@@ -1,0 +1,42 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-latest,  target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest,   target: x86_64-apple-darwin }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install aarch64 linux cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      - name: Package
+        shell: bash
+        run: |
+          ext=""; [ "${{ matrix.os }}" = "windows-latest" ] && ext=".exe"
+          src="target/${{ matrix.target }}/release/ordo$ext"
+          out="ordo-${{ matrix.target }}$ext"
+          cp "$src" "$out"
+          tar -czf "ordo-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" "ordo$ext"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ordo-${{ matrix.target }}*
