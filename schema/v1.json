@@ -25,7 +25,12 @@
           "type": "object",
           "properties": {
             "strategy": { "enum": ["comprehension", "defs-first", "file"], "default": "comprehension" },
-            "cross_file": { "type": "boolean", "default": true }
+            "cross_file": { "type": "boolean", "default": true },
+            "full_context": {
+              "type": "boolean",
+              "default": false,
+              "description": "assert each change's `diff` is a complete (full-context) patch so a modified file can be reconstructed for full semantics; else a diff-only modification is positional"
+            }
           }
         }
       }
@@ -50,6 +55,10 @@
             "required": ["path", "hunks"],
             "properties": {
               "path": { "type": "string" },
+              "degraded": {
+                "type": "boolean",
+                "description": "true when the file could only be ordered positionally (a diff without full context); omitted when false"
+              },
               "hunks": {
                 "type": "array",
                 "items": {

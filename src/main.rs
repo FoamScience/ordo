@@ -8,7 +8,7 @@ fn main() {
     let cmd = args.get(1).map(String::as_str).unwrap_or("order");
     match cmd {
         "order" => order(),
-        "review" => review(args.get(2).map(String::as_str)),
+        "review" => review(&args[2..]),
         "-V" | "--version" | "version" => {
             println!(
                 "ordo {} (schema {})",
@@ -17,19 +17,29 @@ fn main() {
             );
         }
         "-h" | "--help" | "help" => {
-            eprintln!("usage:\n  ordo order --json < input.json > output.json\n  ordo review [patch]   # patch from arg or stdin\n  ordo --version");
+            eprintln!("usage:\n  ordo order --json < input.json > output.json\n  ordo review [--full-context] [patch]   # patch from arg or stdin\n  ordo --version\n\n--full-context: the patch is a complete diff (git diff -U100000), so modified\n                files get full semantics instead of positional order.");
         }
         other => {
-            eprintln!("ordo: unknown command '{other}'\nusage: ordo order --json < input.json | ordo review [patch] | ordo --version");
+            eprintln!("ordo: unknown command '{other}'\nusage: ordo order --json < input.json | ordo review [--full-context] [patch] | ordo --version");
             exit(2);
         }
     }
 }
 
-/// `ordo review [patch]` — read a git/unified diff (file arg or stdin), split
-/// per file, and print the engine's JSON ordering. Modified-file hunks are
-/// positional (see patch.rs ceiling); additions get full semantics.
-fn review(path: Option<&str>) {
+/// `ordo review [--full-context] [patch]` — read a git/unified diff (file arg or
+/// stdin), split per file, print the engine's JSON ordering. Modified-file hunks
+/// are positional unless `--full-context` asserts a complete patch (see
+/// docs/diff-input-design.md); additions get full semantics either way.
+fn review(args: &[String]) {
+    let mut full_context = false;
+    let mut path: Option<&str> = None;
+    for a in args {
+        if a == "--full-context" {
+            full_context = true;
+        } else if !a.starts_with('-') {
+            path = Some(a);
+        }
+    }
     let src = match path {
         Some(f) => std::fs::read_to_string(f).unwrap_or_else(|e| {
             eprintln!("ordo: cannot read '{f}': {e}");
@@ -55,7 +65,10 @@ fn review(path: Option<&str>) {
         .collect();
     let input = ordo::model::Input {
         changes,
-        options: Default::default(),
+        options: ordo::model::Options {
+            full_context,
+            ..Default::default()
+        },
     };
     emit(ordo::run(input));
 }

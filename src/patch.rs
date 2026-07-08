@@ -8,8 +8,28 @@
 use crate::extract::RawHunk;
 
 pub struct ParsedFile {
-    pub new: Option<String>, // Some only when the new side is fully known (added file)
+    // old/new are Some only when the full content is known: an added file, or a
+    // caller-asserted full-context diff. Otherwise the change is positional.
+    pub old: Option<String>,
+    pub new: Option<String>,
     pub hunks: Vec<RawHunk>,
+}
+
+/// Apply a unified diff to `old`, returning full new content, or None on any
+/// parse/apply failure (caller then degrades to positional ordering). Git-free.
+pub fn apply(old: &str, diff: &str) -> Option<String> {
+    let text = with_headers(diff);
+    let patch = diffy::Patch::from_str(&text).ok()?;
+    diffy::apply(old, &patch).ok()
+}
+
+// diffy needs `---`/`+++` file headers; a bare-hunk `diff` gets synthetic ones.
+fn with_headers(diff: &str) -> String {
+    if diff.lines().any(|l| l.starts_with("--- ")) {
+        diff.to_string()
+    } else {
+        format!("--- a\n+++ b\n{diff}")
+    }
 }
 
 /// Split a multi-file git/unified patch into `(path, single-file-diff)` chunks.
@@ -52,10 +72,15 @@ fn push_file(files: &mut Vec<(String, String)>, seg: String) {
     }
 }
 
-pub fn parse_file_diff(diff: &str) -> ParsedFile {
+/// Parse a single-file unified diff. Reconstructs full `old`/`new` content when
+/// safe: an added file (all `+` lines), or — only when `full_context` is set by
+/// the caller — a single whole-file hunk (see L2 in docs/diff-input-design.md).
+/// Otherwise old/new are None and the change is ordered positionally.
+pub fn parse_file_diff(diff: &str, full_context: bool) -> ParsedFile {
     let mut is_new_file = false;
     let mut hunks = vec![];
-    let mut added: Vec<&str> = vec![];
+    let mut old_side: Vec<&str> = vec![]; // context + removed
+    let mut new_side: Vec<&str> = vec![]; // context + added
     let mut in_hunk = false;
     for line in diff.lines() {
         if line.starts_with("+++ ") {
@@ -71,16 +96,32 @@ pub fn parse_file_diff(diff: &str) -> ParsedFile {
             }
         } else if in_hunk {
             if let Some(rest) = line.strip_prefix('+') {
-                added.push(rest);
+                new_side.push(rest);
+            } else if let Some(rest) = line.strip_prefix('-') {
+                old_side.push(rest);
+            } else if let Some(rest) = line.strip_prefix(' ') {
+                old_side.push(rest);
+                new_side.push(rest);
             }
         }
     }
-    let new = if is_new_file {
-        Some(added.join("\n") + "\n")
+    let (old, new) = if is_new_file {
+        (Some(String::new()), Some(join_nl(&new_side)))
+    } else if full_context && hunks.len() == 1 && hunks[0].old_range[0] == 1 {
+        // caller-asserted complete patch + structurally whole-file → reconstruct
+        (Some(join_nl(&old_side)), Some(join_nl(&new_side)))
     } else {
-        None
+        (None, None)
     };
-    ParsedFile { new, hunks }
+    ParsedFile { old, new, hunks }
+}
+
+fn join_nl(lines: &[&str]) -> String {
+    if lines.is_empty() {
+        String::new()
+    } else {
+        lines.join("\n") + "\n"
+    }
 }
 
 fn parse_hunk_header(line: &str) -> Option<RawHunk> {
@@ -127,4 +168,31 @@ fn clean_path(p: &str) -> String {
         .or_else(|| p.strip_prefix("b/"))
         .unwrap_or(p)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply;
+
+    const OLD: &str = "a\nb\nc\n";
+    const NEW: &str = "a\nB\nc\n";
+
+    #[test]
+    fn apply_with_headers() {
+        let diff = "--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n";
+        assert_eq!(apply(OLD, diff).as_deref(), Some(NEW));
+    }
+
+    #[test]
+    fn apply_headerless() {
+        let diff = "@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n";
+        assert_eq!(apply(OLD, diff).as_deref(), Some(NEW));
+    }
+
+    #[test]
+    fn apply_bad_context_is_none() {
+        // context lines don't match OLD → apply must fail, not misapply
+        let diff = "@@ -1,3 +1,3 @@\n x\n-y\n+Y\n z\n";
+        assert_eq!(apply(OLD, diff), None);
+    }
 }

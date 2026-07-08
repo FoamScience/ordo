@@ -17,10 +17,18 @@ pub fn run(input: Input) -> Output {
     // per-file hunks + semantics
     let mut raws: Vec<Vec<RawHunk>> = vec![];
     let mut sems: Vec<Vec<HunkSem>> = vec![];
+    let mut degraded: Vec<bool> = vec![];
     for change in &input.changes {
-        let (raw, sem) = build_change(change);
+        let (raw, sem, deg) = build_change(change, input.options.full_context);
+        if deg {
+            eprintln!(
+                "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
+                change.path
+            );
+        }
         raws.push(raw);
         sems.push(sem);
+        degraded.push(deg);
     }
 
     let ordered = order::order_all(&sems, input.options.strategy, input.options.cross_file);
@@ -80,6 +88,7 @@ pub fn run(input: Input) -> Output {
         files.push(FileOut {
             path: change.path.clone(),
             hunks,
+            degraded: degraded[fi],
         });
     }
 
@@ -116,23 +125,39 @@ pub fn run(input: Input) -> Output {
     }
 }
 
-/// Compute hunks + semantics for one change. Prefers old/new (full semantics
-/// via `similar` + tree-sitter); falls back to a parsed `diff` (positional for
-/// modified files, full for additions — see `patch.rs`). Unsupported/unparsable
-/// language degrades to "other" semantics (file order preserved).
-fn build_change(change: &Change) -> (Vec<RawHunk>, Vec<HunkSem>) {
-    let (raw, new): (Vec<RawHunk>, String) = match (&change.old, &change.new) {
-        (Some(old), Some(new)) => (compute_hunks(old, new), new.clone()),
-        _ => match &change.diff {
-            Some(d) => {
-                let pf = patch::parse_file_diff(d);
-                (pf.hunks, pf.new.unwrap_or_default())
-            }
-            None => (vec![], String::new()),
-        },
+/// Compute hunks + semantics for one change. Full semantics whenever complete
+/// new content is available: `new` given, or reconstructed from `old`+`diff`
+/// (L1), or a full-context diff (L2 — inside `parse_file_diff`). A partial
+/// diff-only change stays positional (L3). Unsupported/unparsable language
+/// degrades to "other" semantics (file order preserved).
+/// Returns (hunks, semantics, degraded). `degraded` = the change carried a diff
+/// but full content couldn't be obtained, so ordering is positional only.
+fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkSem>, bool) {
+    let old = change.old.as_deref();
+    let (raw, new, degraded): (Vec<RawHunk>, String, bool) = if let Some(new) = &change.new {
+        (compute_hunks(old.unwrap_or(""), new), new.clone(), false)
+    } else if let (Some(old), Some(diff)) = (old, &change.diff) {
+        // L1: reconstruct full new content by applying the diff to old
+        match patch::apply(old, diff) {
+            Some(new) => (compute_hunks(old, &new), new, false),
+            None => from_diff(diff, full_context), // apply failed → positional (L3)
+        }
+    } else if let Some(diff) = &change.diff {
+        // diff only: full for additions / opt-in full-context, else positional
+        from_diff(diff, full_context)
+    } else {
+        (vec![], String::new(), false)
     };
     let sems = lang::for_path(&change.path)
         .and_then(|spec| analyze(spec, &new, &raw))
         .unwrap_or_else(|| raw.iter().map(HunkSem::other).collect());
-    (raw, sems)
+    (raw, sems, degraded)
+}
+
+fn from_diff(diff: &str, full_context: bool) -> (Vec<RawHunk>, String, bool) {
+    let pf = patch::parse_file_diff(diff, full_context);
+    match (pf.old, pf.new) {
+        (Some(old), Some(new)) => (compute_hunks(&old, &new), new, false),
+        _ => (pf.hunks, String::new(), true), // positional → degraded
+    }
 }

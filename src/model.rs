@@ -25,12 +25,17 @@ pub struct Options {
     pub strategy: Strategy,
     #[serde(default = "yes")]
     pub cross_file: bool,
+    /// Caller asserts each `diff` is a complete (full-context) patch, so a
+    /// modified file can be reconstructed for full semantics. Off by default.
+    #[serde(default)]
+    pub full_context: bool,
 }
 impl Default for Options {
     fn default() -> Self {
         Options {
             strategy: Strategy::Comprehension,
             cross_file: true,
+            full_context: false,
         }
     }
 }
@@ -78,6 +83,14 @@ pub struct OrderItem {
 pub struct FileOut {
     pub path: String,
     pub hunks: Vec<HunkOut>,
+    /// true when this file could only be ordered positionally (a diff without
+    /// full context and no old/new to reconstruct from). Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub degraded: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Serialize)]
