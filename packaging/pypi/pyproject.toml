@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ordo"
+version = "0.1.0"
+description = "Comprehension-optimized ordering of code-change hunks — thin wrapper over the ordo binary"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+
+[project.urls]
+Homepage = "https://github.com/elwardi/ordo"
+
+[project.scripts]
+ordo = "ordo.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ordo"]
