@@ -40,6 +40,43 @@ Working name `ordo` — TBD. Rust core.
 - [x] `cross_file` toggle (edges restricted to same file when off)
 - [x] Cross-file fixtures (`tests/crossfile.rs`)
 
+## P9 — diff-input full semantics  ✅ (design: `docs/diff-input-design.md`) — pure engine, no git in core
+
+### P9.0 — prep
+- [x] `cargo add diffy`
+- [x] Spike: confirm `diffy::Patch::from_str` parses a headerless single-file diff (our `change.diff`); if not, prepend synthetic `--- a/<p>` / `+++ b/<p>` before parsing
+- [x] `patch.rs`: helper `apply(old: &str, diff: &str) -> Option<String>` (diffy parse + apply; `None` on any parse/apply error)
+
+### P9.1 — L1: `{path, old, diff}` → apply
+- [x] `lib.rs build_change`: match arm `(Some(old), None, Some(diff))` → `patch::apply(old, diff)` → `Some(new)` ⇒ `(compute_hunks(old,&new), new)` (reuse the proven old/new path); `None` ⇒ fall through to L3
+- [x] Test: `{old, diff}` output byte-equals the `{old, new}` result for the same modification
+- [x] Test: corrupted/fuzzy diff (context mismatch) → graceful positional fallback, no panic
+
+### P9.2 — L2: `{path, diff}` full-context → reconstruct both sides (OPT-IN — auto-detect is unsafe, see design)
+- [x] `model.rs Options`: add `full_context: bool` (default false); `main.rs`: `ordo review --full-context` flag
+- [x] `patch.rs parse_file_diff(diff, full_context)`: when `full_context` AND single hunk starting at old line 1 → reconstruct `old` (ctx+removed) **and** `new` (ctx+added); else old/new = None
+- [x] `ParsedFile`: carry optional `old`; `build_change`/`from_diff` use `compute_hunks(old,new)` when both present
+- [x] Preserve trailing-newline / no-normalization in reconstruction
+- [x] Test: full-context modified-file diff + flag → def-before-use holds (real semantics)
+- [x] Test: same diff WITHOUT the flag → positional (L3); multi-hunk WITH flag → still positional
+
+### P9.3 — L3: partial `{diff}` → positional but honest
+- [x] `model.rs FileOut`: add `#[serde(default, skip_serializing_if = "is_false")] degraded: bool`
+- [x] `lib.rs`: diff-only + not reconstructable ⇒ set `degraded = true` + `eprintln!` one-line warning naming the file (suggest `-U100000` / old-new API)
+- [x] Thread `degraded` from `build_change` through to the emitted `FileOut`
+- [x] Test: partial diff → positional order + `degraded == true` + warning on stderr
+
+### P9.4 — CLI, contract, docs
+- [x] Verify `ordo review` picks all of this up (full-context patch → full semantics; else warns) — add a `review` test
+- [x] `schema/v1.json`: document `{old, diff}` input combo + optional output `files[].degraded` (no `schema` bump — additive)
+- [x] README: "`git diff -U100000 | ordo review` for full semantics" + note the old/new API is always full
+- [x] Promote the dogfood wrapper to `scripts/ordo-commit` (repo-read stays OUT of the binary)
+
+### P9.5 — wrap
+- [x] `cargo test` green (incl. new cases + regen goldens if any), `cargo fmt --check`
+- [x] Re-run gitplay suite (unaffected — it uses old/new) to confirm no regression
+- [x] Tick P9 items + update README ceilings section (diff modified-file no longer silently positional)
+
 ### polish (non-blocking)
 - [x] rationale wording: import-category hunk that *also* defines fns now lists only import-introduced names (`HunkSem.imports`); reads "import" when the import node declares no names (e.g. go `import "fmt"`).
 

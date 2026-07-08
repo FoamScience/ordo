@@ -37,7 +37,8 @@ build.
 
 ```sh
 ordo order --json < input.json > output.json
-ordo review path/to.patch          # or: git diff | ordo review
+ordo review path/to.patch                      # or: git diff | ordo review
+git diff -U100000 | ordo review --full-context # modified files get full semantics
 ```
 
 Input / output are frozen as **schema v1** (`schema/v1.json`):
@@ -77,9 +78,13 @@ changes.
 
 - **Symbol resolution is approximate** — name match with an optional cross-file
   union, no full scope/type analysis. `cross_file` is a toggle.
-- **`diff` input**: a context-limited patch has no full new-file content, so
-  *modified* files yield positional hunks; additions reconstruct fully. For full
-  semantics on modified files, pass `old`/`new`.
+- **`diff` input** reaches full semantics whenever full new content is
+  derivable: `new` given, `old`+`diff` (applied), an added file, or a
+  caller-asserted full-context patch (`full_context` / `--full-context`,
+  e.g. `git diff -U100000`). A bare context-limited diff of a *modified* file
+  stays positional and is flagged `degraded: true` (no silent guessing — a
+  partial diff can't be reconstructed without truncating the file). See
+  `docs/diff-input-design.md`.
 
 ## Development
 
