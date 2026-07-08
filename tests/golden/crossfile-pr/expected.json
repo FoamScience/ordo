@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "order": [
+    {
+      "path": "util.py",
+      "hunk": "h1"
+    },
+    {
+      "path": "main.py",
+      "hunk": "h0"
+    }
+  ],
+  "files": [
+    {
+      "path": "main.py",
+      "hunks": [
+        {
+          "id": "h0",
+          "old_range": [
+            2,
+            1
+          ],
+          "new_range": [
+            2,
+            2
+          ],
+          "category": "other",
+          "enclosing": null,
+          "defines": [],
+          "uses": [
+            "helper",
+            "x"
+          ],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "uses helper, x"
+        }
+      ]
+    },
+    {
+      "path": "util.py",
+      "hunks": [
+        {
+          "id": "h1",
+          "old_range": [
+            2,
+            1
+          ],
+          "new_range": [
+            2,
+            3
+          ],
+          "category": "definition",
+          "enclosing": "helper",
+          "defines": [
+            "helper"
+          ],
+          "uses": [],
+          "group": "g1",
+          "order_index": 0,
+          "rationale": "defines helper"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "g0",
+      "reason": "top-level change",
+      "members": [
+        "h0"
+      ]
+    },
+    {
+      "id": "g1",
+      "reason": "same definition: helper",
+      "members": [
+        "h1"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "h1",
+      "to": "h0",
+      "why": "def→use: helper"
+    }
+  ]
+}

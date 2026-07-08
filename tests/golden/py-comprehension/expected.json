@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "order": [
+    {
+      "path": "m.py",
+      "hunk": "h0"
+    },
+    {
+      "path": "m.py",
+      "hunk": "h1"
+    },
+    {
+      "path": "m.py",
+      "hunk": "h2"
+    }
+  ],
+  "files": [
+    {
+      "path": "m.py",
+      "hunks": [
+        {
+          "id": "h0",
+          "old_range": [
+            1,
+            0
+          ],
+          "new_range": [
+            1,
+            1
+          ],
+          "category": "import",
+          "enclosing": null,
+          "defines": [
+            "os"
+          ],
+          "uses": [],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "imports os"
+        },
+        {
+          "id": "h1",
+          "old_range": [
+            3,
+            2
+          ],
+          "new_range": [
+            4,
+            5
+          ],
+          "category": "definition",
+          "enclosing": "helper",
+          "defines": [
+            "helper"
+          ],
+          "uses": [
+            "getpid",
+            "os"
+          ],
+          "group": "g1",
+          "order_index": 1,
+          "rationale": "defines helper"
+        },
+        {
+          "id": "h2",
+          "old_range": [
+            5,
+            4
+          ],
+          "new_range": [
+            8,
+            8
+          ],
+          "category": "other",
+          "enclosing": null,
+          "defines": [],
+          "uses": [
+            "helper",
+            "x"
+          ],
+          "group": "g2",
+          "order_index": 2,
+          "rationale": "uses helper, x"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "g0",
+      "reason": "import",
+      "members": [
+        "h0"
+      ]
+    },
+    {
+      "id": "g1",
+      "reason": "same definition: helper",
+      "members": [
+        "h1"
+      ]
+    },
+    {
+      "id": "g2",
+      "reason": "top-level change",
+      "members": [
+        "h2"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "h0",
+      "to": "h1",
+      "why": "def→use: os"
+    },
+    {
+      "from": "h1",
+      "to": "h2",
+      "why": "def→use: helper"
+    }
+  ]
+}

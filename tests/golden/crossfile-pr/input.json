@@ -1,0 +1,7 @@
+{
+  "changes": [
+    { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+    { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+  ],
+  "options": { "strategy": "comprehension", "cross_file": true }
+}

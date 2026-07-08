@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "order": [
+    {
+      "path": "lib.rs",
+      "hunk": "h0"
+    },
+    {
+      "path": "lib.rs",
+      "hunk": "h1"
+    },
+    {
+      "path": "lib.rs",
+      "hunk": "h2"
+    }
+  ],
+  "files": [
+    {
+      "path": "lib.rs",
+      "hunks": [
+        {
+          "id": "h0",
+          "old_range": [
+            1,
+            0
+          ],
+          "new_range": [
+            1,
+            1
+          ],
+          "category": "import",
+          "enclosing": null,
+          "defines": [
+            "fmt",
+            "std"
+          ],
+          "uses": [],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "imports fmt, std"
+        },
+        {
+          "id": "h1",
+          "old_range": [
+            3,
+            2
+          ],
+          "new_range": [
+            4,
+            4
+          ],
+          "category": "definition",
+          "enclosing": "make",
+          "defines": [
+            "make"
+          ],
+          "uses": [],
+          "group": "g1",
+          "order_index": 1,
+          "rationale": "defines make, used by run below"
+        },
+        {
+          "id": "h2",
+          "old_range": [
+            5,
+            4
+          ],
+          "new_range": [
+            7,
+            7
+          ],
+          "category": "definition",
+          "enclosing": "run",
+          "defines": [
+            "run"
+          ],
+          "uses": [
+            "make"
+          ],
+          "group": "g2",
+          "order_index": 2,
+          "rationale": "defines run"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "g0",
+      "reason": "import",
+      "members": [
+        "h0"
+      ]
+    },
+    {
+      "id": "g1",
+      "reason": "same definition: make",
+      "members": [
+        "h1"
+      ]
+    },
+    {
+      "id": "g2",
+      "reason": "same definition: run",
+      "members": [
+        "h2"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "h1",
+      "to": "h2",
+      "why": "def→use: make"
+    }
+  ]
+}
