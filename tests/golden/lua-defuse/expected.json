@@ -32,7 +32,7 @@
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "defines helper"
+          "rationale": "adds helper, used below"
         },
         {
           "id": "h1",
@@ -53,7 +53,7 @@
           ],
           "group": "g1",
           "order_index": 1,
-          "rationale": "uses helper, x"
+          "rationale": "uses helper, defined above"
         }
       ]
     }

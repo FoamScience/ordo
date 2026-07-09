@@ -113,3 +113,17 @@ Working name `ordo` — TBD. Rust core.
 - deterministic
 - cycle-safe
 - def-before-use wherever a def→use edge is derivable
+
+## P10 — rationale augmentation (patterns #1–#7)  ✅
+
+Foundation for all: make `rationale_for` **file-aware** — pass `paths` into
+`order::order_all`, give it group→file + `gdef` so it can name provenance and
+pick above/below vs "in <path>".
+
+- [x] **#1 cross-file def→use provenance** — use side: "uses `foo`, defined in `a.py` (this change)"; def side: "defines `foo`, used in `b.py`". Drop "below" across files.
+- [x] **#2 within-file bidirectional** — also speak the use side: "uses `helper` defined above" (today only the def side talks). Above/below by source position.
+- [x] **#3 add vs edit a definition** — "adds `foo`" (def node starts in hunk) vs "edits `foo` body" (hunk inside an existing def). Data already present.
+- [x] **#4 signature / type change** — hunk touches a def *header* or a type/struct → "changes signature of `foo` (N uses)" / "changes type `Foo`".
+- [x] **#5 import add/remove** — "adds import os" / "removes `X`" (needs old-side import diff, not just new-side).
+- [x] **#6 test ↔ code link** — path heuristic (tests/, _test, _spec): "tests `foo` (a.py)".
+- [x] **#7 rename / deletion** — "renames `foo`→`bar`" (old↔new def matching), "removes `foo`". Highest cost, last.

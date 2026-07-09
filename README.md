@@ -12,13 +12,13 @@ Ordering is a comprehension *aid*, not a correctness fix — treat it as such.
 
 ## What it does
 
-Per file, it parses the *new* content once with tree-sitter and, for each hunk:
-classifies it (`import` / `definition` / `other`), finds its enclosing
-definition, and extracts the symbols it **defines** and **uses**. Then it groups
-hunks by enclosing definition (P1), derives **def→use** edges between groups
-(P2, across files when enabled), and topologically sorts them — ties and cycles
-broken by file position, so output is deterministic and a strict permutation of
-the input (nothing is dropped).
+Per file, it parses both sides (of the diff) with tree-sitter and, for each hunk: classifies
+it (`import` / `definition` / `other`), finds its enclosing definition, and
+extracts the symbols it **defines** and **uses**. Then it groups hunks by
+enclosing definition (P1), derives **def→use** edges between groups (P2, across
+files when enabled), and topologically sorts them — ties and cycles broken by
+file position, so output is deterministic and a strict permutation of the input
+(nothing is dropped).
 
 ## Install
 
@@ -26,7 +26,6 @@ the input (nothing is dropped).
 cargo install --path .          # from source (Rust)
 npm  install -g @ordo/cli       # node wrapper (vendors a prebuilt binary)
 pip  install ordo               # python wrapper (vendors a prebuilt binary)
-brew install elwardi/tap/ordo   # macOS
 ```
 
 The npm/pypi packages are thin wrappers around one prebuilt binary (the
@@ -55,6 +54,25 @@ A change may instead carry a `diff` (unified/git). See the ceiling below.
 Output carries the global `order`, per-file `hunks` (with `category`,
 `enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`), the
 `groups`, and the def→use `edges`.
+
+## Rationale
+
+Each hunk gets a one-line `rationale` explaining *why* it's where it is, from
+comparing both sides of the change:
+
+| Pattern | Example |
+|---|---|
+| cross-file def→use | `uses parse_cfg, defined in config.py` · `adds parse_cfg, used in main.py` |
+| within-file order | `uses helper, defined above` · `adds helper, used by run below` |
+| add vs edit | `adds helper` (new) · `edits run` (body of an existing def) |
+| signature / type | `changes signature of parse` · `changes type Config` · `adds type Config` |
+| imports | `adds import os` · `removes import sys` |
+| test ↔ code | `tests parse_cfg (config.py)` |
+| rename / delete | `renames foo → bar` · `removes old_helper` |
+
+Cross-file lines (`defined in …`, `tests … (…)`) only appear when the changeset
+is sent as one call with `cross_file: true` — a definer and its user must be
+visible together.
 
 ## Library API
 
@@ -85,6 +103,9 @@ changes.
   stays positional and is flagged `degraded: true` (no silent guessing — a
   partial diff can't be reconstructed without truncating the file). See
   `docs/diff-input-design.md`.
+- **Rationale heuristics** — rename detection is 1:1 per file (a file that
+  renames *and* adds/removes other defs falls back to `adds`/`removes`);
+  removals attach by old-line overlap (precise for isolated deletions).
 
 ## Development
 

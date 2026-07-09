@@ -37,7 +37,7 @@
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "imports fmt, std"
+          "rationale": "adds import fmt, std"
         },
         {
           "id": "h1",
@@ -57,7 +57,7 @@
           "uses": [],
           "group": "g1",
           "order_index": 1,
-          "rationale": "defines make, used by run below"
+          "rationale": "adds make, used by run below"
         },
         {
           "id": "h2",
@@ -79,7 +79,7 @@
           ],
           "group": "g2",
           "order_index": 2,
-          "rationale": "defines run"
+          "rationale": "adds run"
         }
       ]
     }

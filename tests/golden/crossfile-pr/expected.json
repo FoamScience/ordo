@@ -33,7 +33,7 @@
           ],
           "group": "g0",
           "order_index": 0,
-          "rationale": "uses helper, x"
+          "rationale": "uses helper, defined in util.py"
         }
       ]
     },
@@ -58,7 +58,7 @@
           "uses": [],
           "group": "g1",
           "order_index": 0,
-          "rationale": "defines helper"
+          "rationale": "adds helper, used in main.py"
         }
       ]
     }

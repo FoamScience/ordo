@@ -36,7 +36,7 @@
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "imports os"
+          "rationale": "adds import os"
         },
         {
           "id": "h1",
@@ -59,7 +59,7 @@
           ],
           "group": "g1",
           "order_index": 1,
-          "rationale": "defines helper"
+          "rationale": "adds helper, used below"
         },
         {
           "id": "h2",
@@ -80,7 +80,7 @@
           ],
           "group": "g2",
           "order_index": 2,
-          "rationale": "uses helper, x"
+          "rationale": "uses helper, defined above"
         }
       ]
     }

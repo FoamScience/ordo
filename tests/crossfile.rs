@@ -45,3 +45,21 @@ fn cross_file_off_keeps_input_file_order() {
         "no cross-file edge when cross_file is off"
     );
 }
+
+#[test]
+fn cross_file_rationale_names_the_other_file() {
+    let out = ordo::run(input(true));
+    let rats: Vec<&str> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().map(|h| h.rationale.as_str()))
+        .collect();
+    assert!(
+        rats.iter().any(|r| r.contains("used in main.py")),
+        "def side names the user file: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r.contains("defined in util.py")),
+        "use side names the definer file: {rats:?}"
+    );
+}
