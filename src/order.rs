@@ -24,6 +24,20 @@ pub struct OrderedAll {
     pub rationale: Vec<String>,
 }
 
+// #6: does this path look like a test file? (tests/ dir, test_*, *_test, *_spec, *.test/spec)
+fn is_test_path(p: &str) -> bool {
+    let name = p.rsplit('/').next().unwrap_or(p);
+    p.contains("/tests/")
+        || p.starts_with("tests/")
+        || p.contains("/test/")
+        || p.starts_with("test/")
+        || name.starts_with("test_")
+        || name.contains("_test.")
+        || name.contains("_spec.")
+        || name.contains(".test.")
+        || name.contains(".spec.")
+}
+
 fn cat_rank(c: Category) -> u8 {
     match c {
         Category::Import => 0,
@@ -32,7 +46,16 @@ fn cat_rank(c: Category) -> u8 {
     }
 }
 
-pub fn order_all(files: &[Vec<HunkSem>], strategy: Strategy, cross_file: bool) -> OrderedAll {
+pub fn order_all(
+    files: &[Vec<HunkSem>],
+    paths: &[String],
+    old_defs: &[HashSet<String>],
+    old_imports: &[HashSet<String>],
+    rename: &[HashMap<String, String>],
+    removals: &[Vec<(usize, String)>],
+    strategy: Strategy,
+    cross_file: bool,
+) -> OrderedAll {
     // ---- flatten all files into a global hunk list ----
     let mut coord = vec![];
     let mut sem: Vec<&HunkSem> = vec![];
@@ -205,8 +228,33 @@ pub fn order_all(files: &[Vec<HunkSem>], strategy: Strategy, cross_file: bool) -
         perm.extend(mem);
     }
 
+    // per-group file + source position, for provenance and above/below wording
+    let group_file: Vec<usize> = (0..g).map(|gi| coord[groups[gi].members[0]].0).collect();
+    let group_row: Vec<usize> = (0..g)
+        .map(|gi| {
+            groups[gi]
+                .members
+                .iter()
+                .map(|&i| sem[i].start_row)
+                .min()
+                .unwrap_or(0)
+        })
+        .collect();
+    let ctx = RatCtx {
+        groups: &groups,
+        gdef: &gdef,
+        guse: &guse,
+        group_file: &group_file,
+        group_row: &group_row,
+        paths,
+        old_defs,
+        old_imports,
+        rename,
+        removals,
+        cross_file,
+    };
     let rationale = (0..n)
-        .map(|i| rationale_for(i, &sem, &group_idx, &groups, &guse))
+        .map(|i| rationale_for(i, &sem, &group_idx, &ctx))
         .collect();
 
     OrderedAll {
@@ -219,41 +267,166 @@ pub fn order_all(files: &[Vec<HunkSem>], strategy: Strategy, cross_file: bool) -
     }
 }
 
-fn rationale_for(
-    i: usize,
-    sem: &[&HunkSem],
-    group_idx: &[usize],
-    groups: &[GroupInfo],
-    guse: &[HashSet<String>],
-) -> String {
-    let s = sem[i];
-    if s.category == Category::Import {
-        return if s.imports.is_empty() {
-            "import".to_string()
-        } else {
-            format!("imports {}", s.imports.join(", "))
-        };
+struct RatCtx<'a> {
+    groups: &'a [GroupInfo],
+    gdef: &'a [HashSet<String>],
+    guse: &'a [HashSet<String>],
+    group_file: &'a [usize],
+    group_row: &'a [usize],
+    paths: &'a [String],
+    old_defs: &'a [HashSet<String>],
+    old_imports: &'a [HashSet<String>],
+    rename: &'a [HashMap<String, String>],
+    removals: &'a [Vec<(usize, String)>],
+    cross_file: bool,
+}
+
+impl RatCtx<'_> {
+    // a candidate group is usable as provenance if it's another group and (when
+    // cross_file is off) lives in the same file as the hunk's group
+    fn ok(&self, mine: usize, other: usize) -> bool {
+        other != mine && (self.cross_file || self.group_file[other] == self.group_file[mine])
     }
+    // #3/#4: verb for a definition hunk. New symbol → "adds"/"adds type"; a
+    // pre-existing symbol whose header changed → "changes signature of"/"changes
+    // type" (a def-category hunk means the declaration line itself moved).
+    fn def_verb(&self, file: usize, sym: &str, is_type: bool) -> &'static str {
+        let existed = self.old_defs.get(file).is_some_and(|s| s.contains(sym));
+        match (existed, is_type) {
+            (false, false) => "adds",
+            (false, true) => "adds type",
+            (true, false) => "changes signature of",
+            (true, true) => "changes type",
+        }
+    }
+    // "<verb> foo, used in a.py" / "<verb> foo, used by NAME below|above"
+    fn used_phrase(
+        &self,
+        verb: &str,
+        sym: &str,
+        mine: usize,
+        b: usize,
+        sem: &[&HunkSem],
+    ) -> String {
+        if self.group_file[b] != self.group_file[mine] {
+            format!("{verb} {sym}, used in {}", self.paths[self.group_file[b]])
+        } else {
+            let dir = if self.group_row[b] > self.group_row[mine] {
+                "below"
+            } else {
+                "above"
+            };
+            match group_name(&self.groups[b], sem) {
+                Some(nm) => format!("{verb} {sym}, used by {nm} {dir}"),
+                None => format!("{verb} {sym}, used {dir}"),
+            }
+        }
+    }
+    // "uses foo, defined in a.py" / "uses foo, defined above|below"
+    fn use_of_phrase(&self, sym: &str, mine: usize, b: usize) -> String {
+        if self.group_file[b] != self.group_file[mine] {
+            format!("uses {sym}, defined in {}", self.paths[self.group_file[b]])
+        } else {
+            let dir = if self.group_row[b] < self.group_row[mine] {
+                "above"
+            } else {
+                "below"
+            };
+            format!("uses {sym}, defined {dir}")
+        }
+    }
+}
+
+fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) -> String {
+    let s = sem[i];
+    let mine = group_idx[i];
+    let my_file = ctx.group_file[mine];
+    let g = ctx.groups.len();
+
+    if s.category == Category::Import {
+        if s.imports.is_empty() {
+            return "import".to_string();
+        }
+        // #5 (add side): new import(s) → "adds import"; a touched existing one → "changes import"
+        let all_new = s
+            .imports
+            .iter()
+            .all(|im| !ctx.old_imports.get(my_file).is_some_and(|o| o.contains(im)));
+        let verb = if all_new {
+            "adds import"
+        } else {
+            "changes import"
+        };
+        return format!("{verb} {}", s.imports.join(", "));
+    }
+
+    // definition side: rename (#7), else adds (new) vs changes (pre-existing)
     if !s.defines.is_empty() {
-        let g = guse.len();
-        let target = s.defines.iter().find_map(|d| {
+        // #7: this hunk introduces the new name of a 1:1 renamed definition
+        if let Some(old) = ctx
+            .rename
+            .get(my_file)
+            .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|o| (o, d))))
+        {
+            return format!("renames {} → {}", old.0, old.1);
+        }
+        let used = s.defines.iter().find_map(|d| {
             (0..g)
-                .find(|&b| b != group_idx[i] && guse[b].contains(d))
+                .find(|&b| ctx.ok(mine, b) && ctx.guse[b].contains(d))
                 .map(|b| (d.clone(), b))
         });
-        return match target {
-            Some((d, b)) => match group_name(&groups[b], sem) {
-                Some(nm) => format!("defines {d}, used by {nm} below"),
-                None => format!("defines {}", s.defines.join(", ")),
-            },
-            None => format!("defines {}", s.defines.join(", ")),
+        let sym = used
+            .as_ref()
+            .map(|(d, _)| d.clone())
+            .unwrap_or_else(|| s.defines[0].clone());
+        let verb = ctx.def_verb(my_file, &sym, s.is_type);
+        return match used {
+            Some((d, b)) => ctx.used_phrase(verb, &d, mine, b, sem),
+            None => format!("{verb} {}", s.defines.join(", ")),
         };
     }
-    if let Some(nm) = &s.enclosing {
-        return format!("changes {nm}");
-    }
+
+    // use side: a symbol used here that some other group defines (this change)
     if !s.uses.is_empty() {
+        // #6: from a test file, prefer a symbol defined in a non-test file
+        if is_test_path(&ctx.paths[my_file]) {
+            if let Some((u, b)) = s.uses.iter().find_map(|u| {
+                (0..g)
+                    .find(|&b| {
+                        ctx.ok(mine, b)
+                            && ctx.gdef[b].contains(u)
+                            && ctx.group_file[b] != my_file
+                            && !is_test_path(&ctx.paths[ctx.group_file[b]])
+                    })
+                    .map(|b| (u.clone(), b))
+            }) {
+                return format!("tests {u} ({})", ctx.paths[ctx.group_file[b]]);
+            }
+        }
+        if let Some((u, b)) = s.uses.iter().find_map(|u| {
+            (0..g)
+                .find(|&b| ctx.ok(mine, b) && ctx.gdef[b].contains(u))
+                .map(|b| (u.clone(), b))
+        }) {
+            return ctx.use_of_phrase(&u, mine, b);
+        }
+        if let Some(nm) = &s.enclosing {
+            return format!("edits {nm}");
+        }
         return format!("uses {}", s.uses.join(", "));
+    }
+
+    if let Some(nm) = &s.enclosing {
+        return format!("edits {nm}");
+    }
+    // #5/#7 removal: a deletion hunk whose old lines held a removed symbol
+    let [o0, o1] = s.old_range;
+    if let Some(label) = ctx.removals.get(my_file).and_then(|v| {
+        v.iter()
+            .find(|(row, _)| *row >= o0 && *row <= o1)
+            .map(|(_, l)| l.clone())
+    }) {
+        return label;
     }
     "change".to_string()
 }

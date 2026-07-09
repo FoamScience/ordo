@@ -6,8 +6,9 @@ pub mod model;
 mod order;
 mod patch;
 
-use extract::{analyze, compute_hunks, HunkSem, RawHunk};
+use extract::{analyze, compute_hunks, symbol_sets, HunkSem, RawHunk};
 use model::*;
+use std::collections::{HashMap, HashSet};
 
 pub use patch::split_patch;
 
@@ -31,7 +32,60 @@ pub fn run(input: Input) -> Output {
         degraded.push(deg);
     }
 
-    let ordered = order::order_all(&sems, input.options.strategy, input.options.cross_file);
+    let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
+    // old-side symbols (#3 add-vs-edit, #5 import remove, #7 rename/delete) —
+    // one parse of old (with rows) and new (sets) per file.
+    let mut old_defs: Vec<HashSet<String>> = vec![];
+    let mut old_imports: Vec<HashSet<String>> = vec![];
+    let mut rename: Vec<HashMap<String, String>> = vec![];
+    let mut removals: Vec<Vec<(usize, String)>> = vec![]; // (old-line, "removes …")
+    for c in &input.changes {
+        let spec = lang::for_path(&c.path);
+        let (odr, oir) = match (c.old.as_deref(), spec) {
+            (Some(old), Some(sp)) => extract::symbol_rows(sp, old),
+            _ => (vec![], vec![]),
+        };
+        let (new_defs, new_imports) = match (c.new.as_deref(), spec) {
+            (Some(new), Some(sp)) => symbol_sets(sp, new),
+            _ => (HashSet::new(), HashSet::new()),
+        };
+        let od: HashSet<String> = odr.iter().map(|(n, _)| n.clone()).collect();
+        let oi: HashSet<String> = oir.iter().map(|(n, _)| n.clone()).collect();
+        // #7 rename: exactly one def gone and one appeared
+        let removed_d: Vec<&String> = od.difference(&new_defs).collect();
+        let added_d: Vec<&String> = new_defs.difference(&od).collect();
+        let mut ren = HashMap::new();
+        if removed_d.len() == 1 && added_d.len() == 1 {
+            ren.insert(added_d[0].clone(), removed_d[0].clone());
+        }
+        let renamed_old: HashSet<String> = ren.values().cloned().collect();
+        // #7 delete / #5 import remove: gone from new, not a rename
+        let mut rem = vec![];
+        for (n, row) in &odr {
+            if !new_defs.contains(n) && !renamed_old.contains(n) {
+                rem.push((*row, format!("removes {n}")));
+            }
+        }
+        for (n, row) in &oir {
+            if !new_imports.contains(n) {
+                rem.push((*row, format!("removes import {n}")));
+            }
+        }
+        old_defs.push(od);
+        old_imports.push(oi);
+        rename.push(ren);
+        removals.push(rem);
+    }
+    let ordered = order::order_all(
+        &sems,
+        &paths,
+        &old_defs,
+        &old_imports,
+        &rename,
+        &removals,
+        input.options.strategy,
+        input.options.cross_file,
+    );
 
     // global hunk id per (file, local) and reverse map to global index
     let mut hid_of: Vec<Vec<String>> = raws.iter().map(|r| vec![String::new(); r.len()]).collect();
