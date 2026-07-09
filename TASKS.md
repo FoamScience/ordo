@@ -127,3 +127,9 @@ pick above/below vs "in <path>".
 - [x] **#5 import add/remove** — "adds import os" / "removes `X`" (needs old-side import diff, not just new-side).
 - [x] **#6 test ↔ code link** — path heuristic (tests/, _test, _spec): "tests `foo` (a.py)".
 - [x] **#7 rename / deletion** — "renames `foo`→`bar`" (old↔new def matching), "removes `foo`". Highest cost, last.
+
+## P11 — rationale polish
+
+- [x] **collapse nested `<anonymous>`** in enclosing paths (`M.start_pick.<anonymous>.<anonymous>` → `M.start_pick.<anonymous>`) — dedupe consecutive anon in the def stack.
+- [x] **rename beyond 1:1** — match removed↔added defs by normalized body (`extract::symbol_bodies`) + lone-pair 1:1 fallback for body-changed renames.
+- [~] **signature-change use counts** — **skipped**: the count only sees changed hunks (0 when callers unchanged → misleading); provenance (`used by X below`) already conveys "it's used".

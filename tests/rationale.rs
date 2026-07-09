@@ -114,3 +114,49 @@ fn p5_p7_removals() {
         "deleted import: {rats:?}"
     );
 }
+
+#[test]
+fn p11_collapse_nested_anonymous_enclosing() {
+    // change inside anon-inside-anon-inside outer → enclosing collapses to one <anonymous>
+    let old = "local function outer()\n  reg(function()\n    inner(function()\n      x = 1\n    end)\n  end)\nend\n";
+    let new = "local function outer()\n  reg(function()\n    inner(function()\n      x = 2\n    end)\n  end)\nend\n";
+    let inp: ordo::model::Input = serde_json::from_value(
+        serde_json::json!({ "changes": [{ "path": "m.lua", "old": old, "new": new }] }),
+    )
+    .unwrap();
+    let out = ordo::run(inp);
+    let enc: Vec<_> = out.files[0]
+        .hunks
+        .iter()
+        .filter_map(|h| h.enclosing.clone())
+        .collect();
+    assert!(
+        enc.iter().any(|e| e == "outer.<anonymous>"),
+        "collapsed enclosing: {enc:?}"
+    );
+    assert!(
+        !enc.iter().any(|e| e.contains("<anonymous>.<anonymous>")),
+        "no repeated anon: {enc:?}"
+    );
+}
+
+#[test]
+fn p11_multi_rename_by_body() {
+    // two renames (bodies unchanged) + one genuinely new def, in one file
+    let old = "def alpha():\n    return 111\ndef beta():\n    return 222\n";
+    let new = "def gamma():\n    return 111\ndef delta():\n    return 222\ndef epsilon():\n    return 999\n";
+    let rats =
+        rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    assert!(
+        rats.iter().any(|r| r == "renames alpha → gamma"),
+        "rename 1: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r == "renames beta → delta"),
+        "rename 2: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r.starts_with("adds epsilon")),
+        "genuine new def: {rats:?}"
+    );
+}
