@@ -183,7 +183,11 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             c.type_rows.insert(sr);
         }
         c.decls.push((sr, own.clone()));
-        stack.push(own);
+        // collapse runs of nested anonymous defs in the qualified enclosing name
+        let anon_dup = own == "<anonymous>" && stack.last().is_some_and(|s| s == "<anonymous>");
+        if !anon_dup {
+            stack.push(own);
+        }
         c.defs.push(DefRec {
             s: sr,
             e: er,
@@ -193,7 +197,9 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         for ch in node.named_children(&mut cur) {
             walk(ch, src, spec, stack, c);
         }
-        stack.pop();
+        if !anon_dup {
+            stack.pop();
+        }
         return;
     }
     if lang::is_ident(kind) {
@@ -319,6 +325,41 @@ pub fn symbol_rows(spec: &LangSpec, content: &str) -> (Vec<(String, usize)>, Vec
         &mut imports,
     );
     (defs, imports)
+}
+
+/// Each def's name paired with its whitespace-normalized body text, for rename
+/// detection by body similarity (#7 / P11.2). Body = the def's `body` field
+/// (excludes the signature/name), else the whole node text.
+pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<(String, String)> {
+    let mut out = vec![];
+    let mut parser = Parser::new();
+    if parser.set_language(&(spec.language)()).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return out;
+    };
+    collect_bodies(tree.root_node(), content.as_bytes(), spec, &mut out);
+    out
+}
+
+fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(String, String)>) {
+    let kind = node.kind();
+    if spec.is_def(kind) {
+        if let Some(name) = node_name(node, src) {
+            let text = node
+                .child_by_field_name("body")
+                .and_then(|b| b.utf8_text(src).ok())
+                .or_else(|| node.utf8_text(src).ok())
+                .unwrap_or("");
+            let key = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            out.push((name, key));
+        }
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_bodies(ch, src, spec, out);
+    }
 }
 
 fn collect_rows(

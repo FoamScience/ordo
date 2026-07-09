@@ -51,12 +51,44 @@ pub fn run(input: Input) -> Output {
         };
         let od: HashSet<String> = odr.iter().map(|(n, _)| n.clone()).collect();
         let oi: HashSet<String> = oir.iter().map(|(n, _)| n.clone()).collect();
-        // #7 rename: exactly one def gone and one appeared
-        let removed_d: Vec<&String> = od.difference(&new_defs).collect();
-        let added_d: Vec<&String> = new_defs.difference(&od).collect();
+        // #7 rename: match removed↔added defs by body (P11.2), then a 1:1 fallback
+        let mut removed_d: Vec<String> = od.difference(&new_defs).cloned().collect();
+        let mut added_d: Vec<String> = new_defs.difference(&od).cloned().collect();
+        removed_d.sort();
+        added_d.sort();
         let mut ren = HashMap::new();
-        if removed_d.len() == 1 && added_d.len() == 1 {
-            ren.insert(added_d[0].clone(), removed_d[0].clone());
+        if !removed_d.is_empty() && !added_d.is_empty() {
+            let ob = spec
+                .map(|sp| extract::symbol_bodies(sp, c.old.as_deref().unwrap_or("")))
+                .unwrap_or_default();
+            let nb = spec
+                .map(|sp| extract::symbol_bodies(sp, c.new.as_deref().unwrap_or("")))
+                .unwrap_or_default();
+            let body = |list: &[(String, String)], name: &str| {
+                list.iter().find(|(n, _)| n == name).map(|(_, b)| b.clone())
+            };
+            // a removed def whose (non-trivial) body reappears under a new name
+            for r in &removed_d {
+                let rb = match body(&ob, r) {
+                    Some(b) if b.len() >= 8 => b,
+                    _ => continue,
+                };
+                if let Some(a) = added_d
+                    .iter()
+                    .find(|a| !ren.contains_key(*a) && body(&nb, a).as_deref() == Some(rb.as_str()))
+                {
+                    ren.insert(a.clone(), r.clone());
+                }
+            }
+            // lone unmatched removed+added → rename even if the body changed
+            let rem_left: Vec<&String> = removed_d
+                .iter()
+                .filter(|r| !ren.values().any(|v| v == *r))
+                .collect();
+            let add_left: Vec<&String> = added_d.iter().filter(|a| !ren.contains_key(*a)).collect();
+            if rem_left.len() == 1 && add_left.len() == 1 {
+                ren.insert(add_left[0].clone(), rem_left[0].clone());
+            }
         }
         let renamed_old: HashSet<String> = ren.values().cloned().collect();
         // #7 delete / #5 import remove: gone from new, not a rename
