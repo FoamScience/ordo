@@ -212,3 +212,27 @@ pub const IDENT_KINDS: &[&str] = &[
 pub fn is_ident(kind: &str) -> bool {
     IDENT_KINDS.contains(&kind)
 }
+
+/// Is this def node a *type* (class/struct/enum/interface/…) rather than a
+/// function? Node kinds are distinctive enough to judge language-agnostically.
+/// Used to word signature vs type changes (#4).
+pub fn is_type_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "class_definition"
+            | "class_declaration"
+            | "abstract_class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration"
+            | "enum_declaration"
+            | "struct_item"
+            | "enum_item"
+            | "trait_item"
+            | "type_item"
+            | "type_declaration"
+            | "struct_specifier"
+            | "enum_specifier"
+            | "union_specifier"
+            | "class_specifier"
+    )
+}
