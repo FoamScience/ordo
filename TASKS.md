@@ -139,7 +139,7 @@ pick above/below vs "in <path>".
 - [ ] **#1 move detection** — a def whose (normalized) body leaves old file A and reappears in new file B → `moves foo from a.py` on B's def hunk, and `moves foo to b.py` (not "removes") on A's deletion hunk. Cross-file extension of P11.2's body matching. Rivals: difftastic/git only do single-file-pair / whole-file renames.
 - [ ] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
 - [ ] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
-- [ ] **#4 AI context pack** — `ordo pack` subcommand emitting the symbol/edge/rationale graph as compact LLM-ready context; positions ordo as the deterministic pre-processor AI reviewers otherwise re-derive per run.
+
 
 ## P13 — structural smells (native, from ordo's own AST — no style rules, no deps)
 
@@ -158,3 +158,9 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 - [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo pack`, schema, README.
 - [x] **catalog expansion (batch 1)** — py mutable-default-arg + bare-except (verdicts) + eval/exec; rust unsafe + transmute; js/ts eval + with (verdict); go unsafe + reflect. Tested (`p14_catalog`).
 - [x] **catalog expansion (batch 2)** — path-aware advisor; +c/cpp/java coverage. py assert-validation/dynamic-type/empty-except; rust static-mut; js/ts any/empty-catch; go panic; c/cpp goto + reinterpret_cast; java empty-catch + reflection. Tested (`p14_batch2`).
+
+## P15 — ordo-tui reviewer (feature-gated bin, engine stays pure)  ✅
+- [x] `[[bin]] ordo-tui` behind `tui` feature (ratatui optional; default build unaffected)
+- [x] git layer (shell) → `ordo::run` → ratatui review in comprehension order
+- [x] reading-order list (⚠ advisories, dimmed noise) + detail pane (rationale, notes, def→use edges, advisory ladders); j/k/g/G/q nav
+- [ ] follow-ups: mark-reviewed state, jump-along-edge (gd), diff body view, working-tree/range revs
