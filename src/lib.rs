@@ -1,5 +1,6 @@
 //! ordo — comprehension-optimized ordering of code-change hunks.
 //! Public entry: [`run`] takes an [`Input`] and returns the v1 [`Output`].
+mod advisories;
 mod extract;
 mod lang;
 pub mod model;
@@ -222,6 +223,8 @@ pub fn run(input: Input) -> Output {
                 order_index: order_index[fi][li],
                 rationale: ordered.rationale[gi].clone(),
                 noise: sems[fi][li].noise,
+                notes: sems[fi][li].notes.clone(),
+                advisories: sems[fi][li].advisories.clone(),
             });
         }
         files.push(FileOut {
@@ -305,9 +308,14 @@ pub fn pack(out: &Output) -> String {
         if let Some((path, h)) = by_id.get(o.hunk.as_str()) {
             let cat = format!("{:?}", h.category).to_lowercase();
             let noise = if h.noise { " · noise" } else { "" };
+            let notes = if h.notes.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", h.notes.join("; "))
+            };
             let _ = writeln!(
                 s,
-                "{path}:L{} [{cat}{noise}] {}",
+                "{path}:L{} [{cat}{noise}] {}{notes}",
                 h.new_range[0], h.rationale
             );
         }
@@ -327,6 +335,28 @@ pub fn pack(out: &Output) -> String {
         let _ = writeln!(s, "\n## dependencies");
         for e in &out.edges {
             let _ = writeln!(s, "{} → {}   {}", loc(&e.from), loc(&e.to), e.why);
+        }
+    }
+    // P14: advanced-construct advisories
+    let advs: Vec<(String, &crate::model::Advisory)> = out
+        .files
+        .iter()
+        .flat_map(|f| {
+            f.hunks.iter().flat_map(move |h| {
+                h.advisories
+                    .iter()
+                    .map(move |a| (format!("{}:L{}", f.path, h.new_range[0]), a))
+            })
+        })
+        .collect();
+    if !advs.is_empty() {
+        let _ = writeln!(s, "\n## advisories");
+        for (at, a) in advs {
+            let mark = if a.verdict { " ⚠" } else { "" };
+            let _ = writeln!(s, "{at}  {}{mark}", a.construct);
+            for line in a.message.lines() {
+                let _ = writeln!(s, "  {line}");
+            }
         }
     }
     s

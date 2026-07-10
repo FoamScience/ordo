@@ -78,6 +78,24 @@
                     "noise": {
                       "type": "boolean",
                       "description": "formatting-only or generated-file hunk, skippable for review; omitted when false"
+                    },
+                    "notes": {
+                      "type": "array",
+                      "description": "structural smells for a def introduced here (size/nesting/params); omitted when empty",
+                      "items": { "type": "string" }
+                    },
+                    "advisories": {
+                      "type": "array",
+                      "description": "advanced-construct advisories (P14); omitted when empty",
+                      "items": {
+                        "type": "object",
+                        "required": ["construct", "message"],
+                        "properties": {
+                          "construct": { "type": "string" },
+                          "message": { "type": "string", "description": "escalation-ladder guidance" },
+                          "verdict": { "type": "boolean", "description": "true when a concrete downgrade is suggested; omitted when false" }
+                        }
+                      }
                     }
                   }
                 }

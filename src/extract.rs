@@ -2,7 +2,7 @@
 //! enclosing definition, defines/uses. Parses the *new* content once with
 //! tree-sitter, exactly as gitplay's `order.lua` does.
 use crate::lang::{self, LangSpec};
-use crate::model::Category;
+use crate::model::{Advisory, Category};
 use similar::TextDiff;
 use std::collections::HashSet;
 use tree_sitter::{Node, Parser};
@@ -28,6 +28,10 @@ pub struct HunkSem {
     pub is_type: bool,
     /// formatting-only / generated-file hunk — skippable for review (P12.2)
     pub noise: bool,
+    /// structural smells for a def introduced here (P13.1)
+    pub notes: Vec<String>,
+    /// advanced-construct advisories in this hunk (P14)
+    pub advisories: Vec<Advisory>,
     pub start_row: usize,
     /// 1-based inclusive old-line range (for #5/#7 removal matching)
     pub old_range: [usize; 2],
@@ -43,6 +47,8 @@ impl HunkSem {
             uses: vec![],
             is_type: false,
             noise: false,
+            notes: vec![],
+            advisories: vec![],
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
         }
@@ -91,7 +97,14 @@ struct DefRec {
     s: usize,
     e: usize,
     name: String,
+    depth: usize,  // enclosing def count (nesting)
+    params: usize, // parameter count
 }
+
+// Structural-smell thresholds (P13.1) — change-shape signals, not style rules.
+const LARGE_LINES: usize = 60;
+const DEEP_NESTING: usize = 4;
+const MANY_PARAMS: usize = 6;
 
 /// Parse `new`, walk once, then classify each hunk. Returns None when the
 /// grammar can't parse (caller falls back to file order).
@@ -103,6 +116,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk]) -> Option<Vec<Hunk
     let mut c = Collected::default();
     let mut stack: Vec<String> = vec![];
     walk(tree.root_node(), src, spec, &mut stack, &mut c);
+    let adv = crate::advisories::advise(spec, tree.root_node(), src);
 
     let mut out = Vec::with_capacity(hunks.len());
     for h in hunks {
@@ -153,6 +167,25 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk]) -> Option<Vec<Hunk
         imports.sort();
         imports.dedup();
         let is_type = (r0..=r1).any(|r| c.type_rows.contains(&r));
+        // P13.1: structural smells for a def introduced in this hunk
+        let mut notes = vec![];
+        for d in c.defs.iter().filter(|d| r0 <= d.s && d.s <= r1) {
+            let lines = d.e - d.s + 1;
+            if lines >= LARGE_LINES {
+                notes.push(format!("large definition ({lines} lines)"));
+            }
+            if d.depth >= DEEP_NESTING {
+                notes.push(format!("deeply nested (depth {})", d.depth));
+            }
+            if d.params >= MANY_PARAMS {
+                notes.push(format!("{} params", d.params));
+            }
+        }
+        let advisories: Vec<Advisory> = adv
+            .iter()
+            .filter(|(row, _)| r0 <= *row && *row <= r1)
+            .map(|(_, a)| a.clone())
+            .collect();
         out.push(HunkSem {
             category,
             enclosing,
@@ -161,6 +194,8 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk]) -> Option<Vec<Hunk
             uses,
             is_type,
             noise: false,
+            notes,
+            advisories,
             start_row: r0,
             old_range: h.old_range,
         });
@@ -187,6 +222,8 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             c.type_rows.insert(sr);
         }
         c.decls.push((sr, own.clone()));
+        let depth = stack.len(); // enclosing defs before this one
+        let params = count_params(node);
         // collapse runs of nested anonymous defs in the qualified enclosing name
         let anon_dup = own == "<anonymous>" && stack.last().is_some_and(|s| s == "<anonymous>");
         if !anon_dup {
@@ -196,6 +233,8 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             s: sr,
             e: er,
             name: stack.join("."),
+            depth,
+            params,
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
@@ -215,6 +254,15 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
     for ch in node.named_children(&mut cur) {
         walk(ch, src, spec, stack, c);
     }
+}
+
+fn count_params(node: Node) -> usize {
+    node.child_by_field_name("parameters")
+        .map(|p| {
+            let mut cur = p.walk();
+            p.named_children(&mut cur).count()
+        })
+        .unwrap_or(0)
 }
 
 fn node_name(node: Node, src: &[u8]) -> Option<String> {

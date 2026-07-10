@@ -96,6 +96,17 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// P14: an advanced-construct advisory — a powerful/overusable language
+/// construct flagged with escalation-ladder guidance. `verdict` = true when a
+/// concrete downgrade is suggested (a signal backs it), else informational.
+#[derive(Debug, Clone, Serialize)]
+pub struct Advisory {
+    pub construct: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub verdict: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct HunkOut {
     pub id: String,
@@ -111,6 +122,12 @@ pub struct HunkOut {
     /// formatting-only or generated-file hunk — skippable for review (P12.2)
     #[serde(default, skip_serializing_if = "is_false")]
     pub noise: bool,
+    /// structural smells for a def introduced here (P13.1); omitted when empty
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    /// advanced-construct advisories in this hunk (P14); omitted when empty
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisories: Vec<Advisory>,
 }
 
 #[derive(Debug, Serialize)]
