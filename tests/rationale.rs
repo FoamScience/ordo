@@ -289,3 +289,127 @@ fn p12_pack_renders_sections() {
     assert!(p.contains("## dependencies"), "edges section");
     assert!(p.contains("util.py:L2"), "locates util helper");
 }
+
+#[test]
+fn p13_def_smells_size_and_params() {
+    let body: String = (0..65).map(|i| format!("    v{i} = {i}\n")).collect();
+    let big = format!("def big():\n{body}");
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "a.py", "old": "", "new": big },
+                { "path": "b.py", "old": "", "new": "def f(a, b, c, d, e, f, g):\n    return a\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    let notes: Vec<String> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().flat_map(|h| h.notes.clone()))
+        .collect();
+    assert!(
+        notes.iter().any(|n| n.starts_with("large definition")),
+        "large-def note: {notes:?}"
+    );
+    assert!(
+        notes.iter().any(|n| n == "7 params"),
+        "param-bloat note: {notes:?}"
+    );
+}
+
+#[test]
+fn p14_metaclass_advisories() {
+    let out = ordo::run(serde_json::from_value(serde_json::json!({
+        "changes": [
+            { "path": "reg.py", "old": "", "new": "class Registry(type):\n    def __init__(cls, name, bases, ns):\n        pass\n" },
+            { "path": "meta.py", "old": "", "new": "class Meta(type):\n    def __new__(mcs, name, bases, ns):\n        return type.__new__(mcs, name, bases, ns)\n" },
+            { "path": "use.py", "old": "", "new": "class Widget(metaclass=Meta):\n    pass\n" }
+        ]
+    })).unwrap());
+    let advs: Vec<(String, String, bool)> = out
+        .files
+        .iter()
+        .flat_map(|f| {
+            f.hunks.iter().flat_map(move |h| {
+                h.advisories
+                    .iter()
+                    .map(move |a| (f.path.clone(), a.construct.clone(), a.verdict))
+            })
+        })
+        .collect();
+    assert!(
+        advs.iter()
+            .any(|(p, c, v)| p == "reg.py" && c == "metaclass" && *v),
+        "register-only metaclass → downgrade verdict: {advs:?}"
+    );
+    assert!(
+        advs.iter()
+            .any(|(p, c, v)| p == "meta.py" && c == "metaclass" && !*v),
+        "__new__ metaclass → advisory only: {advs:?}"
+    );
+    assert!(
+        advs.iter()
+            .any(|(p, c, v)| p == "use.py" && c == "metaclass" && !*v),
+        "metaclass usage → advisory: {advs:?}"
+    );
+}
+
+#[test]
+fn p14_catalog() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let py = advs(
+        "a.py",
+        "def f(x=[]):\n    return x\ntry:\n    g()\nexcept:\n    pass\nr = eval('1')\n",
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "mutable-default-arg" && *v),
+        "mutable default: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "bare-except" && *v),
+        "bare except: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "eval/exec" && !*v),
+        "eval: {py:?}"
+    );
+
+    let rs = advs(
+        "a.rs",
+        "fn f(x: i32) {\n    unsafe {\n        let _y: u32 = std::mem::transmute(x);\n    }\n}\n",
+    );
+    assert!(rs.iter().any(|(c, _)| c == "unsafe"), "rust unsafe: {rs:?}");
+    assert!(
+        rs.iter().any(|(c, _)| c == "transmute"),
+        "transmute: {rs:?}"
+    );
+
+    let js = advs("a.js", "with (obj) { x = 1 }\nvar r = eval('1')\n");
+    assert!(js.iter().any(|(c, v)| c == "with" && *v), "with: {js:?}");
+    assert!(js.iter().any(|(c, _)| c == "eval"), "js eval: {js:?}");
+
+    let go = advs(
+        "a.go",
+        "package m\nfunc f(x any) {\n    _ = reflect.TypeOf(x)\n    _ = unsafe.Pointer(nil)\n}\n",
+    );
+    assert!(go.iter().any(|(c, _)| c == "reflect"), "reflect: {go:?}");
+    assert!(go.iter().any(|(c, _)| c == "unsafe"), "go unsafe: {go:?}");
+}

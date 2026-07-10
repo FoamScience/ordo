@@ -77,6 +77,31 @@ Cross-file lines (`defined in …`, `tests … (…)`) only appear when the chan
 is sent as one call with `cross_file: true` — a definer and its user must be
 visible together.
 
+Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
+**advisories** — advanced-construct guidance with an escalation ladder, and a
+`verdict` when a downgrade is concretely warranted:
+
+```
+registry.py:L2  metaclass ⚠
+  metaclass — 90% of the time the wrong tool. Lightest sufficient step:
+  1. configure one attribute → __set_name__ (descriptor)
+  2. react to subclassing → __init_subclass__
+  3. replace the class after it's built → class decorator
+  4. rewrite the class as built / control instances → metaclass
+  ⚠ this metaclass overrides only __init__ — __init_subclass__ likely suffices.
+```
+
+Advisories are a curated catalog (`src/advisories.rs`), not a style linter —
+detection is deterministic tree-sitter, verdicts fire only when the pattern is
+concretely wrong. Current catalog:
+
+| lang | advisory (ladder) | verdict (concretely wrong) |
+|---|---|---|
+| python | metaclass, `eval`/`exec` | mutable-default-arg, bare-`except`, register-only metaclass |
+| rust | `unsafe`, `mem::transmute` | — |
+| js/ts | `eval` | `with` |
+| go | `unsafe`, `reflect` | — |
+
 ## Library API
 
 ```js

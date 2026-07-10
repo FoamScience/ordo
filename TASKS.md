@@ -140,3 +140,20 @@ pick above/below vs "in <path>".
 - [ ] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
 - [ ] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
 - [ ] **#4 AI context pack** — `ordo pack` subcommand emitting the symbol/edge/rationale graph as compact LLM-ready context; positions ordo as the deterministic pre-processor AI reviewers otherwise re-derive per run.
+
+## P13 — structural smells (native, from ordo's own AST — no style rules, no deps)
+
+Change-shape signals as `notes`, not judgments. Language-agnostic thresholds.
+
+- [x] **P13.1 per-hunk def smells** — a def introduced in a hunk that is large (≥60 lines), deeply nested (≥4 ancestors), or param-heavy (≥6 params) → `hunks[].notes[]` (`large definition (120 lines)`, `deeply nested (depth 4)`, `7 params`). Data: DefRec span/depth + params node count.
+- [ ] **P13.2 changeset notes** — `Output.notes[]`: `code changed but no test touched` (code file changed, no test file in changeset), `path: N hunks (high churn)` (≥10 hunks). Needs `is_test_path` shared (move to lang.rs).
+- [x] **P13.3 surface** — fold notes into `ordo pack`; document `hunks[].notes` + `notes` in schema/v1.json + README.
+
+## P14 — advanced-construct advisor (curated catalog, not a linter)
+
+Detect powerful/overusable constructs, attach an escalation-ladder advisory, and
+a downgrade **verdict** only where a body-inspection signal backs it.
+`src/advisories.rs` — deterministic tree-sitter detection; `hunks[].advisories`.
+
+- [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo pack`, schema, README.
+- [x] **catalog expansion (batch 1)** — py mutable-default-arg + bare-except (verdicts) + eval/exec; rust unsafe + transmute; js/ts eval + with (verdict); go unsafe + reflect. Tested (`p14_catalog`).
