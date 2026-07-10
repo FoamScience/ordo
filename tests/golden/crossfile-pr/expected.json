@@ -85,5 +85,11 @@
       "to": "h0",
       "why": "def→use: helper"
     }
+  ],
+  "clusters": [
+    [
+      "h0",
+      "h1"
+    ]
   ]
 }

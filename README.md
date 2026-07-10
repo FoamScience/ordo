@@ -36,6 +36,7 @@ build.
 
 ```sh
 ordo order --json < input.json > output.json
+ordo pack  --json < input.json                 # compact LLM-ready review context
 ordo review path/to.patch                      # or: git diff | ordo review
 git diff -U100000 | ordo review --full-context # modified files get full semantics
 ```
@@ -52,8 +53,10 @@ Input / output are frozen as **schema v1** (`schema/v1.json`):
 A change may instead carry a `diff` (unified/git). See the ceiling below.
 
 Output carries the global `order`, per-file `hunks` (with `category`,
-`enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`), the
-`groups`, and the def→use `edges`.
+`enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, and
+`noise` for skippable formatting/generated hunks), the `groups`, the def→use
+`edges`, and `clusters` — the change's independent parts (one ⇒ atomic, many ⇒
+a candidate PR split). `ordo pack` renders all of it as compact review context.
 
 ## Rationale
 

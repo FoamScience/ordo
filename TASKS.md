@@ -133,3 +133,10 @@ pick above/below vs "in <path>".
 - [x] **collapse nested `<anonymous>`** in enclosing paths (`M.start_pick.<anonymous>.<anonymous>` → `M.start_pick.<anonymous>`) — dedupe consecutive anon in the def stack.
 - [x] **rename beyond 1:1** — match removed↔added defs by normalized body (`extract::symbol_bodies`) + lone-pair 1:1 fallback for body-changed renames.
 - [~] **signature-change use counts** — **skipped**: the count only sees changed hunks (0 when callers unchanged → misleading); provenance (`used by X below`) already conveys "it's used".
+
+## P12 — competitive features  ✅ (borrow rivals' strengths into ordering+rationale)
+
+- [ ] **#1 move detection** — a def whose (normalized) body leaves old file A and reappears in new file B → `moves foo from a.py` on B's def hunk, and `moves foo to b.py` (not "removes") on A's deletion hunk. Cross-file extension of P11.2's body matching. Rivals: difftastic/git only do single-file-pair / whole-file renames.
+- [ ] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
+- [ ] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
+- [ ] **#4 AI context pack** — `ordo pack` subcommand emitting the symbol/edge/rationale graph as compact LLM-ready context; positions ordo as the deterministic pre-processor AI reviewers otherwise re-derive per run.

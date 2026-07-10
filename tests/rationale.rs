@@ -160,3 +160,132 @@ fn p11_multi_rename_by_body() {
         "genuine new def: {rats:?}"
     );
 }
+
+#[test]
+fn p12_move_detection() {
+    // helper's body leaves a.py and reappears in b.py (unchanged) → a move, not add+remove
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def helper():\n    return 42\ndef keep():\n    return 1\n", "new": "def keep():\n    return 1\n" },
+            { "path": "b.py", "old": "# b\n", "new": "# b\ndef helper():\n    return 42\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().any(|r| r == "moves helper from a.py"),
+        "move-in on target: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r == "moves helper to b.py"),
+        "move-out on source: {rats:?}"
+    );
+    assert!(
+        !rats
+            .iter()
+            .any(|r| r.contains("removes helper") || r.starts_with("adds helper")),
+        "not add+remove: {rats:?}"
+    );
+}
+
+#[test]
+fn p12_noise_formatting_and_generated() {
+    // whitespace-only body change → formatting-only noise
+    let a = ordo::run(serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "def f():\n    return  1\n", "new": "def f():\n    return 1\n" }]
+    })).unwrap());
+    assert!(
+        a.files[0].hunks.iter().all(|h| h.noise),
+        "formatting hunk flagged noise"
+    );
+    assert!(
+        a.files[0]
+            .hunks
+            .iter()
+            .any(|h| h.rationale == "formatting only"),
+        "formatting rationale: {:?}",
+        a.files[0]
+            .hunks
+            .iter()
+            .map(|h| &h.rationale)
+            .collect::<Vec<_>>()
+    );
+
+    // generated/lockfile path → noise regardless of content
+    let b = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": "package-lock.json", "old": "{}\n", "new": "{ \"a\": 1 }\n" }]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        b.files[0].hunks.iter().all(|h| h.noise),
+        "generated hunk flagged noise"
+    );
+    assert!(
+        b.files[0]
+            .hunks
+            .iter()
+            .any(|h| h.rationale == "generated file"),
+        "generated rationale"
+    );
+}
+
+#[test]
+fn p12_clusters_split_and_connected() {
+    // two unrelated files → two independent parts
+    let split = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "a.py", "old": "# a\n", "new": "# a\ndef x():\n    return 1\nq = x()\n" },
+                { "path": "b.py", "old": "# b\n", "new": "# b\ndef z():\n    return 2\nr = z()\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        split.clusters.len(),
+        2,
+        "unrelated files split: {:?}",
+        split.clusters
+    );
+    let total: usize = split.files.iter().map(|f| f.hunks.len()).sum();
+    assert_eq!(
+        split.clusters.iter().map(|c| c.len()).sum::<usize>(),
+        total,
+        "clusters partition all hunks"
+    );
+
+    // cross-file def→use links into one part
+    let connected = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        connected.clusters.len(),
+        1,
+        "cross-file link → one part: {:?}",
+        connected.clusters
+    );
+}
+
+#[test]
+fn p12_pack_renders_sections() {
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    let p = ordo::pack(&out);
+    assert!(p.contains("# ordo review pack"), "header:\n{p}");
+    assert!(p.contains("## reading order"), "order section");
+    assert!(p.contains("## dependencies"), "edges section");
+    assert!(p.contains("util.py:L2"), "locates util helper");
+}
