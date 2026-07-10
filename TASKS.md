@@ -157,3 +157,4 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 
 - [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo pack`, schema, README.
 - [x] **catalog expansion (batch 1)** — py mutable-default-arg + bare-except (verdicts) + eval/exec; rust unsafe + transmute; js/ts eval + with (verdict); go unsafe + reflect. Tested (`p14_catalog`).
+- [x] **catalog expansion (batch 2)** — path-aware advisor; +c/cpp/java coverage. py assert-validation/dynamic-type/empty-except; rust static-mut; js/ts any/empty-catch; go panic; c/cpp goto + reinterpret_cast; java empty-catch + reflection. Tested (`p14_batch2`).

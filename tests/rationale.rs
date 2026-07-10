@@ -413,3 +413,80 @@ fn p14_catalog() {
     assert!(go.iter().any(|(c, _)| c == "reflect"), "reflect: {go:?}");
     assert!(go.iter().any(|(c, _)| c == "unsafe"), "go unsafe: {go:?}");
 }
+
+#[test]
+fn p14_batch2() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let py = advs("svc.py", "def check(x):\n    assert x > 0\nC = type('C', (), {})\ntry:\n    f()\nexcept ValueError:\n    pass\n");
+    assert!(
+        py.iter().any(|(c, v)| c == "assert-validation" && *v),
+        "assert: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, _)| c == "dynamic-type"),
+        "dynamic type: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "empty-catch" && *v),
+        "py empty catch: {py:?}"
+    );
+
+    let rs = advs("a.rs", "static mut COUNT: u32 = 0;\n");
+    assert!(
+        rs.iter().any(|(c, v)| c == "static-mut" && *v),
+        "static mut: {rs:?}"
+    );
+
+    let js = advs("a.js", "try { f() } catch (e) {}\n");
+    assert!(
+        js.iter().any(|(c, v)| c == "empty-catch" && *v),
+        "js empty catch: {js:?}"
+    );
+    let ts = advs("a.ts", "let x: any = 1;\n");
+    assert!(ts.iter().any(|(c, _)| c == "any"), "ts any: {ts:?}");
+
+    let go = advs("svc.go", "package m\nfunc f() {\n    panic(\"x\")\n}\n");
+    assert!(go.iter().any(|(c, _)| c == "panic"), "go panic: {go:?}");
+
+    let c = advs(
+        "a.c",
+        "int f() {\n    goto done;\ndone:\n    return 0;\n}\n",
+    );
+    assert!(c.iter().any(|(c, _)| c == "goto"), "c goto: {c:?}");
+
+    let cpp = advs(
+        "a.cpp",
+        "int f(char* p) {\n    return *reinterpret_cast<int*>(p);\n}\n",
+    );
+    assert!(
+        cpp.iter().any(|(c, _)| c == "reinterpret_cast"),
+        "cpp reinterpret_cast: {cpp:?}"
+    );
+
+    let java = advs("A.java", "class A {\n    void f() throws Exception {\n        try { g(); } catch (Exception e) {}\n        java.lang.reflect.Method m = null;\n        m.setAccessible(true);\n    }\n}\n");
+    assert!(
+        java.iter().any(|(c, v)| c == "empty-catch" && *v),
+        "java empty catch: {java:?}"
+    );
+    assert!(
+        java.iter().any(|(c, _)| c == "reflection"),
+        "java reflection: {java:?}"
+    );
+}

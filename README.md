@@ -95,12 +95,16 @@ Advisories are a curated catalog (`src/advisories.rs`), not a style linter —
 detection is deterministic tree-sitter, verdicts fire only when the pattern is
 concretely wrong. Current catalog:
 
-| lang | advisory (ladder) | verdict (concretely wrong) |
+| lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
 |---|---|---|
-| python | metaclass, `eval`/`exec` | mutable-default-arg, bare-`except`, register-only metaclass |
-| rust | `unsafe`, `mem::transmute` | — |
-| js/ts | `eval` | `with` |
-| go | `unsafe`, `reflect` | — |
+| python | metaclass, `eval`/`exec`, dynamic `type()` | mutable-default-arg, bare-`except`, empty-`except`, `assert`-validation, register-only metaclass |
+| rust | `unsafe`, `mem::transmute` | `static mut` |
+| js/ts | `eval`, `any` | `with`, empty-`catch` |
+| go | `unsafe`, `reflect`, `panic` (non-test) | — |
+| c / c++ | `goto`, `reinterpret_cast` | — |
+| java | reflection (`setAccessible`) | empty-`catch` |
+
+`assert`/`panic` fire only outside test files.
 
 ## Library API
 
