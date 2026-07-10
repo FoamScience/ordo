@@ -27,19 +27,7 @@ pub struct OrderedAll {
     pub clusters: Vec<Vec<usize>>,
 }
 
-// #6: does this path look like a test file? (tests/ dir, test_*, *_test, *_spec, *.test/spec)
-fn is_test_path(p: &str) -> bool {
-    let name = p.rsplit('/').next().unwrap_or(p);
-    p.contains("/tests/")
-        || p.starts_with("tests/")
-        || p.contains("/test/")
-        || p.starts_with("test/")
-        || name.starts_with("test_")
-        || name.contains("_test.")
-        || name.contains("_spec.")
-        || name.contains(".test.")
-        || name.contains(".spec.")
-}
+use crate::lang::is_test_path;
 
 fn cat_rank(c: Category) -> u8 {
     match c {

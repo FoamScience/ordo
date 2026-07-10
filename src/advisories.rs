@@ -2,33 +2,35 @@
 //! constructs and attach escalation-ladder guidance, with a downgrade *verdict*
 //! only where the pattern is deterministically wrong. A curated catalog of
 //! senior review knowledge — deliberately NOT a style linter.
-use crate::lang::LangSpec;
+use crate::lang::{is_test_path, LangSpec};
 use crate::model::Advisory;
 use tree_sitter::Node;
 
 /// Detect constructs in the parsed *new* tree → (0-based start row, advisory).
-pub fn advise(spec: &LangSpec, root: Node, src: &[u8]) -> Vec<(usize, Advisory)> {
+pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize, Advisory)> {
     let mut out = vec![];
-    let walker = match spec.name {
+    let walker: Rule = match spec.name {
         "python" => walk_python,
         "rust" => walk_rust,
         "javascript" | "typescript" | "tsx" => walk_js,
         "go" => walk_go,
+        "c" => walk_c,
+        "cpp" => walk_cpp,
+        "java" => walk_java,
         _ => return out,
     };
-    walk(root, src, walker, &mut out);
+    walk(root, src, path, walker, &mut out);
     out
 }
 
 type Out = Vec<(usize, Advisory)>;
-type Rule = fn(Node, &[u8], &mut Out);
+type Rule = fn(Node, &[u8], &str, &mut Out);
 
-// generic post-order-ish walk applying a per-language rule to every named node
-fn walk(node: Node, src: &[u8], rule: Rule, out: &mut Out) {
-    rule(node, src, out);
+fn walk(node: Node, src: &[u8], path: &str, rule: Rule, out: &mut Out) {
+    rule(node, src, path, out);
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        walk(ch, src, rule, out);
+        walk(ch, src, path, rule, out);
     }
 }
 
@@ -47,6 +49,15 @@ fn callee_text<'a>(call: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
     call.child_by_field_name(field)
         .and_then(|f| f.utf8_text(src).ok())
 }
+
+fn named<'a>(node: Node<'a>) -> Vec<Node<'a>> {
+    let mut cur = node.walk();
+    node.named_children(&mut cur).collect()
+}
+
+const EMPTY_CATCH: &str = "\
+empty catch — the error is silently swallowed and failures vanish.
+Handle it, re-raise, or at minimum log; never an empty handler.";
 
 // ------------------------------------------------------------------- python
 
@@ -72,7 +83,17 @@ eval/exec — arbitrary code execution. Lightest sufficient step:
 3. import by path → importlib
 4. run arbitrary code → eval/exec (never on untrusted input)";
 
-fn walk_python(node: Node, src: &[u8], out: &mut Out) {
+const ASSERT_PY: &str = "\
+assert for validation — assertions are stripped under `python -O`.
+Raise a real exception (ValueError/TypeError) for runtime checks; keep assert for invariants.";
+
+const DYNAMIC_TYPE: &str = "\
+dynamic type() class creation — opaque to readers and tools.
+1. a normal class / @dataclass
+2. namedtuple / Enum for simple shapes
+3. type() only for genuinely runtime-computed classes";
+
+fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
     match node.kind() {
         "class_definition" => {
             if let Some(a) = python_metaclass(node, src) {
@@ -80,36 +101,52 @@ fn walk_python(node: Node, src: &[u8], out: &mut Out) {
             }
         }
         "default_parameter" | "typed_default_parameter" => {
-            if let Some(v) = node.child_by_field_name("value") {
-                if matches!(v.kind(), "list" | "dictionary" | "set") {
-                    push(out, node, "mutable-default-arg", MUTABLE_DEFAULT, true);
-                }
+            if node
+                .child_by_field_name("value")
+                .is_some_and(|v| matches!(v.kind(), "list" | "dictionary" | "set"))
+            {
+                push(out, node, "mutable-default-arg", MUTABLE_DEFAULT, true);
             }
         }
         "except_clause" => {
-            // bare `except:` — first named child is the body block, no exception type
-            let mut cur = node.walk();
-            if node.named_children(&mut cur).next().map(|c| c.kind()) == Some("block") {
+            let kids = named(node);
+            if kids.first().map(|c| c.kind()) == Some("block") {
                 push(out, node, "bare-except", BARE_EXCEPT, true);
+            } else if kids
+                .last()
+                .is_some_and(|b| b.kind() == "block" && only_pass(*b))
+            {
+                push(out, node, "empty-catch", EMPTY_CATCH, true);
             }
         }
-        "call" => {
-            if matches!(
-                callee_text(node, "function", src),
-                Some("eval") | Some("exec")
-            ) {
-                push(out, node, "eval/exec", EVAL_PY, false);
-            }
+        "assert_statement" if !is_test_path(path) => {
+            push(out, node, "assert-validation", ASSERT_PY, true);
         }
+        "call" => match callee_text(node, "function", src) {
+            Some("eval") | Some("exec") => push(out, node, "eval/exec", EVAL_PY, false),
+            Some("type")
+                if node
+                    .child_by_field_name("arguments")
+                    .map(|a| named(a).len())
+                    == Some(3) =>
+            {
+                push(out, node, "dynamic-type", DYNAMIC_TYPE, false);
+            }
+            _ => {}
+        },
         _ => {}
     }
+}
+
+fn only_pass(block: Node) -> bool {
+    let kids = named(block);
+    kids.len() == 1 && kids[0].kind() == "pass_statement"
 }
 
 fn python_metaclass(class: Node, src: &[u8]) -> Option<Advisory> {
     let supers = class.child_by_field_name("superclasses")?;
     let (mut uses_meta, mut defines_meta) = (false, false);
-    let mut cur = supers.walk();
-    for arg in supers.named_children(&mut cur) {
+    for arg in named(supers) {
         if arg.kind() == "keyword_argument" {
             if arg
                 .child_by_field_name("name")
@@ -161,8 +198,7 @@ fn python_metaclass(class: Node, src: &[u8]) -> Option<Advisory> {
 fn class_methods(class: Node, src: &[u8]) -> Vec<String> {
     let mut out = vec![];
     if let Some(body) = class.child_by_field_name("body") {
-        let mut cur = body.walk();
-        for stmt in body.named_children(&mut cur) {
+        for stmt in named(body) {
             if stmt.kind() == "function_definition" {
                 if let Some(n) = stmt
                     .child_by_field_name("name")
@@ -190,13 +226,23 @@ mem::transmute — the biggest hammer, rarely justified.
 3. byte reinterpret → bytemuck / a pointer cast
 4. transmute (last resort; same size, well-understood layout)";
 
-fn walk_rust(node: Node, src: &[u8], out: &mut Out) {
+const STATIC_MUT_RS: &str = "\
+static mut — data races and UB the moment it's touched from >1 place.
+1. immutable static / const
+2. OnceLock / LazyLock for init-once
+3. atomics for counters/flags
+4. Mutex/RwLock for shared mutable state";
+
+fn walk_rust(node: Node, src: &[u8], _path: &str, out: &mut Out) {
     match node.kind() {
         "unsafe_block" => push(out, node, "unsafe", UNSAFE_RS, false),
-        "call_expression" => {
-            if callee_text(node, "function", src).is_some_and(|t| t.ends_with("transmute")) {
-                push(out, node, "transmute", TRANSMUTE_RS, false);
-            }
+        "static_item" if named(node).iter().any(|c| c.kind() == "mutable_specifier") => {
+            push(out, node, "static-mut", STATIC_MUT_RS, true);
+        }
+        "call_expression"
+            if callee_text(node, "function", src).is_some_and(|t| t.ends_with("transmute")) =>
+        {
+            push(out, node, "transmute", TRANSMUTE_RS, false);
         }
         _ => {}
     }
@@ -215,13 +261,28 @@ const WITH_JS: &str = "\
 `with` — ambiguous scope resolution; illegal in strict mode / modules.
 Destructure or alias the object explicitly instead.";
 
-fn walk_js(node: Node, src: &[u8], out: &mut Out) {
+const ANY_TS: &str = "\
+`any` — opts out of type checking and infects everything it touches.
+1. write the real type
+2. `unknown` + narrow at the boundary
+3. a generic parameter
+4. any (last resort, isolate it)";
+
+fn walk_js(node: Node, src: &[u8], _path: &str, out: &mut Out) {
     match node.kind() {
         "with_statement" => push(out, node, "with", WITH_JS, true),
-        "call_expression" => {
-            if callee_text(node, "function", src) == Some("eval") {
-                push(out, node, "eval", EVAL_JS, false);
-            }
+        "predefined_type" if node.utf8_text(src) == Ok("any") => {
+            push(out, node, "any", ANY_TS, false)
+        }
+        "call_expression" if callee_text(node, "function", src) == Some("eval") => {
+            push(out, node, "eval", EVAL_JS, false);
+        }
+        "catch_clause"
+            if node
+                .child_by_field_name("body")
+                .is_some_and(|b| named(b).is_empty()) =>
+        {
+            push(out, node, "empty-catch", EMPTY_CATCH, true);
         }
         _ => {}
     }
@@ -241,15 +302,81 @@ reflect — slow, unchecked at compile time, hard to read.
 3. code generation
 4. reflect (last resort)";
 
-fn walk_go(node: Node, src: &[u8], out: &mut Out) {
-    if node.kind() == "selector_expression" {
-        match node
+const PANIC_GO: &str = "\
+panic in library code — crashes the caller's whole process.
+Return an error and let the caller decide; reserve panic for truly unrecoverable state.";
+
+fn walk_go(node: Node, src: &[u8], path: &str, out: &mut Out) {
+    match node.kind() {
+        "selector_expression" => match node
             .child_by_field_name("operand")
             .and_then(|o| o.utf8_text(src).ok())
         {
             Some("unsafe") => push(out, node, "unsafe", UNSAFE_GO, false),
             Some("reflect") => push(out, node, "reflect", REFLECT_GO, false),
             _ => {}
+        },
+        "call_expression"
+            if !is_test_path(path) && callee_text(node, "function", src) == Some("panic") =>
+        {
+            push(out, node, "panic", PANIC_GO, false);
         }
+        _ => {}
+    }
+}
+
+// -------------------------------------------------------------------- c / c++
+
+const GOTO: &str = "\
+goto — tangles control flow.
+1. structured loops / early return
+2. RAII / scope guards for cleanup (C++)
+3. a single cleanup label is the rare defensible case (C error paths)";
+
+const REINTERPRET_CAST: &str = "\
+reinterpret_cast — reinterprets bits with no checks (often UB).
+1. value convert → static_cast
+2. type-pun → std::bit_cast (C++20) / memcpy
+3. reinterpret_cast (last resort; you own the aliasing/lifetime rules)";
+
+fn walk_c(node: Node, _src: &[u8], _path: &str, out: &mut Out) {
+    if node.kind() == "goto_statement" {
+        push(out, node, "goto", GOTO, false);
+    }
+}
+
+fn walk_cpp(node: Node, src: &[u8], path: &str, out: &mut Out) {
+    walk_c(node, src, path, out);
+    // reinterpret_cast<T>(x) — the cast keyword leads a call-like expression
+    if node
+        .utf8_text(src)
+        .is_ok_and(|t| t.starts_with("reinterpret_cast"))
+        && node.kind().contains("expression")
+    {
+        push(out, node, "reinterpret_cast", REINTERPRET_CAST, false);
+    }
+}
+
+// -------------------------------------------------------------------- java
+
+const REFLECTION_JAVA: &str = "\
+reflection (setAccessible/forName) — breaks encapsulation and compile-time safety.
+1. an interface + a normal call
+2. a factory / ServiceLoader
+3. reflection (last resort, e.g. a framework)";
+
+fn walk_java(node: Node, src: &[u8], _path: &str, out: &mut Out) {
+    match node.kind() {
+        "catch_clause"
+            if node
+                .child_by_field_name("body")
+                .is_some_and(|b| named(b).is_empty()) =>
+        {
+            push(out, node, "empty-catch", EMPTY_CATCH, true);
+        }
+        "method_invocation" if callee_text(node, "name", src) == Some("setAccessible") => {
+            push(out, node, "reflection", REFLECTION_JAVA, false);
+        }
+        _ => {}
     }
 }

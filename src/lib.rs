@@ -386,7 +386,7 @@ fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkS
         (vec![], String::new(), false)
     };
     let mut sems = lang::for_path(&change.path)
-        .and_then(|spec| analyze(spec, &new, &raw))
+        .and_then(|spec| analyze(spec, &new, &raw, &change.path))
         .unwrap_or_else(|| raw.iter().map(HunkSem::other).collect());
     // P12.2 noise: generated/vendored path, or a formatting-only hunk
     let generated = lang::is_generated_path(&change.path);

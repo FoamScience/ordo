@@ -108,7 +108,7 @@ const MANY_PARAMS: usize = 6;
 
 /// Parse `new`, walk once, then classify each hunk. Returns None when the
 /// grammar can't parse (caller falls back to file order).
-pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk]) -> Option<Vec<HunkSem>> {
+pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Option<Vec<HunkSem>> {
     let mut parser = Parser::new();
     parser.set_language(&(spec.language)()).ok()?;
     let tree = parser.parse(new, None)?;
@@ -116,7 +116,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk]) -> Option<Vec<Hunk
     let mut c = Collected::default();
     let mut stack: Vec<String> = vec![];
     walk(tree.root_node(), src, spec, &mut stack, &mut c);
-    let adv = crate::advisories::advise(spec, tree.root_node(), src);
+    let adv = crate::advisories::advise(spec, tree.root_node(), src, path);
 
     let mut out = Vec::with_capacity(hunks.len());
     for h in hunks {
