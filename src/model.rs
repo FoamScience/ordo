@@ -71,6 +71,9 @@ pub struct Output {
     pub files: Vec<FileOut>,
     pub groups: Vec<Group>,
     pub edges: Vec<Edge>,
+    /// P12.3: independent parts of the change (hunk ids per cluster). One
+    /// cluster ⇒ atomic; multiple ⇒ candidate PR split.
+    pub clusters: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +108,9 @@ pub struct HunkOut {
     pub group: String,
     pub order_index: usize,
     pub rationale: String,
+    /// formatting-only or generated-file hunk — skippable for review (P12.2)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub noise: bool,
 }
 
 #[derive(Debug, Serialize)]

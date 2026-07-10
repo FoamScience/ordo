@@ -213,6 +213,31 @@ pub fn is_ident(kind: &str) -> bool {
     IDENT_KINDS.contains(&kind)
 }
 
+/// Generated / vendored / lockfile paths whose hunks are noise to a reviewer.
+pub fn is_generated_path(p: &str) -> bool {
+    let name = p.rsplit('/').next().unwrap_or(p);
+    matches!(
+        name,
+        "package-lock.json"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "Cargo.lock"
+            | "go.sum"
+            | "poetry.lock"
+            | "Gemfile.lock"
+            | "composer.lock"
+            | "flake.lock"
+            | "uv.lock"
+    ) || name.ends_with(".min.js")
+        || name.ends_with(".min.css")
+        || name.ends_with(".map")
+        || name.ends_with(".pb.go")
+        || name.ends_with("_pb2.py")
+        || p.contains("/generated/")
+        || p.contains("/vendor/")
+        || p.contains("/node_modules/")
+}
+
 /// Is this def node a *type* (class/struct/enum/interface/…) rather than a
 /// function? Node kinds are distinctive enough to judge language-agnostically.
 /// Used to word signature vs type changes (#4).

@@ -74,7 +74,11 @@
                     "uses": { "type": "array", "items": { "type": "string" } },
                     "group": { "type": "string" },
                     "order_index": { "type": "integer" },
-                    "rationale": { "type": "string" }
+                    "rationale": { "type": "string" },
+                    "noise": {
+                      "type": "boolean",
+                      "description": "formatting-only or generated-file hunk, skippable for review; omitted when false"
+                    }
                   }
                 }
               }
@@ -104,6 +108,11 @@
               "why": { "type": "string" }
             }
           }
+        },
+        "clusters": {
+          "type": "array",
+          "description": "independent parts of the change (connected components of the group def→use graph); each is an array of hunk ids. One cluster = atomic; multiple = candidate PR split.",
+          "items": { "type": "array", "items": { "type": "string" } }
         }
       }
     }

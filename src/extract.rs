@@ -26,6 +26,8 @@ pub struct HunkSem {
     pub uses: Vec<String>,
     /// a type-def (class/struct/enum/…) starts in this hunk (#4 wording)
     pub is_type: bool,
+    /// formatting-only / generated-file hunk — skippable for review (P12.2)
+    pub noise: bool,
     pub start_row: usize,
     /// 1-based inclusive old-line range (for #5/#7 removal matching)
     pub old_range: [usize; 2],
@@ -40,6 +42,7 @@ impl HunkSem {
             imports: vec![],
             uses: vec![],
             is_type: false,
+            noise: false,
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
         }
@@ -157,6 +160,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk]) -> Option<Vec<Hunk
             imports,
             uses,
             is_type,
+            noise: false,
             start_row: r0,
             old_range: h.old_range,
         });

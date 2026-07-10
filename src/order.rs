@@ -22,6 +22,9 @@ pub struct OrderedAll {
     /// (from global idx, to global idx, why)
     pub edges: Vec<(usize, usize, String)>,
     pub rationale: Vec<String>,
+    /// P12.3: independent parts — connected components of the group def→use
+    /// graph, each a sorted list of global hunk indices.
+    pub clusters: Vec<Vec<usize>>,
 }
 
 // #6: does this path look like a test file? (tests/ dir, test_*, *_test, *_spec, *.test/spec)
@@ -52,6 +55,7 @@ pub fn order_all(
     old_defs: &[HashSet<String>],
     old_imports: &[HashSet<String>],
     rename: &[HashMap<String, String>],
+    moved_in: &[HashMap<String, String>],
     removals: &[Vec<(usize, String)>],
     strategy: Strategy,
     cross_file: bool,
@@ -250,12 +254,35 @@ pub fn order_all(
         old_defs,
         old_imports,
         rename,
+        moved_in,
         removals,
         cross_file,
     };
     let rationale = (0..n)
         .map(|i| rationale_for(i, &sem, &group_idx, &ctx))
         .collect();
+
+    // P12.3: connected components of the group def→use graph = independent parts
+    let mut parent: Vec<usize> = (0..g).collect();
+    for &(a, b) in &gedges {
+        let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
+        if ra != rb {
+            parent[ra] = rb;
+        }
+    }
+    let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
+    for gi in 0..g {
+        let r = uf_find(&mut parent, gi);
+        by_root
+            .entry(r)
+            .or_default()
+            .extend(groups[gi].members.iter().copied());
+    }
+    let mut clusters: Vec<Vec<usize>> = by_root.into_values().collect();
+    for c in &mut clusters {
+        c.sort_unstable();
+    }
+    clusters.sort_by_key(|c| c.first().copied().unwrap_or(0));
 
     OrderedAll {
         coord,
@@ -264,7 +291,16 @@ pub fn order_all(
         groups,
         edges,
         rationale,
+        clusters,
     }
+}
+
+fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
 }
 
 struct RatCtx<'a> {
@@ -277,6 +313,7 @@ struct RatCtx<'a> {
     old_defs: &'a [HashSet<String>],
     old_imports: &'a [HashSet<String>],
     rename: &'a [HashMap<String, String>],
+    moved_in: &'a [HashMap<String, String>],
     removals: &'a [Vec<(usize, String)>],
     cross_file: bool,
 }
@@ -343,6 +380,15 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     let my_file = ctx.group_file[mine];
     let g = ctx.groups.len();
 
+    // P12.2: noise hunks are skippable — say why, skip semantic wording
+    if s.noise {
+        return if crate::lang::is_generated_path(&ctx.paths[my_file]) {
+            "generated file".to_string()
+        } else {
+            "formatting only".to_string()
+        };
+    }
+
     if s.category == Category::Import {
         if s.imports.is_empty() {
             return "import".to_string();
@@ -360,8 +406,16 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         return format!("{verb} {}", s.imports.join(", "));
     }
 
-    // definition side: rename (#7), else adds (new) vs changes (pre-existing)
+    // definition side: move (P12.1) / rename (#7), else adds vs changes
     if !s.defines.is_empty() {
+        // P12.1: this hunk introduces a def that moved in from another file
+        if let Some((sym, src)) = ctx
+            .moved_in
+            .get(my_file)
+            .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|src| (d, src))))
+        {
+            return format!("moves {sym} from {src}");
+        }
         // #7: this hunk introduces the new name of a 1:1 renamed definition
         if let Some(old) = ctx
             .rename
