@@ -117,8 +117,10 @@ cargo run --features tui --bin ordo-tui -- <rev>   # defaults to HEAD
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders the
 change **in comprehension order**: a reading-order list (advisories `⚠`, noise
-dimmed) beside a detail pane (rationale, notes, def→use edges, advisory ladders).
-`j`/`k` move, `g`/`G` jump, `q` quits. The engine never learns what git is.
+dimmed, reviewed `✓`) beside a detail pane showing the hunk diff, rationale,
+notes, def→use edges and advisory ladders. `j`/`k` move, `x` mark-reviewed (with
+an `n/N` progress count), `g`/`G` ends, `q` quits. The engine never learns what
+git is.
 
 ## Library API
 

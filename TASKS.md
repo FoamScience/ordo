@@ -163,4 +163,5 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 - [x] `[[bin]] ordo-tui` behind `tui` feature (ratatui optional; default build unaffected)
 - [x] git layer (shell) → `ordo::run` → ratatui review in comprehension order
 - [x] reading-order list (⚠ advisories, dimmed noise) + detail pane (rationale, notes, def→use edges, advisory ladders); j/k/g/G/q nav
-- [ ] follow-ups: mark-reviewed state, jump-along-edge (gd), diff body view, working-tree/range revs
+- [x] diff-body view (colored old→new, capped) + mark-reviewed (x, ✓, n/N progress)
+- [ ] follow-ups: jump-along-edge (gd), detail-pane scroll, working-tree/range revs
