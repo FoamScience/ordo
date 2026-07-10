@@ -8,6 +8,7 @@ fn main() {
     let cmd = args.get(1).map(String::as_str).unwrap_or("order");
     match cmd {
         "order" => order(),
+        "pack" => pack(),
         "review" => review(&args[2..]),
         "-V" | "--version" | "version" => {
             println!(
@@ -17,7 +18,7 @@ fn main() {
             );
         }
         "-h" | "--help" | "help" => {
-            eprintln!("usage:\n  ordo order --json < input.json > output.json\n  ordo review [--full-context] [patch]   # patch from arg or stdin\n  ordo --version\n\n--full-context: the patch is a complete diff (git diff -U100000), so modified\n                files get full semantics instead of positional order.");
+            eprintln!("usage:\n  ordo order --json < input.json > output.json\n  ordo pack  --json < input.json         # compact LLM-ready review context\n  ordo review [--full-context] [patch]   # patch from arg or stdin\n  ordo --version\n\n--full-context: the patch is a complete diff (git diff -U100000), so modified\n                files get full semantics instead of positional order.");
         }
         other => {
             eprintln!("ordo: unknown command '{other}'\nusage: ordo order --json < input.json | ordo review [--full-context] [patch] | ordo --version");
@@ -73,20 +74,25 @@ fn review(args: &[String]) {
     emit(ordo::run(input));
 }
 
-fn order() {
+fn read_input() -> ordo::model::Input {
     let mut buf = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
         eprintln!("ordo: failed to read stdin: {e}");
         exit(1);
     }
-    let input: ordo::model::Input = match serde_json::from_str(&buf) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("ordo: invalid input json: {e}");
-            exit(1);
-        }
-    };
-    emit(ordo::run(input));
+    serde_json::from_str(&buf).unwrap_or_else(|e| {
+        eprintln!("ordo: invalid input json: {e}");
+        exit(1);
+    })
+}
+
+fn order() {
+    emit(ordo::run(read_input()));
+}
+
+/// `ordo pack --json < input.json` — compact, LLM-ready review context.
+fn pack() {
+    print!("{}", ordo::pack(&ordo::run(read_input())));
 }
 
 fn emit(out: ordo::model::Output) {
