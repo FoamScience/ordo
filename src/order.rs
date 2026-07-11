@@ -383,7 +383,15 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     // definition side: report EVERY construct the hunk touches, not just one.
     // Classify each defined symbol (moved-in / renamed / extracted / added /
     // changed), group same-verb symbols, and append provenance once.
-    if !s.defines.is_empty() {
+    // placeholder names (unnamed closures, `_`-bound throwaways) carry no
+    // navigational signal — drop them from the wording and fall through to the
+    // enclosing-edit branch when a hunk defines nothing else.
+    let real: Vec<&String> = s
+        .defines
+        .iter()
+        .filter(|d| *d != "<anonymous>" && *d != "_")
+        .collect();
+    if !real.is_empty() {
         let (mut moves, mut renames, mut extracts) = (vec![], vec![], vec![]);
         let (mut adds, mut adds_ty, mut edits, mut ch_sig, mut ch_ty): (
             Vec<&str>,
@@ -392,7 +400,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             Vec<&str>,
             Vec<&str>,
         ) = Default::default();
-        for d in &s.defines {
+        for d in real.iter().copied() {
             if let Some(src) = ctx.moved_in.get(my_file).and_then(|m| m.get(d)) {
                 moves.push(format!("moves {d} from {src}"));
             } else if let Some(old) = ctx.rename.get(my_file).and_then(|m| m.get(d)) {
@@ -431,10 +439,10 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         let mut out = frags.join("; ");
         // provenance: a defined symbol used by another group. Name it only when
         // several constructs are listed (otherwise "used by X" is unambiguous).
-        if let Some((d, b)) = s.defines.iter().find_map(|d| {
+        if let Some((d, b)) = real.iter().find_map(|d| {
             (0..g)
-                .find(|&b| ctx.ok(mine, b) && ctx.guse[b].contains(d))
-                .map(|b| (d.clone(), b))
+                .find(|&b| ctx.ok(mine, b) && ctx.guse[b].contains(*d))
+                .map(|b| ((*d).clone(), b))
         }) {
             let prov = if ctx.group_file[b] != my_file {
                 format!("used in {}", ctx.paths[ctx.group_file[b]])

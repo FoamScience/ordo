@@ -509,3 +509,23 @@ fn p16_extraction_from_present_def() {
         "must not read as a plain add: {rats:?}"
     );
 }
+
+#[test]
+fn placeholder_defs_suppressed() {
+    // `_`-bound / anonymous closures carry no navigational signal → dropped from wording.
+    let rats = rationales(serde_json::json!({ "changes": [{
+        "path": "m.lua",
+        "old": "local x = 1\n",
+        "new": "local x = 1\n_ = function() return 1 end\nlocal t = { run = function() return 2 end }\n",
+    }]}));
+    assert!(
+        rats.iter().any(|r| r == "adds run"),
+        "named def kept: {rats:?}"
+    );
+    assert!(
+        !rats
+            .iter()
+            .any(|r| r.contains("adds _") || r.contains("<anonymous>")),
+        "placeholders dropped: {rats:?}"
+    );
+}
