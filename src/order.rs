@@ -327,29 +327,6 @@ impl RatCtx<'_> {
             (true, true) => "changes type",
         }
     }
-    // "<verb> foo, used in a.py" / "<verb> foo, used by NAME below|above"
-    fn used_phrase(
-        &self,
-        verb: &str,
-        sym: &str,
-        mine: usize,
-        b: usize,
-        sem: &[&HunkSem],
-    ) -> String {
-        if self.group_file[b] != self.group_file[mine] {
-            format!("{verb} {sym}, used in {}", self.paths[self.group_file[b]])
-        } else {
-            let dir = if self.group_row[b] > self.group_row[mine] {
-                "below"
-            } else {
-                "above"
-            };
-            match group_name(&self.groups[b], sem) {
-                Some(nm) => format!("{verb} {sym}, used by {nm} {dir}"),
-                None => format!("{verb} {sym}, used {dir}"),
-            }
-        }
-    }
     // "uses foo, defined in a.py" / "uses foo, defined above|below"
     fn use_of_phrase(&self, sym: &str, mine: usize, b: usize) -> String {
         if self.group_file[b] != self.group_file[mine] {
@@ -397,46 +374,77 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         return format!("{verb} {}", s.imports.join(", "));
     }
 
-    // definition side: move (P12.1) / rename (#7), else adds vs changes
+    // definition side: report EVERY construct the hunk touches, not just one.
+    // Classify each defined symbol (moved-in / renamed / extracted / added /
+    // changed), group same-verb symbols, and append provenance once.
     if !s.defines.is_empty() {
-        // P12.1: this hunk introduces a def that moved in from another file
-        if let Some((sym, src)) = ctx
-            .moved_in
-            .get(my_file)
-            .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|src| (d, src))))
-        {
-            return format!("moves {sym} from {src}");
+        let (mut moves, mut renames, mut extracts) = (vec![], vec![], vec![]);
+        let (mut adds, mut adds_ty, mut ch_sig, mut ch_ty): (
+            Vec<&str>,
+            Vec<&str>,
+            Vec<&str>,
+            Vec<&str>,
+        ) = Default::default();
+        for d in &s.defines {
+            if let Some(src) = ctx.moved_in.get(my_file).and_then(|m| m.get(d)) {
+                moves.push(format!("moves {d} from {src}"));
+            } else if let Some(old) = ctx.rename.get(my_file).and_then(|m| m.get(d)) {
+                renames.push(format!("renames {old} → {d}"));
+            } else if let Some(src) = ctx.relocated.get(my_file).and_then(|m| m.get(d)) {
+                extracts.push(format!("adds {d}, extracted from {src}"));
+            } else {
+                match ctx.def_verb(my_file, d, s.is_type) {
+                    "adds" => adds.push(d),
+                    "adds type" => adds_ty.push(d),
+                    "changes type" => ch_ty.push(d),
+                    _ => ch_sig.push(d),
+                }
+            }
         }
-        // #7: this hunk introduces the new name of a 1:1 renamed definition
-        if let Some(old) = ctx
-            .rename
-            .get(my_file)
-            .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|o| (o, d))))
-        {
-            return format!("renames {} → {}", old.0, old.1);
+        let mut frags: Vec<String> = vec![];
+        frags.append(&mut extracts);
+        frags.append(&mut renames);
+        frags.append(&mut moves);
+        if !adds.is_empty() {
+            frags.push(format!("adds {}", adds.join(", ")));
         }
-        // P16: this def's body was extracted/relocated from a still-present def
-        if let Some((sym, src)) = ctx
-            .relocated
-            .get(my_file)
-            .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|src| (d, src))))
-        {
-            return format!("adds {sym}, extracted from {src}");
+        if !adds_ty.is_empty() {
+            frags.push(format!("adds type {}", adds_ty.join(", ")));
         }
-        let used = s.defines.iter().find_map(|d| {
+        if !ch_sig.is_empty() {
+            frags.push(format!("changes signature of {}", ch_sig.join(", ")));
+        }
+        if !ch_ty.is_empty() {
+            frags.push(format!("changes type {}", ch_ty.join(", ")));
+        }
+        let mut out = frags.join("; ");
+        // provenance: a defined symbol used by another group. Name it only when
+        // several constructs are listed (otherwise "used by X" is unambiguous).
+        if let Some((d, b)) = s.defines.iter().find_map(|d| {
             (0..g)
                 .find(|&b| ctx.ok(mine, b) && ctx.guse[b].contains(d))
                 .map(|b| (d.clone(), b))
-        });
-        let sym = used
-            .as_ref()
-            .map(|(d, _)| d.clone())
-            .unwrap_or_else(|| s.defines[0].clone());
-        let verb = ctx.def_verb(my_file, &sym, s.is_type);
-        return match used {
-            Some((d, b)) => ctx.used_phrase(verb, &d, mine, b, sem),
-            None => format!("{verb} {}", s.defines.join(", ")),
-        };
+        }) {
+            let prov = if ctx.group_file[b] != my_file {
+                format!("used in {}", ctx.paths[ctx.group_file[b]])
+            } else {
+                let dir = if ctx.group_row[b] > ctx.group_row[mine] {
+                    "below"
+                } else {
+                    "above"
+                };
+                match group_name(&ctx.groups[b], sem) {
+                    Some(nm) => format!("used by {nm} {dir}"),
+                    None => format!("used {dir}"),
+                }
+            };
+            out += &if frags.len() > 1 {
+                format!(", {d} {prov}")
+            } else {
+                format!(", {prov}")
+            };
+        }
+        return out;
     }
 
     // use side: a symbol used here that some other group defines (this change)
