@@ -529,3 +529,71 @@ fn placeholder_defs_suppressed() {
         "placeholders dropped: {rats:?}"
     );
 }
+
+#[test]
+fn p14_deep_python_cpp() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let has = |v: &[(String, bool)], c: &str, verdict: bool| {
+        v.iter().any(|(k, w)| k == c && *w == verdict)
+    };
+
+    let py = advs(
+        "a.py",
+        "import os, subprocess, pickle\nclass C:\n    def __eq__(self, o):\n        return True\n    def __del__(self):\n        pass\nos.system(x)\nsubprocess.run(x, shell=True)\npickle.loads(b)\n",
+    );
+    assert!(has(&py, "eq-without-hash", true), "eq/hash: {py:?}");
+    assert!(has(&py, "del-finalizer", true), "__del__: {py:?}");
+    assert!(has(&py, "os-system", false), "os.system: {py:?}");
+    assert!(has(&py, "shell-injection", true), "shell=True: {py:?}");
+    assert!(has(&py, "pickle", false), "pickle: {py:?}");
+
+    // __eq__ + __hash__ present → no advisory
+    let ok = advs(
+        "b.py",
+        "class D:\n    def __eq__(self, o):\n        return True\n    def __hash__(self):\n        return 0\n",
+    );
+    assert!(
+        !ok.iter().any(|(c, _)| c == "eq-without-hash"),
+        "hash present → quiet: {ok:?}"
+    );
+
+    let cpp = advs(
+        "a.cpp",
+        "#define SQ(x) ((x)*(x))\nvoid f(){ char b[4]; strcpy(b,s); int* p = new int(3); free(malloc(8)); int y=(int)3.0; auto q=reinterpret_cast<long>(p); auto r=const_cast<int*>(p); delete p; }\n",
+    );
+    assert!(has(&cpp, "unsafe-str-fn", true), "strcpy: {cpp:?}");
+    assert!(has(&cpp, "raw-new-delete", false), "new/delete: {cpp:?}");
+    assert!(has(&cpp, "manual-memory", false), "malloc: {cpp:?}");
+    assert!(has(&cpp, "c-style-cast", false), "c-cast: {cpp:?}");
+    assert!(has(&cpp, "const-cast", false), "const_cast: {cpp:?}");
+    assert!(has(&cpp, "function-macro", false), "macro: {cpp:?}");
+
+    // using namespace std: advisory always, verdict only in a header
+    let src = advs("a.cpp", "using namespace std;\n");
+    assert!(
+        has(&src, "using-namespace-std", false),
+        "in .cpp → no verdict: {src:?}"
+    );
+    let hdr = advs("a.hpp", "using namespace std;\n");
+    assert!(
+        has(&hdr, "using-namespace-std", true),
+        "in header → verdict: {hdr:?}"
+    );
+}

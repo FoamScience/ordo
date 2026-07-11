@@ -93,12 +93,53 @@ dynamic type() class creation — opaque to readers and tools.
 2. namedtuple / Enum for simple shapes
 3. type() only for genuinely runtime-computed classes";
 
+const DEL_PY: &str = "\
+__del__ finalizer — unpredictable timing, skipped at interpreter exit, keeps reference cycles alive.
+1. deterministic cleanup → a context manager (__enter__/__exit__ or contextlib)
+2. non-deterministic cleanup → weakref.finalize
+3. __del__ (last resort; must be exception-safe and side-effect-light)";
+
+const HASH_PY: &str = "\
+__eq__ without __hash__ — defining __eq__ makes instances unhashable (can't be a set member or dict key).
+1. immutable value → @dataclass(frozen=True) generates both
+2. by hand → define __hash__ over the same fields as __eq__
+3. intentionally unhashable → set `__hash__ = None` explicitly";
+
+const SYSTEM_PY: &str = "\
+os.system — runs a string through the shell (injection), no output capture, no error object.
+1. run a program → subprocess.run([...]) with an argument list (no shell)
+2. capture output → subprocess.run(..., capture_output=True)
+3. os.system (avoid; never with interpolated input)";
+
+const SHELL_PY: &str = "\
+subprocess(..., shell=True) — the command string is parsed by the shell (injection).
+Pass an argument list and drop shell=True; if a shell is truly required, shlex.quote every interpolated value.";
+
+const PICKLE_PY: &str = "\
+pickle load — unpickling untrusted data executes arbitrary code (__reduce__).
+1. structured data → json
+2. with a schema → pydantic / dataclasses over json
+3. cross-language / binary → protobuf / msgpack
+4. pickle (only for data you produced and fully trust)";
+
 fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
     match node.kind() {
         "class_definition" => {
             if let Some(a) = python_metaclass(node, src) {
                 out.push((node.start_position().row, a));
             }
+            // __eq__ with no __hash__ anywhere in the body → unhashable instances
+            let methods = class_methods(node, src);
+            let has_hash = node
+                .child_by_field_name("body")
+                .and_then(|b| b.utf8_text(src).ok())
+                .is_some_and(|t| t.contains("__hash__"));
+            if methods.iter().any(|m| m == "__eq__") && !has_hash {
+                push(out, node, "eq-without-hash", HASH_PY, true);
+            }
+        }
+        "function_definition" if callee_text(node, "name", src) == Some("__del__") => {
+            push(out, node, "del-finalizer", DEL_PY, true);
         }
         "default_parameter" | "typed_default_parameter" => {
             if node
@@ -122,20 +163,46 @@ fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
         "assert_statement" if !is_test_path(path) => {
             push(out, node, "assert-validation", ASSERT_PY, true);
         }
-        "call" => match callee_text(node, "function", src) {
-            Some("eval") | Some("exec") => push(out, node, "eval/exec", EVAL_PY, false),
-            Some("type")
-                if node
-                    .child_by_field_name("arguments")
-                    .map(|a| named(a).len())
-                    == Some(3) =>
-            {
-                push(out, node, "dynamic-type", DYNAMIC_TYPE, false);
+        "call" => {
+            let fname = callee_text(node, "function", src);
+            match fname {
+                Some("eval") | Some("exec") => push(out, node, "eval/exec", EVAL_PY, false),
+                Some("type")
+                    if node
+                        .child_by_field_name("arguments")
+                        .map(|a| named(a).len())
+                        == Some(3) =>
+                {
+                    push(out, node, "dynamic-type", DYNAMIC_TYPE, false);
+                }
+                Some("os.system") => push(out, node, "os-system", SYSTEM_PY, false),
+                Some("pickle.load")
+                | Some("pickle.loads")
+                | Some("cPickle.load")
+                | Some("cPickle.loads") => push(out, node, "pickle", PICKLE_PY, false),
+                _ => {}
             }
-            _ => {}
-        },
+            if fname.is_some_and(|f| f.starts_with("subprocess.")) && py_shell_true(node, src) {
+                push(out, node, "shell-injection", SHELL_PY, true);
+            }
+        }
         _ => {}
     }
+}
+
+// a subprocess call carrying `shell=True`
+fn py_shell_true(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("arguments").is_some_and(|args| {
+        named(args).iter().any(|a| {
+            a.kind() == "keyword_argument"
+                && a.child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(src).ok())
+                    == Some("shell")
+                && a.child_by_field_name("value")
+                    .and_then(|v| v.utf8_text(src).ok())
+                    == Some("True")
+        })
+    })
 }
 
 fn only_pass(block: Node) -> bool {
@@ -339,21 +406,109 @@ reinterpret_cast — reinterprets bits with no checks (often UB).
 2. type-pun → std::bit_cast (C++20) / memcpy
 3. reinterpret_cast (last resort; you own the aliasing/lifetime rules)";
 
-fn walk_c(node: Node, _src: &[u8], _path: &str, out: &mut Out) {
-    if node.kind() == "goto_statement" {
-        push(out, node, "goto", GOTO, false);
+const CONST_CAST: &str = "\
+const_cast — casting away const is UB if the underlying object is really const.
+1. take the pointer/reference as non-const where it is genuinely mutated
+2. a mutable member for a logical-const cache
+3. const_cast only to bridge a const-incorrect API you do not own";
+
+const UNSAFE_STR: &str = "\
+unsafe string function — no bounds checking; the classic buffer overflow.
+1. bounded C → snprintf / strncpy / strncat with an explicit size (mind truncation)
+2. C++ → std::string / std::format / std::span
+3. never sized from attacker-controlled input";
+
+const NEW_CPP: &str = "\
+raw new/delete — ownership leaks on every early return or exception.
+1. value semantics / a container (vector, string)
+2. unique_ptr via make_unique (single owner)
+3. shared_ptr via make_shared (shared owner)
+4. raw new only inside a RAII wrapper you fully own";
+
+const MALLOC_CPP: &str = "\
+malloc/free in C++ — no constructor or destructor runs, no RAII.
+1. a value type or container
+2. make_unique / make_shared
+3. malloc only for C interop or placement-new arenas";
+
+const CSTYLE_CAST: &str = "\
+C-style cast — silently selects static/const/reinterpret; the intent is invisible.
+1. numeric / derived→base → static_cast
+2. add or drop const → const_cast (rarely)
+3. bit reinterpret → reinterpret_cast / std::bit_cast
+Name the cast so the reader sees what was meant.";
+
+const USING_STD: &str = "\
+`using namespace std` — imports the whole std namespace; in a header it leaks into every includer.
+1. qualify names (std::vector) — mandatory in headers
+2. using-declarations for the few names used (using std::vector;)
+3. a using-directive only inside a .cpp function scope";
+
+const MACRO_CPP: &str = "\
+function-like macro — no types, no scope, no debugger; textual substitution surprises.
+1. a constant → constexpr
+2. a function → inline / constexpr function
+3. generic code → a template
+4. macros only for token-pasting / conditional compilation";
+
+fn walk_c(node: Node, src: &[u8], _path: &str, out: &mut Out) {
+    match node.kind() {
+        "goto_statement" => push(out, node, "goto", GOTO, false),
+        "call_expression"
+            if callee_text(node, "function", src).is_some_and(|f| {
+                matches!(
+                    f,
+                    "strcpy" | "strcat" | "sprintf" | "vsprintf" | "gets" | "scanf"
+                )
+            }) =>
+        {
+            push(out, node, "unsafe-str-fn", UNSAFE_STR, true);
+        }
+        _ => {}
     }
+}
+
+fn is_header(path: &str) -> bool {
+    matches!(
+        path.rsplit('.').next(),
+        Some("h" | "hpp" | "hh" | "hxx" | "h++")
+    )
 }
 
 fn walk_cpp(node: Node, src: &[u8], path: &str, out: &mut Out) {
     walk_c(node, src, path, out);
-    // reinterpret_cast<T>(x) — the cast keyword leads a call-like expression
-    if node
-        .utf8_text(src)
-        .is_ok_and(|t| t.starts_with("reinterpret_cast"))
-        && node.kind().contains("expression")
-    {
-        push(out, node, "reinterpret_cast", REINTERPRET_CAST, false);
+    match node.kind() {
+        "new_expression" | "delete_expression" => push(out, node, "raw-new-delete", NEW_CPP, false),
+        "cast_expression" => push(out, node, "c-style-cast", CSTYLE_CAST, false),
+        "preproc_function_def" => push(out, node, "function-macro", MACRO_CPP, false),
+        "using_declaration"
+            if node
+                .utf8_text(src)
+                .is_ok_and(|t| t.contains("namespace std")) =>
+        {
+            push(out, node, "using-namespace-std", USING_STD, is_header(path));
+        }
+        "call_expression"
+            if callee_text(node, "function", src)
+                .is_some_and(|f| matches!(f, "malloc" | "calloc" | "realloc" | "free")) =>
+        {
+            push(out, node, "manual-memory", MALLOC_CPP, false);
+        }
+        _ => {}
+    }
+    // named-cast keywords lead a call-like expression; no dedicated node kind.
+    // ponytail: text-prefix match, may double-report when the cast heads a larger
+    // expression — tighten to an exact node kind if that surfaces.
+    if node.kind().contains("expression") {
+        match node.utf8_text(src) {
+            Ok(t) if t.starts_with("reinterpret_cast") => {
+                push(out, node, "reinterpret_cast", REINTERPRET_CAST, false)
+            }
+            Ok(t) if t.starts_with("const_cast") => {
+                push(out, node, "const-cast", CONST_CAST, false)
+            }
+            _ => {}
+        }
     }
 }
 

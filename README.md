@@ -98,11 +98,12 @@ concretely wrong. Current catalog:
 
 | lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
 |---|---|---|
-| python | metaclass, `eval`/`exec`, dynamic `type()` | mutable-default-arg, bare-`except`, empty-`except`, `assert`-validation, register-only metaclass |
+| python | metaclass, `eval`/`exec`, dynamic `type()`, `__del__`, `os.system`, `pickle` load | mutable-default-arg, bare/empty-`except`, `assert`-validation, register-only metaclass, `__eq__` w/o `__hash__`, `subprocess(shell=True)` |
 | rust | `unsafe`, `mem::transmute` | `static mut` |
 | js/ts | `eval`, `any` | `with`, empty-`catch` |
 | go | `unsafe`, `reflect`, `panic` (non-test) | — |
-| c / c++ | `goto`, `reinterpret_cast` | — |
+| c | `goto` | `strcpy`/`sprintf`/`gets`/`scanf` (buffer overflow) |
+| c++ | (all of c) raw `new`/`delete`, `malloc`/`free`, C-style cast, `reinterpret_cast`, `const_cast`, function-like macro, `using namespace std` | unsafe string fns, `using namespace std` in a header |
 | java | reflection (`setAccessible`) | empty-`catch` |
 
 `assert`/`panic` fire only outside test files.
