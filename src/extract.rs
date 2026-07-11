@@ -379,10 +379,13 @@ pub fn symbol_rows(spec: &LangSpec, content: &str) -> (Vec<(String, usize)>, Vec
     (defs, imports)
 }
 
-/// Each def's name paired with its whitespace-normalized body text, for rename
-/// detection by body similarity (#7 / P11.2). Body = the def's `body` field
-/// (excludes the signature/name), else the whole node text.
-pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<(String, String)> {
+/// Each def's `(name, whitespace-normalized whole body, substantial body lines)`.
+/// The whole body drives exact rename/move matching (#7 / P11.2); the line set
+/// drives line-overlap relocation detection (extract/relocate a def, P16). Body
+/// = the def's `body` field (excludes the signature/name), else the node text.
+pub type Body = (String, String, Vec<String>);
+
+pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<Body> {
     let mut out = vec![];
     let mut parser = Parser::new();
     if parser.set_language(&(spec.language)()).is_err() {
@@ -395,7 +398,7 @@ pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<(String, String)> {
     out
 }
 
-fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(String, String)>) {
+fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) {
     let kind = node.kind();
     if spec.is_def(kind) {
         if let Some(name) = node_name(node, src) {
@@ -404,8 +407,13 @@ fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(String
                 .and_then(|b| b.utf8_text(src).ok())
                 .or_else(|| node.utf8_text(src).ok())
                 .unwrap_or("");
-            let key = text.split_whitespace().collect::<Vec<_>>().join(" ");
-            out.push((name, key));
+            let whole = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let lines = text
+                .lines()
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
+                .collect();
+            out.push((name, whole, lines));
         }
     }
     let mut cur = node.walk();

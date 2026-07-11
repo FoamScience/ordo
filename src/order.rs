@@ -44,6 +44,7 @@ pub fn order_all(
     old_imports: &[HashSet<String>],
     rename: &[HashMap<String, String>],
     moved_in: &[HashMap<String, String>],
+    relocated: &[HashMap<String, String>],
     removals: &[Vec<(usize, String)>],
     strategy: Strategy,
     cross_file: bool,
@@ -243,6 +244,7 @@ pub fn order_all(
         old_imports,
         rename,
         moved_in,
+        relocated,
         removals,
         cross_file,
     };
@@ -302,6 +304,7 @@ struct RatCtx<'a> {
     old_imports: &'a [HashSet<String>],
     rename: &'a [HashMap<String, String>],
     moved_in: &'a [HashMap<String, String>],
+    relocated: &'a [HashMap<String, String>],
     removals: &'a [Vec<(usize, String)>],
     cross_file: bool,
 }
@@ -411,6 +414,14 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|o| (o, d))))
         {
             return format!("renames {} → {}", old.0, old.1);
+        }
+        // P16: this def's body was extracted/relocated from a still-present def
+        if let Some((sym, src)) = ctx
+            .relocated
+            .get(my_file)
+            .and_then(|m| s.defines.iter().find_map(|d| m.get(d).map(|src| (d, src))))
+        {
+            return format!("adds {sym}, extracted from {src}");
         }
         let used = s.defines.iter().find_map(|d| {
             (0..g)

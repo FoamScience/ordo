@@ -37,18 +37,18 @@ pub fn run(input: Input) -> Output {
     let n = input.changes.len();
     // per-file old/new symbol data (rows for positions, sets for membership,
     // bodies for rename/move matching) — drives #3/#5/#7 and P12.1 moves.
-    let body_of = |list: &[(String, String)], name: &str| {
+    let body_of = |list: &[extract::Body], name: &str| {
         list.iter()
-            .find(|(nm, _)| nm == name)
-            .map(|(_, b)| b.clone())
+            .find(|(nm, _, _)| nm == name)
+            .map(|(_, b, _)| b.clone())
     };
     let mut old_defs: Vec<HashSet<String>> = vec![];
     let mut old_imports: Vec<HashSet<String>> = vec![];
     let mut new_defs_v: Vec<HashSet<String>> = vec![];
     let mut new_imports_v: Vec<HashSet<String>> = vec![];
     let mut old_rows: Vec<(Vec<(String, usize)>, Vec<(String, usize)>)> = vec![];
-    let mut old_body: Vec<Vec<(String, String)>> = vec![];
-    let mut new_body: Vec<Vec<(String, String)>> = vec![];
+    let mut old_body: Vec<Vec<extract::Body>> = vec![];
+    let mut new_body: Vec<Vec<extract::Body>> = vec![];
     for c in &input.changes {
         let spec = lang::for_path(&c.path);
         let rows = match (c.old.as_deref(), spec) {
@@ -78,7 +78,7 @@ pub fn run(input: Input) -> Output {
     // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
     let mut appeared: HashMap<(String, String), usize> = HashMap::new();
     for (fi, nb) in new_body.iter().enumerate() {
-        for (name, body) in nb {
+        for (name, body, _) in nb {
             if body.len() >= 8 && !old_defs[fi].contains(name) {
                 appeared.entry((name.clone(), body.clone())).or_insert(fi);
             }
@@ -87,6 +87,7 @@ pub fn run(input: Input) -> Output {
 
     let mut rename: Vec<HashMap<String, String>> = vec![HashMap::new(); n];
     let mut moved_in: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → source path
+    let mut relocated: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → old def it was extracted from
     let mut removals: Vec<Vec<(usize, String)>> = vec![vec![]; n];
     for fi in 0..n {
         let (nd, ni) = (&new_defs_v[fi], &new_imports_v[fi]);
@@ -141,6 +142,34 @@ pub fn run(input: Input) -> Output {
             }
         }
 
+        // P16 relocation: an added def whose body-lines overlap a still-present
+        // old def → it was extracted/relocated out of that def (body may differ).
+        let mut reloc = HashMap::new();
+        for a in &added_d {
+            if ren.contains_key(a) {
+                continue;
+            }
+            let al = match nb.iter().find(|(nm, _, _)| nm == a).map(|(_, _, l)| l) {
+                Some(l) if l.len() >= 3 => l,
+                _ => continue,
+            };
+            let aset: HashSet<&String> = al.iter().collect();
+            let mut best: Option<(&String, usize)> = None;
+            for (x, _, xl) in ob {
+                if x == a || !nd.contains(x) {
+                    continue;
+                }
+                let shared = xl.iter().filter(|l| aset.contains(*l)).count();
+                if shared >= 3 && shared * 2 >= al.len() && best.is_none_or(|(_, s)| shared > s) {
+                    best = Some((x, shared));
+                }
+            }
+            if let Some((x, _)) = best {
+                reloc.insert(a.clone(), x.clone());
+            }
+        }
+        relocated[fi] = reloc;
+
         // #7 delete / #5 import remove / P12.1 move-out (else "removes")
         let mut rem = vec![];
         for (name, row) in odr {
@@ -167,6 +196,7 @@ pub fn run(input: Input) -> Output {
         &old_imports,
         &rename,
         &moved_in,
+        &relocated,
         &removals,
         input.options.strategy,
         input.options.cross_file,
