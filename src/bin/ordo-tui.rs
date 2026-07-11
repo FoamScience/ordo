@@ -17,10 +17,67 @@ use ratatui::Frame;
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_DIFF_LINES: usize = 40;
 
+const USAGE: &str = "\
+ordo-tui — interactive review of a commit, ordered for comprehension.
+
+usage:
+  ordo-tui [<rev>]     review <rev> vs its parent (default: HEAD)
+  ordo-tui --help
+  ordo-tui --version
+
+<rev> is any git commit-ish (a sha, HEAD~2, a tag). Its diff is ordered by
+def→use with rationale, structural notes, advisories and PR-split clusters.
+
+keys:
+  j / down    next hunk          k / up    previous hunk
+  x           toggle reviewed     g / G     first / last
+  q / Esc     quit
+";
+
+// Parse argv → the rev to review, or Err(exit-code) for --help/--version/misuse.
+fn parse_args() -> Result<String, i32> {
+    let mut rev: Option<String> = None;
+    for a in std::env::args().skip(1) {
+        match a.as_str() {
+            "-h" | "--help" | "help" => {
+                print!("{USAGE}");
+                return Err(0);
+            }
+            "-V" | "--version" | "version" => {
+                println!(
+                    "ordo-tui {} (ordo schema {})",
+                    env!("CARGO_PKG_VERSION"),
+                    ordo::SCHEMA_VERSION
+                );
+                return Err(0);
+            }
+            s if s.starts_with('-') => {
+                eprintln!("ordo-tui: unknown flag '{s}'\n\n{USAGE}");
+                return Err(2);
+            }
+            s if rev.is_some() => {
+                eprintln!("ordo-tui: unexpected extra argument '{s}'\n\n{USAGE}");
+                return Err(2);
+            }
+            s => rev = Some(s.to_string()),
+        }
+    }
+    Ok(rev.unwrap_or_else(|| "HEAD".to_string()))
+}
+
 fn main() -> std::io::Result<()> {
-    let rev = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "HEAD".to_string());
+    let rev = match parse_args() {
+        Ok(rev) => rev,
+        Err(code) => std::process::exit(code),
+    };
+    // fail clearly on a bad repo / revision instead of showing an empty review
+    if git(&["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")])
+        .trim()
+        .is_empty()
+    {
+        eprintln!("ordo-tui: not a git repository, or unknown revision '{rev}'");
+        std::process::exit(1);
+    }
     let input = gather(&rev);
     let sources: Sources = input
         .changes
