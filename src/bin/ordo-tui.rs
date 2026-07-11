@@ -1,8 +1,9 @@
 //! ordo-tui — a terminal reviewer that is a pure client of the ordo engine.
 //! It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
-//! the change in comprehension order with the diff, rationale, advisories and
-//! def→use edges. The engine stays git-free; this binary is gated behind the
-//! `tui` feature so the default build never pulls a UI stack.
+//! the change in comprehension order: the full file with the changed hunk
+//! highlighted in context, plus rationale, advisories and def→use edges. The
+//! engine stays git-free; gated behind the `tui` feature so the default build
+//! never pulls a UI stack.
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -15,7 +16,7 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-const MAX_DIFF_LINES: usize = 40;
+const PAGE: u16 = 15;
 
 const USAGE: &str = "\
 ordo-tui — interactive review of a commit, ordered for comprehension.
@@ -29,12 +30,12 @@ usage:
 def→use with rationale, structural notes, advisories and PR-split clusters.
 
 keys:
-  j / down    next hunk          k / up    previous hunk
-  x           toggle reviewed     g / G     first / last
-  q / Esc     quit
+  j / down     next hunk           k / up       previous hunk
+  space / f    page down (code)    b            page up (code)
+  x            toggle reviewed      g / G        first / last
+  q / Esc      quit
 ";
 
-// Parse argv → the rev to review, or Err(exit-code) for --help/--version/misuse.
 fn parse_args() -> Result<String, i32> {
     let mut rev: Option<String> = None;
     for a in std::env::args().skip(1) {
@@ -70,7 +71,6 @@ fn main() -> std::io::Result<()> {
         Ok(rev) => rev,
         Err(code) => std::process::exit(code),
     };
-    // fail clearly on a bad repo / revision instead of showing an empty review
     if git(&["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")])
         .trim()
         .is_empty()
@@ -94,16 +94,19 @@ fn main() -> std::io::Result<()> {
         })
         .collect();
     let out = ordo::run(input);
-    let items = build_items(&out, &sources);
+    let items = build_items(&out);
     if items.is_empty() {
         eprintln!("ordo-tui: nothing to review in {rev}");
         return Ok(());
     }
+    let scroll = auto_scroll(&items[0]);
     run(
         App {
             reviewed: vec![false; items.len()],
             items,
             sel: 0,
+            scroll,
+            sources,
         },
         &rev,
     )
@@ -150,14 +153,14 @@ fn gather(rev: &str) -> Input {
 type Sources = HashMap<String, (Vec<String>, Vec<String>)>;
 
 struct Item {
-    header: String,
+    path: String,
+    old_range: [usize; 2],
+    new_range: [usize; 2],
     label: String,
     rationale: String,
     notes: Vec<String>,
     edges: Vec<String>,
     advisories: Vec<(String, String, bool)>,
-    diff: Vec<(char, String)>, // '-' old / '+' new
-    extra_diff: usize,         // lines beyond MAX_DIFF_LINES
     noise: bool,
 }
 
@@ -165,9 +168,11 @@ struct App {
     items: Vec<Item>,
     reviewed: Vec<bool>,
     sel: usize,
+    scroll: u16,
+    sources: Sources,
 }
 
-fn build_items(out: &Output, sources: &Sources) -> Vec<Item> {
+fn build_items(out: &Output) -> Vec<Item> {
     let by_id: HashMap<&str, (&str, &ordo::model::HunkOut)> = out
         .files
         .iter()
@@ -207,27 +212,10 @@ fn build_items(out: &Output, sources: &Sources) -> Vec<Item> {
                     }
                 })
                 .collect();
-
-            let (mut diff, mut extra_diff) = (vec![], 0);
-            if let Some((ol, nl)) = sources.get(*path) {
-                let slice =
-                    |lines: &[String], r: [usize; 2], sign: char, out: &mut Vec<(char, String)>| {
-                        if r[0] >= 1 && r[0] <= r[1] && r[1] <= lines.len() {
-                            for l in &lines[r[0] - 1..r[1]] {
-                                out.push((sign, l.clone()));
-                            }
-                        }
-                    };
-                slice(ol, h.old_range, '-', &mut diff);
-                slice(nl, h.new_range, '+', &mut diff);
-                if diff.len() > MAX_DIFF_LINES {
-                    extra_diff = diff.len() - MAX_DIFF_LINES;
-                    diff.truncate(MAX_DIFF_LINES);
-                }
-            }
-
             Some(Item {
-                header: format!("{path}:L{}", h.new_range[0]),
+                path: path.to_string(),
+                old_range: h.old_range,
+                new_range: h.new_range,
                 label: format!("{mark} {path}:L{} [{cat}] {}", h.new_range[0], h.rationale),
                 rationale: h.rationale.clone(),
                 notes: h.notes.clone(),
@@ -237,12 +225,65 @@ fn build_items(out: &Output, sources: &Sources) -> Vec<Item> {
                     .iter()
                     .map(|a| (a.construct.clone(), a.message.clone(), a.verdict))
                     .collect(),
-                diff,
-                extra_diff,
                 noise: h.noise,
             })
         })
         .collect()
+}
+
+// position the code view so the hunk sits a few lines below the top
+fn auto_scroll(it: &Item) -> u16 {
+    let [o0, o1] = it.old_range;
+    let removed = if o0 >= 1 && o0 <= o1 { o1 - o0 + 1 } else { 0 };
+    ((it.new_range[0].saturating_sub(1) + removed).saturating_sub(3)) as u16
+}
+
+// ------------------------------------------------------------------- code view
+
+// The whole new file with the changed hunk highlighted in place: removed lines
+// (red) shown at the change point, added/changed lines (green) marked, the rest
+// as plain context so a reviewer sees the full surrounding code.
+fn code_view<'a>(it: &Item, sources: &'a Sources) -> Vec<Line<'a>> {
+    let mut out = vec![];
+    let Some((ol, nl)) = sources.get(&it.path) else {
+        return out;
+    };
+    let [o0, o1] = it.old_range;
+    let [n0, n1] = it.new_range;
+    let removed: Vec<&String> = if o0 >= 1 && o0 <= o1 && o1 <= ol.len() {
+        ol[o0 - 1..o1].iter().collect()
+    } else {
+        vec![]
+    };
+    let red = Style::default().fg(Color::Red);
+    let green = Style::default().fg(Color::Green);
+    let num = Style::default().fg(Color::DarkGray);
+    let emit_removed = |out: &mut Vec<Line<'a>>| {
+        for r in &removed {
+            out.push(Line::from(Span::styled(format!("    - {r}"), red)));
+        }
+    };
+    for (i, line) in nl.iter().enumerate() {
+        let ln = i + 1;
+        if ln == n0 {
+            emit_removed(&mut out);
+        }
+        if n0 <= ln && ln <= n1 {
+            out.push(Line::from(vec![
+                Span::styled(format!("{ln:>4} "), num),
+                Span::styled(format!("+ {line}"), green),
+            ]));
+        } else {
+            out.push(Line::from(vec![
+                Span::styled(format!("{ln:>4}   "), num),
+                Span::raw(line.as_str()),
+            ]));
+        }
+    }
+    if n0 > nl.len() {
+        emit_removed(&mut out); // deletion at/after EOF
+    }
+    out
 }
 
 // --------------------------------------------------------------------- tui loop
@@ -254,22 +295,35 @@ fn run(mut app: App, rev: &str) -> std::io::Result<()> {
         if let Err(e) = terminal.draw(|f| draw(f, &app, rev)) {
             break Err(e);
         }
+        let goto = |app: &mut App, to: usize| {
+            app.sel = to;
+            app.scroll = auto_scroll(&app.items[to]);
+        };
         match event::read() {
             Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
                 KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if app.sel + 1 < n {
-                        app.sel += 1;
-                    }
+                KeyCode::Down | KeyCode::Char('j') if app.sel + 1 < n => {
+                    let to = app.sel + 1;
+                    goto(&mut app, to);
                 }
-                KeyCode::Up | KeyCode::Char('k') => app.sel = app.sel.saturating_sub(1),
-                KeyCode::Char('g') => app.sel = 0,
-                KeyCode::Char('G') => app.sel = n - 1,
+                KeyCode::Up | KeyCode::Char('k') if app.sel > 0 => {
+                    let to = app.sel - 1;
+                    goto(&mut app, to);
+                }
+                KeyCode::Char('g') => goto(&mut app, 0),
+                KeyCode::Char('G') => goto(&mut app, n - 1),
                 KeyCode::Char('x') => {
                     app.reviewed[app.sel] = !app.reviewed[app.sel];
                     if app.sel + 1 < n {
-                        app.sel += 1;
+                        let to = app.sel + 1;
+                        goto(&mut app, to);
                     }
+                }
+                KeyCode::PageDown | KeyCode::Char(' ' | 'f') => {
+                    app.scroll = app.scroll.saturating_add(PAGE)
+                }
+                KeyCode::PageUp | KeyCode::Char('b') => {
+                    app.scroll = app.scroll.saturating_sub(PAGE)
                 }
                 _ => {}
             },
@@ -282,24 +336,24 @@ fn run(mut app: App, rev: &str) -> std::io::Result<()> {
 }
 
 fn draw(f: &mut Frame, app: &App, rev: &str) {
-    let cols = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+    let cols = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(f.area());
-    let bold = Style::default().add_modifier(Modifier::BOLD);
 
+    // left — reading order
     let rows: Vec<ListItem> = app
         .items
         .iter()
         .enumerate()
         .map(|(i, it)| {
             let check = if app.reviewed[i] { "✓" } else { " " };
-            let base = if it.noise {
+            let style = if it.noise {
                 Style::default().fg(Color::DarkGray)
             } else if app.reviewed[i] {
                 Style::default().fg(Color::Green)
             } else {
                 Style::default()
             };
-            ListItem::new(format!("{check}{}", it.label)).style(base)
+            ListItem::new(format!("{check}{}", it.label)).style(style)
         })
         .collect();
     let done = app.reviewed.iter().filter(|r| **r).count();
@@ -311,63 +365,51 @@ fn draw(f: &mut Frame, app: &App, rev: &str) {
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, cols[0], &mut state);
 
+    // right — code (top) + why (bottom)
+    let rhs =
+        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).split(cols[1]);
     let it = &app.items[app.sel];
-    let mut lines = vec![
-        Line::from(Span::styled(it.header.clone(), bold)),
-        Line::from(""),
-    ];
-    for (sign, text) in &it.diff {
-        let color = if *sign == '-' {
-            Color::Red
-        } else {
-            Color::Green
-        };
-        lines.push(Line::from(Span::styled(
-            format!("{sign} {text}"),
-            Style::default().fg(color),
-        )));
-    }
-    if it.extra_diff > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  … {} more lines", it.extra_diff),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+
+    let code = code_view(it, &app.sources);
+    let max_scroll = code.len().saturating_sub(1) as u16;
+    let scroll = app.scroll.min(max_scroll);
+    let code_view = Paragraph::new(Text::from(code))
+        .block(Block::bordered().title(format!(
+            " {}  (space/b scroll · x review · q quit) ",
+            it.path
+        )))
+        .scroll((scroll, 0));
+    f.render_widget(code_view, rhs[0]);
+
+    let mut why = vec![Line::from(Span::styled(
         format!("why: {}", it.rationale),
         Style::default().fg(Color::Cyan),
-    )));
+    ))];
     if !it.notes.is_empty() {
-        lines.push(Line::from(Span::styled(
+        why.push(Line::from(Span::styled(
             format!("notes: {}", it.notes.join("; ")),
             Style::default().fg(Color::Yellow),
         )));
     }
-    if !it.edges.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("dependencies", bold)));
-        for e in &it.edges {
-            lines.push(Line::from(format!("  {e}")));
-        }
+    for e in &it.edges {
+        why.push(Line::from(format!("dep {e}")));
     }
     for (construct, message, verdict) in &it.advisories {
-        lines.push(Line::from(""));
         let (head, color) = if *verdict {
             (format!("⚠ {construct}"), Color::Red)
         } else {
             (construct.clone(), Color::Magenta)
         };
-        lines.push(Line::from(Span::styled(
+        why.push(Line::from(Span::styled(
             head,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )));
         for ml in message.lines() {
-            lines.push(Line::from(format!("  {ml}")));
+            why.push(Line::from(format!("  {ml}")));
         }
     }
-    let detail = Paragraph::new(Text::from(lines))
-        .block(Block::bordered().title(" detail   j/k move · x review · g/G ends · q quit "))
+    let info = Paragraph::new(Text::from(why))
+        .block(Block::bordered().title(" why "))
         .wrap(Wrap { trim: false });
-    f.render_widget(detail, cols[1]);
+    f.render_widget(info, rhs[1]);
 }
