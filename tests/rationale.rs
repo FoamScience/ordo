@@ -597,3 +597,83 @@ fn p14_deep_python_cpp() {
         "in header → verdict: {hdr:?}"
     );
 }
+
+#[test]
+fn p14_derived_python_cpp() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "z", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let has = |v: &[(String, bool)], c: &str, verdict: bool| {
+        v.iter().any(|(k, w)| k == c && *w == verdict)
+    };
+
+    let py = advs(
+        "a.py",
+        "import asyncio, yaml, functools\nfrom contextlib import suppress\nclass C:\n    def __enter__(self): return self\n    @functools.lru_cache\n    def m(self): return 1\n    def __getattribute__(self, n): return 1\nasync def h():\n    time.sleep(1)\ncur.execute(f'select {x}')\nrequests.get(u, verify=False)\nyaml.load(data)\nasyncio.create_task(bg())\nwith suppress(Exception):\n    pass\n",
+    );
+    for c in [
+        ("blocking-in-async", true),
+        ("lru-cache-on-method", true),
+        ("sql-injection", true),
+        ("tls-no-verify", true),
+        ("yaml-load", true),
+        ("fire-and-forget-task", true),
+        ("half-context-manager", true),
+        ("getattribute-override", false),
+        ("broad-suppress", false),
+    ] {
+        assert!(has(&py, c.0, c.1), "python {}: {py:?}", c.0);
+    }
+    // negatives
+    let pyn = advs("b.py", "class C:\n    def __enter__(self): return self\n    def __exit__(self, *a): pass\ncur.execute('select 1', p)\nyaml.load(d, Loader=SafeLoader)\nx = asyncio.create_task(bg())\n");
+    assert!(
+        !pyn.iter().any(|(c, _)| c == "half-context-manager"
+            || c == "sql-injection"
+            || c == "yaml-load"
+            || c == "fire-and-forget-task"),
+        "py negatives: {pyn:?}"
+    );
+
+    let cpp = advs(
+        "a.cpp",
+        "struct T { ~T() { throw 1; } };\nbool operator&&(T a, T b) { return true; }\nvoid f() {\n  volatile int v = 0;\n  auto g = [&]() { return v; };\n  std::memcpy(p, q, 8);\n  system(cmd);\n  alloca(64);\n  rand();\n  setjmp(buf);\n  auto d = dynamic_cast<T*>(pp);\n  try { g(); } catch (std::exception e) {}\n}",
+    );
+    for c in [
+        ("throw-in-destructor", true),
+        ("operator-logical", true),
+        ("setjmp-longjmp", true),
+        ("volatile", false),
+        ("lambda-ref-capture", false),
+        ("mem-family", false),
+        ("shell-exec", false),
+        ("alloca", false),
+        ("non-reentrant", false),
+        ("dynamic-cast", false),
+        ("catch-by-value", false),
+    ] {
+        assert!(has(&cpp, c.0, c.1), "cpp {}: {cpp:?}", c.0);
+    }
+    // negatives
+    let cppn = advs("b.cpp", "void ok() { throw 1; }\nvoid f() {\n  auto a = [=]() { return 1; };\n  auto b = [&x]() { return x; };\n  try { f(); } catch (const std::exception& e) {}\n  try { f(); } catch (int e) {}\n}");
+    assert!(
+        !cppn.iter().any(|(c, _)| c == "throw-in-destructor"
+            || c == "lambda-ref-capture"
+            || c == "catch-by-value"),
+        "cpp negatives: {cppn:?}"
+    );
+}

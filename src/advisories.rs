@@ -122,6 +122,60 @@ pickle load — unpickling untrusted data executes arbitrary code (__reduce__).
 3. cross-language / binary → protobuf / msgpack
 4. pickle (only for data you produced and fully trust)";
 
+const BLOCKING_ASYNC: &str = "\
+blocking call in an async function — stalls the whole event loop, defeating async.
+1. the async equivalent (asyncio.sleep, httpx/aiohttp, aiofiles)
+2. offload to a thread → await asyncio.to_thread(...) / loop.run_in_executor
+3. a blocking call inline (only if the loop truly has nothing else to do)";
+
+const LRU_METHOD: &str = "\
+lru_cache/cache on a method — the cache holds `self`, pinning every instance forever (leak).
+1. per-instance memoization → functools.cached_property
+2. cache a module-level function taking only hashable args
+3. lru_cache on the bound method (only if instances are singletons)";
+
+const SQL_INJECT: &str = "\
+formatted string as a SQL statement — injection by construction.
+1. parameterized query → cur.execute(sql, params)
+2. a query builder / ORM
+3. string interpolation into SQL (never with external input)";
+
+const YAML_LOAD: &str = "\
+yaml.load without a safe Loader — constructs arbitrary objects / runs code on untrusted input.
+1. yaml.safe_load(...)
+2. yaml.load(..., Loader=SafeLoader)
+3. an unsafe Loader (only for data you fully trust)";
+
+const TLS_VERIFY: &str = "\
+TLS verification disabled — certificates go unchecked, opening a MITM.
+1. fix the trust store / pass verify=<ca_bundle>
+2. pin the expected certificate
+3. verify=False (only ever for a throwaway local script)";
+
+const FIRE_FORGET: &str = "\
+fire-and-forget task — the loop keeps only a weak ref, so it can be GC'd mid-flight and vanish.
+1. await it, or gather it with others
+2. an asyncio.TaskGroup (3.11+)
+3. store the task in a set + add_done_callback to keep it alive";
+
+const HALF_CM: &str = "\
+half a context-manager protocol — only one of __enter__/__exit__ is defined, so `with` can't use it.
+1. @contextlib.contextmanager over a generator
+2. implement both halves (__enter__ and __exit__)
+3. leave it (only if it is deliberately not a context manager)";
+
+const GETATTRIBUTE_PY: &str = "\
+__getattribute__ override — intercepts EVERY access (incl. dunders); easy infinite recursion, big slowdown.
+1. __getattr__ (fires only on a missing attribute)
+2. property / descriptors for specific attributes
+3. __getattribute__ (only for a genuine transparent proxy)";
+
+const SUPPRESS_BROAD: &str = "\
+suppress(Exception/BaseException) — the explicit-API twin of bare except; swallows bugs and KeyboardInterrupt.
+1. suppress(SpecificError)
+2. try/except SpecificError with handling
+3. a broad suppress (name the concrete type instead)";
+
 fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
     match node.kind() {
         "class_definition" => {
@@ -137,9 +191,23 @@ fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
             if methods.iter().any(|m| m == "__eq__") && !has_hash {
                 push(out, node, "eq-without-hash", HASH_PY, true);
             }
+            let has = |a: &str| methods.iter().any(|m| m == a);
+            if has("__enter__") != has("__exit__") || has("__aenter__") != has("__aexit__") {
+                push(out, node, "half-context-manager", HALF_CM, true);
+            }
         }
         "function_definition" if callee_text(node, "name", src) == Some("__del__") => {
             push(out, node, "del-finalizer", DEL_PY, true);
+        }
+        "function_definition" if callee_text(node, "name", src) == Some("__getattribute__") => {
+            push(out, node, "getattribute-override", GETATTRIBUTE_PY, false);
+        }
+        "function_definition" if node.utf8_text(src).is_ok_and(|t| t.starts_with("async")) => {
+            scan_async_blocking(node, src, out);
+        }
+        "decorated_definition" => py_lru_method(node, src, out),
+        "expression_statement" if py_fire_and_forget(node, src) => {
+            push(out, node, "fire-and-forget-task", FIRE_FORGET, true);
         }
         "default_parameter" | "typed_default_parameter" => {
             if node
@@ -180,14 +248,183 @@ fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
                 | Some("pickle.loads")
                 | Some("cPickle.load")
                 | Some("cPickle.loads") => push(out, node, "pickle", PICKLE_PY, false),
+                Some("ssl._create_unverified_context") => {
+                    push(out, node, "tls-no-verify", TLS_VERIFY, true)
+                }
+                Some("yaml.load") | Some("yaml.load_all") if !py_safe_loader(node, src) => {
+                    push(out, node, "yaml-load", YAML_LOAD, true)
+                }
+                Some("contextlib.suppress") | Some("suppress") if py_broad_suppress(node, src) => {
+                    push(out, node, "broad-suppress", SUPPRESS_BROAD, false)
+                }
                 _ => {}
             }
             if fname.is_some_and(|f| f.starts_with("subprocess.")) && py_shell_true(node, src) {
                 push(out, node, "shell-injection", SHELL_PY, true);
             }
+            if fname.is_some_and(py_sql_sink) && py_dynamic_sql(node, src) {
+                push(out, node, "sql-injection", SQL_INJECT, true);
+            }
+            if fname.is_some_and(py_http_callee) && py_kw_is(node, "verify", "False", src) {
+                push(out, node, "tls-no-verify", TLS_VERIFY, true);
+            }
         }
         _ => {}
     }
+}
+
+// a call to `x.execute` / `.executemany` / `.executescript` (a DB cursor sink)
+fn py_sql_sink(f: &str) -> bool {
+    matches!(
+        f.rsplit('.').next(),
+        Some("execute" | "executemany" | "executescript")
+    ) && f.contains('.')
+}
+
+// the first argument to execute* is a built (not literal) string
+fn py_dynamic_sql(call: Node, src: &[u8]) -> bool {
+    let Some(arg) = call
+        .child_by_field_name("arguments")
+        .and_then(|a| named(a).into_iter().next())
+    else {
+        return false;
+    };
+    match arg.kind() {
+        "string" => has_descendant(arg, "interpolation"),
+        "binary_operator" => true, // `"..." % x` or `"..." + x`
+        "call" => callee_text(arg, "function", src).is_some_and(|c| c.ends_with(".format")),
+        _ => false,
+    }
+}
+
+fn py_http_callee(f: &str) -> bool {
+    f.starts_with("requests.")
+        || f.starts_with("httpx.")
+        || f.contains("ession.") // Session. / session.
+        || matches!(
+            f.rsplit('.').next(),
+            Some("get" | "post" | "put" | "delete" | "patch" | "head" | "request")
+        )
+}
+
+// call has a keyword argument `name` whose value renders exactly as `val`
+fn py_kw_is(call: Node, name: &str, val: &str, src: &[u8]) -> bool {
+    call.child_by_field_name("arguments").is_some_and(|args| {
+        named(args).iter().any(|a| {
+            a.kind() == "keyword_argument"
+                && a.child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(src).ok())
+                    == Some(name)
+                && a.child_by_field_name("value")
+                    .and_then(|v| v.utf8_text(src).ok())
+                    == Some(val)
+        })
+    })
+}
+
+// a yaml.load call that names a Safe loader
+fn py_safe_loader(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("arguments").is_some_and(|args| {
+        named(args).iter().any(|a| {
+            a.kind() == "keyword_argument"
+                && a.child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(src).ok())
+                    == Some("Loader")
+                && a.child_by_field_name("value")
+                    .and_then(|v| v.utf8_text(src).ok())
+                    .is_some_and(|v| v.contains("Safe"))
+        })
+    })
+}
+
+// suppress(...) covering Exception / BaseException
+fn py_broad_suppress(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("arguments").is_some_and(|args| {
+        named(args)
+            .iter()
+            .any(|a| matches!(a.utf8_text(src), Ok("Exception") | Ok("BaseException")))
+    })
+}
+
+// asyncio.create_task(...) / ensure_future(...) whose result is discarded
+fn py_fire_and_forget(stmt: Node, src: &[u8]) -> bool {
+    let kids = named(stmt);
+    if kids.len() != 1 || kids[0].kind() != "call" {
+        return false;
+    }
+    callee_text(kids[0], "function", src).is_some_and(|c| {
+        c == "asyncio.create_task" || c == "asyncio.ensure_future" || c.ends_with(".create_task")
+    })
+}
+
+// lru_cache/cache decorating a method whose first parameter is self/cls
+fn py_lru_method(dec: Node, src: &[u8], out: &mut Out) {
+    let kids = named(dec);
+    let Some(func) = kids.iter().find(|c| c.kind() == "function_definition") else {
+        return;
+    };
+    let decs: Vec<&str> = kids
+        .iter()
+        .filter(|c| c.kind() == "decorator")
+        .filter_map(|d| d.utf8_text(src).ok())
+        .collect();
+    if decs.iter().any(|d| d.contains("staticmethod")) {
+        return;
+    }
+    let cached = decs.iter().any(|d| {
+        let d = d.trim_start_matches('@').trim_start_matches("functools.");
+        d.starts_with("lru_cache") || d.starts_with("cache")
+    });
+    let on_method = func
+        .child_by_field_name("parameters")
+        .and_then(|p| named(p).into_iter().next())
+        .and_then(|p| p.utf8_text(src).ok())
+        .is_some_and(|p| p == "self" || p == "cls");
+    if cached && on_method {
+        push(out, *func, "lru-cache-on-method", LRU_METHOD, true);
+    }
+}
+
+// scan an async function body for known-blocking sync calls, not descending
+// into nested function/lambda scopes.
+const BLOCKING: &[&str] = &[
+    "time.sleep",
+    "requests.get",
+    "requests.post",
+    "requests.put",
+    "requests.delete",
+    "requests.patch",
+    "requests.head",
+    "urllib.request.urlopen",
+    "subprocess.run",
+    "subprocess.call",
+    "subprocess.check_output",
+    "subprocess.Popen",
+];
+
+fn scan_async_blocking(node: Node, src: &[u8], out: &mut Out) {
+    for ch in named(node) {
+        match ch.kind() {
+            "function_definition" | "lambda" => continue, // its own scope
+            "call" => {
+                if callee_text(ch, "function", src).is_some_and(|c| BLOCKING.contains(&c)) {
+                    push(out, ch, "blocking-in-async", BLOCKING_ASYNC, true);
+                }
+                scan_async_blocking(ch, src, out);
+            }
+            _ => scan_async_blocking(ch, src, out),
+        }
+    }
+}
+
+fn has_descendant(node: Node, kind: &str) -> bool {
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        if ch.kind() == kind || has_descendant(ch, kind) {
+            return true;
+        }
+    }
+    false
 }
 
 // a subprocess call carrying `shell=True`
@@ -451,6 +688,72 @@ function-like macro — no types, no scope, no debugger; textual substitution su
 3. generic code → a template
 4. macros only for token-pasting / conditional compilation";
 
+const THROW_DTOR: &str = "\
+throw in a destructor / noexcept function — if it escapes during unwinding, std::terminate is called.
+1. handle and log inside the destructor (never let it escape)
+2. move the fallible work to an explicit close()/commit() that may throw
+3. throw here (only if you can prove it never fires during unwinding)";
+
+const SETJMP_CPP: &str = "\
+setjmp/longjmp in C++ — jumping across frames skips destructors of live objects: undefined behavior.
+1. exceptions for error propagation
+2. return values → std::optional / std::expected
+3. setjmp only in pure-C interop with trivially-destructible state";
+
+const OPERATOR_LOGIC: &str = "\
+overloading operator&& / || / , — silently destroys short-circuit and sequencing every caller assumes.
+1. a named member function (.both(), .either())
+2. a free function with an explicit name
+3. never overload these (only defensible in EDSLs you fully control)";
+
+const MEM_FAMILY: &str = "\
+memcpy/memset on objects — byte-blitting corrupts non-trivially-copyable types (vtables, ownership).
+1. std::copy / std::fill / assignment for objects
+2. std::span / vector assignment for buffers
+3. memcpy only for trivially-copyable data (guard with static_assert(is_trivially_copyable))";
+
+const SYSTEM_EXEC: &str = "\
+system/popen/exec* — shell-out with injection risk and awkward error handling.
+1. a library API for the task (<filesystem>, etc. — no shell)
+2. posix_spawn/exec with an explicit argv array (no shell parsing)
+3. system() only with a fully literal, non-interpolated command";
+
+const DYNAMIC_CAST: &str = "\
+dynamic_cast on a normal path — usually a type-switch that should be virtual dispatch; RTTI cost + null traps.
+1. add a virtual method and let the vtable dispatch
+2. a visitor / std::variant + std::visit
+3. dynamic_cast only across a genuine unrelated-hierarchy boundary";
+
+const LAMBDA_REF: &str = "\
+[&] default-reference capture — dangles the moment the lambda outlives the scope (stored callback, thread, async).
+1. capture the few names you need explicitly (by value or ref)
+2. [=] or move-capture ([x = std::move(x)]) when it escapes
+3. [&] only for an immediately-used local lambda (sort comparator, for_each)";
+
+const CATCH_VALUE: &str = "\
+catch by value — slices a derived exception to its base and copies (the copy can itself throw).
+1. catch (const E&)
+2. catch (const std::exception&) at boundaries
+3. catch by value only for a small error-code value type";
+
+const ALLOCA_CPP: &str = "\
+alloca — unchecked stack allocation; overflow is silent UB and the lifetime is the whole function.
+1. std::array when the bound is known at compile time
+2. std::vector / std::string (or a small-buffer type) for dynamic size
+3. alloca only for tiny, bounded, hot-path scratch";
+
+const NONREENTRANT: &str = "\
+non-reentrant C runtime — shared static buffers / poor quality; data races and clobbering.
+1. <random> (mt19937) for rand; std::string / string_view for strtok
+2. the _r/_s reentrant variant, or std::chrono + <format> for the time funcs
+3. the bare call (only single-threaded, non-security code)";
+
+const VOLATILE_CPP: &str = "\
+volatile as a threading primitive — gives no atomicity, ordering, or cross-thread visibility.
+1. std::atomic<T> for flags/counters
+2. a mutex-guarded value for compound invariants
+3. volatile only for memory-mapped I/O or sig_atomic_t signal handlers";
+
 fn walk_c(node: Node, src: &[u8], _path: &str, out: &mut Out) {
     match node.kind() {
         "goto_statement" => push(out, node, "goto", GOTO, false),
@@ -488,12 +791,22 @@ fn walk_cpp(node: Node, src: &[u8], path: &str, out: &mut Out) {
         {
             push(out, node, "using-namespace-std", USING_STD, is_header(path));
         }
-        "call_expression"
-            if callee_text(node, "function", src)
-                .is_some_and(|f| matches!(f, "malloc" | "calloc" | "realloc" | "free")) =>
-        {
-            push(out, node, "manual-memory", MALLOC_CPP, false);
+        "type_qualifier" if node.utf8_text(src) == Ok("volatile") => {
+            push(out, node, "volatile", VOLATILE_CPP, false)
         }
+        "throw_statement" if cpp_throw_unwind(node, src) => {
+            push(out, node, "throw-in-destructor", THROW_DTOR, true)
+        }
+        "lambda_expression" if cpp_lambda_default_ref(node, src) => {
+            push(out, node, "lambda-ref-capture", LAMBDA_REF, false)
+        }
+        "catch_clause" if cpp_catch_by_value(node) => {
+            push(out, node, "catch-by-value", CATCH_VALUE, false)
+        }
+        "function_definition" | "field_declaration" if cpp_bad_operator(node, src) => {
+            push(out, node, "operator-logical", OPERATOR_LOGIC, true)
+        }
+        "call_expression" => cpp_call(node, src, out),
         _ => {}
     }
     // named-cast keywords lead a call-like expression; no dedicated node kind.
@@ -507,9 +820,111 @@ fn walk_cpp(node: Node, src: &[u8], path: &str, out: &mut Out) {
             Ok(t) if t.starts_with("const_cast") => {
                 push(out, node, "const-cast", CONST_CAST, false)
             }
+            Ok(t) if t.starts_with("dynamic_cast") => {
+                push(out, node, "dynamic-cast", DYNAMIC_CAST, false)
+            }
             _ => {}
         }
     }
+}
+
+// dispatch a C++ call by callee (std:: prefix stripped)
+fn cpp_call(node: Node, src: &[u8], out: &mut Out) {
+    let Some(f) = callee_text(node, "function", src) else {
+        return;
+    };
+    let base = f.rsplit("::").next().unwrap_or(f);
+    if matches!(base, "malloc" | "calloc" | "realloc" | "free") {
+        push(out, node, "manual-memory", MALLOC_CPP, false);
+    } else if matches!(
+        base,
+        "memcpy" | "memmove" | "memset" | "memcmp" | "bcopy" | "bzero"
+    ) {
+        push(out, node, "mem-family", MEM_FAMILY, false);
+    } else if matches!(
+        base,
+        "system" | "popen" | "execl" | "execlp" | "execle" | "execv" | "execvp" | "execvpe"
+    ) {
+        push(out, node, "shell-exec", SYSTEM_EXEC, false);
+    } else if matches!(base, "alloca" | "_alloca" | "_malloca") {
+        push(out, node, "alloca", ALLOCA_CPP, false);
+    } else if matches!(
+        base,
+        "rand" | "srand" | "strtok" | "localtime" | "gmtime" | "asctime" | "ctime"
+    ) {
+        push(out, node, "non-reentrant", NONREENTRANT, false);
+    } else if matches!(
+        base,
+        "setjmp" | "_setjmp" | "sigsetjmp" | "longjmp" | "siglongjmp"
+    ) {
+        push(out, node, "setjmp-longjmp", SETJMP_CPP, true);
+    }
+}
+
+// a throw whose nearest enclosing function is a destructor or noexcept (→ terminate
+// if it escapes during unwinding). Stops at a nested lambda/function scope.
+fn cpp_throw_unwind(node: Node, src: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(p) = cur.parent() {
+        match p.kind() {
+            "lambda_expression" => return false,
+            "function_definition" => {
+                let txt = p.utf8_text(src).unwrap_or("");
+                let header = txt.split('{').next().unwrap_or(txt);
+                return header.contains('~') || header.contains("noexcept");
+            }
+            _ => {}
+        }
+        cur = p;
+    }
+    false
+}
+
+// a [&] default-reference-capture lambda (not [&x], an explicit single capture)
+fn cpp_lambda_default_ref(node: Node, src: &[u8]) -> bool {
+    let t = node.utf8_text(src).unwrap_or("");
+    let inner = t
+        .strip_prefix('[')
+        .and_then(|s| s.split(']').next())
+        .unwrap_or("")
+        .trim();
+    let mut c = inner.chars();
+    c.next() == Some('&') && matches!(c.next(), None | Some(','))
+}
+
+// catch (E e) by value on a class type — slices; skip catch(const E&) and catch(int)
+fn cpp_catch_by_value(node: Node) -> bool {
+    let Some(params) = node.child_by_field_name("parameters") else {
+        return false; // catch(...) has no parameter
+    };
+    let Some(decl) = named(params)
+        .into_iter()
+        .find(|c| c.kind() == "parameter_declaration")
+    else {
+        return false;
+    };
+    let by_ref = named(decl).iter().any(|c| {
+        matches!(
+            c.kind(),
+            "reference_declarator" | "pointer_declarator" | "abstract_reference_declarator"
+        )
+    });
+    let class_type = matches!(
+        decl.child_by_field_name("type").map(|t| t.kind()),
+        Some("type_identifier" | "qualified_identifier" | "template_type")
+    );
+    !by_ref && class_type
+}
+
+// a definition/declaration of operator&& / operator|| / operator,
+fn cpp_bad_operator(node: Node, src: &[u8]) -> bool {
+    let head = node
+        .utf8_text(src)
+        .unwrap_or("")
+        .split('{')
+        .next()
+        .unwrap_or("");
+    head.contains("operator&&") || head.contains("operator||") || head.contains("operator,")
 }
 
 // -------------------------------------------------------------------- java

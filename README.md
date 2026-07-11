@@ -98,12 +98,12 @@ concretely wrong. Current catalog:
 
 | lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
 |---|---|---|
-| python | metaclass, `eval`/`exec`, dynamic `type()`, `__del__`, `os.system`, `pickle` load | mutable-default-arg, bare/empty-`except`, `assert`-validation, register-only metaclass, `__eq__` w/o `__hash__`, `subprocess(shell=True)` |
+| python | metaclass, `eval`/`exec`, dynamic `type()`, `__del__`, `os.system`, `pickle`, `__getattribute__`, `suppress(Exception)` | mutable-default-arg, bare/empty-`except`, `assert`-validation, register-only metaclass, `__eq__` w/o `__hash__`, `subprocess(shell=True)`, blocking-call-in-async, `lru_cache`-on-method, SQL f-string, TLS `verify=False`, unsafe `yaml.load`, fire-and-forget task, half context-manager |
 | rust | `unsafe`, `mem::transmute` | `static mut` |
 | js/ts | `eval`, `any` | `with`, empty-`catch` |
 | go | `unsafe`, `reflect`, `panic` (non-test) | — |
 | c | `goto` | `strcpy`/`sprintf`/`gets`/`scanf` (buffer overflow) |
-| c++ | (all of c) raw `new`/`delete`, `malloc`/`free`, C-style cast, `reinterpret_cast`, `const_cast`, function-like macro, `using namespace std` | unsafe string fns, `using namespace std` in a header |
+| c++ | (all of c) raw `new`/`delete`, `malloc`/`free`, C-style/`reinterpret`/`const`/`dynamic` cast, function-like macro, `using namespace std`, `volatile`, `[&]` capture, `memcpy` family, `system`/`exec*`, `alloca`, non-reentrant runtime, catch-by-value | unsafe string fns, `using namespace std` in a header, throw in destructor/`noexcept`, `setjmp`/`longjmp`, `operator&&`/`\|\|`/`,` overload |
 | java | reflection (`setAccessible`) | empty-`catch` |
 
 `assert`/`panic` fire only outside test files.
