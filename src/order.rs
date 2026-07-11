@@ -45,6 +45,7 @@ pub fn order_all(
     rename: &[HashMap<String, String>],
     moved_in: &[HashMap<String, String>],
     relocated: &[HashMap<String, String>],
+    body_only: &[HashSet<String>],
     removals: &[Vec<(usize, String)>],
     strategy: Strategy,
     cross_file: bool,
@@ -245,6 +246,7 @@ pub fn order_all(
         rename,
         moved_in,
         relocated,
+        body_only,
         removals,
         cross_file,
     };
@@ -305,6 +307,7 @@ struct RatCtx<'a> {
     rename: &'a [HashMap<String, String>],
     moved_in: &'a [HashMap<String, String>],
     relocated: &'a [HashMap<String, String>],
+    body_only: &'a [HashSet<String>],
     removals: &'a [Vec<(usize, String)>],
     cross_file: bool,
 }
@@ -320,9 +323,12 @@ impl RatCtx<'_> {
     // type" (a def-category hunk means the declaration line itself moved).
     fn def_verb(&self, file: usize, sym: &str, is_type: bool) -> &'static str {
         let existed = self.old_defs.get(file).is_some_and(|s| s.contains(sym));
+        let body_only = self.body_only.get(file).is_some_and(|s| s.contains(sym));
         match (existed, is_type) {
             (false, false) => "adds",
             (false, true) => "adds type",
+            // a def whose header is unchanged → body edit, not a signature change
+            (true, false) if body_only => "edits",
             (true, false) => "changes signature of",
             (true, true) => "changes type",
         }
@@ -379,7 +385,8 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     // changed), group same-verb symbols, and append provenance once.
     if !s.defines.is_empty() {
         let (mut moves, mut renames, mut extracts) = (vec![], vec![], vec![]);
-        let (mut adds, mut adds_ty, mut ch_sig, mut ch_ty): (
+        let (mut adds, mut adds_ty, mut edits, mut ch_sig, mut ch_ty): (
+            Vec<&str>,
             Vec<&str>,
             Vec<&str>,
             Vec<&str>,
@@ -396,6 +403,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
                 match ctx.def_verb(my_file, d, s.is_type) {
                     "adds" => adds.push(d),
                     "adds type" => adds_ty.push(d),
+                    "edits" => edits.push(d),
                     "changes type" => ch_ty.push(d),
                     _ => ch_sig.push(d),
                 }
@@ -410,6 +418,9 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         }
         if !adds_ty.is_empty() {
             frags.push(format!("adds type {}", adds_ty.join(", ")));
+        }
+        if !edits.is_empty() {
+            frags.push(format!("edits {}", edits.join(", ")));
         }
         if !ch_sig.is_empty() {
             frags.push(format!("changes signature of {}", ch_sig.join(", ")));

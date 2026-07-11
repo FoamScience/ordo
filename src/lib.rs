@@ -39,8 +39,13 @@ pub fn run(input: Input) -> Output {
     // bodies for rename/move matching) — drives #3/#5/#7 and P12.1 moves.
     let body_of = |list: &[extract::Body], name: &str| {
         list.iter()
-            .find(|(nm, _, _)| nm == name)
-            .map(|(_, b, _)| b.clone())
+            .find(|(nm, _, _, _)| nm == name)
+            .map(|(_, _, b, _)| b.clone())
+    };
+    let header_of = |list: &[extract::Body], name: &str| {
+        list.iter()
+            .find(|(nm, _, _, _)| nm == name)
+            .map(|(_, h, _, _)| h.clone())
     };
     let mut old_defs: Vec<HashSet<String>> = vec![];
     let mut old_imports: Vec<HashSet<String>> = vec![];
@@ -78,7 +83,7 @@ pub fn run(input: Input) -> Output {
     // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
     let mut appeared: HashMap<(String, String), usize> = HashMap::new();
     for (fi, nb) in new_body.iter().enumerate() {
-        for (name, body, _) in nb {
+        for (name, _, body, _) in nb {
             if body.len() >= 8 && !old_defs[fi].contains(name) {
                 appeared.entry((name.clone(), body.clone())).or_insert(fi);
             }
@@ -88,6 +93,7 @@ pub fn run(input: Input) -> Output {
     let mut rename: Vec<HashMap<String, String>> = vec![HashMap::new(); n];
     let mut moved_in: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → source path
     let mut relocated: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → old def it was extracted from
+    let mut body_only: Vec<HashSet<String>> = vec![HashSet::new(); n]; // existing def, unchanged signature → body-only edit
     let mut removals: Vec<Vec<(usize, String)>> = vec![vec![]; n];
     for fi in 0..n {
         let (nd, ni) = (&new_defs_v[fi], &new_imports_v[fi]);
@@ -149,13 +155,17 @@ pub fn run(input: Input) -> Output {
             if ren.contains_key(a) {
                 continue;
             }
-            let al = match nb.iter().find(|(nm, _, _)| nm == a).map(|(_, _, l)| l) {
+            let al = match nb
+                .iter()
+                .find(|(nm, _, _, _)| nm == a)
+                .map(|(_, _, _, l)| l)
+            {
                 Some(l) if l.len() >= 3 => l,
                 _ => continue,
             };
             let aset: HashSet<&String> = al.iter().collect();
             let mut best: Option<(&String, usize)> = None;
-            for (x, _, xl) in ob {
+            for (x, _, _, xl) in ob {
                 if x == a || !nd.contains(x) {
                     continue;
                 }
@@ -169,6 +179,17 @@ pub fn run(input: Input) -> Output {
             }
         }
         relocated[fi] = reloc;
+
+        // #4: an existing def whose signature is unchanged → body-only edit, not
+        // a signature change. Positive-only: unknown headers keep "changes signature of".
+        for name in od.intersection(nd) {
+            match (header_of(ob, name), header_of(nb, name)) {
+                (Some(o), Some(m)) if o == m => {
+                    body_only[fi].insert(name.clone());
+                }
+                _ => {}
+            }
+        }
 
         // #7 delete / #5 import remove / P12.1 move-out (else "removes")
         let mut rem = vec![];
@@ -197,6 +218,7 @@ pub fn run(input: Input) -> Output {
         &rename,
         &moved_in,
         &relocated,
+        &body_only,
         &removals,
         input.options.strategy,
         input.options.cross_file,

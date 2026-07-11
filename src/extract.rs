@@ -379,11 +379,12 @@ pub fn symbol_rows(spec: &LangSpec, content: &str) -> (Vec<(String, usize)>, Vec
     (defs, imports)
 }
 
-/// Each def's `(name, whitespace-normalized whole body, substantial body lines)`.
-/// The whole body drives exact rename/move matching (#7 / P11.2); the line set
-/// drives line-overlap relocation detection (extract/relocate a def, P16). Body
-/// = the def's `body` field (excludes the signature/name), else the node text.
-pub type Body = (String, String, Vec<String>);
+/// Each def's `(name, normalized signature/header, normalized whole body,
+/// substantial body lines)`. The header (node text before the `body` field)
+/// drives signature-change vs body-only-edit wording (#4). The whole body drives
+/// exact rename/move matching (#7 / P11.2); the line set drives line-overlap
+/// relocation detection (P16). Body = the def's `body` field, else the node text.
+pub type Body = (String, String, String, Vec<String>);
 
 pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<Body> {
     let mut out = vec![];
@@ -402,18 +403,23 @@ fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) 
     let kind = node.kind();
     if spec.is_def(kind) {
         if let Some(name) = node_name(node, src) {
-            let text = node
-                .child_by_field_name("body")
-                .and_then(|b| b.utf8_text(src).ok())
-                .or_else(|| node.utf8_text(src).ok())
-                .unwrap_or("");
+            let full = node.utf8_text(src).unwrap_or("");
+            let body = node.child_by_field_name("body");
+            // header = everything before the body (the signature); body text drives
+            // rename/relocation matching. Fall back to the whole node when unsplit.
+            let header = match body {
+                Some(b) => &full[..(b.start_byte() - node.start_byte()).min(full.len())],
+                None => full,
+            };
+            let text = body.and_then(|b| b.utf8_text(src).ok()).unwrap_or(full);
+            let header = header.split_whitespace().collect::<Vec<_>>().join(" ");
             let whole = text.split_whitespace().collect::<Vec<_>>().join(" ");
             let lines = text
                 .lines()
                 .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
                 .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
                 .collect();
-            out.push((name, whole, lines));
+            out.push((name, header, whole, lines));
         }
     }
     let mut cur = node.walk();
