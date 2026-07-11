@@ -165,3 +165,7 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 - [x] reading-order list (⚠ advisories, dimmed noise) + detail pane (rationale, notes, def→use edges, advisory ladders); j/k/g/G/q nav
 - [x] diff-body view (colored old→new, capped) + mark-reviewed (x, ✓, n/N progress)
 - [ ] follow-ups: jump-along-edge (gd), detail-pane scroll, working-tree/range revs
+
+## P16 — relocation / extraction detection  ✅
+- [x] `symbol_bodies` also returns each def's substantial body lines
+- [x] an added def whose body-lines overlap a still-present old def (≥3 shared, ≥50%) → "adds X, extracted from Y" (catches extractions where the body was also edited and the source name is reused — exact rename/move miss these). Tested (`p16_extraction_from_present_def`).

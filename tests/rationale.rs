@@ -490,3 +490,22 @@ fn p14_batch2() {
         "java reflection: {java:?}"
     );
 }
+
+#[test]
+fn p16_extraction_from_present_def() {
+    // read_input's body is extracted from order (which still exists as a wrapper);
+    // bodies overlap but are not identical, and order is NOT removed → not a rename.
+    let old = "fn order() {\n    let mut buf = String::new();\n    io::stdin().read_to_string(&mut buf).unwrap();\n    log::debug!(\"got input\");\n    let parsed = serde_json::from_str(&buf).unwrap();\n    emit(run(parsed));\n}\n";
+    let new = "fn read_input() -> Input {\n    let mut buf = String::new();\n    io::stdin().read_to_string(&mut buf).unwrap();\n    log::debug!(\"got input\");\n    serde_json::from_str(&buf).unwrap()\n}\nfn order() {\n    emit(run(read_input()));\n}\n";
+    let rats =
+        rationales(serde_json::json!({ "changes": [{ "path": "m.rs", "old": old, "new": new }] }));
+    assert!(
+        rats.iter()
+            .any(|r| r == "adds read_input, extracted from order"),
+        "extraction detected: {rats:?}"
+    );
+    assert!(
+        !rats.iter().any(|r| r == "adds read_input"),
+        "must not read as a plain add: {rats:?}"
+    );
+}

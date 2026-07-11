@@ -72,6 +72,7 @@ comparing both sides of the change:
 | imports | `adds import os` · `removes import sys` |
 | test ↔ code | `tests parse_cfg (config.py)` |
 | rename / delete | `renames foo → bar` · `removes old_helper` |
+| move / extract | `moves foo from a.py` · `adds read_input, extracted from order` |
 
 Cross-file lines (`defined in …`, `tests … (…)`) only appear when the changeset
 is sent as one call with `cross_file: true` — a definer and its user must be
