@@ -156,12 +156,43 @@ struct Item {
     path: String,
     old_range: [usize; 2],
     new_range: [usize; 2],
-    label: String,
+    head: String, // "<mark>path:Ln [cat]"
     rationale: String,
     notes: Vec<String>,
     edges: Vec<String>,
     advisories: Vec<(String, String, bool)>,
     noise: bool,
+}
+
+// Word-wrap a sidebar row to `width`: `head` then the rationale, with wrapped
+// rationale lines hanging-indented to align under where the rationale begins.
+fn wrap_row(head: &str, msg: &str, width: usize) -> Vec<String> {
+    let width = width.max(12);
+    if msg.is_empty() {
+        return vec![head.to_string()];
+    }
+    let indent = (head.chars().count() + 1).min(width.saturating_sub(4));
+    let pad = " ".repeat(indent);
+    let mut out = vec![];
+    let mut line = format!("{head} ");
+    for w in msg.split_whitespace() {
+        let cand = format!(
+            "{}{w}",
+            if line.ends_with(' ') {
+                line.clone()
+            } else {
+                format!("{line} ")
+            }
+        );
+        if cand.chars().count() > width && line.trim_end() != head {
+            out.push(line.trim_end().to_string());
+            line = format!("{pad}{w}");
+        } else {
+            line = cand;
+        }
+    }
+    out.push(line.trim_end().to_string());
+    out
 }
 
 struct App {
@@ -194,11 +225,11 @@ fn build_items(out: &Output) -> Vec<Item> {
             let (path, h) = by_id.get(o.hunk.as_str())?;
             let cat = format!("{:?}", h.category).to_lowercase();
             let mark = if !h.advisories.is_empty() {
-                "⚠"
+                "⚠ "
             } else if h.noise {
-                "·"
+                "· "
             } else {
-                " "
+                ""
             };
             let edges = out
                 .edges
@@ -216,7 +247,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 path: path.to_string(),
                 old_range: h.old_range,
                 new_range: h.new_range,
-                label: format!("{mark} {path}:L{} [{cat}] {}", h.new_range[0], h.rationale),
+                head: format!("{mark}{path}:L{} [{cat}]", h.new_range[0]),
                 rationale: h.rationale.clone(),
                 notes: h.notes.clone(),
                 edges,
@@ -340,12 +371,13 @@ fn draw(f: &mut Frame, app: &App, rev: &str) {
         .split(f.area());
 
     // left — reading order
+    let symbol = "▶ ";
+    let text_w = (cols[0].width as usize).saturating_sub(2 + symbol.chars().count());
     let rows: Vec<ListItem> = app
         .items
         .iter()
         .enumerate()
         .map(|(i, it)| {
-            let check = if app.reviewed[i] { "✓" } else { " " };
             let style = if it.noise {
                 Style::default().fg(Color::DarkGray)
             } else if app.reviewed[i] {
@@ -353,7 +385,11 @@ fn draw(f: &mut Frame, app: &App, rev: &str) {
             } else {
                 Style::default()
             };
-            ListItem::new(format!("{check}{}", it.label)).style(style)
+            let lines: Vec<Line> = wrap_row(&it.head, &it.rationale, text_w)
+                .into_iter()
+                .map(|l| Line::from(l).style(style))
+                .collect();
+            ListItem::new(lines)
         })
         .collect();
     let done = app.reviewed.iter().filter(|r| **r).count();
@@ -362,7 +398,7 @@ fn draw(f: &mut Frame, app: &App, rev: &str) {
     let list = List::new(rows)
         .block(Block::bordered().title(format!(" {rev} — {done}/{} reviewed ", app.items.len())))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▶ ");
+        .highlight_symbol(symbol);
     f.render_stateful_widget(list, cols[0], &mut state);
 
     // right — code (top) + why (bottom)
