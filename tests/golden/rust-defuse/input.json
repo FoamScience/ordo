@@ -1,0 +1,10 @@
+{
+  "changes": [
+    {
+      "path": "lib.rs",
+      "old": "// a\n// b\n// c\n// d\n",
+      "new": "use std::fmt;\n// a\n// b\nfn make() -> u8 { 1 }\n// c\n// d\nfn run() { let _ = make(); }\n"
+    }
+  ],
+  "options": { "strategy": "comprehension" }
+}

@@ -1,0 +1,10 @@
+{
+  "changes": [
+    {
+      "path": "m.lua",
+      "old": "-- a\n-- b\n-- c\n-- d\n",
+      "new": "-- a\nlocal function helper()\n  return 1\nend\n-- c\n-- d\nlocal x = helper()\n"
+    }
+  ],
+  "options": { "strategy": "comprehension" }
+}

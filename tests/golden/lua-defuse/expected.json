@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "order": [
+    {
+      "path": "m.lua",
+      "hunk": "h0"
+    },
+    {
+      "path": "m.lua",
+      "hunk": "h1"
+    }
+  ],
+  "files": [
+    {
+      "path": "m.lua",
+      "hunks": [
+        {
+          "id": "h0",
+          "old_range": [
+            2,
+            2
+          ],
+          "new_range": [
+            2,
+            4
+          ],
+          "category": "definition",
+          "enclosing": "helper",
+          "defines": [
+            "helper"
+          ],
+          "uses": [],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "adds helper, used below"
+        },
+        {
+          "id": "h1",
+          "old_range": [
+            5,
+            4
+          ],
+          "new_range": [
+            7,
+            7
+          ],
+          "category": "other",
+          "enclosing": null,
+          "defines": [],
+          "uses": [
+            "helper",
+            "x"
+          ],
+          "group": "g1",
+          "order_index": 1,
+          "rationale": "uses helper, defined above"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "g0",
+      "reason": "same definition: helper",
+      "members": [
+        "h0"
+      ]
+    },
+    {
+      "id": "g1",
+      "reason": "top-level change",
+      "members": [
+        "h1"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "h0",
+      "to": "h1",
+      "why": "def→use: helper"
+    }
+  ],
+  "clusters": [
+    [
+      "h0",
+      "h1"
+    ]
+  ]
+}

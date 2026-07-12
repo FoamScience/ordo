@@ -1,0 +1,10 @@
+{
+  "changes": [
+    {
+      "path": "m.py",
+      "old": "# a\n# b\n# c\n# d\n# e\n",
+      "new": "import os\n# a\n# b\ndef helper():\n    return os.getpid()\n# c\n# d\nx = helper()\n# e\n"
+    }
+  ],
+  "options": { "strategy": "comprehension" }
+}

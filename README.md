@@ -12,13 +12,13 @@ Ordering is a comprehension *aid*, not a correctness fix — treat it as such.
 
 ## What it does
 
-Per file, it parses the *new* content once with tree-sitter and, for each hunk:
-classifies it (`import` / `definition` / `other`), finds its enclosing
-definition, and extracts the symbols it **defines** and **uses**. Then it groups
-hunks by enclosing definition (P1), derives **def→use** edges between groups
-(P2, across files when enabled), and topologically sorts them — ties and cycles
-broken by file position, so output is deterministic and a strict permutation of
-the input (nothing is dropped).
+Per file, it parses both sides (of the diff) with tree-sitter and, for each hunk: classifies
+it (`import` / `definition` / `other`), finds its enclosing definition, and
+extracts the symbols it **defines** and **uses**. Then it groups hunks by
+enclosing definition (P1), derives **def→use** edges between groups (P2, across
+files when enabled), and topologically sorts them — ties and cycles broken by
+file position, so output is deterministic and a strict permutation of the input
+(nothing is dropped).
 
 ## Install
 
@@ -26,7 +26,6 @@ the input (nothing is dropped).
 cargo install --path .          # from source (Rust)
 npm  install -g @ordo/cli       # node wrapper (vendors a prebuilt binary)
 pip  install ordo               # python wrapper (vendors a prebuilt binary)
-brew install elwardi/tap/ordo   # macOS
 ```
 
 The npm/pypi packages are thin wrappers around one prebuilt binary (the
@@ -37,7 +36,9 @@ build.
 
 ```sh
 ordo order --json < input.json > output.json
-ordo review path/to.patch          # or: git diff | ordo review
+ordo pack  --json < input.json                 # compact LLM-ready review context
+ordo review path/to.patch                      # or: git diff | ordo review
+git diff -U100000 | ordo review --full-context # modified files get full semantics
 ```
 
 Input / output are frozen as **schema v1** (`schema/v1.json`):
@@ -52,8 +53,76 @@ Input / output are frozen as **schema v1** (`schema/v1.json`):
 A change may instead carry a `diff` (unified/git). See the ceiling below.
 
 Output carries the global `order`, per-file `hunks` (with `category`,
-`enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`), the
-`groups`, and the def→use `edges`.
+`enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, and
+`noise` for skippable formatting/generated hunks), the `groups`, the def→use
+`edges`, and `clusters` — the change's independent parts (one ⇒ atomic, many ⇒
+a candidate PR split). `ordo pack` renders all of it as compact review context.
+
+## Rationale
+
+Each hunk gets a one-line `rationale` explaining *why* it's where it is, from
+comparing both sides of the change:
+
+| Pattern | Example |
+|---|---|
+| cross-file def→use | `uses parse_cfg, defined in config.py` · `adds parse_cfg, used in main.py` |
+| within-file order | `uses helper, defined above` · `adds helper, used by run below` |
+| add vs edit | `adds helper` (new) · `edits run` (body of an existing def) |
+| signature / type | `changes signature of parse` · `changes type Config` · `adds type Config` |
+| imports | `adds import os` · `removes import sys` |
+| test ↔ code | `tests parse_cfg (config.py)` |
+| rename / delete | `renames foo → bar` · `removes old_helper` |
+| move / extract | `moves foo from a.py` · `adds read_input, extracted from order` |
+
+Cross-file lines (`defined in …`, `tests … (…)`) only appear when the changeset
+is sent as one call with `cross_file: true` — a definer and its user must be
+visible together.
+
+Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
+**advisories** — advanced-construct guidance with an escalation ladder, and a
+`verdict` when a downgrade is concretely warranted:
+
+```
+registry.py:L2  metaclass ⚠
+  metaclass — 90% of the time the wrong tool. Lightest sufficient step:
+  1. configure one attribute → __set_name__ (descriptor)
+  2. react to subclassing → __init_subclass__
+  3. replace the class after it's built → class decorator
+  4. rewrite the class as built / control instances → metaclass
+  ⚠ this metaclass overrides only __init__ — __init_subclass__ likely suffices.
+```
+
+Advisories are a curated catalog (`src/advisories.rs`), not a style linter —
+detection is deterministic tree-sitter, verdicts fire only when the pattern is
+concretely wrong. Current catalog:
+
+| lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
+|---|---|---|
+| python | metaclass, `eval`/`exec`, dynamic `type()`, `__del__`, `os.system`, `pickle`, `__getattribute__`, `suppress(Exception)` | mutable-default-arg, bare/empty-`except`, `assert`-validation, register-only metaclass, `__eq__` w/o `__hash__`, `subprocess(shell=True)`, blocking-call-in-async, `lru_cache`-on-method, SQL f-string, TLS `verify=False`, unsafe `yaml.load`, fire-and-forget task, half context-manager |
+| rust | `unsafe`, `mem::transmute` | `static mut` |
+| js/ts | `eval`, `any` | `with`, empty-`catch` |
+| go | `unsafe`, `reflect`, `panic` (non-test) | — |
+| c | `goto` | `strcpy`/`sprintf`/`gets`/`scanf` (buffer overflow) |
+| c++ | (all of c) raw `new`/`delete`, `malloc`/`free`, C-style/`reinterpret`/`const`/`dynamic` cast, function-like macro, `using namespace std`, `volatile`, `[&]` capture, `memcpy` family, `system`/`exec*`, `alloca`, non-reentrant runtime, catch-by-value | unsafe string fns, `using namespace std` in a header, throw in destructor/`noexcept`, `setjmp`/`longjmp`, `operator&&`/`\|\|`/`,` overload |
+| java | reflection (`setAccessible`) | empty-`catch` |
+
+`assert`/`panic` fire only outside test files.
+
+## Reviewer TUI (`ordo-tui`)
+
+An interactive terminal reviewer — a first-party *client* of the engine, kept
+out of the pure default build behind the `tui` feature:
+
+```sh
+cargo run --features tui --bin ordo-tui -- <rev>   # defaults to HEAD
+```
+
+It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders the
+change **in comprehension order**: a reading-order list (advisories `⚠`, noise
+dimmed, reviewed `✓`) beside a detail pane showing the hunk diff, rationale,
+notes, def→use edges and advisory ladders. `j`/`k` move, `x` mark-reviewed (with
+an `n/N` progress count), `g`/`G` ends, `q` quits. The engine never learns what
+git is.
 
 ## Library API
 
@@ -77,9 +146,16 @@ changes.
 
 - **Symbol resolution is approximate** — name match with an optional cross-file
   union, no full scope/type analysis. `cross_file` is a toggle.
-- **`diff` input**: a context-limited patch has no full new-file content, so
-  *modified* files yield positional hunks; additions reconstruct fully. For full
-  semantics on modified files, pass `old`/`new`.
+- **`diff` input** reaches full semantics whenever full new content is
+  derivable: `new` given, `old`+`diff` (applied), an added file, or a
+  caller-asserted full-context patch (`full_context` / `--full-context`,
+  e.g. `git diff -U100000`). A bare context-limited diff of a *modified* file
+  stays positional and is flagged `degraded: true` (no silent guessing — a
+  partial diff can't be reconstructed without truncating the file). See
+  `docs/diff-input-design.md`.
+- **Rationale heuristics** — rename detection is 1:1 per file (a file that
+  renames *and* adds/removes other defs falls back to `adds`/`removes`);
+  removals attach by old-line overlap (precise for isolated deletions).
 
 ## Development
 

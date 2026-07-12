@@ -1,0 +1,679 @@
+//! P10 rationale-pattern tests.
+use ordo::model::Input;
+
+fn rationales(v: serde_json::Value) -> Vec<String> {
+    let inp: Input = serde_json::from_value(v).unwrap();
+    ordo::run(inp)
+        .files
+        .into_iter()
+        .flat_map(|f| f.hunks.into_iter().map(|h| h.rationale))
+        .collect()
+}
+
+#[test]
+fn p3_adds_new_def_vs_edits_existing_body() {
+    // a.py: f already exists, only its body changes → "edits f"
+    // b.py: g is brand new → "adds g"
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def f():\n    x = 1\n    return x\n", "new": "def f():\n    x = 2\n    return x\n" },
+            { "path": "b.py", "old": "", "new": "def g():\n    return 3\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().any(|r| r.contains("edits f")),
+        "existing body edit → edits: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r.starts_with("adds g")),
+        "new definition → adds: {rats:?}"
+    );
+    assert!(
+        !rats.iter().any(|r| r.contains("adds f")),
+        "a pre-existing def must not be called 'adds': {rats:?}"
+    );
+}
+
+#[test]
+fn p4_signature_and_type_changes() {
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def f(a):\n    return a\n", "new": "def f(a, b):\n    return a\n" },
+            { "path": "b.py", "old": "class C:\n    x = 1\n", "new": "class C(Base):\n    x = 1\n" },
+            { "path": "c.py", "old": "", "new": "class D:\n    pass\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().any(|r| r.contains("changes signature of f")),
+        "existing fn header change: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r.contains("changes type C")),
+        "existing type header change: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r.contains("adds type D")),
+        "new type: {rats:?}"
+    );
+}
+
+#[test]
+fn p5_add_import() {
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py", "old": "# x\n", "new": "import os\n# x\n" } ]
+    }));
+    assert!(
+        rats.iter().any(|r| r.contains("adds import os")),
+        "new import: {rats:?}"
+    );
+}
+
+#[test]
+fn p6_test_links_to_code() {
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "tests/test_a.py", "old": "import a\n", "new": "import a\nassert a.helper()\n" },
+            { "path": "a.py", "old": "", "new": "def helper():\n    return 1\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().any(|r| r == "tests helper (a.py)"),
+        "test file links to code: {rats:?}"
+    );
+}
+
+#[test]
+fn p7_rename() {
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py", "old": "def foo():\n    return 1\n", "new": "def bar():\n    return 1\n" } ]
+    }));
+    assert!(
+        rats.iter().any(|r| r == "renames foo → bar"),
+        "1:1 def rename: {rats:?}"
+    );
+    assert!(
+        !rats.iter().any(|r| r.contains("adds bar")),
+        "a rename is not an add: {rats:?}"
+    );
+}
+
+#[test]
+fn p5_p7_removals() {
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def a():\n    return 1\ndef b():\n    return 2\n", "new": "def a():\n    return 1\n" },
+            { "path": "b.py", "old": "import os\nimport sys\nx = 1\n", "new": "import os\nx = 1\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().any(|r| r == "removes b"),
+        "deleted def: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r == "removes import sys"),
+        "deleted import: {rats:?}"
+    );
+}
+
+#[test]
+fn p11_collapse_nested_anonymous_enclosing() {
+    // change inside anon-inside-anon-inside outer → enclosing collapses to one <anonymous>
+    let old = "local function outer()\n  reg(function()\n    inner(function()\n      x = 1\n    end)\n  end)\nend\n";
+    let new = "local function outer()\n  reg(function()\n    inner(function()\n      x = 2\n    end)\n  end)\nend\n";
+    let inp: ordo::model::Input = serde_json::from_value(
+        serde_json::json!({ "changes": [{ "path": "m.lua", "old": old, "new": new }] }),
+    )
+    .unwrap();
+    let out = ordo::run(inp);
+    let enc: Vec<_> = out.files[0]
+        .hunks
+        .iter()
+        .filter_map(|h| h.enclosing.clone())
+        .collect();
+    assert!(
+        enc.iter().any(|e| e == "outer.<anonymous>"),
+        "collapsed enclosing: {enc:?}"
+    );
+    assert!(
+        !enc.iter().any(|e| e.contains("<anonymous>.<anonymous>")),
+        "no repeated anon: {enc:?}"
+    );
+}
+
+#[test]
+fn p11_multi_rename_by_body() {
+    // two renames (bodies unchanged) + one genuinely new def, in one file
+    let old = "def alpha():\n    return 111\ndef beta():\n    return 222\n";
+    let new = "def gamma():\n    return 111\ndef delta():\n    return 222\ndef epsilon():\n    return 999\n";
+    let rats =
+        rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    assert!(
+        rats.iter().any(|r| r == "renames alpha → gamma"),
+        "rename 1: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r == "renames beta → delta"),
+        "rename 2: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r.starts_with("adds epsilon")),
+        "genuine new def: {rats:?}"
+    );
+}
+
+#[test]
+fn p12_move_detection() {
+    // helper's body leaves a.py and reappears in b.py (unchanged) → a move, not add+remove
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def helper():\n    return 42\ndef keep():\n    return 1\n", "new": "def keep():\n    return 1\n" },
+            { "path": "b.py", "old": "# b\n", "new": "# b\ndef helper():\n    return 42\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().any(|r| r == "moves helper from a.py"),
+        "move-in on target: {rats:?}"
+    );
+    assert!(
+        rats.iter().any(|r| r == "moves helper to b.py"),
+        "move-out on source: {rats:?}"
+    );
+    assert!(
+        !rats
+            .iter()
+            .any(|r| r.contains("removes helper") || r.starts_with("adds helper")),
+        "not add+remove: {rats:?}"
+    );
+}
+
+#[test]
+fn p12_noise_formatting_and_generated() {
+    // whitespace-only body change → formatting-only noise
+    let a = ordo::run(serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "def f():\n    return  1\n", "new": "def f():\n    return 1\n" }]
+    })).unwrap());
+    assert!(
+        a.files[0].hunks.iter().all(|h| h.noise),
+        "formatting hunk flagged noise"
+    );
+    assert!(
+        a.files[0]
+            .hunks
+            .iter()
+            .any(|h| h.rationale == "formatting only"),
+        "formatting rationale: {:?}",
+        a.files[0]
+            .hunks
+            .iter()
+            .map(|h| &h.rationale)
+            .collect::<Vec<_>>()
+    );
+
+    // generated/lockfile path → noise regardless of content
+    let b = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": "package-lock.json", "old": "{}\n", "new": "{ \"a\": 1 }\n" }]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        b.files[0].hunks.iter().all(|h| h.noise),
+        "generated hunk flagged noise"
+    );
+    assert!(
+        b.files[0]
+            .hunks
+            .iter()
+            .any(|h| h.rationale == "generated file"),
+        "generated rationale"
+    );
+}
+
+#[test]
+fn p12_clusters_split_and_connected() {
+    // two unrelated files → two independent parts
+    let split = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "a.py", "old": "# a\n", "new": "# a\ndef x():\n    return 1\nq = x()\n" },
+                { "path": "b.py", "old": "# b\n", "new": "# b\ndef z():\n    return 2\nr = z()\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        split.clusters.len(),
+        2,
+        "unrelated files split: {:?}",
+        split.clusters
+    );
+    let total: usize = split.files.iter().map(|f| f.hunks.len()).sum();
+    assert_eq!(
+        split.clusters.iter().map(|c| c.len()).sum::<usize>(),
+        total,
+        "clusters partition all hunks"
+    );
+
+    // cross-file def→use links into one part
+    let connected = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        connected.clusters.len(),
+        1,
+        "cross-file link → one part: {:?}",
+        connected.clusters
+    );
+}
+
+#[test]
+fn p12_pack_renders_sections() {
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    let p = ordo::pack(&out);
+    assert!(p.contains("# ordo review pack"), "header:\n{p}");
+    assert!(p.contains("## reading order"), "order section");
+    assert!(p.contains("## dependencies"), "edges section");
+    assert!(p.contains("util.py:L2"), "locates util helper");
+}
+
+#[test]
+fn p13_def_smells_size_and_params() {
+    let body: String = (0..65).map(|i| format!("    v{i} = {i}\n")).collect();
+    let big = format!("def big():\n{body}");
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "a.py", "old": "", "new": big },
+                { "path": "b.py", "old": "", "new": "def f(a, b, c, d, e, f, g):\n    return a\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    let notes: Vec<String> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().flat_map(|h| h.notes.clone()))
+        .collect();
+    assert!(
+        notes.iter().any(|n| n.starts_with("large definition")),
+        "large-def note: {notes:?}"
+    );
+    assert!(
+        notes.iter().any(|n| n == "7 params"),
+        "param-bloat note: {notes:?}"
+    );
+}
+
+#[test]
+fn p14_metaclass_advisories() {
+    let out = ordo::run(serde_json::from_value(serde_json::json!({
+        "changes": [
+            { "path": "reg.py", "old": "", "new": "class Registry(type):\n    def __init__(cls, name, bases, ns):\n        pass\n" },
+            { "path": "meta.py", "old": "", "new": "class Meta(type):\n    def __new__(mcs, name, bases, ns):\n        return type.__new__(mcs, name, bases, ns)\n" },
+            { "path": "use.py", "old": "", "new": "class Widget(metaclass=Meta):\n    pass\n" }
+        ]
+    })).unwrap());
+    let advs: Vec<(String, String, bool)> = out
+        .files
+        .iter()
+        .flat_map(|f| {
+            f.hunks.iter().flat_map(move |h| {
+                h.advisories
+                    .iter()
+                    .map(move |a| (f.path.clone(), a.construct.clone(), a.verdict))
+            })
+        })
+        .collect();
+    assert!(
+        advs.iter()
+            .any(|(p, c, v)| p == "reg.py" && c == "metaclass" && *v),
+        "register-only metaclass → downgrade verdict: {advs:?}"
+    );
+    assert!(
+        advs.iter()
+            .any(|(p, c, v)| p == "meta.py" && c == "metaclass" && !*v),
+        "__new__ metaclass → advisory only: {advs:?}"
+    );
+    assert!(
+        advs.iter()
+            .any(|(p, c, v)| p == "use.py" && c == "metaclass" && !*v),
+        "metaclass usage → advisory: {advs:?}"
+    );
+}
+
+#[test]
+fn p14_catalog() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let py = advs(
+        "a.py",
+        "def f(x=[]):\n    return x\ntry:\n    g()\nexcept:\n    pass\nr = eval('1')\n",
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "mutable-default-arg" && *v),
+        "mutable default: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "bare-except" && *v),
+        "bare except: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "eval/exec" && !*v),
+        "eval: {py:?}"
+    );
+
+    let rs = advs(
+        "a.rs",
+        "fn f(x: i32) {\n    unsafe {\n        let _y: u32 = std::mem::transmute(x);\n    }\n}\n",
+    );
+    assert!(rs.iter().any(|(c, _)| c == "unsafe"), "rust unsafe: {rs:?}");
+    assert!(
+        rs.iter().any(|(c, _)| c == "transmute"),
+        "transmute: {rs:?}"
+    );
+
+    let js = advs("a.js", "with (obj) { x = 1 }\nvar r = eval('1')\n");
+    assert!(js.iter().any(|(c, v)| c == "with" && *v), "with: {js:?}");
+    assert!(js.iter().any(|(c, _)| c == "eval"), "js eval: {js:?}");
+
+    let go = advs(
+        "a.go",
+        "package m\nfunc f(x any) {\n    _ = reflect.TypeOf(x)\n    _ = unsafe.Pointer(nil)\n}\n",
+    );
+    assert!(go.iter().any(|(c, _)| c == "reflect"), "reflect: {go:?}");
+    assert!(go.iter().any(|(c, _)| c == "unsafe"), "go unsafe: {go:?}");
+}
+
+#[test]
+fn p14_batch2() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let py = advs("svc.py", "def check(x):\n    assert x > 0\nC = type('C', (), {})\ntry:\n    f()\nexcept ValueError:\n    pass\n");
+    assert!(
+        py.iter().any(|(c, v)| c == "assert-validation" && *v),
+        "assert: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, _)| c == "dynamic-type"),
+        "dynamic type: {py:?}"
+    );
+    assert!(
+        py.iter().any(|(c, v)| c == "empty-catch" && *v),
+        "py empty catch: {py:?}"
+    );
+
+    let rs = advs("a.rs", "static mut COUNT: u32 = 0;\n");
+    assert!(
+        rs.iter().any(|(c, v)| c == "static-mut" && *v),
+        "static mut: {rs:?}"
+    );
+
+    let js = advs("a.js", "try { f() } catch (e) {}\n");
+    assert!(
+        js.iter().any(|(c, v)| c == "empty-catch" && *v),
+        "js empty catch: {js:?}"
+    );
+    let ts = advs("a.ts", "let x: any = 1;\n");
+    assert!(ts.iter().any(|(c, _)| c == "any"), "ts any: {ts:?}");
+
+    let go = advs("svc.go", "package m\nfunc f() {\n    panic(\"x\")\n}\n");
+    assert!(go.iter().any(|(c, _)| c == "panic"), "go panic: {go:?}");
+
+    let c = advs(
+        "a.c",
+        "int f() {\n    goto done;\ndone:\n    return 0;\n}\n",
+    );
+    assert!(c.iter().any(|(c, _)| c == "goto"), "c goto: {c:?}");
+
+    let cpp = advs(
+        "a.cpp",
+        "int f(char* p) {\n    return *reinterpret_cast<int*>(p);\n}\n",
+    );
+    assert!(
+        cpp.iter().any(|(c, _)| c == "reinterpret_cast"),
+        "cpp reinterpret_cast: {cpp:?}"
+    );
+
+    let java = advs("A.java", "class A {\n    void f() throws Exception {\n        try { g(); } catch (Exception e) {}\n        java.lang.reflect.Method m = null;\n        m.setAccessible(true);\n    }\n}\n");
+    assert!(
+        java.iter().any(|(c, v)| c == "empty-catch" && *v),
+        "java empty catch: {java:?}"
+    );
+    assert!(
+        java.iter().any(|(c, _)| c == "reflection"),
+        "java reflection: {java:?}"
+    );
+}
+
+#[test]
+fn p16_extraction_from_present_def() {
+    // read_input's body is extracted from order (which still exists as a wrapper);
+    // bodies overlap but are not identical, and order is NOT removed → not a rename.
+    let old = "fn order() {\n    let mut buf = String::new();\n    io::stdin().read_to_string(&mut buf).unwrap();\n    log::debug!(\"got input\");\n    let parsed = serde_json::from_str(&buf).unwrap();\n    emit(run(parsed));\n}\n";
+    let new = "fn read_input() -> Input {\n    let mut buf = String::new();\n    io::stdin().read_to_string(&mut buf).unwrap();\n    log::debug!(\"got input\");\n    serde_json::from_str(&buf).unwrap()\n}\nfn order() {\n    emit(run(read_input()));\n}\n";
+    let rats =
+        rationales(serde_json::json!({ "changes": [{ "path": "m.rs", "old": old, "new": new }] }));
+    assert!(
+        rats.iter()
+            .any(|r| r == "adds read_input, extracted from order"),
+        "extraction detected: {rats:?}"
+    );
+    assert!(
+        !rats.iter().any(|r| r == "adds read_input"),
+        "must not read as a plain add: {rats:?}"
+    );
+}
+
+#[test]
+fn placeholder_defs_suppressed() {
+    // `_`-bound / anonymous closures carry no navigational signal → dropped from wording.
+    let rats = rationales(serde_json::json!({ "changes": [{
+        "path": "m.lua",
+        "old": "local x = 1\n",
+        "new": "local x = 1\n_ = function() return 1 end\nlocal t = { run = function() return 2 end }\n",
+    }]}));
+    assert!(
+        rats.iter().any(|r| r == "adds run"),
+        "named def kept: {rats:?}"
+    );
+    assert!(
+        !rats
+            .iter()
+            .any(|r| r.contains("adds _") || r.contains("<anonymous>")),
+        "placeholders dropped: {rats:?}"
+    );
+}
+
+#[test]
+fn p14_deep_python_cpp() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let has = |v: &[(String, bool)], c: &str, verdict: bool| {
+        v.iter().any(|(k, w)| k == c && *w == verdict)
+    };
+
+    let py = advs(
+        "a.py",
+        "import os, subprocess, pickle\nclass C:\n    def __eq__(self, o):\n        return True\n    def __del__(self):\n        pass\nos.system(x)\nsubprocess.run(x, shell=True)\npickle.loads(b)\n",
+    );
+    assert!(has(&py, "eq-without-hash", true), "eq/hash: {py:?}");
+    assert!(has(&py, "del-finalizer", true), "__del__: {py:?}");
+    assert!(has(&py, "os-system", false), "os.system: {py:?}");
+    assert!(has(&py, "shell-injection", true), "shell=True: {py:?}");
+    assert!(has(&py, "pickle", false), "pickle: {py:?}");
+
+    // __eq__ + __hash__ present → no advisory
+    let ok = advs(
+        "b.py",
+        "class D:\n    def __eq__(self, o):\n        return True\n    def __hash__(self):\n        return 0\n",
+    );
+    assert!(
+        !ok.iter().any(|(c, _)| c == "eq-without-hash"),
+        "hash present → quiet: {ok:?}"
+    );
+
+    let cpp = advs(
+        "a.cpp",
+        "#define SQ(x) ((x)*(x))\nvoid f(){ char b[4]; strcpy(b,s); int* p = new int(3); free(malloc(8)); int y=(int)3.0; auto q=reinterpret_cast<long>(p); auto r=const_cast<int*>(p); delete p; }\n",
+    );
+    assert!(has(&cpp, "unsafe-str-fn", true), "strcpy: {cpp:?}");
+    assert!(has(&cpp, "raw-new-delete", false), "new/delete: {cpp:?}");
+    assert!(has(&cpp, "manual-memory", false), "malloc: {cpp:?}");
+    assert!(has(&cpp, "c-style-cast", false), "c-cast: {cpp:?}");
+    assert!(has(&cpp, "const-cast", false), "const_cast: {cpp:?}");
+    assert!(has(&cpp, "function-macro", false), "macro: {cpp:?}");
+
+    // using namespace std: advisory always, verdict only in a header
+    let src = advs("a.cpp", "using namespace std;\n");
+    assert!(
+        has(&src, "using-namespace-std", false),
+        "in .cpp → no verdict: {src:?}"
+    );
+    let hdr = advs("a.hpp", "using namespace std;\n");
+    assert!(
+        has(&hdr, "using-namespace-std", true),
+        "in header → verdict: {hdr:?}"
+    );
+}
+
+#[test]
+fn p14_derived_python_cpp() {
+    fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": "z", "new": code }]
+            }))
+            .unwrap(),
+        );
+        out.files
+            .iter()
+            .flat_map(|f| {
+                f.hunks.iter().flat_map(|h| {
+                    h.advisories
+                        .iter()
+                        .map(|a| (a.construct.clone(), a.verdict))
+                })
+            })
+            .collect()
+    }
+    let has = |v: &[(String, bool)], c: &str, verdict: bool| {
+        v.iter().any(|(k, w)| k == c && *w == verdict)
+    };
+
+    let py = advs(
+        "a.py",
+        "import asyncio, yaml, functools\nfrom contextlib import suppress\nclass C:\n    def __enter__(self): return self\n    @functools.lru_cache\n    def m(self): return 1\n    def __getattribute__(self, n): return 1\nasync def h():\n    time.sleep(1)\ncur.execute(f'select {x}')\nrequests.get(u, verify=False)\nyaml.load(data)\nasyncio.create_task(bg())\nwith suppress(Exception):\n    pass\n",
+    );
+    for c in [
+        ("blocking-in-async", true),
+        ("lru-cache-on-method", true),
+        ("sql-injection", true),
+        ("tls-no-verify", true),
+        ("yaml-load", true),
+        ("fire-and-forget-task", true),
+        ("half-context-manager", true),
+        ("getattribute-override", false),
+        ("broad-suppress", false),
+    ] {
+        assert!(has(&py, c.0, c.1), "python {}: {py:?}", c.0);
+    }
+    // negatives
+    let pyn = advs("b.py", "class C:\n    def __enter__(self): return self\n    def __exit__(self, *a): pass\ncur.execute('select 1', p)\nyaml.load(d, Loader=SafeLoader)\nx = asyncio.create_task(bg())\n");
+    assert!(
+        !pyn.iter().any(|(c, _)| c == "half-context-manager"
+            || c == "sql-injection"
+            || c == "yaml-load"
+            || c == "fire-and-forget-task"),
+        "py negatives: {pyn:?}"
+    );
+
+    let cpp = advs(
+        "a.cpp",
+        "struct T { ~T() { throw 1; } };\nbool operator&&(T a, T b) { return true; }\nvoid f() {\n  volatile int v = 0;\n  auto g = [&]() { return v; };\n  std::memcpy(p, q, 8);\n  system(cmd);\n  alloca(64);\n  rand();\n  setjmp(buf);\n  auto d = dynamic_cast<T*>(pp);\n  try { g(); } catch (std::exception e) {}\n}",
+    );
+    for c in [
+        ("throw-in-destructor", true),
+        ("operator-logical", true),
+        ("setjmp-longjmp", true),
+        ("volatile", false),
+        ("lambda-ref-capture", false),
+        ("mem-family", false),
+        ("shell-exec", false),
+        ("alloca", false),
+        ("non-reentrant", false),
+        ("dynamic-cast", false),
+        ("catch-by-value", false),
+    ] {
+        assert!(has(&cpp, c.0, c.1), "cpp {}: {cpp:?}", c.0);
+    }
+    // negatives
+    let cppn = advs("b.cpp", "void ok() { throw 1; }\nvoid f() {\n  auto a = [=]() { return 1; };\n  auto b = [&x]() { return x; };\n  try { f(); } catch (const std::exception& e) {}\n  try { f(); } catch (int e) {}\n}");
+    assert!(
+        !cppn.iter().any(|(c, _)| c == "throw-in-destructor"
+            || c == "lambda-ref-capture"
+            || c == "catch-by-value"),
+        "cpp negatives: {cppn:?}"
+    );
+}

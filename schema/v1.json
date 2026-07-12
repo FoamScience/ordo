@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/elwardi/ordo/schema/v1.json",
+  "title": "ordo v1",
+  "description": "Frozen contract for the ordo change-ordering engine. Input and output for `ordo order --json`.",
+  "$defs": {
+    "input": {
+      "type": "object",
+      "required": ["changes"],
+      "properties": {
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string", "description": "language inferred from extension" },
+              "old": { "type": "string" },
+              "new": { "type": "string" },
+              "diff": { "type": "string", "description": "unified diff; alternative to old/new" }
+            }
+          }
+        },
+        "options": {
+          "type": "object",
+          "properties": {
+            "strategy": { "enum": ["comprehension", "defs-first", "file"], "default": "comprehension" },
+            "cross_file": { "type": "boolean", "default": true },
+            "full_context": {
+              "type": "boolean",
+              "default": false,
+              "description": "assert each change's `diff` is a complete (full-context) patch so a modified file can be reconstructed for full semantics; else a diff-only modification is positional"
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["schema", "order", "files", "groups", "edges"],
+      "properties": {
+        "schema": { "const": 1 },
+        "order": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "hunk"],
+            "properties": { "path": { "type": "string" }, "hunk": { "type": "string" } }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "hunks"],
+            "properties": {
+              "path": { "type": "string" },
+              "degraded": {
+                "type": "boolean",
+                "description": "true when the file could only be ordered positionally (a diff without full context); omitted when false"
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "old_range", "new_range", "category", "enclosing", "defines", "uses", "group", "order_index", "rationale"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "old_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                    "new_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                    "category": { "enum": ["import", "definition", "other"] },
+                    "enclosing": { "type": ["string", "null"] },
+                    "defines": { "type": "array", "items": { "type": "string" } },
+                    "uses": { "type": "array", "items": { "type": "string" } },
+                    "group": { "type": "string" },
+                    "order_index": { "type": "integer" },
+                    "rationale": { "type": "string" },
+                    "noise": {
+                      "type": "boolean",
+                      "description": "formatting-only or generated-file hunk, skippable for review; omitted when false"
+                    },
+                    "notes": {
+                      "type": "array",
+                      "description": "structural smells for a def introduced here (size/nesting/params); omitted when empty",
+                      "items": { "type": "string" }
+                    },
+                    "advisories": {
+                      "type": "array",
+                      "description": "advanced-construct advisories (P14); omitted when empty",
+                      "items": {
+                        "type": "object",
+                        "required": ["construct", "message"],
+                        "properties": {
+                          "construct": { "type": "string" },
+                          "message": { "type": "string", "description": "escalation-ladder guidance" },
+                          "verdict": { "type": "boolean", "description": "true when a concrete downgrade is suggested; omitted when false" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "reason", "members"],
+            "properties": {
+              "id": { "type": "string" },
+              "reason": { "type": "string" },
+              "members": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to", "why"],
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "why": { "type": "string" }
+            }
+          }
+        },
+        "clusters": {
+          "type": "array",
+          "description": "independent parts of the change (connected components of the group def→use graph); each is an array of hunk ids. One cluster = atomic; multiple = candidate PR split.",
+          "items": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "oneOf": [ { "$ref": "#/$defs/input" }, { "$ref": "#/$defs/output" } ]
+}
