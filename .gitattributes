@@ -1,0 +1,35 @@
+# Lock files are resolver output, not code. `linguist-generated=true` collapses
+# them in GitHub's diff view and drops them from ordo-tui's review (`--all` keeps
+# them). Listed across ecosystems, not just this repo's, so the file stays useful
+# as the sample it is referenced as in the README.
+
+Cargo.lock              linguist-generated=true
+package-lock.json       linguist-generated=true
+npm-shrinkwrap.json     linguist-generated=true
+yarn.lock               linguist-generated=true
+pnpm-lock.yaml          linguist-generated=true
+bun.lock                linguist-generated=true
+bun.lockb               linguist-generated=true
+deno.lock               linguist-generated=true
+uv.lock                 linguist-generated=true
+poetry.lock             linguist-generated=true
+pdm.lock                linguist-generated=true
+Pipfile.lock            linguist-generated=true
+go.sum                  linguist-generated=true
+go.work.sum             linguist-generated=true
+Gemfile.lock            linguist-generated=true
+composer.lock           linguist-generated=true
+flake.lock              linguist-generated=true
+mix.lock                linguist-generated=true
+pubspec.lock            linguist-generated=true
+Podfile.lock            linguist-generated=true
+Package.resolved        linguist-generated=true
+Cartfile.resolved       linguist-generated=true
+packages.lock.json      linguist-generated=true
+gradle.lockfile         linguist-generated=true
+shard.lock              linguist-generated=true
+renv.lock               linguist-generated=true
+stack.yaml.lock         linguist-generated=true
+cabal.project.freeze    linguist-generated=true
+conan.lock              linguist-generated=true
+.terraform.lock.hcl     linguist-generated=true
