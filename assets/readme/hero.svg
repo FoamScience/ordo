@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="ordo-hero-title ordo-hero-desc">
+  <title id="ordo-hero-title">ordo — a code change, read in the order a human should read it</title>
+  <desc id="ordo-hero-desc">Left: the name ordo, described as a hunk reordering engine built on tree-sitter, covering ten languages, with a frozen JSON schema. Right: a reviewer pane from a real ordo run over the click commit "Add support of pathlib.Path to edit", listing five hunks in comprehension order — the changed definition in _termui_impl.py first, then its uses in termui.py, then the tests — with the rationale "changes signature of edit_files" shown for the selected hunk.</desc>
+
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="360" rx="28" fill="#0a0c10"/>
+  <rect x="0.5" y="0.5" width="1199" height="359" rx="27.5" fill="none" stroke="#1c222b"/>
+
+  <!-- identity -->
+  <g transform="translate(60,0)">
+    <text class="mono" x="2" y="86" font-size="18" fill="#5fd4c0" letter-spacing="2.4">HUNK REORDERING ENGINE</text>
+    <text class="sans" x="0" y="168" font-size="86" font-weight="700" fill="#f5f7f9" letter-spacing="-1">ordo</text>
+    <text class="sans" x="2" y="216" font-size="26" fill="#c7cdd6">A code change, read in the order</text>
+    <text class="sans" x="2" y="250" font-size="26" fill="#c7cdd6">a human should read it.</text>
+    <text class="mono" x="2" y="300" font-size="18" fill="#7c8591">tree-sitter · 10 languages · schema v1</text>
+  </g>
+
+  <!-- reviewer pane: a real run -->
+  <g transform="translate(520,44)">
+    <rect x="0" y="0" width="624" height="272" rx="12" fill="#10141a" stroke="#232a33"/>
+    <text class="mono" x="20" y="30" font-size="17" fill="#7c8591">e1fd594 — 0/9 reviewed · comprehension</text>
+    <line x1="0" y1="46" x2="624" y2="46" stroke="#232a33"/>
+
+    <!-- selected row -->
+    <rect x="1" y="58" width="622" height="32" fill="#182029"/>
+    <text class="mono" x="20" y="80" font-size="17" fill="#4d5663">1</text>
+    <text class="mono" x="48" y="80" font-size="19">
+      <tspan fill="#e6eaf0">src/click/_termui_impl.py</tspan><tspan fill="#6f9bef">:L713</tspan><tspan fill="#c78bd9"> [definition]</tspan>
+    </text>
+    <text class="mono" x="20" y="118" font-size="17" fill="#4d5663">2</text>
+    <text class="mono" x="48" y="118" font-size="19">
+      <tspan fill="#c7cdd6">src/click/termui.py</tspan><tspan fill="#6f9bef">:L841</tspan><tspan fill="#c78bd9"> [other]</tspan>
+    </text>
+    <text class="mono" x="20" y="152" font-size="17" fill="#4d5663">3</text>
+    <text class="mono" x="48" y="152" font-size="19">
+      <tspan fill="#c7cdd6">src/click/termui.py</tspan><tspan fill="#6f9bef">:L854</tspan><tspan fill="#c78bd9"> [other]</tspan>
+    </text>
+    <text class="mono" x="20" y="186" font-size="17" fill="#4d5663">4</text>
+    <text class="mono" x="48" y="186" font-size="19">
+      <tspan fill="#c7cdd6">tests/test_termui.py</tspan><tspan fill="#6f9bef">:L424</tspan><tspan fill="#c78bd9"> [definition]</tspan>
+    </text>
+    <text class="mono" x="20" y="220" font-size="17" fill="#4d5663">5</text>
+    <text class="mono" x="48" y="220" font-size="19">
+      <tspan fill="#c7cdd6">tests/test_termui.py</tspan><tspan fill="#6f9bef">:L451</tspan><tspan fill="#c78bd9"> [definition]</tspan>
+    </text>
+
+    <line x1="0" y1="238" x2="624" y2="238" stroke="#232a33"/>
+    <text class="mono" x="20" y="261" font-size="19">
+      <tspan fill="#7c8591">reason: </tspan><tspan fill="#5fd4c0">changes signature of edit_files</tspan>
+    </text>
+  </g>
+</svg>
