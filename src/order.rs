@@ -2,8 +2,9 @@
 //! (P1), def→use edges between groups (P2) — cross-file when enabled (P4),
 //! topological sort (Kahn) with deterministic (import, file, position) tiebreak.
 //! Single-file is just the one-file case of this.
-use crate::extract::HunkSem;
+use crate::extract::{BindingUse, HunkSem};
 use crate::model::{Category, Strategy};
+use crate::name_list;
 use std::collections::{HashMap, HashSet};
 
 pub struct GroupInfo {
@@ -29,6 +30,86 @@ pub struct OrderedAll {
 
 use crate::lang::is_test_path;
 
+/// One-line rationale bound (mirrors tests/rationale_bounds.rs's own
+/// MAX_RATIONALE) — used where composing two independently-capped fragments
+/// can still exceed it, so the composition itself needs a length check.
+const MAX_RATIONALE: usize = 240;
+
+/// Join rationale fragments within the one-line budget. Every fragment is
+/// already name-capped, but several capped fragments still overflow together —
+/// python test names run past 60 characters, so three of them exceed the bound
+/// on their own. Keep what fits and say how many were left out, rather than
+/// emitting a line the contract forbids.
+fn join_frags(frags: &[String]) -> String {
+    const SUFFIX: usize = 12; // room for the "; +N more" tail
+    let budget = MAX_RATIONALE - SUFFIX;
+    let mut out = String::new();
+    let mut dropped = 0usize;
+    for f in frags {
+        let sep = if out.is_empty() { 0 } else { 2 };
+        if out.chars().count() + sep + f.chars().count() <= budget {
+            if !out.is_empty() {
+                out.push_str("; ");
+            }
+            out.push_str(f);
+        } else {
+            dropped += 1;
+        }
+    }
+    if out.is_empty() {
+        // even one fragment overflows on its own: keep a truncated head, since
+        // a clipped name still orients better than no wording at all
+        if let Some(f) = frags.first() {
+            out = f.chars().take(budget.saturating_sub(1)).collect::<String>() + "…";
+            dropped -= 1;
+        }
+    }
+    if dropped > 0 {
+        out.push_str(&format!("; +{dropped} more"));
+    }
+    out
+}
+
+/// Last-resort guard on the one-line bound. `rationale_for` composes through
+/// many paths — fragments, provenance clauses, binding clauses — each capped on
+/// its own, and no single one of them can see the finished length. Clamping
+/// once, where every path lands, is what actually holds the contract.
+fn clamp_rationale(r: String) -> String {
+    if r.chars().count() <= MAX_RATIONALE {
+        return r;
+    }
+    // cut at a fragment boundary when there is one, so the line still ends on a
+    // complete statement rather than mid-name
+    let head: String = r.chars().take(MAX_RATIONALE - 2).collect();
+    match head.rfind("; ") {
+        Some(i) if i > MAX_RATIONALE / 2 => format!("{}…", &head[..i]),
+        _ => format!("{head}…"),
+    }
+}
+
+/// One fragment per source reads naturally; several sources fold into a single
+/// fragment with each name carrying its own source, so the relation phrase is
+/// said once however many sources are involved.
+fn src_frags(pairs: &[(&str, &str)], verb: &str, sep: &str, rel: &str) -> Vec<String> {
+    let groups = group_by_src(pairs);
+    match groups.len() {
+        0 => vec![],
+        1 => {
+            let (src, names) = &groups[0];
+            vec![format!("{verb} {}{sep}{rel} {src}", name_list(names))]
+        }
+        _ => {
+            let mut each: Vec<String> = groups
+                .iter()
+                .flat_map(|(src, names)| names.iter().map(move |n| format!("{n} ({rel} {src})")))
+                .collect();
+            each.sort();
+            let refs: Vec<&str> = each.iter().map(String::as_str).collect();
+            vec![format!("{verb} {}", name_list(&refs))]
+        }
+    }
+}
+
 fn cat_rank(c: Category) -> u8 {
     match c {
         Category::Import => 0,
@@ -42,26 +123,33 @@ pub fn order_all(
     paths: &[String],
     old_defs: &[HashSet<String>],
     old_imports: &[HashSet<String>],
+    old_locals: &[HashSet<String>],
     rename: &[HashMap<String, String>],
     moved_in: &[HashMap<String, String>],
     relocated: &[HashMap<String, String>],
     body_only: &[HashSet<String>],
     removals: &[Vec<(usize, String)>],
+    comment_only: &[Vec<bool>],
     strategy: Strategy,
     cross_file: bool,
 ) -> OrderedAll {
     // ---- flatten all files into a global hunk list ----
     let mut coord = vec![];
     let mut sem: Vec<&HunkSem> = vec![];
+    let mut comment: Vec<bool> = vec![];
     for (fi, hs) in files.iter().enumerate() {
         for (li, s) in hs.iter().enumerate() {
             coord.push((fi, li));
             sem.push(s);
+            comment.push(comment_only.get(fi).and_then(|v| v.get(li)).copied().unwrap_or(false));
         }
     }
     let n = sem.len();
 
-    // ---- group by (file, enclosing definition); top-level hunks are singletons ----
+    // ---- group by (file, enclosing definition); top-level hunks (no enclosing
+    // definition) share one group per file — module constants, imports,
+    // exports and similar file-scope hunks all live in the same scope, so
+    // they group the same way two hunks in the same function do ----
     let mut idx_of_key: HashMap<String, usize> = HashMap::new();
     let mut groups: Vec<GroupInfo> = vec![];
     let mut group_idx = vec![0usize; n];
@@ -69,16 +157,12 @@ pub fn order_all(
         let (fi, _) = coord[i];
         let key = match &sem[i].enclosing {
             Some(nm) => format!("{fi}\u{0}def:{nm}"),
-            None => format!("{fi}\u{0}top:{i}"),
+            None => format!("{fi}\u{0}top"),
         };
         let gi = *idx_of_key.entry(key).or_insert_with(|| {
             let reason = match &sem[i].enclosing {
                 Some(nm) => format!("same definition: {nm}"),
-                None => match sem[i].category {
-                    Category::Import => "import".to_string(),
-                    Category::Definition => "top-level definition".to_string(),
-                    Category::Other => "top-level change".to_string(),
-                },
+                None => "same scope: top-level".to_string(),
             };
             groups.push(GroupInfo {
                 reason,
@@ -151,6 +235,50 @@ pub fn order_all(
                     gedges.push((a, b));
                 }
             }
+        }
+    }
+
+    // ---- containment edges: a def introduced here whose `scope` names
+    // another group's own enclosing definition — i.e. this def lives nested
+    // inside that other def, and both changed in this diff. Barnett et al.,
+    // ICSE 2015 (ClusterChanges) model containment as a distinct edge in the
+    // same graph as def→use, specifically so it feeds connected components
+    // without flattening the grouping key to the outermost def — two
+    // unrelated sibling methods of one class never share a group just for
+    // sharing a container, only a def and the parent def it nests inside do.
+    // Cluster membership only (see order_all's doc comment) — kept out of
+    // `gedges`/Kahn's indegree, which drives P2 reading order: a containment
+    // edge that also gated the topo sort could conflict with a def→use edge
+    // running the other way (a nested helper the parent def calls), forcing
+    // a cycle-break where none exists today; measured against the corpus,
+    // clustering the two together already recovers the "these changed
+    // together" signal without risking that.
+    let mut def_group: HashMap<(usize, String), usize> = HashMap::new();
+    for i in 0..n {
+        if let Some(nm) = &sem[i].enclosing {
+            def_group.entry((coord[i].0, nm.clone())).or_insert(group_idx[i]);
+        }
+    }
+    let mut seen_contain: HashSet<(usize, usize)> = HashSet::new();
+    let mut contain_gedges: Vec<(usize, usize)> = vec![];
+    for i in 0..n {
+        let cgi = group_idx[i];
+        for sym in &sem[i].symbols {
+            let Some(sc) = &sym.scope else { continue };
+            let Some(&pgi) = def_group.get(&(coord[i].0, sc.clone())) else {
+                continue;
+            };
+            if pgi == cgi || !seen_contain.insert((pgi, cgi)) {
+                continue;
+            }
+            let from_h = groups[pgi]
+                .members
+                .iter()
+                .find(|&&h| sem[h].enclosing.as_deref() == Some(sc.as_str()))
+                .copied()
+                .unwrap_or(groups[pgi].members[0]);
+            edges.push((from_h, i, format!("encloses: {}", sym.name)));
+            contain_gedges.push((pgi, cgi));
         }
     }
 
@@ -243,20 +371,25 @@ pub fn order_all(
         paths,
         old_defs,
         old_imports,
+        old_locals,
         rename,
         moved_in,
         relocated,
         body_only,
         removals,
+        comment: &comment,
         cross_file,
     };
     let rationale = (0..n)
-        .map(|i| rationale_for(i, &sem, &group_idx, &ctx))
+        .map(|i| clamp_rationale(rationale_for(i, &sem, &group_idx, &ctx)))
         .collect();
 
-    // P12.3: connected components of the group def→use graph = independent parts
+    // P12.3: connected components of the group def→use graph = independent
+    // parts; containment edges join components here too (a nested def and
+    // its parent def are part of the same change even with no def→use edge
+    // between them) without joining the groups themselves.
     let mut parent: Vec<usize> = (0..g).collect();
-    for &(a, b) in &gedges {
+    for &(a, b) in gedges.iter().chain(contain_gedges.iter()) {
         let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
         if ra != rb {
             parent[ra] = rb;
@@ -304,11 +437,13 @@ struct RatCtx<'a> {
     paths: &'a [String],
     old_defs: &'a [HashSet<String>],
     old_imports: &'a [HashSet<String>],
+    old_locals: &'a [HashSet<String>],
     rename: &'a [HashMap<String, String>],
     moved_in: &'a [HashMap<String, String>],
     relocated: &'a [HashMap<String, String>],
     body_only: &'a [HashSet<String>],
     removals: &'a [Vec<(usize, String)>],
+    comment: &'a [bool],
     cross_file: bool,
 }
 
@@ -317,6 +452,11 @@ impl RatCtx<'_> {
     // cross_file is off) lives in the same file as the hunk's group
     fn ok(&self, mine: usize, other: usize) -> bool {
         other != mine && (self.cross_file || self.group_file[other] == self.group_file[mine])
+    }
+    // markdown (currently the only prose language): rationale wording says
+    // "section" instead of naming a construct kind.
+    fn is_prose(&self, file: usize) -> bool {
+        crate::lang::for_path(&self.paths[file]).is_some_and(|s| s.prose)
     }
     // #3/#4: verb for a definition hunk. New symbol → "adds"/"adds type"; a
     // pre-existing symbol whose header changed → "changes signature of"/"changes
@@ -348,6 +488,27 @@ impl RatCtx<'_> {
     }
 }
 
+// group (name, src) pairs by shared src, preserving first-seen src order, so
+// "adds A, extracted from tests" / "adds B, extracted from tests" collapse
+// into one "adds A, B, extracted from tests" fragment instead of repeating.
+fn group_by_src<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<(&'a str, Vec<&'a str>)> {
+    let mut groups: Vec<(&str, Vec<&str>)> = vec![];
+    for &(name, src) in pairs {
+        match groups.iter_mut().find(|(s, _)| *s == src) {
+            Some(g) => g.1.push(name),
+            None => groups.push((src, vec![name])),
+        }
+    }
+    groups
+}
+
+// prose wording: "section Install" / "sections Install, Usage" ahead of a
+// name list, singular/plural on the count named.
+fn prose_noun(count: usize, list: &str) -> String {
+    let noun = if count == 1 { "section" } else { "sections" };
+    format!("{noun} {list}")
+}
+
 fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) -> String {
     let s = sem[i];
     let mine = group_idx[i];
@@ -377,7 +538,18 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         } else {
             "changes import"
         };
-        return format!("{verb} {}", s.imports.join(", "));
+        let names: Vec<&str> = s.imports.iter().map(String::as_str).collect();
+        return format!("{verb} {}", name_list(&names));
+    }
+
+    // comment-only hunk: wins over every "edits {name}" / body-edit wording
+    // below, definition-side included — the changed lines are comment text,
+    // not code, however deep inside a known definition they sit. A pure
+    // deletion says "removes comment from X" rather than falling through to
+    // the generic "removes N lines" further down: knowing it was comment text
+    // is strictly more useful than a bare line count.
+    if ctx.comment.get(i).copied().unwrap_or(false) {
+        return comment_rationale(s.old_range, s.new_empty, s.enclosing.as_deref());
     }
 
     // definition side: report EVERY construct the hunk touches, not just one.
@@ -392,7 +564,10 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         .filter(|d| *d != "<anonymous>" && *d != "_")
         .collect();
     if !real.is_empty() {
-        let (mut moves, mut renames, mut extracts) = (vec![], vec![], vec![]);
+        let prose = ctx.is_prose(my_file);
+        let mut move_pairs: Vec<(&str, &str)> = vec![];
+        let mut rename_pairs: Vec<(&str, &str)> = vec![];
+        let mut extract_pairs: Vec<(&str, &str)> = vec![];
         let (mut adds, mut adds_ty, mut edits, mut ch_sig, mut ch_ty): (
             Vec<&str>,
             Vec<&str>,
@@ -402,11 +577,11 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         ) = Default::default();
         for d in real.iter().copied() {
             if let Some(src) = ctx.moved_in.get(my_file).and_then(|m| m.get(d)) {
-                moves.push(format!("moves {d} from {src}"));
+                move_pairs.push((d.as_str(), src.as_str()));
             } else if let Some(old) = ctx.rename.get(my_file).and_then(|m| m.get(d)) {
-                renames.push(format!("renames {old} → {d}"));
+                rename_pairs.push((old.as_str(), d.as_str()));
             } else if let Some(src) = ctx.relocated.get(my_file).and_then(|m| m.get(d)) {
-                extracts.push(format!("adds {d}, extracted from {src}"));
+                extract_pairs.push((d.as_str(), src.as_str()));
             } else {
                 match ctx.def_verb(my_file, d, s.is_type) {
                     "adds" => adds.push(d),
@@ -417,26 +592,53 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
                 }
             }
         }
+        // several symbols sharing a source collapse into one fragment naming
+        // the source once (e.g. "adds A, B, extracted from tests") instead of
+        // repeating "extracted from tests" per symbol.
+        // …and several *sources* must still name the relation once, or the line
+        // repeats "extracted from"/"from" per source — grouped within a source
+        // but not across them. Each name then carries its own source inline.
+        let extracts = src_frags(&extract_pairs, "adds", ", ", "extracted from");
+        let moves = src_frags(&move_pairs, "moves", " ", "from");
+        // renames are inherently pairwise (old → new), so grouping by target is
+        // meaningless; instead cap the *number* of rename pairs shown, same as
+        // name_list caps any other list.
+        let renames: Vec<String> = if rename_pairs.is_empty() {
+            vec![]
+        } else {
+            let items: Vec<String> = rename_pairs
+                .iter()
+                .map(|(old, new)| format!("{old} → {new}"))
+                .collect();
+            let refs: Vec<&str> = items.iter().map(String::as_str).collect();
+            vec![format!("renames {}", name_list(&refs))]
+        };
         let mut frags: Vec<String> = vec![];
-        frags.append(&mut extracts);
-        frags.append(&mut renames);
-        frags.append(&mut moves);
+        frags.extend(extracts);
+        frags.extend(renames);
+        frags.extend(moves);
         if !adds.is_empty() {
-            frags.push(format!("adds {}", adds.join(", ")));
+            let list = name_list(&adds);
+            let label = if prose { prose_noun(adds.len(), &list) } else { list };
+            frags.push(format!("adds {label}"));
         }
         if !adds_ty.is_empty() {
-            frags.push(format!("adds type {}", adds_ty.join(", ")));
+            let list = name_list(&adds_ty);
+            let label = if prose { prose_noun(adds_ty.len(), &list) } else { list };
+            frags.push(format!("adds type {label}"));
         }
         if !edits.is_empty() {
-            frags.push(format!("edits {}", edits.join(", ")));
+            let list = name_list(&edits);
+            let label = if prose { prose_noun(edits.len(), &list) } else { list };
+            frags.push(format!("edits {label}"));
         }
         if !ch_sig.is_empty() {
-            frags.push(format!("changes signature of {}", ch_sig.join(", ")));
+            frags.push(format!("changes signature of {}", name_list(&ch_sig)));
         }
         if !ch_ty.is_empty() {
-            frags.push(format!("changes type {}", ch_ty.join(", ")));
+            frags.push(format!("changes type {}", name_list(&ch_ty)));
         }
-        let mut out = frags.join("; ");
+        let mut out = join_frags(&frags);
         // provenance: a defined symbol used by another group. Name it only when
         // several constructs are listed (otherwise "used by X" is unambiguous).
         if let Some((d, b)) = real.iter().find_map(|d| {
@@ -462,6 +664,31 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             } else {
                 format!(", {prov}")
             };
+        }
+        // P17 composes with def-side wording rather than being suppressed by
+        // it: a hunk that both defines a real symbol and introduces bindings
+        // (e.g. a function plus the module-level constants beside it) must
+        // name both, or the constants silently vanish from the rationale.
+        // The def-side prefix is already list-capped, but a long qualified
+        // scope name (nested test class/function) can still push the
+        // composed line past the one-line bound — degrade the same way
+        // name_list itself does (a count instead of the full listing)
+        // rather than let the line grow unboundedly.
+        if let Some(r) = binding_rationale(s, &ctx.old_locals[my_file]) {
+            if out.chars().count() + 2 + r.chars().count() <= MAX_RATIONALE {
+                out += "; ";
+                out += &r;
+            } else {
+                let n = s
+                    .bindings
+                    .iter()
+                    .filter(|b| !ctx.old_locals[my_file].contains(&b.name))
+                    .count();
+                let summary = format!("; +{n} more binding{}", if n == 1 { "" } else { "s" });
+                if out.chars().count() + summary.chars().count() <= MAX_RATIONALE {
+                    out += &summary;
+                }
+            }
         }
         return out;
     }
@@ -490,14 +717,29 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         }) {
             return ctx.use_of_phrase(&u, mine, b);
         }
+        // P17: a local binding this hunk introduces beats the bare "edits
+        // {enclosing}" fallback — naming the binding and where it's used (or
+        // that it isn't) is more useful than restating the enclosing def.
+        if let Some(r) = binding_rationale(s, &ctx.old_locals[my_file]) {
+            return r;
+        }
         if let Some(nm) = &s.enclosing {
             return format!("edits {nm}");
         }
-        return format!("uses {}", s.uses.join(", "));
+        let names: Vec<&str> = s.uses.iter().map(String::as_str).collect();
+        return format!("uses {}", name_list(&names));
+    }
+
+    if let Some(r) = binding_rationale(s, &ctx.old_locals[my_file]) {
+        return r;
     }
 
     if let Some(nm) = &s.enclosing {
-        return format!("edits {nm}");
+        return if ctx.is_prose(my_file) {
+            format!("edits section {nm}")
+        } else {
+            format!("edits {nm}")
+        };
     }
     // #5/#7 removal: a deletion hunk whose old lines held a removed symbol
     let [o0, o1] = s.old_range;
@@ -508,7 +750,189 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     }) {
         return label;
     }
+    // a pure deletion of body lines (no tracked def/import removed) — name the
+    // size so a large removal isn't hidden behind a blank "change". Comment
+    // deletions never reach here: the comment-only check above already claims
+    // them.
+    if s.new_empty && o1 >= o0 {
+        let n = o1 - o0 + 1;
+        return format!("removes {n} line{}", if n == 1 { "" } else { "s" });
+    }
     "change".to_string()
+}
+
+// comment-only wording, verb/preposition matched the way P15's detail_phrases
+// pairs them (adds…to, removes…from); "edits" keeps its existing vocabulary
+// but takes "in" for the same reason.
+fn comment_rationale(old_range: [usize; 2], new_empty: bool, enclosing: Option<&str>) -> String {
+    let [o0, o1] = old_range;
+    let (verb, prep) = if o0 > o1 {
+        ("adds", "to")
+    } else if new_empty {
+        ("removes", "from")
+    } else {
+        ("edits", "in")
+    };
+    match enclosing {
+        Some(nm) => format!("{verb} comment {prep} {nm}"),
+        None => format!("{verb} comment"),
+    }
+}
+
+// P17: "where is this binding used?" wording for a hunk that introduces a
+// local-variable binding (see `lang::LangSpec::locals`). ordo parses one
+// file, so an absence of uses is scoped honestly to what it actually
+// checked — the enclosing function for a function-local, the whole file for
+// a module/script-level name — rather than an unsupportable "unused" claim
+// (that's ruff/clippy's job, with their suppression conventions).
+// Names already locally bound somewhere in the old file are excluded: a
+// hunk that only edits an existing variable's value (`x = 1` → `x = 2`)
+// isn't introducing `x` — that stays the bare "edits {enclosing}" wording.
+// One-line rendering for a "used" group of bindings: a single binding keeps
+// the original "used at L.., L.." wording; several collapse into one
+// name_list-capped fragment, same degrade-gracefully shape as `renames`
+// above (line numbers stay attached per name only while there are few
+// enough names to show — past the cap, name_list's own "and N more" already
+// drops them, so there's nothing extra to special-case).
+// `alt` reworks the single-binding wording to avoid the literal ", used at
+// L" phrase — used when a scoped fragment already used it in the same
+// rationale (see call site), so the two don't read as one repeated,
+// per-symbol fragment.
+fn used_frag(items: &[(&str, &[usize])], prefix: &str, alt: bool) -> String {
+    if let [(name, uses)] = items {
+        let lines: Vec<String> = uses.iter().map(|l| format!("L{l}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        return if alt {
+            format!("adds {prefix}{name} (used at {})", name_list(&refs))
+        } else {
+            format!("adds {prefix}{name}, used at {}", name_list(&refs))
+        };
+    }
+    let strs: Vec<String> = items
+        .iter()
+        .map(|(name, uses)| {
+            let lines: Vec<String> = uses.iter().map(|l| format!("L{l}")).collect();
+            format!("{name} ({})", name_list(&lines.iter().map(String::as_str).collect::<Vec<_>>()))
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    format!("adds {prefix}{}", name_list(&refs))
+}
+
+// P17: "where is this binding used?" wording for a hunk that introduces one
+// or more local-variable bindings (see `lang::LangSpec::locals`). ordo
+// parses one file, so an absence of uses is scoped honestly to what it
+// actually checked — the enclosing function for a function-local, the whole
+// file for a module/script-level name — rather than an unsupportable
+// "unused" claim (that's ruff/clippy's job, with their suppression
+// conventions).
+//
+// Names already locally bound somewhere in the old file are excluded: a
+// hunk that only edits an existing variable's value (`x = 1` → `x = 2`)
+// isn't introducing `x` — that stays the bare "edits {enclosing}" wording.
+//
+// Several bindings sharing the same outcome (same scope, same uses-or-not)
+// collapse into one fragment naming the outcome once — the same
+// `group_by_src` idea used for extraction provenance above — so a block of
+// module-level constants doesn't repeat "no uses in this file — check other
+// files" once per name. `bindings` (and therefore each group) is walked in
+// name order, so the grouping and every `name_list` it feeds are
+// deterministic without touching a HashMap.
+fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String> {
+    // A binding inside a def this same hunk introduces is that def's own
+    // implementation detail — the rationale already says "adds _wrap_fan_deg",
+    // so naming the locals it was born with adds nothing and costs the line
+    // length that the independently-interesting names need. Same rule the P15
+    // detail layer applies to the members of a wholly new container.
+    let born_here = |b: &BindingUse| {
+        b.scope.as_deref().is_some_and(|sc| {
+            s.defines
+                .iter()
+                .any(|d| sc == d || sc.starts_with(&format!("{d}.")))
+        })
+    };
+    let mut items: Vec<&BindingUse> = s
+        .bindings
+        .iter()
+        .filter(|b| !old_locals.contains(&b.name) && !born_here(b))
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut no_uses_scoped: Vec<(&str, Vec<&str>)> = vec![]; // (scope, names), scope-sorted below
+    let mut no_uses_file: Vec<&str> = vec![];
+    let mut used_scoped: Vec<(&str, &[usize])> = vec![];
+    let mut used_file: Vec<(&str, &[usize])> = vec![];
+    for b in &items {
+        match (&b.scope, b.uses.is_empty()) {
+            (Some(scope), true) => match no_uses_scoped.iter_mut().find(|(sc, _)| sc == scope) {
+                Some((_, names)) => names.push(&b.name),
+                None => no_uses_scoped.push((scope.as_str(), vec![&b.name])),
+            },
+            (None, true) => no_uses_file.push(&b.name),
+            (Some(_), false) => used_scoped.push((&b.name, &b.uses)),
+            (None, false) => used_file.push((&b.name, &b.uses)),
+        }
+    }
+    no_uses_scoped.sort_by_key(|(scope, _)| *scope);
+
+    let mut frags: Vec<String> = vec![];
+    // One scope reads naturally; several must still say the phrase once, or the
+    // line repeats "no uses in ..." per scope — grouped per scope, but not
+    // grouped across them.
+    match no_uses_scoped.len() {
+        0 => {}
+        1 => {
+            let (scope, names) = &no_uses_scoped[0];
+            frags.push(format!(
+                "adds local {}, no uses in {scope} — check nested scopes",
+                name_list(names)
+            ));
+        }
+        _ => {
+            let mut each: Vec<String> = no_uses_scoped
+                .iter()
+                .flat_map(|(scope, names)| {
+                    names.iter().map(move |n| format!("{n} (in {scope})"))
+                })
+                .collect();
+            each.sort();
+            let refs: Vec<&str> = each.iter().map(String::as_str).collect();
+            frags.push(format!(
+                "adds local {}, no uses in their own scopes — check nested scopes",
+                name_list(&refs)
+            ));
+        }
+    }
+    if !no_uses_file.is_empty() {
+        // scoped fragments above already say "no uses in {scope}" — when both
+        // kinds land in the same rationale (P17 composing with def-side
+        // wording), repeating that exact phrase at file scope reads as the
+        // per-symbol-fragment defect rationale_bounds.rs guards against, even
+        // though it's really two distinct groups. Reword only in that mixed
+        // case; the lone-fragment wording (no scoped group alongside it)
+        // stays as-is.
+        frags.push(if no_uses_scoped.is_empty() {
+            format!(
+                "adds {}, no uses in this file — check other files",
+                name_list(&no_uses_file)
+            )
+        } else {
+            format!(
+                "adds {}, unused elsewhere in this file — check other files",
+                name_list(&no_uses_file)
+            )
+        });
+    }
+    if !used_scoped.is_empty() {
+        frags.push(used_frag(&used_scoped, "local ", false));
+    }
+    if !used_file.is_empty() {
+        frags.push(used_frag(&used_file, "", !used_scoped.is_empty()));
+    }
+    (!frags.is_empty()).then(|| join_frags(&frags))
 }
 
 fn group_name(g: &GroupInfo, sem: &[&HunkSem]) -> Option<String> {

@@ -30,6 +30,11 @@
               "type": "boolean",
               "default": false,
               "description": "assert each change's `diff` is a complete (full-context) patch so a modified file can be reconstructed for full semantics; else a diff-only modification is positional"
+            },
+            "only_comments": {
+              "type": "boolean",
+              "default": false,
+              "description": "drop every non-comment/docstring hunk before ordering, so order/files/groups/edges/clusters cover only comment-only hunks"
             }
           }
         }
@@ -59,6 +64,10 @@
                 "type": "boolean",
                 "description": "true when the file could only be ordered positionally (a diff without full context); omitted when false"
               },
+              "unsupported": {
+                "type": "boolean",
+                "description": "true when the file's extension has no tree-sitter grammar, so hunks carry no structural analysis; omitted when false"
+              },
               "hunks": {
                 "type": "array",
                 "items": {
@@ -79,6 +88,15 @@
                       "type": "boolean",
                       "description": "formatting-only or generated-file hunk, skippable for review; omitted when false"
                     },
+                    "comment": {
+                      "type": "boolean",
+                      "description": "every changed line is a comment or docstring; drives `only_comments` filtering; omitted when false"
+                    },
+                    "details": {
+                      "type": "array",
+                      "description": "what the hunk did to the members of its enclosing container, e.g. \"adds Serve, Watch to Cli\"; omitted when empty",
+                      "items": { "type": "string" }
+                    },
                     "notes": {
                       "type": "array",
                       "description": "structural smells for a def introduced here (size/nesting/params); omitted when empty",
@@ -94,6 +112,19 @@
                           "construct": { "type": "string" },
                           "message": { "type": "string", "description": "escalation-ladder guidance" },
                           "verdict": { "type": "boolean", "description": "true when a concrete downgrade is suggested; omitted when false" }
+                        }
+                      }
+                    },
+                    "symbols": {
+                      "type": "array",
+                      "description": "symbol identity (name + tree-sitter node kind + enclosing scope) for each definition this hunk introduces, e.g. distinguishing a method `run` on class `A` from a module-level function `run`; matches `defines` minus imports; omitted when empty",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "kind", "scope"],
+                        "properties": {
+                          "name": { "type": "string" },
+                          "kind": { "type": "string", "description": "raw tree-sitter node kind of the defining node, e.g. function_definition" },
+                          "scope": { "type": ["string", "null"], "description": "qualified enclosing-definition name at the point of definition, or null at top level" }
                         }
                       }
                     }

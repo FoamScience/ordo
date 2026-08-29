@@ -7,8 +7,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("order");
     match cmd {
-        "order" => order(),
-        "pack" => pack(),
+        "order" => order(&args[2..]),
+        "pack" => pack(&args[2..]),
         "review" => review(&args[2..]),
         "-V" | "--version" | "version" => {
             println!(
@@ -18,7 +18,7 @@ fn main() {
             );
         }
         "-h" | "--help" | "help" => {
-            eprintln!("usage:\n  ordo order --json < input.json > output.json\n  ordo pack  --json < input.json         # compact LLM-ready review context\n  ordo review [--full-context] [patch]   # patch from arg or stdin\n  ordo --version\n\n--full-context: the patch is a complete diff (git diff -U100000), so modified\n                files get full semantics instead of positional order.");
+            eprintln!("usage:\n  ordo order [--only-comments] --json < input.json > output.json\n  ordo pack  [--only-comments] --json < input.json  # compact LLM-ready review context\n  ordo review [--full-context] [patch]   # patch from arg or stdin\n  ordo --version\n\n--full-context: the patch is a complete diff (git diff -U100000), so modified\n                files get full semantics instead of positional order.\n--only-comments: drop every non-comment/docstring hunk before ordering, so\n                 order/groups/edges/clusters cover only comment changes.");
         }
         other => {
             eprintln!("ordo: unknown command '{other}'\nusage: ordo order --json < input.json | ordo review [--full-context] [patch] | ordo --version");
@@ -74,25 +74,32 @@ fn review(args: &[String]) {
     emit(ordo::run(input));
 }
 
-fn read_input() -> ordo::model::Input {
+fn read_input(only_comments: bool) -> ordo::model::Input {
     let mut buf = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
         eprintln!("ordo: failed to read stdin: {e}");
         exit(1);
     }
-    serde_json::from_str(&buf).unwrap_or_else(|e| {
+    let mut input: ordo::model::Input = serde_json::from_str(&buf).unwrap_or_else(|e| {
         eprintln!("ordo: invalid input json: {e}");
         exit(1);
-    })
+    });
+    if only_comments {
+        input.options.only_comments = true;
+    }
+    input
 }
 
-fn order() {
-    emit(ordo::run(read_input()));
+fn order(args: &[String]) {
+    emit(ordo::run(read_input(
+        args.iter().any(|a| a == "--only-comments"),
+    )));
 }
 
 /// `ordo pack --json < input.json` — compact, LLM-ready review context.
-fn pack() {
-    print!("{}", ordo::pack(&ordo::run(read_input())));
+fn pack(args: &[String]) {
+    let input = read_input(args.iter().any(|a| a == "--only-comments"));
+    print!("{}", ordo::pack(&ordo::run(input)));
 }
 
 fn emit(out: ordo::model::Output) {

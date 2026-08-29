@@ -8,9 +8,12 @@ mod order;
 mod patch;
 
 use extract::{analyze, compute_hunks, symbol_sets, HunkSem, RawHunk};
+use lang::LangSpec;
 use model::*;
 use std::collections::{HashMap, HashSet};
+use tree_sitter::{Node, Parser};
 
+pub use lang::is_generated_path;
 pub use patch::split_patch;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -20,17 +23,35 @@ pub fn run(input: Input) -> Output {
     let mut raws: Vec<Vec<RawHunk>> = vec![];
     let mut sems: Vec<Vec<HunkSem>> = vec![];
     let mut degraded: Vec<bool> = vec![];
+    let mut comment_only: Vec<Vec<bool>> = vec![];
     for change in &input.changes {
-        let (raw, sem, deg) = build_change(change, input.options.full_context);
+        let (raw, sem, deg, com) = build_change(change, input.options.full_context);
         if deg {
             eprintln!(
                 "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
                 change.path
             );
         }
+        // Imports are skipped entirely: drop pure-import hunks so they neither
+        // appear in the reading order nor seed def→use edges. `only_comments`
+        // drops non-comment hunks the same way, keeping order/groups/edges/
+        // clusters internally consistent (a post-filter of the finished
+        // Output would leave them referring to hunks no longer present).
+        let mut raw_kept = vec![];
+        let mut sem_kept = vec![];
+        let mut com_kept = vec![];
+        for ((r, s), c) in raw.into_iter().zip(sem).zip(com) {
+            if s.category != Category::Import && (!input.options.only_comments || c) {
+                raw_kept.push(r);
+                sem_kept.push(s);
+                com_kept.push(c);
+            }
+        }
+        let (raw, sem, com) = (raw_kept, sem_kept, com_kept);
         raws.push(raw);
         sems.push(sem);
         degraded.push(deg);
+        comment_only.push(com);
     }
 
     let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
@@ -49,6 +70,7 @@ pub fn run(input: Input) -> Output {
     };
     let mut old_defs: Vec<HashSet<String>> = vec![];
     let mut old_imports: Vec<HashSet<String>> = vec![];
+    let mut old_locals: Vec<HashSet<String>> = vec![];
     let mut new_defs_v: Vec<HashSet<String>> = vec![];
     let mut new_imports_v: Vec<HashSet<String>> = vec![];
     let mut old_rows: Vec<(Vec<(String, usize)>, Vec<(String, usize)>)> = vec![];
@@ -74,6 +96,10 @@ pub fn run(input: Input) -> Output {
             .unwrap_or_default();
         old_defs.push(rows.0.iter().map(|(nm, _)| nm.clone()).collect());
         old_imports.push(rows.1.iter().map(|(nm, _)| nm.clone()).collect());
+        old_locals.push(match (c.old.as_deref(), spec) {
+            (Some(old), Some(sp)) => extract::local_names(sp, old),
+            _ => HashSet::new(),
+        });
         new_defs_v.push(nd);
         new_imports_v.push(ni);
         old_rows.push(rows);
@@ -197,8 +223,10 @@ pub fn run(input: Input) -> Output {
             if nd.contains(name) || renamed_old.contains(name) {
                 continue;
             }
+            let prose = lang::for_path(&paths[fi]).is_some_and(|s| s.prose);
             match moved_out.get(name) {
                 Some(&tgt) => rem.push((*row, format!("moves {name} to {}", paths[tgt]))),
+                None if prose => rem.push((*row, format!("removes section {name}"))),
                 None => rem.push((*row, format!("removes {name}"))),
             }
         }
@@ -215,11 +243,13 @@ pub fn run(input: Input) -> Output {
         &paths,
         &old_defs,
         &old_imports,
+        &old_locals,
         &rename,
         &moved_in,
         &relocated,
         &body_only,
         &removals,
+        &comment_only,
         input.options.strategy,
         input.options.cross_file,
     );
@@ -275,14 +305,18 @@ pub fn run(input: Input) -> Output {
                 order_index: order_index[fi][li],
                 rationale: ordered.rationale[gi].clone(),
                 noise: sems[fi][li].noise,
+                comment: comment_only[fi][li],
+                details: sems[fi][li].details.clone(),
                 notes: sems[fi][li].notes.clone(),
                 advisories: sems[fi][li].advisories.clone(),
+                symbols: sems[fi][li].symbols.clone(),
             });
         }
         files.push(FileOut {
             path: change.path.clone(),
             hunks,
             degraded: degraded[fi],
+            unsupported: lang::for_path(&change.path).is_none(),
         });
     }
 
@@ -365,9 +399,14 @@ pub fn pack(out: &Output) -> String {
             } else {
                 format!(" · {}", h.notes.join("; "))
             };
+            let details = if h.details.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", h.details.join("; "))
+            };
             let _ = writeln!(
                 s,
-                "{path}:L{} [{cat}{noise}] {}{notes}",
+                "{path}:L{} [{cat}{noise}] {}{details}{notes}",
                 h.new_range[0], h.rationale
             );
         }
@@ -419,9 +458,11 @@ pub fn pack(out: &Output) -> String {
 /// (L1), or a full-context diff (L2 — inside `parse_file_diff`). A partial
 /// diff-only change stays positional (L3). Unsupported/unparsable language
 /// degrades to "other" semantics (file order preserved).
-/// Returns (hunks, semantics, degraded). `degraded` = the change carried a diff
-/// but full content couldn't be obtained, so ordering is positional only.
-fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkSem>, bool) {
+/// Returns (hunks, semantics, degraded, comment_only). `degraded` = the change
+/// carried a diff but full content couldn't be obtained, so ordering is
+/// positional only. `comment_only` parallels `hunks`: true when every changed
+/// line is a comment (drives the "adds/edits comment" rationale fallback).
+fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkSem>, bool, Vec<bool>) {
     let old = change.old.as_deref();
     let (raw, new, degraded): (Vec<RawHunk>, String, bool) = if let Some(new) = &change.new {
         (compute_hunks(old.unwrap_or(""), new), new.clone(), false)
@@ -447,7 +488,306 @@ fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkS
     for (i, h) in raw.iter().enumerate() {
         sems[i].noise = generated || formatting_only(h, &old_lines, &new_lines);
     }
-    (raw, sems, degraded)
+    let ext = change.path.rsplit('.').next().unwrap_or("");
+    let spec = lang::for_path(&change.path);
+    let old_doc = old.and_then(|o| spec.and_then(|s| ts_comment_lines(s, o)));
+    let new_doc = spec.and_then(|s| ts_comment_lines(s, &new));
+    let comment_only: Vec<bool> = raw
+        .iter()
+        .map(|h| {
+            comment_only_hunk(
+                h,
+                &old_lines,
+                &new_lines,
+                ext,
+                old_doc.as_ref(),
+                new_doc.as_ref(),
+            )
+        })
+        .collect();
+    // P15 detail layer: what the hunk did to the members of its container. The
+    // container name is already on the hunk as `enclosing`; only the old side's
+    // members need a second parse.
+    if let Some(spec) = lang::for_path(&change.path) {
+        let old_members = old
+            .map(|o| extract::member_rows(spec, o))
+            .unwrap_or_default();
+        let phrases: Vec<Vec<String>> = raw
+            .iter()
+            .enumerate()
+            .map(|(i, h)| detail_phrases(&sems[i], h, &old_members, spec.prose))
+            .collect();
+        for (i, d) in phrases.into_iter().enumerate() {
+            sems[i].details = d;
+        }
+    }
+    (raw, sems, degraded, comment_only)
+}
+
+// A hunk whose changed lines are all comments: every non-blank line on
+// whichever side(s) are present is a comment line — either by
+// extension-specific textual syntax (`#`, `//`, …) or, when the language has
+// a grammar, by falling inside a tree-sitter comment node or a docstring
+// (`old_doc`/`new_doc`, see `ts_comment_lines`). The textual check alone
+// can't tell a real comment from prose that merely looks like one (e.g. help
+// text inside a raw string literal), and it's line-based so it can't see a
+// multi-line docstring's interior prose lines at all — the tree-sitter sets
+// cover both. Where no grammar is available (or parsing fails) `old_doc`/
+// `new_doc` are `None` and behavior is exactly the prior textual-only check.
+fn comment_only_hunk(
+    h: &RawHunk,
+    old_lines: &[&str],
+    new_lines: &[&str],
+    ext: &str,
+    old_doc: Option<&HashSet<usize>>,
+    new_doc: Option<&HashSet<usize>>,
+) -> bool {
+    let side = |lines: &[&str], r: [usize; 2], doc: Option<&HashSet<usize>>| -> Option<bool> {
+        if r[0] == 0 || r[0] > r[1] || r[1] > lines.len() {
+            return None; // empty side (pure insert/delete)
+        }
+        let seg = &lines[r[0] - 1..r[1]];
+        if seg.iter().all(|l| l.trim().is_empty()) {
+            return None; // nothing but blank lines: not a meaningful side
+        }
+        Some((r[0]..=r[1]).zip(seg.iter()).all(|(line_no, l)| {
+            is_comment_line(l.trim(), ext) || doc.is_some_and(|d| d.contains(&line_no))
+        }))
+    };
+    match (
+        side(new_lines, h.new_range, new_doc),
+        side(old_lines, h.old_range, old_doc),
+    ) {
+        (Some(n), Some(o)) => n && o,
+        (Some(n), None) => n,
+        (None, Some(o)) => o,
+        (None, None) => false,
+    }
+}
+
+// Tree-sitter line coverage for comment-like content: every 1-based line
+// fully inside a grammar comment node (`comment`, `line_comment`,
+// `block_comment`, `doc_comment`, … — every comment kind across the
+// supported grammars contains "comment" in its node kind), plus, for python,
+// a docstring: an `expression_statement` whose sole child is a `string`, as
+// the first statement of a module/class/function body, or — the Sphinx/attrs
+// "attribute docstring" convention — immediately after the assignment it
+// documents within that same body. Doc comments in other languages (rust
+// `///`/`//!`, java/js `/** */`) are already grammar `comment` nodes, so
+// they're covered by the first check without special casing. Returns `None`
+// when the source doesn't parse.
+fn ts_comment_lines(spec: &LangSpec, src: &str) -> Option<HashSet<usize>> {
+    let mut parser = Parser::new();
+    parser.set_language(&(spec.language)()).ok()?;
+    let tree = parser.parse(src, None)?;
+    let mut out = HashSet::new();
+    collect_comment_lines(tree.root_node(), spec.name, &mut out);
+    Some(out)
+}
+
+// an `expression_statement` whose sole child is a `string` — a bare string
+// literal used as a statement, python's docstring shape.
+fn is_bare_string_stmt(node: Node) -> bool {
+    node.kind() == "expression_statement"
+        && node.named_child_count() == 1
+        && node.named_child(0).is_some_and(|n| n.kind() == "string")
+}
+
+fn collect_comment_lines(node: Node, lang_name: &str, out: &mut HashSet<usize>) {
+    let kind = node.kind();
+    if kind.contains("comment") {
+        for row in node.start_position().row..=node.end_position().row {
+            out.insert(row + 1);
+        }
+        return; // no need to recurse inside a comment node
+    }
+    if lang_name == "python" {
+        let is_doc_container = kind == "module"
+            || (kind == "block"
+                && node.parent().is_some_and(|p| {
+                    matches!(p.kind(), "function_definition" | "class_definition")
+                }));
+        if is_doc_container {
+            let mut cur = node.walk();
+            let mut prev: Option<Node> = None;
+            for stmt in node.named_children(&mut cur) {
+                // the module/class/function's first statement is always a
+                // docstring candidate; any later one only counts as the
+                // "attribute docstring" convention (Sphinx/attrs) — a bare
+                // string immediately after the assignment it documents. A
+                // string elsewhere (after a `for`/`if`/`return`/…) is data or
+                // dead code, not a comment, so it's left alone.
+                let is_attr_doc_site = prev.is_some_and(|p| {
+                    p.kind() == "expression_statement"
+                        && p.named_child(0).is_some_and(|a| a.kind() == "assignment")
+                });
+                if (prev.is_none() || is_attr_doc_site) && is_bare_string_stmt(stmt) {
+                    for row in stmt.start_position().row..=stmt.end_position().row {
+                        out.insert(row + 1);
+                    }
+                }
+                prev = Some(stmt);
+            }
+        }
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        collect_comment_lines(child, lang_name, out);
+    }
+}
+
+// Comment-line syntax by file extension. `#` is python-only (a C/C++
+// preprocessor directive also starts with `#` but isn't a comment).
+fn is_comment_line(trimmed: &str, ext: &str) -> bool {
+    if trimmed.is_empty() {
+        return true;
+    }
+    match ext {
+        "py" | "pyi" => {
+            trimmed.starts_with('#') || trimmed.starts_with("\"\"\"") || trimmed.starts_with("'''")
+        }
+        "lua" => trimmed.starts_with("--"),
+        _ => trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*'),
+    }
+}
+
+/// What a hunk did to the named members of its container(s). New-side members
+/// come from `analyze`, each already carrying its own container (P15's
+/// attribution fix — see `extract::member_container`); the old side is
+/// matched by the hunk's old line range. A name present on both sides of the
+/// *same* container was edited; on one side only, added or removed. Members
+/// under different containers (e.g. two distinct `add_argument(...)` calls
+/// touched by one hunk) are never compared against each other.
+fn detail_phrases(
+    s: &HunkSem,
+    h: &RawHunk,
+    old_members: &[extract::MemberRow],
+    prose: bool,
+) -> Vec<String> {
+    let [o0, o1] = h.old_range;
+    // Anything the hunk introduces wholesale is already named by the rationale
+    // ("adds type Fresh") — relisting the members it was born with says nothing
+    // more. An empty old side is what makes it new; a container merely *edited*
+    // on the line that declares it (a one-line enum) still earns its details.
+    // Prose is the exception: a def (section) is also its parent's member, so
+    // a brand-new subsection needs this layer to say which section it landed
+    // in — but only when it HAS a parent; a wholly new top-level section still
+    // stays silent here, same as every other language.
+    if o0 > o1 && !s.defines.is_empty() && !(prose && s.enclosing.is_some()) {
+        return vec![];
+    }
+    // A member with no identifiable container of its own (not in a call, no
+    // enclosing definition) falls back to the hunk's enclosing definition,
+    // same as before this member-level attribution existed. Placeholder
+    // segments never reach the wording (as in the rationale itself).
+    let clean =
+        |c: String| (!c.split('.').any(|seg| seg == "<anonymous>" || seg == "_")).then_some(c);
+    let fallback = s.enclosing.clone();
+    let resolve = |c: &Option<String>| c.clone().or_else(|| fallback.clone()).and_then(clean);
+
+    let mut old_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();
+    for (_row, n, t, ctr) in old_members
+        .iter()
+        .filter(|(row, ..)| o0 <= row + 1 && *row < o1)
+    {
+        old_by
+            .entry(resolve(ctr))
+            .or_default()
+            .insert(n.as_str(), t.as_str());
+    }
+    let mut new_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();
+    for (n, t, ctr) in &s.members {
+        new_by
+            .entry(resolve(ctr))
+            .or_default()
+            .insert(n.as_str(), t.as_str());
+    }
+
+    let mut containers: Vec<Option<String>> = old_by.keys().chain(new_by.keys()).cloned().collect();
+    containers.sort();
+    containers.dedup();
+
+    fn sorted(mut v: Vec<&str>) -> Vec<&str> {
+        v.sort();
+        v
+    }
+
+    let mut out = vec![];
+    let empty = HashMap::new();
+    for container in containers {
+        let old = old_by.get(&container).unwrap_or(&empty);
+        let new = new_by.get(&container).unwrap_or(&empty);
+        // A member that IS its own container names nothing new: a js
+        // `{ run: () => {} }` makes `run` both the member and — once the
+        // arrow is a definition — the enclosing def, which would read "adds
+        // run to run". Attributing a member to `stack` before its own def is
+        // pushed (see `member_container`) already keeps this from happening
+        // for the def-container case; kept as a defensive backstop and to
+        // cover a call whose callee or literal happens to equal a member name.
+        let self_named = |name: &str| {
+            container
+                .as_deref()
+                .is_some_and(|c| c == name || c.rsplit('.').next() == Some(name))
+        };
+        let added = sorted(
+            new.keys()
+                .filter(|n| !old.contains_key(*n) && !self_named(n))
+                .copied()
+                .collect(),
+        );
+        let removed = sorted(
+            old.keys()
+                .filter(|n| !new.contains_key(*n) && !self_named(n))
+                .copied()
+                .collect(),
+        );
+        // present on both sides: changed only when its own text moved, so a
+        // member that merely shares a line with the real change isn't named
+        let changed = sorted(
+            new.iter()
+                .filter(|(n, t)| old.get(*n).is_some_and(|o| o != *t) && !self_named(n))
+                .map(|(n, _)| *n)
+                .collect(),
+        );
+        for (verb, prep, names) in [
+            ("adds", "to", added),
+            ("removes", "from", removed),
+            ("changes", "in", changed),
+        ] {
+            if names.is_empty() {
+                continue;
+            }
+            let list = name_list(&names);
+            let list = if prose && verb != "changes" {
+                let noun = if names.len() == 1 {
+                    "section"
+                } else {
+                    "sections"
+                };
+                format!("{noun} {list}")
+            } else {
+                list
+            };
+            out.push(match &container {
+                Some(c) => format!("{verb} {list} {prep} {c}"),
+                None => format!("{verb} {list}"),
+            });
+        }
+    }
+    out
+}
+
+// At most three names, then a count — a detail line is a glance, not a listing.
+fn name_list(names: &[&str]) -> String {
+    const SHOWN: usize = 3;
+    if names.len() <= SHOWN {
+        return names.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        names[..SHOWN].join(", "),
+        names.len() - SHOWN
+    )
 }
 
 // A hunk that changes only whitespace/layout: both sides present and equal once

@@ -29,6 +29,11 @@ pub struct Options {
     /// modified file can be reconstructed for full semantics. Off by default.
     #[serde(default)]
     pub full_context: bool,
+    /// Drop every non-comment/docstring hunk before grouping, so `order`,
+    /// `groups`, `edges` and `clusters` cover only comment-only hunks. Off by
+    /// default.
+    #[serde(default)]
+    pub only_comments: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -36,6 +41,7 @@ impl Default for Options {
             strategy: Strategy::Comprehension,
             cross_file: true,
             full_context: false,
+            only_comments: false,
         }
     }
 }
@@ -90,6 +96,10 @@ pub struct FileOut {
     /// full context and no old/new to reconstruct from). Omitted when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub degraded: bool,
+    /// true when the file's extension has no tree-sitter grammar, so hunks
+    /// carry no structural analysis at all. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unsupported: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -107,6 +117,21 @@ pub struct Advisory {
     pub verdict: bool,
 }
 
+/// A defined symbol's identity: name + tree-sitter node kind + enclosing
+/// scope. Lets a consumer tell apart same-named symbols across commits (e.g.
+/// a method `run` on class `A` vs a module-level function `run`), per the
+/// requirement "tree sitter type + scope for the symbol must match, otherwise
+/// it's a different symbol".
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Symbol {
+    pub name: String,
+    /// raw tree-sitter node kind of the defining node, e.g. `function_definition`
+    pub kind: String,
+    /// qualified enclosing-definition name at the point of definition, or null
+    /// at top level (not always the same as the hunk's `enclosing`)
+    pub scope: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct HunkOut {
     pub id: String,
@@ -122,12 +147,24 @@ pub struct HunkOut {
     /// formatting-only or generated-file hunk — skippable for review (P12.2)
     #[serde(default, skip_serializing_if = "is_false")]
     pub noise: bool,
+    /// every changed line is a comment or docstring — drives `--only-comments`
+    /// filtering. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub comment: bool,
+    /// P15: what the hunk did to the members of its enclosing container —
+    /// "adds Serve, Watch to Cli". Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<String>,
     /// structural smells for a def introduced here (P13.1); omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// advanced-construct advisories in this hunk (P14); omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisories: Vec<Advisory>,
+    /// symbol identity (name + tree-sitter kind + enclosing scope) for each
+    /// definition this hunk introduces; omitted when empty
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<Symbol>,
 }
 
 #[derive(Debug, Serialize)]

@@ -2,7 +2,7 @@
 //! enclosing definition, defines/uses. Parses the *new* content once with
 //! tree-sitter, exactly as gitplay's `order.lua` does.
 use crate::lang::{self, LangSpec};
-use crate::model::{Advisory, Category};
+use crate::model::{Advisory, Category, Symbol};
 use similar::TextDiff;
 use std::collections::HashSet;
 use tree_sitter::{Node, Parser};
@@ -28,13 +28,39 @@ pub struct HunkSem {
     pub is_type: bool,
     /// formatting-only / generated-file hunk — skippable for review (P12.2)
     pub noise: bool,
+    /// named members of the enclosing container this hunk touches, new side, as
+    /// `(name, normalized text)` (P15) — compared against the old side to
+    /// compose `details`
+    pub members: Vec<(String, String, Option<String>)>,
+    /// what the hunk did to its container's members: adds / removes / changes
+    pub details: Vec<String>,
     /// structural smells for a def introduced here (P13.1)
     pub notes: Vec<String>,
     /// advanced-construct advisories in this hunk (P14)
     pub advisories: Vec<Advisory>,
+    /// symbol identity (name + tree-sitter kind + scope) for each def this
+    /// hunk introduces — matches `defines`, minus imports
+    pub symbols: Vec<Symbol>,
+    /// local-variable bindings this hunk introduces (not defs, not imports —
+    /// see `lang::LangSpec::locals`), with where each is used elsewhere in the
+    /// file. Rationale wording only; never added to `defines`/`symbols`.
+    pub bindings: Vec<BindingUse>,
     pub start_row: usize,
     /// 1-based inclusive old-line range (for #5/#7 removal matching)
     pub old_range: [usize; 2],
+    /// hunk adds no new lines (pure deletion) — drives removal wording
+    pub new_empty: bool,
+}
+
+/// A local binding introduced by this hunk and where its name is used
+/// elsewhere in the file. `scope` is the dotted enclosing-def name the
+/// binding lives in, or None at module/script level — matches `enclosing`'s
+/// naming so the "no uses" wording can say where it looked.
+pub struct BindingUse {
+    pub name: String,
+    pub scope: Option<String>,
+    /// 1-based line numbers where the name is used elsewhere, sorted
+    pub uses: Vec<usize>,
 }
 
 impl HunkSem {
@@ -47,10 +73,15 @@ impl HunkSem {
             uses: vec![],
             is_type: false,
             noise: false,
+            members: vec![],
+            details: vec![],
             notes: vec![],
             advisories: vec![],
+            symbols: vec![],
+            bindings: vec![],
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
+            new_empty: h.new_r0.is_none(),
         }
     }
 }
@@ -89,8 +120,29 @@ struct Collected {
     type_rows: HashSet<usize>,
     defs: Vec<DefRec>,
     decls: Vec<(usize, String)>,
+    /// (row, name, tree-sitter kind, enclosing scope) for each real definition
+    /// — the raw material for `symbols` (name+kind+scope identity)
+    sym_decls: Vec<(usize, String, String, Option<String>)>,
     import_decls: Vec<(usize, String)>,
     uses: Vec<(usize, String)>,
+    /// parameter names (local bindings) seen anywhere in the file
+    bound: HashSet<String>,
+    /// named members of a container (enum variant, struct field, object
+    /// property) as `(row, name, normalized text)` — the detail layer's raw
+    /// material (P15). The text tells a member that merely shares a line with a
+    /// change from one that actually changed.
+    member_rows: Vec<MemberRow>,
+    /// (row, name) of every local-variable binding target (P17: "where is
+    /// this binding used?") — raw material for `HunkSem::bindings`
+    local_binds: Vec<(usize, String)>,
+    /// tree-sitter node ids of binding-target identifiers (the `local_binds`
+    /// occurrences themselves), so the use-search below can exclude them
+    /// without guessing from row/text alone
+    bind_ids: HashSet<usize>,
+    /// every identifier node in the file as (row, text, node id) — the use
+    /// search's raw material, kept separate from `uses` (which already feeds
+    /// the def→use edge graph and must not gain binding-target entries)
+    all_idents: Vec<(usize, String, usize)>,
 }
 
 struct DefRec {
@@ -127,19 +179,39 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                 continue;
             }
         };
-        let category = if (r0..=r1).any(|r| c.import_rows.contains(&r)) {
-            Category::Import
-        } else if (r0..=r1).any(|r| c.def_rows.contains(&r)) {
+        // Definition wins over Import: a hunk that adds real defs (e.g. a whole
+        // new file, or an import block followed by functions) is a definition
+        // hunk, not an import hunk — only a hunk that is *only* imports is Import.
+        let category = if (r0..=r1).any(|r| c.def_rows.contains(&r)) {
             Category::Definition
+        } else if (r0..=r1).any(|r| c.import_rows.contains(&r)) {
+            Category::Import
         } else {
             Category::Other
         };
-        let enclosing = c
-            .defs
-            .iter()
-            .filter(|d| d.s <= r0 && r0 <= d.e)
-            .min_by_key(|d| d.e - d.s)
-            .map(|d| d.name.clone());
+        // prose: containment is checked against r1, not r0. A markdown
+        // section includes its trailing blank line up to the next sibling
+        // heading, so a hunk that (say) adds a whole new subsection commonly
+        // starts on that blank line — a row still owned by the *previous*
+        // sibling, not the new subsection's actual parent. r1 lands inside
+        // real content. Any def whose own heading starts within the hunk is
+        // what the hunk *defines* (e.g. that new subsection), not its
+        // container, so it's excluded — "enclosing" names the parent
+        // instead of resolving to itself. Code languages are unaffected:
+        // they keep the original r0-based, self-inclusive pick.
+        let enclosing = if spec.prose {
+            c.defs
+                .iter()
+                .filter(|d| d.s <= r1 && r1 <= d.e && !(r0 <= d.s && d.s <= r1))
+                .min_by_key(|d| d.e - d.s)
+                .map(|d| d.name.clone())
+        } else {
+            c.defs
+                .iter()
+                .filter(|d| d.s <= r0 && r0 <= d.e)
+                .min_by_key(|d| d.e - d.s)
+                .map(|d| d.name.clone())
+        };
         let mut defines: Vec<String> = c
             .decls
             .iter()
@@ -154,10 +226,18 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             .iter()
             .filter(|(row, _)| r0 <= *row && *row <= r1)
             .map(|(_, n)| n.clone())
-            .filter(|n| !defset.contains(n))
+            .filter(|n| !defset.contains(n) && !c.bound.contains(n))
             .collect();
         uses.sort();
         uses.dedup();
+        let mut members: Vec<(String, String, Option<String>)> = c
+            .member_rows
+            .iter()
+            .filter(|(row, _, _, _)| r0 <= *row && *row <= r1)
+            .map(|(_, n, t, ctr)| (n.clone(), t.clone(), ctr.clone()))
+            .collect();
+        members.sort();
+        members.dedup();
         let mut imports: Vec<String> = c
             .import_decls
             .iter()
@@ -166,6 +246,11 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             .collect();
         imports.sort();
         imports.dedup();
+        // an import is not a definition: exclude imported names from `defines` so
+        // an importing hunk can't act as a def→use edge source (`defset` above
+        // still suppresses them from `uses`). Real defs remain.
+        let importset: HashSet<&String> = imports.iter().collect();
+        defines.retain(|d| !importset.contains(d));
         let is_type = (r0..=r1).any(|r| c.type_rows.contains(&r));
         // P13.1: structural smells for a def introduced in this hunk
         let mut notes = vec![];
@@ -186,6 +271,61 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             .filter(|(row, _)| r0 <= *row && *row <= r1)
             .map(|(_, a)| a.clone())
             .collect();
+        let mut symbols: Vec<Symbol> = c
+            .sym_decls
+            .iter()
+            .filter(|(row, _, _, _)| r0 <= *row && *row <= r1)
+            .map(|(_, name, kind, scope)| Symbol {
+                name: name.clone(),
+                kind: kind.clone(),
+                scope: scope.clone(),
+            })
+            .collect();
+        symbols.sort();
+        symbols.dedup();
+        // P17: local bindings this hunk introduces, and where each is used
+        // elsewhere in the file. A binding whose row also holds a real def
+        // (e.g. lua's `local f = function() end`, named via `bound_name`)
+        // is already reported as that def — skip it here to avoid saying
+        // the same thing twice. `_` (and other placeholder-only names) carry
+        // no navigational signal, same reasoning `rationale_for` already
+        // applies to `defines` — drop them here too rather than passing a
+        // dead entry through to the rationale layer.
+        let decl_at_row: HashSet<(usize, &str)> =
+            c.decls.iter().map(|(r, n)| (*r, n.as_str())).collect();
+        // several `locals`-kind nodes reassigning the same name within one
+        // hunk (a variable rebound across a loop body, tuple-unpacked twice,
+        // …) must collapse into one entry — otherwise the same name/use-list
+        // gets reported multiple times, ballooning the rationale.
+        let mut bindings: Vec<BindingUse> = vec![];
+        for (row, name) in c.local_binds.iter().filter(|(row, _)| r0 <= *row && *row <= r1) {
+            if name == "_" || decl_at_row.contains(&(*row, name.as_str())) {
+                continue;
+            }
+            let scope_def = c
+                .defs
+                .iter()
+                .filter(|d| d.s <= *row && *row <= d.e)
+                .min_by_key(|d| d.e - d.s);
+            let (lo, hi) = scope_def.map(|d| (d.s, d.e)).unwrap_or((0, usize::MAX));
+            let uses_here = c
+                .all_idents
+                .iter()
+                .filter(|(r, n, id)| n == name && *r >= lo && *r <= hi && !c.bind_ids.contains(id))
+                .map(|(r, _, _)| r + 1);
+            match bindings.iter_mut().find(|b| &b.name == name) {
+                Some(b) => b.uses.extend(uses_here),
+                None => bindings.push(BindingUse {
+                    name: name.clone(),
+                    scope: scope_def.map(|d| d.name.clone()),
+                    uses: uses_here.collect(),
+                }),
+            }
+        }
+        for b in &mut bindings {
+            b.uses.sort();
+            b.uses.dedup();
+        }
         out.push(HunkSem {
             category,
             enclosing,
@@ -194,10 +334,15 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             uses,
             is_type,
             noise: false,
+            members,
+            details: vec![],
             notes,
             advisories,
+            symbols,
+            bindings,
             start_row: r0,
             old_range: h.old_range,
+            new_empty: false,
         });
     }
     Some(out)
@@ -207,32 +352,100 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
     let kind = node.kind();
     let sr = node.start_position().row;
     if spec.is_import(kind) {
-        c.import_rows.insert(sr);
-        for name in ident_texts(node, src) {
-            c.decls.push((sr, name.clone()));
-            c.import_decls.push((sr, name));
+        // the whole statement's rows count as import — a hunk that lands
+        // anywhere in a multi-line `from x import (\n  a,\n  b,\n)` (tail,
+        // middle, or head) is still an import hunk, not a bare "change".
+        let er = node.end_position().row;
+        for r in sr..=er {
+            c.import_rows.insert(r);
+        }
+        for (row, name) in ident_text_rows(node, src) {
+            c.decls.push((row, name.clone()));
+            c.import_decls.push((row, name));
         }
         return; // don't descend: import identifiers are declarations, not uses
     }
     if spec.is_def(kind) {
-        let er = node.end_position().row;
-        let own = node_name(node, src).unwrap_or_else(|| "<anonymous>".to_string());
+        // markdown's `section` end_position lands one row past its last
+        // content row and exactly on the next same-level sibling's heading
+        // row (a zero-width boundary), which would make that sibling look
+        // contained by this section too — pull it back a row so containment
+        // checks (enclosing lookup) treat the end row as inclusive, the way
+        // every other grammar's def nodes already do.
+        let er = node
+            .end_position()
+            .row
+            .saturating_sub(if spec.prose { 1 } else { 0 });
+        // A def with no name of its own names no container, so it is
+        // transparent: descend without pushing a scope. This covers a c++
+        // anonymous `namespace {`, a lambda, and the content before a markdown
+        // document's first heading — all of which would otherwise contribute an
+        // `<anonymous>` segment to every enclosing name beneath them, and reach
+        // the rationale. Their contents still nest under the nearest *named*
+        // def, which is what a reviewer can actually navigate to.
+        let Some(own) = node_name(node, src) else {
+            let mut cur = node.walk();
+            for ch in node.named_children(&mut cur) {
+                walk(ch, src, spec, stack, c);
+            }
+            return;
+        };
+        // parameter names are local bindings, not references to outer symbols —
+        // record them so a param that shadows a def elsewhere (e.g. a `lane`
+        // fixture used only via param injection) can't seed a def→use edge.
+        if let Some(p) = node.child_by_field_name("parameters") {
+            for name in param_names(p, src) {
+                c.bound.insert(name);
+            }
+        }
         c.def_rows.insert(sr);
         if lang::is_type_kind(kind) {
             c.type_rows.insert(sr);
         }
         c.decls.push((sr, own.clone()));
+        // prose only: a def kind that is *also* a member kind (markdown's
+        // `section`) registers itself as a member of its enclosing container
+        // too, so a new subsection shows up in the P15 detail layer. Gated on
+        // `spec.prose` so this can't change member_rows for any code language
+        // (none of them has a kind that is both a def and reaches this branch
+        // as its own member — see lang.rs's java comment on that exact trap).
+        if spec.prose && spec.is_member(kind) {
+            let text = node
+                .utf8_text(src)
+                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            // markdown has no calls: container is always the enclosing
+            // section (`stack`, not yet pushed with `own` at this point).
+            let container = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
+            c.member_rows.push((sr, own.clone(), text, container));
+        }
         let depth = stack.len(); // enclosing defs before this one
         let params = count_params(node);
-        // collapse runs of nested anonymous defs in the qualified enclosing name
-        let anon_dup = own == "<anonymous>" && stack.last().is_some_and(|s| s == "<anonymous>");
-        if !anon_dup {
+        // collapse runs of nested defs sharing a name in the qualified enclosing
+        // name: nested anonymous defs, and python's decorated_definition wrapper
+        // whose resolved name (via the `definition` field) duplicates the
+        // class/function it wraps.
+        let dup = stack.last().is_some_and(|s| s == &own);
+        // a wrapper that delegates its name to an inner def (python's
+        // decorated_definition -> `definition` field) isn't itself the
+        // defining node — the inner def it wraps gets the symbol entry.
+        let delegates = node
+            .child_by_field_name("definition")
+            .is_some_and(|d| spec.is_def(d.kind()));
+        if !delegates {
+            // scope excludes a duplicate trailing entry (the wrapper's own
+            // push for this same symbol, not a genuine enclosing scope)
+            let scope_stack = if dup { &stack[..stack.len() - 1] } else { &stack[..] };
+            let scope = (!scope_stack.is_empty()).then(|| scope_stack.join(lang::scope_sep(spec)));
+            c.sym_decls.push((sr, own.clone(), kind.to_string(), scope));
+        }
+        if !dup {
             stack.push(own);
         }
         c.defs.push(DefRec {
             s: sr,
             e: er,
-            name: stack.join("."),
+            name: stack.join(lang::scope_sep(spec)),
             depth,
             params,
         });
@@ -240,20 +453,294 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         for ch in node.named_children(&mut cur) {
             walk(ch, src, spec, stack, c);
         }
-        if !anon_dup {
+        if !dup {
             stack.pop();
         }
         return;
     }
+    if spec.is_member(kind) {
+        if let Some(name) = member_name(node, src) {
+            let text = node
+                .utf8_text(src)
+                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            let container = member_container(node, src, stack, spec);
+            c.member_rows.push((sr, name, text, container));
+        }
+        // fall through: a member's value can still hold defs and uses
+    }
+    // A declaration the parser could not make sense of yields nonsense names —
+    // a macro-heavy c++ header (VTK's vtkTypeMacro family, say) parses with
+    // ERROR nodes and hands back `virtual`/`override` as if they were bound
+    // names. Nothing harvested from a failed parse is trustworthy.
+    if spec.is_local(kind) && !node.has_error() {
+        for id in binding_idents(node, kind) {
+            if let Ok(name) = id.utf8_text(src).map(tidy_ident) {
+                if name.is_empty() {
+                    continue; // a macro-shaped declaration with no real name
+                }
+                c.local_binds.push((id.start_position().row, name));
+                c.bind_ids.insert(id.id());
+            }
+        }
+        // fall through: the bound value can still hold defs and uses
+    }
     if lang::is_ident(kind) {
-        if let Ok(t) = node.utf8_text(src) {
-            c.uses.push((sr, t.to_string()));
+        // A zero-width identifier node is a parse artifact (C++ template and
+        // macro constructs produce them); an empty name would surface in the
+        // rationale as a stray comma.
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                c.uses.push((sr, t.to_string()));
+                c.all_idents.push((sr, t.to_string(), node.id()));
+            }
         }
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
         walk(ch, src, spec, stack, c);
     }
+}
+
+// Identifier nodes bound (given a new value) by a `locals`-kind node — the
+// name(s) it introduces, as nodes (not just text) so the caller can record
+// their tree-sitter node id and exclude that exact occurrence from a later
+// use-search. One field per grammar (verified against node-types.json);
+// unlisted kinds yield nothing rather than guessing.
+fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
+    let field = match kind {
+        "assignment" | "short_var_declaration" => "left",
+        "let_declaration" => "pattern",
+        "var_spec" | "variable_declarator" => "name",
+        // java local_variable_declaration / c/cpp declaration: one or more
+        // `declarator` fields (`int x = 1, y = 2;`), each possibly wrapping
+        // the name a level or two down (pointer/init declarator).
+        "local_variable_declaration" | "declaration" => {
+            let mut cur = node.walk();
+            return node
+                .children_by_field_name("declarator", &mut cur)
+                .filter_map(declarator_ident)
+                .collect();
+        }
+        // lua: `local x = …` is `variable_declaration` wrapping
+        // `assignment_statement` -> `variable_list` (field `name`, one per
+        // bound name) — no single field reaches the name from the top node.
+        "variable_declaration" => return lua_binding_idents(node),
+        _ => return vec![],
+    };
+    match node.child_by_field_name(field) {
+        Some(target) => target_idents(target),
+        None => vec![],
+    }
+}
+
+// Identifier(s) inside an assignment/let/var target subtree, skipping into
+// `attribute`/`subscript` targets (`obj.x = …`, `arr[0] = …` mutate an
+// existing binding, not introduce one) — everything else (bare identifier,
+// tuple/destructuring pattern) is a genuine new local name.
+fn target_idents(node: Node) -> Vec<Node> {
+    if matches!(node.kind(), "attribute" | "subscript") {
+        return vec![];
+    }
+    if lang::is_ident(node.kind()) {
+        return vec![node];
+    }
+    let mut out = vec![];
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        out.extend(target_idents(ch));
+    }
+    out
+}
+
+// c/cpp/java: unwrap a `declarator` field chain (pointer/init/array
+// declarator, java's variable_declarator) down to the leaf name identifier.
+fn declarator_ident(node: Node) -> Option<Node> {
+    if let Some(n) = node.child_by_field_name("name") {
+        return Some(n);
+    }
+    if let Some(d) = node.child_by_field_name("declarator") {
+        return declarator_ident(d);
+    }
+    lang::is_ident(node.kind()).then_some(node)
+}
+
+fn lua_binding_idents(node: Node) -> Vec<Node> {
+    let mut out = vec![];
+    let mut cur = node.walk();
+    for stmt in node.named_children(&mut cur).filter(|c| c.kind() == "assignment_statement") {
+        let mut c2 = stmt.walk();
+        for list in stmt.named_children(&mut c2).filter(|c| c.kind() == "variable_list") {
+            let mut c3 = list.walk();
+            out.extend(list.children_by_field_name("name", &mut c3));
+        }
+    }
+    out
+}
+
+// A member's own name. `name` covers rust/go/c fields and enum variants, `key`
+// covers object properties (js `pair`, ts `enum_assignment`); a `declarator`
+// field covers java fields, whose name sits one level down in a nested
+// `variable_declarator`; otherwise the first identifier leaf, which is the
+// name in every remaining member kind.
+fn member_name(node: Node, src: &[u8]) -> Option<String> {
+    for field in ["name", "key"] {
+        if let Some(n) = node.child_by_field_name(field) {
+            if let Ok(t) = n.utf8_text(src) {
+                let name = tidy_ident(t.trim_matches(['"', '\'']));
+                if !name.is_empty() {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    if let Some(d) = node.child_by_field_name("declarator") {
+        if let Some(name) = declarator_name(d, src) {
+            return Some(name);
+        }
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        if lang::is_ident(ch.kind()) {
+            return ch.utf8_text(src).ok().map(str::to_string);
+        }
+    }
+    None
+}
+
+// Container identity for a member (P15's attribution fix): a member that
+// sits directly under a call's argument list — python's `keyword_argument`
+// is the current example — belongs to that call, not to whatever definition
+// happens to enclose it. `add_argument("--sample", required=True)` inside
+// `main` is a call `main` merely contains; the call, named by its callee
+// plus first literal argument, is the real container. Everything else (a
+// class body, an enum, a struct, an object/dict literal, a markdown section)
+// keeps the enclosing-definition behavior member_rows always had — `stack`
+// is exactly that definition, since a member is always visited before the
+// def it names would be pushed onto it (see `walk`), which also means a
+// member can never resolve to its own def through this path: the js
+// `{ run: () => {} }` self-reference case is subsumed structurally, not
+// just guarded against.
+//
+// KNOWN LIMITATION: two calls sharing both callee and first literal argument
+// within one hunk collide onto the same key — the same class of limitation
+// documented at `symbol_identity_key` (src/bin/ordo-tui.rs).
+fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -> Option<String> {
+    call_container(node, src).or_else(|| (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec))))
+}
+
+// A member is a call's container only when it is a *direct* child of that
+// call's argument list — one nested inside an object/dict literal passed as
+// an argument is not (that object literal is not a call; today's def-based
+// behavior applies, per spec).
+fn call_container(node: Node, src: &[u8]) -> Option<String> {
+    let args = node.parent()?;
+    let call = args.parent()?;
+    if call.child_by_field_name("arguments") != Some(args) {
+        return None;
+    }
+    let callee = callee_text(call, src)?;
+    match first_literal_arg(args, src) {
+        Some(lit) => Some(format!("{callee}({lit})")),
+        // no literal first argument: callee alone (documented fallback)
+        None => Some(callee),
+    }
+}
+
+// The callee's own text. `function` is the field name shared by
+// call/call_expression across python/js/ts/rust/go/c/cpp (verified against
+// each grammar's node-types.json); java's `method_invocation` has no
+// `function` field — it names the callee via `name`, with an optional
+// `object` receiver, instead.
+fn callee_text(call: Node, src: &[u8]) -> Option<String> {
+    if let Some(f) = call.child_by_field_name("function") {
+        return f.utf8_text(src).ok().map(tidy_ident);
+    }
+    let name = call.child_by_field_name("name")?.utf8_text(src).ok()?;
+    match call.child_by_field_name("object").and_then(|o| o.utf8_text(src).ok()) {
+        Some(obj) => Some(format!("{}.{}", tidy_ident(obj), tidy_ident(name))),
+        None => Some(tidy_ident(name)),
+    }
+}
+
+// The call's first positional argument, only when it is a literal — judged by
+// node kind, never by text.
+fn first_literal_arg(args: Node, src: &[u8]) -> Option<String> {
+    let mut cur = args.walk();
+    let first = args.named_children(&mut cur).next()?;
+    is_literal_kind(first.kind())
+        .then(|| first.utf8_text(src).ok().map(tidy_ident))
+        .flatten()
+}
+
+// Literal node kinds, verified per grammar against its own node-types.json —
+// python (string/concatenated_string/integer/float/true/false/none), js & ts
+// (string/number/true/false/null), rust (string_literal/raw_string_literal/
+// char_literal/integer_literal/float_literal/boolean_literal), go
+// (interpreted_string_literal/raw_string_literal/int_literal/float_literal/
+// imaginary_literal/rune_literal/true/false/nil), c & cpp (string_literal/
+// concatenated_string/char_literal/number_literal/true/false/null, cpp adds
+// raw_string_literal), java (string_literal/character_literal/
+// decimal_integer_literal/decimal_floating_point_literal/hex_integer_literal/
+// hex_floating_point_literal/octal_integer_literal/binary_integer_literal/
+// true/false/null_literal).
+fn is_literal_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "string"
+            | "concatenated_string"
+            | "integer"
+            | "float"
+            | "none"
+            | "number"
+            | "null"
+            | "nil"
+            | "true"
+            | "false"
+            | "string_literal"
+            | "raw_string_literal"
+            | "char_literal"
+            | "character_literal"
+            | "integer_literal"
+            | "float_literal"
+            | "boolean_literal"
+            | "interpreted_string_literal"
+            | "int_literal"
+            | "imaginary_literal"
+            | "rune_literal"
+            | "number_literal"
+            | "decimal_integer_literal"
+            | "decimal_floating_point_literal"
+            | "hex_integer_literal"
+            | "hex_floating_point_literal"
+            | "octal_integer_literal"
+            | "binary_integer_literal"
+            | "null_literal"
+    )
+}
+
+// Binding names in a parameter list — the name of each parameter, not its type
+// annotation. Each direct child of the parameter container yields one name:
+// a bare identifier is the name; otherwise the child's `name` field, else its
+// first identifier leaf (which precedes any annotation). Type idents that sit
+// after the name (under a `type` field / later children) are left out.
+fn param_names(params: Node, src: &[u8]) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = params.walk();
+    for ch in params.named_children(&mut cur) {
+        if lang::is_ident(ch.kind()) {
+            if let Ok(t) = ch.utf8_text(src) {
+                out.push(t.to_string());
+            }
+        } else if let Some(n) = ch.child_by_field_name("name") {
+            if let Ok(t) = n.utf8_text(src) {
+                out.push(t.to_string());
+            }
+        } else if let Some(id) = first_ident_text(ch, src) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 fn count_params(node: Node) -> usize {
@@ -265,17 +752,106 @@ fn count_params(node: Node) -> usize {
         .unwrap_or(0)
 }
 
+/// A code identifier with any internal whitespace removed. C++ (OpenFOAM's
+/// house style especially) wraps a qualified name across lines —
+/// `Foam::frictionalStressModels::\nJohnsonJacksonSchaeffer::nu` — and that
+/// newline would otherwise reach `defines`, `symbols`, `enclosing` and the
+/// rationale, which is contractually one line.
+fn tidy_ident(s: &str) -> String {
+    if s.chars().any(char::is_whitespace) {
+        s.split_whitespace().collect()
+    } else {
+        s.to_string()
+    }
+}
+
 fn node_name(node: Node, src: &[u8]) -> Option<String> {
+    // markdown headings are prose: their spacing is meaningful, so they are
+    // named by `heading_name` and never passed through `tidy_ident`.
+    if node.kind() == "section" {
+        return node_name_inner(node, src);
+    }
+    node_name_inner(node, src)
+        .map(|n| tidy_ident(&n))
+        .filter(|n| !n.is_empty())
+}
+
+fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
+    // 0. markdown `section`: no name/declarator/identifier field exists (a
+    // heading is prose, not an identifier) — name it from the heading text
+    // instead. Scoped to this exact kind, which no other grammar in this
+    // crate produces (verified against each grammar's node-types.json), so
+    // it can't shadow any other language's naming path.
+    if node.kind() == "section" {
+        // a section's first child is only sometimes a heading: content
+        // before the document's first heading is its own headless section
+        // (e.g. an HTML comment or a stray paragraph at the top of a file).
+        // Naming it after that raw content reads badly, so it stays
+        // anonymous rather than borrowing the wrong node's text.
+        return node.named_child(0).filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading")).and_then(|h| heading_name(h, src));
+    }
     // 1. own name (function foo, class Foo, local function foo, impl Foo, …)
     if let Some(n) = node.child_by_field_name("name") {
         return n.utf8_text(src).ok().map(|s| s.to_string());
+    }
+    // 1b. name nested one or more levels down a `declarator` field — java
+    // `field_declaration` -> `variable_declarator`, c/cpp `declaration` ->
+    // `pointer_declarator`/`init_declarator`/… -> identifier.
+    if let Some(d) = node.child_by_field_name("declarator") {
+        if let Some(name) = declarator_name(d, src) {
+            return Some(name);
+        }
+    }
+    // 1c. python `decorated_definition` -> the class/function it wraps, under
+    // field `definition`.
+    if let Some(d) = node.child_by_field_name("definition") {
+        if let Some(name) = node_name(d, src) {
+            return Some(name);
+        }
     }
     // 2. anonymous expression → the binding it's assigned to
     //    (local x = function…, x = function…, t.x = function…, x: fn)
     if let Some(name) = bound_name(node, src) {
         return Some(name);
     }
-    // 3. first identifier-ish child (e.g. rust impl's type_identifier)
+    // 2b. the `type` field, for a def named after a type rather than an
+    // identifier of its own — rust `impl<'s> Worker<'s>`, whose first named
+    // child is the lifetime list, and `impl Display for Work`, where the first
+    // identifier is the *trait*. Only when there is no `declarator`, so c/cpp's
+    // `type` (a return type) and java's (a field type) can never be reached:
+    // those shapes are named by 1b above.
+    if node.child_by_field_name("declarator").is_none() {
+        if let Some(t) = node.child_by_field_name("type") {
+            if let Some(name) = type_name(t, src) {
+                return Some(name);
+            }
+        }
+    }
+    // 3. first identifier-ish child (e.g. rust impl's type_identifier).
+    // js/ts `arrow_function` is the one def kind whose own single bare
+    // parameter (`x => …`, field `parameter`) is itself a direct identifier
+    // child — without this guard it would be picked up here and misname an
+    // anonymous callback after its own parameter instead of staying nameless.
+    if node.kind() != "arrow_function" {
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            if lang::is_ident(ch.kind()) {
+                return ch.utf8_text(src).ok().map(|s| s.to_string());
+            }
+        }
+    }
+    None
+}
+
+// The bare name of a type node, unwrapping a generic application so
+// `Worker<'s>` reads as `Worker`.
+fn type_name(node: Node, src: &[u8]) -> Option<String> {
+    if lang::is_ident(node.kind()) {
+        return node.utf8_text(src).ok().map(|s| s.to_string());
+    }
+    if let Some(t) = node.child_by_field_name("type") {
+        return type_name(t, src);
+    }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
         if lang::is_ident(ch.kind()) {
@@ -292,12 +868,20 @@ fn bound_name(node: Node, src: &[u8]) -> Option<String> {
     for _ in 0..3 {
         let parent = child.parent()?;
         let k = parent.kind();
+        // a statement/argument container sits between the def and any real
+        // binding above it — a callback passed to a call (`arr.map(x => …)`)
+        // or a value returned/nested inside a function body must not borrow
+        // the name of whatever the call result or outer function is bound
+        // to. Stop the climb rather than crossing into that unrelated scope.
+        if matches!(k, "arguments" | "statement_block" | "class_body" | "program" | "block") {
+            return None;
+        }
         let binds = k.contains("assignment")
             || k.contains("declaration")
             || k.contains("variable")
             || k.contains("pair")
             || k.contains("binding")
-            || k.ends_with("field");
+            || k.contains("field");
         if binds {
             for f in ["name", "left", "variable", "key", "property"] {
                 if let Some(n) = parent.child_by_field_name(f) {
@@ -322,6 +906,60 @@ fn bound_name(node: Node, src: &[u8]) -> Option<String> {
     None
 }
 
+// A markdown heading's title text: an atx heading's `heading_content` field is
+// the `inline` node directly; a setext heading's is a `paragraph` wrapping an
+// `inline`. Falls back to the heading's own text if neither shape matches.
+fn heading_name(heading: Node, src: &[u8]) -> Option<String> {
+    let content = heading.child_by_field_name("heading_content");
+    let inline = match content {
+        Some(c) if c.kind() == "inline" => Some(c),
+        Some(c) => {
+            let mut cur = c.walk();
+            let found = c.named_children(&mut cur).find(|ch| ch.kind() == "inline");
+            found
+        }
+        None => None,
+    };
+    let raw = inline
+        .and_then(|n| n.utf8_text(src).ok())
+        .or_else(|| heading.utf8_text(src).ok())?;
+    normalize_heading(raw)
+}
+
+// strip leading `#` markers (belt-and-braces — heading_content already
+// excludes them), collapse internal whitespace (a heading can wrap across
+// lines), and cap the length: this name flows straight into a one-line
+// rationale, and a heading can be a whole sentence.
+const HEADING_NAME_MAX: usize = 80;
+
+fn normalize_heading(raw: &str) -> Option<String> {
+    let stripped = raw.trim_start_matches('#').trim();
+    let collapsed = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    if collapsed.chars().count() > HEADING_NAME_MAX {
+        let capped: String = collapsed.chars().take(HEADING_NAME_MAX).collect();
+        return Some(format!("{capped}…"));
+    }
+    Some(collapsed)
+}
+
+// Follow a chain of declarator wrappers (c/cpp pointer/array/init/function
+// declarators, java variable_declarator) down to the leaf name.
+fn declarator_name(node: Node, src: &[u8]) -> Option<String> {
+    if let Some(n) = node.child_by_field_name("name") {
+        return n.utf8_text(src).ok().map(|s| s.to_string());
+    }
+    if let Some(d) = node.child_by_field_name("declarator") {
+        return declarator_name(d, src);
+    }
+    if lang::is_ident(node.kind()) {
+        return node.utf8_text(src).ok().map(|s| s.to_string());
+    }
+    None
+}
+
 fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
     if lang::is_ident(node.kind()) {
         return node.utf8_text(src).ok().map(|s| s.to_string());
@@ -333,6 +971,23 @@ fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
         }
     }
     None
+}
+
+/// All local-binding names present anywhere in `content` (whole file) — the
+/// old-side comparison set for P17: a name already locally bound in the old
+/// file isn't "introduced" by a hunk that only edits its value.
+pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
+    let mut parser = Parser::new();
+    if parser.set_language(&(spec.language)()).is_err() {
+        return HashSet::new();
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return HashSet::new();
+    };
+    let mut c = Collected::default();
+    let mut stack: Vec<String> = vec![];
+    walk(tree.root_node(), content.as_bytes(), spec, &mut stack, &mut c);
+    c.local_binds.into_iter().map(|(_, n)| n).collect()
 }
 
 /// All def names and import names present in `content` (whole file). Used for
@@ -359,6 +1014,28 @@ pub fn symbol_sets(spec: &LangSpec, content: &str) -> (HashSet<String>, HashSet<
 
 /// Like `symbol_sets` but with each symbol's 1-based start row, for locating a
 /// removed symbol against a deletion hunk's old range (#5 remove / #7 delete).
+/// A container member: `(0-based row, name, normalized text, container key)`.
+/// The container key is `None` for a top-level member with no enclosing
+/// definition and no call it's a direct argument of (P15's attribution fix
+/// — see `member_container`).
+pub type MemberRow = (usize, String, String, Option<String>);
+
+/// Every container member in `content` — the old-side counterpart of what
+/// `analyze` collects for the new one.
+pub fn member_rows(spec: &LangSpec, content: &str) -> Vec<MemberRow> {
+    let mut parser = Parser::new();
+    if parser.set_language(&(spec.language)()).is_err() {
+        return vec![];
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return vec![];
+    };
+    let mut c = Collected::default();
+    let mut stack: Vec<String> = vec![];
+    walk(tree.root_node(), content.as_bytes(), spec, &mut stack, &mut c);
+    c.member_rows
+}
+
 pub fn symbol_rows(spec: &LangSpec, content: &str) -> (Vec<(String, usize)>, Vec<(String, usize)>) {
     let mut defs = vec![];
     let mut imports = vec![];
@@ -499,6 +1176,23 @@ fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
             }
         }
         out.extend(ident_texts(ch, src));
+    }
+    out
+}
+
+// like `ident_texts`, but paired with each identifier's own row — an import
+// statement spans several lines, and a hunk touching only one of them must
+// find the names that actually sit on that line, not the statement's first.
+fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
+    let mut out = vec![];
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        if lang::is_ident(ch.kind()) {
+            if let Ok(t) = ch.utf8_text(src) {
+                out.push((ch.start_position().row, t.to_string()));
+            }
+        }
+        out.extend(ident_text_rows(ch, src));
     }
     out
 }

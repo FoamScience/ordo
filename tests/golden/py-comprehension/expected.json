@@ -8,10 +8,6 @@
     {
       "path": "m.py",
       "hunk": "h1"
-    },
-    {
-      "path": "m.py",
-      "hunk": "h2"
     }
   ],
   "files": [
@@ -20,26 +16,6 @@
       "hunks": [
         {
           "id": "h0",
-          "old_range": [
-            1,
-            0
-          ],
-          "new_range": [
-            1,
-            1
-          ],
-          "category": "import",
-          "enclosing": null,
-          "defines": [
-            "os"
-          ],
-          "uses": [],
-          "group": "g0",
-          "order_index": 0,
-          "rationale": "adds import os"
-        },
-        {
-          "id": "h1",
           "old_range": [
             3,
             2
@@ -57,12 +33,19 @@
             "getpid",
             "os"
           ],
-          "group": "g1",
-          "order_index": 1,
-          "rationale": "adds helper, used below"
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "adds helper, used below",
+          "symbols": [
+            {
+              "name": "helper",
+              "kind": "function_definition",
+              "scope": null
+            }
+          ]
         },
         {
-          "id": "h2",
+          "id": "h1",
           "old_range": [
             5,
             4
@@ -78,8 +61,8 @@
             "helper",
             "x"
           ],
-          "group": "g2",
-          "order_index": 2,
+          "group": "g1",
+          "order_index": 1,
           "rationale": "uses helper, defined above"
         }
       ]
@@ -88,23 +71,16 @@
   "groups": [
     {
       "id": "g0",
-      "reason": "import",
+      "reason": "same definition: helper",
       "members": [
         "h0"
       ]
     },
     {
       "id": "g1",
-      "reason": "same definition: helper",
+      "reason": "same scope: top-level",
       "members": [
         "h1"
-      ]
-    },
-    {
-      "id": "g2",
-      "reason": "top-level change",
-      "members": [
-        "h2"
       ]
     }
   ],
@@ -112,19 +88,13 @@
     {
       "from": "h0",
       "to": "h1",
-      "why": "def→use: os"
-    },
-    {
-      "from": "h1",
-      "to": "h2",
       "why": "def→use: helper"
     }
   ],
   "clusters": [
     [
       "h0",
-      "h1",
-      "h2"
+      "h1"
     ]
   ]
 }

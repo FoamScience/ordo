@@ -1,7 +1,9 @@
 //! Per-language config: tree-sitter grammar + node-type sets, ported verbatim
 //! from gitplay's validated `order.lua` classifier. Adding a language is one
-//! entry here plus its grammar crate in Cargo.toml — no logic changes.
-//! Tier-1: python, javascript, typescript, tsx, go, c, cpp, java, lua.
+//! entry here plus its grammar crate in Cargo.toml — no logic changes (markdown
+//! is the one exception: it also needed a small, `prose`-gated naming path in
+//! extract.rs and order.rs, since a heading has no identifier to name a def by).
+//! Tier-1: python, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
 use tree_sitter::Language;
 
 pub struct LangSpec {
@@ -11,6 +13,18 @@ pub struct LangSpec {
     pub imports: &'static [&'static str],
     /// node types that introduce a definition (fn / type / class / …)
     pub defs: &'static [&'static str],
+    /// node types that are a *named member* of an enclosing definition — an enum
+    /// variant, a struct field, an object property. Drives the detail layer
+    /// (P15): what a hunk added to / removed from / changed in its container.
+    pub members: &'static [&'static str],
+    /// prose, not code: a def is a section, not a function/class. Switches the
+    /// rationale wording (adds/edits/removes X) to say "section X" and lets a
+    /// nested def's enclosing scope resolve to its parent rather than itself.
+    pub prose: bool,
+    /// node types that bind a name without being a definition (local
+    /// variable / assignment target) — drives the "adds local X, used at …"
+    /// rationale wording. Verified against each grammar's node-types.json.
+    pub locals: &'static [&'static str],
 }
 
 fn py() -> Language {
@@ -43,6 +57,11 @@ fn java() -> Language {
 fn lua() -> Language {
     tree_sitter_lua::LANGUAGE.into()
 }
+// block grammar only (headings, sections, prose) — the crate's separate
+// inline grammar (link/emphasis text) is out of scope, see README.
+fn md() -> Language {
+    tree_sitter_md::LANGUAGE.into()
+}
 
 static SPECS: &[LangSpec] = &[
     LangSpec {
@@ -58,6 +77,9 @@ static SPECS: &[LangSpec] = &[
             "class_definition",
             "decorated_definition",
         ],
+        members: &["pair", "keyword_argument"],
+        prose: false,
+        locals: &["assignment"],
     },
     LangSpec {
         name: "javascript",
@@ -68,7 +90,20 @@ static SPECS: &[LangSpec] = &[
             "generator_function_declaration",
             "class_declaration",
             "method_definition",
+            // named arrow/function expressions (`const foo = () => {}`,
+            // `const foo = function () {}`) — anonymous when unbound: a def
+            // node whose `node_name` returns None (no assignment/pair/…
+            // ancestor within 3 levels) is transparent in extract.rs's
+            // `walk`, so an inline callback (`arr.map(x => x*2)`) contributes
+            // no def entry and floods nothing. Verified against
+            // tree-sitter-javascript-0.23.1's node-types.json.
+            "arrow_function",
+            "function_expression",
+            "generator_function",
         ],
+        members: &["pair", "field_definition", "method_definition"],
+        prose: false,
+        locals: &["variable_declarator"],
     },
     LangSpec {
         name: "rust",
@@ -83,7 +118,12 @@ static SPECS: &[LangSpec] = &[
             "mod_item",
             "type_item",
             "macro_definition",
+            "const_item",
+            "static_item",
         ],
+        members: &["enum_variant", "field_declaration"],
+        prose: false,
+        locals: &["let_declaration"],
     },
     LangSpec {
         name: "typescript",
@@ -98,7 +138,21 @@ static SPECS: &[LangSpec] = &[
             "interface_declaration",
             "type_alias_declaration",
             "enum_declaration",
+            // see javascript's comment: same grammar shapes, verified
+            // against tree-sitter-typescript-0.23.2's node-types.json.
+            "arrow_function",
+            "function_expression",
+            "generator_function",
         ],
+        members: &[
+            "enum_assignment",
+            "property_signature",
+            "public_field_definition",
+            "method_signature",
+            "pair",
+        ],
+        prose: false,
+        locals: &["variable_declarator"],
     },
     LangSpec {
         name: "tsx",
@@ -111,7 +165,21 @@ static SPECS: &[LangSpec] = &[
             "interface_declaration",
             "type_alias_declaration",
             "enum_declaration",
+            // see javascript's comment: same grammar shapes, verified
+            // against tree-sitter-typescript-0.23.2's node-types.json.
+            "arrow_function",
+            "function_expression",
+            "generator_function",
         ],
+        members: &[
+            "enum_assignment",
+            "property_signature",
+            "public_field_definition",
+            "method_signature",
+            "pair",
+        ],
+        prose: false,
+        locals: &["variable_declarator"],
     },
     LangSpec {
         name: "go",
@@ -122,6 +190,9 @@ static SPECS: &[LangSpec] = &[
             "method_declaration",
             "type_declaration",
         ],
+        members: &["field_declaration", "const_spec", "var_spec", "type_spec"],
+        prose: false,
+        locals: &["short_var_declaration", "var_spec"],
     },
     LangSpec {
         name: "c",
@@ -133,6 +204,9 @@ static SPECS: &[LangSpec] = &[
             "enum_specifier",
             "union_specifier",
         ],
+        members: &["field_declaration", "enumerator"],
+        prose: false,
+        locals: &["declaration"],
     },
     LangSpec {
         name: "cpp",
@@ -146,6 +220,9 @@ static SPECS: &[LangSpec] = &[
             "namespace_definition",
             "template_declaration",
         ],
+        members: &["field_declaration", "enumerator"],
+        prose: false,
+        locals: &["declaration"],
     },
     LangSpec {
         name: "java",
@@ -157,7 +234,18 @@ static SPECS: &[LangSpec] = &[
             "class_declaration",
             "interface_declaration",
             "enum_declaration",
+            "field_declaration",
         ],
+        // field_declaration is a def (below), not a member: a java field is
+        // commonly referenced by bare name within the class (a static final
+        // constant, or an instance field read without `this.`), so it needs
+        // def→use edges the way a rust const/static does. Leaving it in
+        // `members` too made P15 report "adds/changes X in X" for a hunk
+        // that IS the field's own def — self-referential once the field
+        // becomes its own enclosing definition.
+        members: &["enum_constant"],
+        prose: false,
+        locals: &["local_variable_declaration"],
     },
     LangSpec {
         // lua: `require()` is a call, not a distinct import node → no imports
@@ -165,6 +253,27 @@ static SPECS: &[LangSpec] = &[
         language: lua,
         imports: &[],
         defs: &["function_declaration", "function_definition"],
+        members: &["field"],
+        prose: false,
+        // `local x = …` parses as `variable_declaration` wrapping an
+        // `assignment_statement`/`variable_list` — the name sits several
+        // levels down (see extract.rs's lua-specific binding walk), not
+        // reachable via a single field the way other grammars' locals are.
+        locals: &["variable_declaration"],
+    },
+    LangSpec {
+        // markdown: a def is a `section` (heading + its content, nested by
+        // heading level via the grammar's own tree shape) — no imports, no
+        // uses (link targets are out of scope, see README). `section` doing
+        // double duty as both def and member lets a new subsection register
+        // as a member of its parent for the P15 detail layer.
+        name: "markdown",
+        language: md,
+        imports: &[],
+        defs: &["section"],
+        members: &["section"],
+        prose: true,
+        locals: &[],
     },
 ];
 
@@ -180,9 +289,13 @@ pub fn for_path(path: &str) -> Option<&'static LangSpec> {
         "tsx" => "tsx",
         "go" => "go",
         "c" | "h" => "c",
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => "cpp",
+        // `.C`/`.H` are C++ by the GNU convention gcc follows, and the house
+        // style of OpenFOAM and much older scientific C++. Case matters here:
+        // `.c` is C, `.C` is not, so the extension is never lower-cased.
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "C" | "H" => "cpp",
         "java" => "java",
         "lua" => "lua",
+        "md" | "markdown" => "markdown",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -194,6 +307,12 @@ impl LangSpec {
     }
     pub fn is_def(&self, kind: &str) -> bool {
         self.defs.contains(&kind)
+    }
+    pub fn is_member(&self, kind: &str) -> bool {
+        self.members.contains(&kind)
+    }
+    pub fn is_local(&self, kind: &str) -> bool {
+        self.locals.contains(&kind)
     }
 }
 
@@ -208,6 +327,18 @@ pub const IDENT_KINDS: &[&str] = &[
     "shorthand_property_identifier_pattern",
     "constant",
 ];
+
+/// How a qualified enclosing name joins its parts. Code nests through a dot
+/// (`App.handle`, the language's own notation); prose nests through an arrow
+/// (`Install > From source`), since a dot reads like a code path and a heading
+/// path is not one.
+pub fn scope_sep(spec: &LangSpec) -> &'static str {
+    if spec.prose {
+        " > "
+    } else {
+        "."
+    }
+}
 
 pub fn is_ident(kind: &str) -> bool {
     IDENT_KINDS.contains(&kind)
