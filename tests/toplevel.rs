@@ -532,3 +532,41 @@ fn a_removed_local_is_still_part_of_editing_its_function() {
         out.files[0].hunks[0].rationale
     );
 }
+
+#[test]
+fn a_default_export_of_a_value_is_not_bookkeeping() {
+    // `export default {…}` is the whole body of a config file or a component.
+    // It fills the `value` field rather than `declaration`, and reading "no
+    // declaration" as "bookkeeping" swept every hunk inside it out of review.
+    let out = one(
+        "config.ts",
+        "export default {\n  a: 1,\n}\n",
+        "export default {\n  a: 1,\n  b: 2,\n}\n",
+    );
+    assert_eq!(out.files[0].hunks.len(), 1, "{:?}", out.files[0].dropped);
+    assert!(out.files[0].dropped.is_empty());
+    assert_eq!(out.files[0].hunks[0].details, vec!["adds b"]);
+}
+
+#[test]
+fn a_default_exported_call_keeps_its_contents_too() {
+    let out = one(
+        "vitest.config.ts",
+        "export default defineConfig({\n  test: {\n    timeout: 10,\n  },\n})\n",
+        "export default defineConfig({\n  test: {\n    timeout: 20,\n  },\n})\n",
+    );
+    assert_eq!(out.files[0].hunks.len(), 1, "{:?}", out.files[0].dropped);
+    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("defineConfig"));
+}
+
+#[test]
+fn the_bookkeeping_forms_are_still_bookkeeping() {
+    for (old, new) in [
+        ("export * from \"./a\";\n", "export * from \"./a\";\nexport * from \"./b\";\n"),
+        ("type A = 1;\n", "type A = 1;\n\nexport {};\n"),
+    ] {
+        let out = one("b.ts", old, new);
+        assert!(out.files[0].hunks.is_empty(), "{old:?} -> {new:?}");
+        assert_eq!(out.files[0].dropped[0].reason, ordo::model::DropReason::Import);
+    }
+}

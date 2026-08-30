@@ -375,7 +375,16 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
 /// (verified against each one's node-types.json), so no other language's kinds
 /// can collide with the check.
 fn is_bookkeeping_export(node: Node) -> bool {
-    node.kind() == "export_statement" && node.child_by_field_name("declaration").is_none()
+    if node.kind() != "export_statement" {
+        return false;
+    }
+    // `export default <expression>` puts the exported object/array/call in the
+    // `value` field rather than `declaration` (verified against
+    // tree-sitter-typescript-0.23.2's node-types.json), and it is emphatically
+    // NOT bookkeeping: `export default {…}` is the whole body of a config file
+    // or a component. Reading it as an import swept every hunk inside it out of
+    // the review.
+    node.child_by_field_name("declaration").is_none() && node.child_by_field_name("value").is_none()
 }
 
 /// Import-like for classification: a real import, or an export that only moves
