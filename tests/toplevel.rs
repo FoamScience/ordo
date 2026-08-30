@@ -362,3 +362,40 @@ fn an_ordinary_macro_is_not_a_test_block() {
     );
     assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("main"));
 }
+
+#[test]
+fn a_generated_file_is_recognised_by_its_name() {
+    // lazy.nvim writes `_generated.lua`; the `.generated.` infix and go's
+    // `_generated.go` are the same convention
+    assert!(ordo::is_generated_path("lua/lazy/community/_generated.lua"));
+    assert!(ordo::is_generated_path("src/api.generated.ts"));
+    assert!(ordo::is_generated_path("pkg/mock_generated.go"));
+    assert!(!ordo::is_generated_path("src/generator.lua"));
+    assert!(!ordo::is_generated_path("src/generated_test_helper.rs"));
+}
+
+#[test]
+fn a_lua_field_assignment_is_a_binding_container() {
+    let out = one(
+        "c.lua",
+        "M.defaults = {\n  \"rockspec\",\n  \"luarocks\",\n}\n",
+        "M.defaults = {\n  \"rockspec\", -- only with rocks.enabled\n  \"luarocks\",\n}\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].enclosing.as_deref(),
+        Some("M.defaults")
+    );
+}
+
+#[test]
+fn busted_style_lua_tests_are_blocks_too() {
+    let out = one(
+        "s.lua",
+        "describe(\"spec\", function()\n  it(\"works\", function()\n    assert(one())\n  end)\nend)\n",
+        "describe(\"spec\", function()\n  it(\"works\", function()\n    assert(two())\n  end)\nend)\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].enclosing.as_deref(),
+        Some("describe \"spec\" > it \"works\"")
+    );
+}

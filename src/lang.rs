@@ -279,7 +279,7 @@ static SPECS: &[LangSpec] = &[
         // lua: `require()` is a call, not a distinct import node → no imports
         name: "lua",
         language: lua,
-        test_blocks: &[],
+        test_blocks: &["describe", "it", "test", "context", "pending"],
         imports: &[],
         defs: &["function_declaration", "function_definition"],
         members: &["field"],
@@ -288,7 +288,7 @@ static SPECS: &[LangSpec] = &[
         // `assignment_statement`/`variable_list` — the name sits several
         // levels down (see extract.rs's lua-specific binding walk), not
         // reachable via a single field the way other grammars' locals are.
-        locals: &["variable_declaration"],
+        locals: &["variable_declaration", "assignment_statement"],
     },
     LangSpec {
         // markdown: a def is a `section` (heading + its content, nested by
@@ -428,7 +428,10 @@ pub fn is_generated_path(p: &str) -> bool {
             | "composer.lock"
             | "flake.lock"
             | "uv.lock"
-    ) || name.ends_with(".min.js")
+    ) || name.starts_with("_generated.")
+        || name.contains(".generated.")
+        || name.ends_with("_generated.go")
+        || name.ends_with(".min.js")
         || name.ends_with(".min.css")
         || name.ends_with(".map")
         || name.ends_with(".pb.go")

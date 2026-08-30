@@ -422,7 +422,7 @@ fn test_block_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
             .filter(|t| !t.is_empty())?;
         return Some(format!("{name}! {label}"));
     }
-    if node.kind() != "call_expression" {
+    if !matches!(node.kind(), "call_expression" | "function_call") {
         return None;
     }
     let callee = callee_text(node, src)?;
@@ -433,9 +433,13 @@ fn test_block_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
     let args = node.child_by_field_name("arguments")?;
     let mut cur = args.walk();
     let children: Vec<Node> = args.named_children(&mut cur).collect();
-    let has_body = children
-        .iter()
-        .any(|n| matches!(n.kind(), "arrow_function" | "function_expression" | "generator_function"));
+    let has_body = children.iter().any(|n| {
+        matches!(
+            n.kind(),
+            // js/ts | lua (busted's `describe("…", function() … end)`)
+            "arrow_function" | "function_expression" | "generator_function" | "function_definition"
+        )
+    });
     if !has_body {
         return None;
     }
@@ -904,6 +908,19 @@ fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
         // `assignment_statement` -> `variable_list` (field `name`, one per
         // bound name) — no single field reaches the name from the top node.
         "variable_declaration" => return lua_binding_idents(node),
+        // lua `M.defaults = { … }`: the bound name is a `variable_list` entry,
+        // which may be a plain identifier or a `dot_index_expression`
+        "assignment_statement" => {
+            let mut cur = node.walk();
+            return node
+                .named_children(&mut cur)
+                .filter(|c| c.kind() == "variable_list")
+                .flat_map(|list| {
+                    let mut c2 = list.walk();
+                    list.named_children(&mut c2).collect::<Vec<_>>()
+                })
+                .collect();
+        }
         _ => return vec![],
     };
     match node.child_by_field_name(field) {
