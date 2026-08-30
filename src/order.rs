@@ -160,8 +160,8 @@ pub fn order_all(
     body_only: &[HashSet<String>],
     removals: &[Vec<(usize, String)>],
     comment_only: &[Vec<bool>],
-    // `Some(true)` = this hunk comments code out, `Some(false)` = uncomments
-    switched: &[Vec<Option<bool>>],
+    // how each hunk moved code across the comment boundary, if it did
+    switched: &[Vec<Option<crate::SideShift>>],
     strategy: Strategy,
     cross_file: bool,
 ) -> OrderedAll {
@@ -169,7 +169,7 @@ pub fn order_all(
     let mut coord = vec![];
     let mut sem: Vec<&HunkSem> = vec![];
     let mut comment: Vec<bool> = vec![];
-    let mut switched_off: Vec<Option<bool>> = vec![];
+    let mut switched_off: Vec<Option<crate::SideShift>> = vec![];
     for (fi, hs) in files.iter().enumerate() {
         for (li, s) in hs.iter().enumerate() {
             coord.push((fi, li));
@@ -479,8 +479,8 @@ struct RatCtx<'a> {
     body_only: &'a [HashSet<String>],
     removals: &'a [Vec<(usize, String)>],
     comment: &'a [bool],
-    /// `Some(true)` = the hunk comments code out, `Some(false)` = uncomments it
-    switched: &'a [Option<bool>],
+    /// how the hunk moved code across the comment boundary, if it did
+    switched: &'a [Option<crate::SideShift>],
     cross_file: bool,
 }
 
@@ -588,8 +588,29 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     // code switched off (or back on) is neither an edit nor a comment change:
     // it is the reviewer-visible act of disabling code, and saying so beats
     // "adds comment", which is what the comment branch below would call it
-    if let Some(off) = ctx.switched.get(i).copied().flatten() {
-        let verb = if off { "comments out" } else { "uncomments" };
+    if let Some(shift) = ctx.switched.get(i).copied().flatten() {
+        let [o0, o1] = s.old_range;
+        let verb = match shift {
+            crate::SideShift::CommentedOut => "comments out",
+            crate::SideShift::Uncommented => "uncomments",
+            // comments where code used to be: both halves are worth saying, and
+            // "removes N lines" is the vocabulary the deletion branch uses
+            crate::SideShift::CodeToComment => {
+                let n = o1.saturating_sub(o0) + 1;
+                let what = if n == 1 {
+                    "1 line".to_string()
+                } else {
+                    format!("{n} lines")
+                };
+                let comment = if n == 1 { "a comment" } else { "comments" };
+                return match s.enclosing.as_deref() {
+                    Some(nm) => {
+                        format!("replaces {what} with {comment} in {}", short_container(nm))
+                    }
+                    None => format!("replaces {what} with {comment}"),
+                };
+            }
+        };
         return match s.enclosing.as_deref() {
             Some(nm) => format!("{verb} code in {}", short_container(nm)),
             None => format!("{verb} code"),

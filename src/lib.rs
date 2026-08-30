@@ -25,7 +25,7 @@ pub fn run(input: Input) -> Output {
     let mut sems: Vec<Vec<HunkSem>> = vec![];
     let mut degraded: Vec<bool> = vec![];
     let mut comment_only: Vec<Vec<bool>> = vec![];
-    let mut switched: Vec<Vec<Option<bool>>> = vec![];
+    let mut switched: Vec<Vec<Option<SideShift>>> = vec![];
     let mut dropped: Vec<Vec<DroppedHunk>> = vec![];
     for change in &input.changes {
         let (raw, sem, deg, com, sw) = build_change(change, input.options.full_context);
@@ -284,6 +284,34 @@ pub fn run(input: Input) -> Output {
         rename[fi] = ren;
         removals[fi] = rem;
     }
+    // An import line that moved, leaving a blank line behind, reads as a bare
+    // change: the new side carries no rows to classify by, and the old side is
+    // where the meaning was. ordo already treats pure-import hunks as
+    // bookkeeping, so the residue of reordering them is formatting. A genuinely
+    // deleted import is excluded below — that one is named.
+    for fi in 0..n {
+        let Some(new) = input.changes[fi].new.as_deref() else {
+            continue;
+        };
+        let new_lines: Vec<&str> = new.lines().collect();
+        let import_rows: HashSet<usize> = old_rows[fi].1.iter().map(|(_, r)| *r).collect();
+        for (li, sem) in sems[fi].iter_mut().enumerate() {
+            let [o0, o1] = sem.old_range;
+            if sem.noise || o0 == 0 || o0 > o1 {
+                continue;
+            }
+            let [n0, n1] = raws[fi][li].new_range;
+            let new_blank = n0 > n1
+                || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
+            // a *deleted* import is a real removal and is named as such; this
+            // is only the residue of one that moved, where nothing was removed
+            let named = removals[fi].iter().any(|(r, _)| *r >= o0 && *r <= o1);
+            if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
+                sem.noise = true;
+            }
+        }
+    }
+
     let ordered = order::order_all(
         &sems,
         &paths,
@@ -511,7 +539,13 @@ pub fn pack(out: &Output) -> String {
 /// carried a diff but full content couldn't be obtained, so ordering is
 /// positional only. `comment_only` parallels `hunks`: true when every changed
 /// line is a comment (drives the "adds/edits comment" rationale fallback).
-type ChangeParts = (Vec<RawHunk>, Vec<HunkSem>, bool, Vec<bool>, Vec<Option<bool>>);
+type ChangeParts = (
+    Vec<RawHunk>,
+    Vec<HunkSem>,
+    bool,
+    Vec<bool>,
+    Vec<Option<SideShift>>,
+);
 
 fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let old = change.old.as_deref();
@@ -572,9 +606,9 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
             sems[i].details = d;
         }
     }
-    let switched: Vec<Option<bool>> = raw
+    let switched: Vec<Option<SideShift>> = raw
         .iter()
-        .map(|h| commented_out_hunk(h, &old_lines, &new_lines, ext))
+        .map(|h| side_shift(h, &old_lines, &new_lines, ext))
         .collect();
     (raw, sems, degraded, comment_only, switched)
 }
@@ -697,6 +731,11 @@ fn is_comment_line(trimmed: &str, ext: &str) -> bool {
     if trimmed.is_empty() {
         return true;
     }
+    // an interpreter line is a comment to every grammar that allows one, and
+    // reads as one in a diff; without this it classifies as nothing at all
+    if trimmed.starts_with("#!") {
+        return true;
+    }
     match ext {
         "py" | "pyi" => {
             trimmed.starts_with('#') || trimmed.starts_with("\"\"\"") || trimmed.starts_with("'''")
@@ -706,20 +745,25 @@ fn is_comment_line(trimmed: &str, ext: &str) -> bool {
     }
 }
 
-/// Code turned into a comment, or a comment turned back into code.
+/// How a hunk moved code across the comment boundary.
 ///
 /// A hunk whose new side is the old side with comment markers added is not an
 /// edit and not a comment change: it is code being switched off, which is a
 /// thing a reviewer specifically looks for. The test is exact — strip the
 /// markers and the two sides must match once whitespace is normalised — so a
-/// hunk that merely replaces code with unrelated prose is never described this
-/// way. `Some(true)` = commented out, `Some(false)` = uncommented.
-fn commented_out_hunk(
-    h: &RawHunk,
-    old_lines: &[&str],
-    new_lines: &[&str],
-    ext: &str,
-) -> Option<bool> {
+/// hunk that replaces code with *unrelated* prose is reported as what it is
+/// instead: documentation arriving where code left.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SideShift {
+    /// the same code, now commented out
+    CommentedOut,
+    /// the same code, no longer commented out
+    Uncommented,
+    /// comments in place of code that is simply gone
+    CodeToComment,
+}
+
+fn side_shift(h: &RawHunk, old_lines: &[&str], new_lines: &[&str], ext: &str) -> Option<SideShift> {
     let side = |lines: &[&str], r: [usize; 2]| -> Option<Vec<String>> {
         if r[0] == 0 || r[0] > r[1] || r[1] > lines.len() {
             return None;
@@ -746,8 +790,9 @@ fn commented_out_hunk(
             .collect()
     };
     match (all_comment(&old), all_comment(&new)) {
-        (false, true) => (stripped(&new) == old).then_some(true),
-        (true, false) => (stripped(&old) == new).then_some(false),
+        (false, true) if stripped(&new) == old => Some(SideShift::CommentedOut),
+        (false, true) => Some(SideShift::CodeToComment),
+        (true, false) if stripped(&old) == new => Some(SideShift::Uncommented),
         _ => None,
     }
 }

@@ -491,14 +491,32 @@ fn uncommenting_code_says_so_too() {
 
 #[test]
 fn replacing_code_with_unrelated_prose_is_not_commenting_out() {
-    // the test is exact: strip the markers and the two sides must match. A
-    // hunk that swaps code for a different comment is an ordinary edit.
+    // the commented-out test is exact: strip the markers and the two sides must
+    // match. A hunk that swaps code for a *different* comment is reported as
+    // what it is — documentation arriving where code left — rather than as
+    // code being switched off
     let out = one(
         "c.js",
         "function h() {\n  const a = 1;\n  return a;\n}\n",
         "function h() {\n  // a totally different comment\n  return a;\n}\n",
     );
-    assert_eq!(out.files[0].hunks[0].rationale, "edits h");
+    assert_eq!(
+        out.files[0].hunks[0].rationale,
+        "replaces 1 line with a comment in h"
+    );
+}
+
+#[test]
+fn a_doc_comment_arriving_where_code_left_says_both_halves() {
+    let out = one(
+        "p.rs",
+        "/// On Unix, an optimized check.\n#[cfg(unix)]\npub fn is_hidden(d: &D) -> bool { true }\n",
+        "/// ## Windows\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].rationale,
+        "replaces 3 lines with comments"
+    );
 }
 
 #[test]
