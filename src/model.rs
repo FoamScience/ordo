@@ -162,6 +162,8 @@ pub enum ContainerKind {
     FrontMatter,
     /// a top-level binding whose multi-line value holds the hunk
     Binding,
+    /// a top-level call whose multi-line arguments hold the hunk
+    Call,
 }
 
 /// A defined symbol's identity: name + tree-sitter node kind + enclosing

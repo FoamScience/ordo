@@ -433,3 +433,36 @@ fn a_very_long_container_name_is_elided_not_left_to_crowd_the_line() {
     assert!(r.ends_with('…'), "{r}");
     assert!(r.chars().count() < 80, "{r}");
 }
+
+#[test]
+fn a_top_level_call_with_multi_line_arguments_is_a_container() {
+    let out = one(
+        "t.ts",
+        "execa('unicorns', {\n\tstdio: [\n\t\t'pipe',\n\t\t'overlapped',\n\t],\n});\n",
+        "execa('unicorns', {\n\tstdio: [\n\t\t'pipe',\n\t\tundefined,\n\t],\n});\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing.as_deref(), Some("execa('unicorns')"));
+    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Call));
+}
+
+#[test]
+fn a_test_block_is_named_as_a_test_not_as_a_call() {
+    // both rules match the same node shape; the test-block reading is the
+    // useful one and must win
+    let out = one(
+        "t.test.ts",
+        "it(\"works\", () => {\n  expect(one()).toBe(1);\n});\n",
+        "it(\"works\", () => {\n  expect(two()).toBe(2);\n});\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].enclosing_kind,
+        Some(ordo::model::ContainerKind::Test)
+    );
+}
+
+#[test]
+fn a_one_line_call_is_not_a_container() {
+    let out = one("t.js", "run(1);\nconst a = 1;\n", "run(2);\nconst a = 1;\n");
+    assert_eq!(out.files[0].hunks[0].enclosing, None);
+}

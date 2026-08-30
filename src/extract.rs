@@ -590,6 +590,39 @@ fn literal_elements<'t>(node: Node<'t>) -> Vec<Node<'t>> {
     v.named_children(&mut v.walk()).collect()
 }
 
+/// A top-level call whose arguments span several lines — a fixture, a config
+/// object, a big options literal. The lines inside those arguments have no
+/// definition around them; the call is what they belong to.
+///
+/// Named the way the detail layer already names a call container:
+/// `execa('unicorns')` — callee plus its first literal argument, which is what
+/// distinguishes one such call from the next in a file full of them. Scoped to
+/// file scope and to multi-line calls, for the same reasons as
+/// `binding_container`, and it never applies to a test block (those are
+/// recognised first and named by their own label).
+fn call_statement_container(
+    node: Node,
+    src: &[u8],
+    spec: &LangSpec,
+    stack: &[String],
+) -> Option<String> {
+    if !stack.is_empty() || !matches!(node.kind(), "call_expression" | "call" | "function_call") {
+        return None;
+    }
+    if end_row(node, spec) <= node.start_position().row {
+        return None;
+    }
+    let callee = callee_text(node, src)?;
+    if callee.is_empty() {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    Some(match first_literal_arg(args, src) {
+        Some(lit) => format!("{callee}({lit})"),
+        None => callee,
+    })
+}
+
 /// A *region*: a container that holds code without declaring anything — a
 /// conditional-compilation block, a document's preamble or its front matter.
 /// Naming it is the difference between "change" and "edits code under
@@ -750,6 +783,17 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             stack.push(p);
         }
         return;
+    }
+    if let Some(name) = call_statement_container(node, src, spec, stack) {
+        c.defs.push(DefRec {
+            s: sr,
+            e: end_row(node, spec),
+            name,
+            depth: stack.len(),
+            params: 0,
+            kind: ContainerKind::Call,
+        });
+        // fall through: the arguments still hold uses, members and defs
     }
     if spec.is_def(kind) {
         let er = end_row(node, spec);

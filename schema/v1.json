@@ -93,8 +93,8 @@
                     "category": { "enum": ["import", "definition", "other"] },
                     "enclosing": { "type": ["string", "null"] },
                     "enclosing_kind": {
-                      "enum": ["test", "region", "preamble", "front-matter", "binding"],
-                      "description": "what `enclosing` names when it is not a plain definition: a named block (a test suite) or a region that holds the hunk but declares nothing (a conditional-compilation block, a document preamble or its front matter, a top-level binding whose multi-line value holds the hunk). A region name is never a symbol and never seeds a def\u2192use edge; omitted for a definition"
+                      "enum": ["test", "region", "preamble", "front-matter", "binding", "call"],
+                      "description": "what `enclosing` names when it is not a plain definition: a named block (a test suite) or a region that holds the hunk but declares nothing (a conditional-compilation block, a document preamble or its front matter, a top-level binding or call whose multi-line value or arguments hold the hunk). A region name is never a symbol and never seeds a def\u2192use edge; omitted for a definition"
                     },
                     "defines": { "type": "array", "items": { "type": "string" } },
                     "uses": { "type": "array", "items": { "type": "string" } },
