@@ -162,6 +162,29 @@ impl PathGlobs {
 // before their blobs are even read — parsing a lock file costs more than the
 // review it would add. Globs, when given, keep a path that matches at least
 // one positive pattern (or there are none) and no negative one.
+/// What never reached the screen, and why — the numbers `:audit` reports.
+/// File-level counts are filled in by `Filter::apply` and the gather functions;
+/// hunk-level ones come from the engine's own `dropped` record. Anything hidden
+/// that no field here explains is a bug, and `:audit` says so rather than
+/// quietly rounding it away.
+#[derive(Clone, Copy, Default)]
+struct Ledger {
+    /// paths git reported changed, before any client-side filtering
+    files_seen: usize,
+    /// dropped by the built-in generated/lock set
+    files_generated: usize,
+    /// dropped because the repo's own .gitattributes declares them generated
+    files_declared: usize,
+    /// dropped by a path glob (positive miss or negative match)
+    files_globbed: usize,
+    /// listed as changed but unreadable, so never sent to the engine
+    files_unreadable: usize,
+    /// hunks the engine dropped as pure imports
+    hunks_import: usize,
+    /// hunks the engine dropped under `only_comments`
+    hunks_non_comment: usize,
+}
+
 #[derive(Clone)]
 struct Filter {
     globs: PathGlobs,
@@ -170,14 +193,31 @@ struct Filter {
     /// then excluded by a negative one — `note`'s only use for it, so the
     /// "nothing to review" message can say *why* rather than just *that*.
     negatives_emptied: std::cell::Cell<bool>,
+    /// file-level accounting, filled in by `apply` (and by the gather that owns
+    /// this filter, for unreadable paths) — read once the load is done.
+    tally: std::cell::Cell<Ledger>,
+}
+
+/// Why a path never reached the engine — one variant per file-level count in
+/// `Ledger`, so the tally and the decision can't drift apart.
+enum FileDrop {
+    Generated,
+    Globbed,
 }
 
 impl Filter {
-    fn keep(&self, path: &str) -> bool {
+    /// The drop decision itself: `None` keeps the path.
+    fn reject(&self, path: &str) -> Option<FileDrop> {
         if self.skip_generated && ordo::is_generated_path(path) {
-            return false;
+            return Some(FileDrop::Generated);
         }
-        self.globs.is_match(path)
+        (!self.globs.is_match(path)).then_some(FileDrop::Globbed)
+    }
+
+    /// `reject` read as a predicate — the glob tests' vocabulary.
+    #[cfg(test)]
+    fn keep(&self, path: &str) -> bool {
+        self.reject(path).is_none()
     }
 
     /// Winnow a change list: globs and the built-in generated set first, then one
@@ -190,13 +230,34 @@ impl Filter {
             .any(|p| self.globs.include.as_ref().is_none_or(|g| g.is_match(p)));
         let any_survives = paths.iter().any(|p| self.globs.is_match(p));
         self.negatives_emptied.set(any_positive && !any_survives && !paths.is_empty());
-        let mut kept: Vec<String> = paths.into_iter().filter(|p| self.keep(p)).collect();
+        let mut tally = self.tally.get();
+        tally.files_seen += paths.len();
+        let mut kept: Vec<String> = vec![];
+        for p in paths {
+            match self.reject(&p) {
+                Some(FileDrop::Generated) => tally.files_generated += 1,
+                Some(FileDrop::Globbed) => tally.files_globbed += 1,
+                None => kept.push(p),
+            }
+        }
         if !self.skip_generated || kept.is_empty() {
+            self.tally.set(tally);
             return kept;
         }
         let declared = declared_generated(&kept);
+        let before = kept.len();
         kept.retain(|p| !declared.contains(p));
+        tally.files_declared += before - kept.len();
+        self.tally.set(tally);
         kept
+    }
+
+    /// Record a path that was listed as changed but could not be read, so it is
+    /// accounted for rather than silently absent (`gather_worktree_range`).
+    fn note_unreadable(&self) {
+        let mut t = self.tally.get();
+        t.files_unreadable += 1;
+        self.tally.set(t);
     }
 
     // so an empty review doesn't read as "no changes" when it's the filter
@@ -331,6 +392,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         globs,
         skip_generated,
         negatives_emptied: std::cell::Cell::new(false),
+        tally: std::cell::Cell::new(Ledger::default()),
     };
     Ok((
         rev.unwrap_or_else(|| "HEAD".to_string()),
@@ -416,6 +478,8 @@ struct LoadResult {
     marks: HashMap<u64, u64>,
     /// group id -> reason, for `:group`'s header rows
     groups: HashMap<String, String>,
+    /// what was dropped on the way here, for `:audit`
+    ledger: Ledger,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -472,6 +536,15 @@ fn load(target: Target, filter: Filter, only_comments: bool, rev: String, tx: mp
     let t = std::time::Instant::now();
     progress("ordering…".to_string());
     let out = ordo::run(input);
+    // the engine records what it dropped and why; fold it into the same ledger
+    // the path filter has been filling in, so `:audit` reads one set of numbers
+    let mut ledger = filter.tally.get();
+    for d in out.files.iter().flat_map(|f| f.dropped.iter()) {
+        match d.reason {
+            ordo::model::DropReason::Import => ledger.hunks_import += 1,
+            ordo::model::DropReason::NonComment => ledger.hunks_non_comment += 1,
+        }
+    }
     let items = build_items(&out);
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None);
@@ -517,6 +590,7 @@ fn load(target: Target, filter: Filter, only_comments: bool, rev: String, tx: mp
         marks_path,
         marks,
         groups,
+        ledger,
     })));
 }
 
@@ -906,7 +980,10 @@ fn gather_worktree_range(base: &str, filter: &Filter, progress: &dyn Fn(String))
             let new = match std::fs::read(&path) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(_) => return None,
+                Err(_) => {
+                    filter.note_unreadable();
+                    return None;
+                }
             };
             Some(Change {
                 old: Some(git(&["show", &format!("{base}:{path}")])),
@@ -1740,6 +1817,8 @@ struct App {
     /// group id -> the engine's `Group::reason`, carried out of `load()`
     /// alongside `items` so headers can show it without re-touching the engine
     groups: HashMap<String, String>,
+    /// what the filters and the engine dropped on the way here — `:audit`
+    ledger: Ledger,
 }
 
 /// Bound on the position stack `JumpToEdge`/`JumpBack` maintain — generous
@@ -1865,6 +1944,40 @@ fn compute_view(
         .filter(|(_, it)| glob.is_none_or(|g| g.is_match(&it.path)))
         .map(|(i, _)| i)
         .collect()
+}
+
+/// Why each currently-hidden item is hidden, attributed in `compute_view`'s own
+/// order so the counts partition the hidden set exactly (an item hidden by two
+/// filters is charged to the first). `unaccounted` must always be zero: it
+/// counts items `compute_view` rejected for a reason this function does not
+/// know about, which can only be a bug.
+#[derive(Default, Debug, PartialEq, Eq)]
+struct Hidden {
+    comment: usize,
+    noise: usize,
+    glob: usize,
+    unaccounted: usize,
+}
+
+fn hidden_breakdown(
+    items: &[Item],
+    comments_only: bool,
+    show_all: bool,
+    glob: Option<&PathGlobs>,
+) -> Hidden {
+    let mut h = Hidden::default();
+    for it in items {
+        if comments_only && !it.comment {
+            h.comment += 1;
+        } else if !show_all && it.noise {
+            h.noise += 1;
+        } else if glob.is_some_and(|g| !g.is_match(&it.path)) {
+            h.glob += 1;
+        }
+    }
+    let shown = compute_view(items, comments_only, show_all, glob).len();
+    h.unaccounted = items.len() - shown - h.comment - h.noise - h.glob;
+    h
 }
 
 // ---------------------------------------------------------- group headers
@@ -3334,6 +3447,7 @@ fn run(
                         marks_path,
                         marks,
                         groups,
+                        ledger,
                     } = *r;
                     let sel0 = view[0];
                     let scroll = auto_scroll(&items[sel0]);
@@ -3377,6 +3491,7 @@ fn run(
                         theme,
                         show_groups: false,
                         groups,
+                        ledger,
                     }));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -4260,9 +4375,65 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "group", args: "", help: "toggle group-reason headers in the reading-order list" },
     Cmd { name: "goto", args: "<path>", help: "select the first hunk of <path>, focus the code pane" },
     Cmd { name: "e", args: "<rev>", help: "review a different revision, without restarting" },
+    Cmd {
+        name: "audit",
+        args: "",
+        help: "account for every hunk and file not on screen, and why",
+    },
     Cmd { name: "q", args: "", help: "quit" },
     Cmd { name: "help", args: "", help: "list these commands" },
 ];
+
+/// `:audit`'s body — every hunk and file that isn't on screen, charged to the
+/// thing that removed it. The point is the last line: if the reasons don't add
+/// up to what's missing, it says so instead of implying the review is complete.
+fn build_audit(
+    items: &[Item],
+    view_len: usize,
+    hidden: &Hidden,
+    ledger: &Ledger,
+    path_filter: Option<&str>,
+) -> Vec<String> {
+    let mut out = vec![
+        format!("{view_len} of {} hunks shown", items.len()),
+        String::new(),
+        "hidden in the view".to_string(),
+    ];
+    let row = |n: usize, what: &str| format!("  {n:>4}  {what}");
+    out.push(row(hidden.noise, "generated/formatting noise (:all shows them)"));
+    out.push(row(hidden.comment, "not a comment change (:only-comments)"));
+    out.push(row(
+        hidden.glob,
+        &match path_filter {
+            Some(g) => format!("outside the path filter '{g}'"),
+            None => "outside the path filter".to_string(),
+        },
+    ));
+
+    out.push(String::new());
+    out.push("dropped by the engine before ordering".to_string());
+    out.push(row(ledger.hunks_import, "pure import hunk"));
+    out.push(row(ledger.hunks_non_comment, "not a comment change (--only-comments)"));
+
+    out.push(String::new());
+    out.push(format!("files: {} changed, of which", ledger.files_seen));
+    out.push(row(ledger.files_generated, "generated or lock file (--all keeps them)"));
+    out.push(row(ledger.files_declared, "declared generated by .gitattributes"));
+    out.push(row(ledger.files_globbed, "never fetched: excluded by a launch-time glob"));
+    out.push(row(ledger.files_unreadable, "listed as changed but unreadable"));
+
+    out.push(String::new());
+    out.push(if hidden.unaccounted == 0 {
+        "every hidden hunk is accounted for".to_string()
+    } else {
+        format!(
+            "{} hidden hunk{} unaccounted for — this is a bug, please report it",
+            hidden.unaccounted,
+            plural(hidden.unaccounted)
+        )
+    });
+    out
+}
 
 fn command_names() -> Vec<String> {
     COMMANDS.iter().map(|c| c.name.to_string()).collect()
@@ -4645,6 +4816,30 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
             app.popup = Some(Popup {
                 title: "commands".to_string(),
                 lines: build_command_help().into_iter().map(prose).collect(),
+                scroll: 0,
+                hscroll: 0,
+            });
+            Ok(CommandOutcome::None)
+        }
+        "audit" => {
+            let hidden = hidden_breakdown(
+                &app.items,
+                app.comments_only,
+                app.show_all,
+                app.path_filter.as_ref().map(|(_, g)| g),
+            );
+            app.popup = Some(Popup {
+                title: "audit".to_string(),
+                lines: build_audit(
+                    &app.items,
+                    app.view.len(),
+                    &hidden,
+                    &app.ledger,
+                    app.path_filter.as_ref().map(|(p, _)| p.as_str()),
+                )
+                .into_iter()
+                .map(prose)
+                .collect(),
                 scroll: 0,
                 hscroll: 0,
             });
@@ -5410,6 +5605,64 @@ mod tests {
     // ---- command mode: filter view + index clamping ----
 
     #[test]
+    fn hidden_breakdown_partitions_the_hidden_set_exactly() {
+        let mut noisy = test_item("src/a.rs");
+        noisy.noise = true;
+        let mut both = test_item("tests/b.rs"); // noise AND outside the glob
+        both.noise = true;
+        let outside = test_item("tests/c.rs");
+        let shown = test_item("src/d.rs");
+        let items = vec![noisy, both, outside, shown];
+        let globs = build_globs(&["src/*".to_string()]).unwrap();
+
+        let h = hidden_breakdown(&items, false, false, Some(&globs));
+        // an item hidden twice is charged once, to the first reason
+        assert_eq!(h, Hidden { comment: 0, noise: 2, glob: 1, unaccounted: 0 });
+        assert_eq!(
+            compute_view(&items, false, false, Some(&globs)).len() + h.noise + h.glob,
+            items.len()
+        );
+    }
+
+    #[test]
+    fn hidden_breakdown_charges_only_comments_before_noise() {
+        let mut a = test_item("a.rs");
+        a.comment = true;
+        let mut b = test_item("b.rs");
+        b.noise = true; // hidden by only-comments first, not by noise
+        let items = vec![a, b];
+
+        let h = hidden_breakdown(&items, true, false, None);
+        assert_eq!(h, Hidden { comment: 1, noise: 0, glob: 0, unaccounted: 0 });
+    }
+
+    #[test]
+    fn build_audit_reports_every_reason_and_flags_an_unaccounted_remainder() {
+        let items = vec![test_item("a.rs"), test_item("b.rs"), test_item("c.rs")];
+        let ledger = Ledger {
+            files_seen: 9,
+            files_generated: 2,
+            files_declared: 1,
+            files_globbed: 3,
+            files_unreadable: 1,
+            hunks_import: 4,
+            hunks_non_comment: 0,
+        };
+        let clean = Hidden { comment: 0, noise: 1, glob: 0, unaccounted: 0 };
+        let text = build_audit(&items, 2, &clean, &ledger, None).join("\n");
+        assert!(text.contains("2 of 3 hunks shown"), "{text}");
+        assert!(text.contains("   4  pure import hunk"), "{text}");
+        assert!(text.contains("files: 9 changed"), "{text}");
+        assert!(text.contains("never fetched: excluded by a launch-time glob"), "{text}");
+        assert!(text.contains("every hidden hunk is accounted for"), "{text}");
+
+        let leak = Hidden { comment: 0, noise: 0, glob: 0, unaccounted: 1 };
+        let text = build_audit(&items, 2, &leak, &ledger, Some("src/*")).join("\n");
+        assert!(text.contains("1 hidden hunk unaccounted for"), "{text}");
+        assert!(text.contains("outside the path filter 'src/*'"), "{text}");
+    }
+
+    #[test]
     fn compute_view_applies_only_comments_show_all_and_glob_independently() {
         let mut a = test_item("src/a.rs");
         a.comment = true;
@@ -5575,7 +5828,13 @@ mod tests {
     }
 
     fn test_file_out(path: &str, hunks: Vec<HunkOut>) -> ordo::model::FileOut {
-        ordo::model::FileOut { path: path.to_string(), hunks, degraded: false, unsupported: false }
+        ordo::model::FileOut {
+            path: path.to_string(),
+            hunks,
+            degraded: false,
+            unsupported: false,
+            dropped: vec![],
+        }
     }
 
     #[test]
@@ -5713,6 +5972,7 @@ mod tests {
             theme: Theme::dark(),
             show_groups: false,
             groups: HashMap::new(),
+            ledger: Ledger::default(),
         }
     }
 
@@ -5879,7 +6139,12 @@ mod tests {
 
     fn filt(pats: &[&str]) -> Filter {
         let globs = build_globs(&pats.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
-        Filter { globs, skip_generated: false, negatives_emptied: std::cell::Cell::new(false) }
+        Filter {
+            globs,
+            skip_generated: false,
+            negatives_emptied: std::cell::Cell::new(false),
+            tally: std::cell::Cell::new(Ledger::default()),
+        }
     }
 
     #[test]
