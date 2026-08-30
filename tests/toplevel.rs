@@ -306,3 +306,37 @@ fn a_one_line_binding_is_not_a_container() {
     let out = one("t.py", "X = [1, 2]\n", "X = [1, 3]\n");
     assert_eq!(out.files[0].hunks[0].enclosing, None);
 }
+
+// ---- whitespace-only hunks are formatting, not an unexplained change ----
+
+#[test]
+fn added_blank_lines_are_formatting_noise() {
+    let out = one(
+        "a.c",
+        "int a(void) { return 1; }\nint b(void) { return 2; }\n",
+        "int a(void) { return 1; }\n\n\nint b(void) { return 2; }\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert!(h.noise, "a blank-line-only hunk is formatting");
+    assert_eq!(h.rationale, "formatting only");
+}
+
+#[test]
+fn removed_blank_lines_are_formatting_noise_too() {
+    let out = one(
+        "b.py",
+        "def a():\n    return 1\n\n\n\ndef b():\n    return 2\n",
+        "def a():\n    return 1\n\n\ndef b():\n    return 2\n",
+    );
+    assert!(out.files[0].hunks[0].noise);
+}
+
+#[test]
+fn a_real_edit_is_never_called_formatting() {
+    let out = one(
+        "c.py",
+        "def a():\n    return 1\n",
+        "def a():\n    return 2\n",
+    );
+    assert!(!out.files[0].hunks[0].noise);
+}

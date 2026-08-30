@@ -828,9 +828,15 @@ fn formatting_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool 
                 .join(" "),
         )
     };
-    match (slice(old_lines, h.old_range), slice(new_lines, h.new_range)) {
-        (Some(o), Some(n)) => !o.is_empty() && o == n,
-        _ => false,
+    let (o, n) = (slice(old_lines, h.old_range), slice(new_lines, h.new_range));
+    match (&o, &n) {
+        // same text once whitespace is normalised: a reindent or a rewrap
+        (Some(o), Some(n)) if !o.is_empty() && o == n => true,
+        // nothing but whitespace on either side — blank lines added or removed.
+        // `None` is an empty side (a pure insert or delete), which is itself
+        // "no text", so a blank-line-only hunk lands here rather than reading
+        // as a change with nothing to say about it.
+        _ => o.unwrap_or_default().is_empty() && n.unwrap_or_default().is_empty(),
     }
 }
 
