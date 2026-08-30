@@ -348,10 +348,137 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
     Some(out)
 }
 
+/// An `export` that declares nothing of its own — `export * from "./x"`,
+/// `export {a, b} from "./y"`, or the bare `export {}` module marker. It is
+/// module bookkeeping in exactly the way an import is: it forwards or re-lists
+/// names defined elsewhere, and follows from the real change rather than being
+/// it. `export const foo = …` / `export function f()` carry a `declaration`
+/// field and are NOT this — they are the definition they contain.
+///
+/// `export_statement` exists only in the javascript/typescript/tsx grammars
+/// (verified against each one's node-types.json), so no other language's kinds
+/// can collide with the check.
+fn is_bookkeeping_export(node: Node) -> bool {
+    node.kind() == "export_statement" && node.child_by_field_name("declaration").is_none()
+}
+
+/// Import-like for classification: a real import, or an export that only moves
+/// names around (see `is_bookkeeping_export`).
+fn import_like(node: Node, spec: &LangSpec) -> bool {
+    spec.is_import(node.kind()) || is_bookkeeping_export(node)
+}
+
+/// `describe("adds two numbers", () => …)` — a call that names a block of code
+/// the way a definition names one. The whole js/ts test-runner family (jest,
+/// vitest, mocha, ava, node:test) shares this shape, and it is the container a
+/// reviewer actually navigates by: without it every hunk in a test file sits at
+/// file scope with nothing to attribute it to.
+///
+/// Requires all three of: a callee whose first segment is in `spec.test_blocks`
+/// (so `test.serial`, `it.only` and `describe.each` count), a string first
+/// argument, and a function argument to hold the body. A bare `test(name)` with
+/// no body is a call, not a block, and is left alone.
+fn test_block_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
+    if spec.test_blocks.is_empty() || node.kind() != "call_expression" {
+        return None;
+    }
+    let callee = callee_text(node, src)?;
+    let base = callee.split('.').next()?;
+    if !spec.test_blocks.contains(&base) {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let mut cur = args.walk();
+    let children: Vec<Node> = args.named_children(&mut cur).collect();
+    let has_body = children
+        .iter()
+        .any(|n| matches!(n.kind(), "arrow_function" | "function_expression" | "generator_function"));
+    if !has_body {
+        return None;
+    }
+    // read the name straight off the node rather than through `tidy_ident`,
+    // which collapses whitespace: a test name is prose, and "parses flags"
+    // must not become "parsesflags". Only line breaks and runs of spaces are
+    // normalised, so a wrapped name still reads as one line.
+    let first = children.first()?;
+    if !matches!(first.kind(), "string" | "template_string") {
+        return None;
+    }
+    let name = first.utf8_text(src).ok()?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.chars().filter(|c| c.is_alphanumeric()).count() == 0 {
+        return None; // an empty or punctuation-only name names nothing
+    }
+    // the label keeps the quotes the source wrote, so `describe "parses flags"`
+    // reads as a name and can never be confused with an identifier
+    Some(format!("{base} {name}"))
+}
+
+/// Whether a stack entry is a test-block label rather than a code scope — used
+/// to join nested blocks with ` > ` instead of the language's scope separator,
+/// so a nested suite reads `describe "cli" > it "parses flags"`.
+fn is_test_label(s: &str) -> bool {
+    s.split_once(' ')
+        .is_some_and(|(head, rest)| rest.starts_with(['"', '\'', '`']) && !head.is_empty())
+}
+
+/// Language injection: a fenced code block in a prose file holds real code in
+/// another language, and tree-sitter's own injection story says to parse it
+/// with that language's grammar rather than as opaque text.
+///
+/// What comes back is recorded as **uses only, never definitions**. A ```python
+/// block in a README demonstrates the project's API; it does not define it. So
+/// a doc change that starts calling `parse_cfg` links to wherever `parse_cfg`
+/// is defined (P2, across files) — while a sample that happens to write
+/// `def foo(): …` never claims to define `foo` and can never be mistaken for
+/// the real thing.
+fn inject_fence(node: Node, src: &[u8], c: &mut Collected) {
+    let info = node
+        .named_children(&mut node.walk())
+        .find(|n| n.kind() == "info_string")
+        .and_then(|n| n.utf8_text(src).ok().map(str::to_string));
+    let Some(inner) = info.as_deref().and_then(lang::for_lang_name) else {
+        return;
+    };
+    let Some(content) = node
+        .named_children(&mut node.walk())
+        .find(|n| n.kind() == "code_fence_content")
+    else {
+        return;
+    };
+    let Ok(text) = content.utf8_text(src) else {
+        return;
+    };
+    let mut parser = Parser::new();
+    if parser.set_language(&(inner.language)()).is_err() {
+        return;
+    }
+    let Some(tree) = parser.parse(text, None) else {
+        return;
+    };
+    // rows inside the fence are relative to the fence; report them in the
+    // enclosing file's coordinates so a hunk lines up with them
+    let offset = content.start_position().row;
+    collect_injected_uses(tree.root_node(), text.as_bytes(), offset, c);
+}
+
+fn collect_injected_uses(node: Node, src: &[u8], offset: usize, c: &mut Collected) {
+    if lang::is_ident(node.kind()) {
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                c.uses.push((node.start_position().row + offset, t.to_string()));
+            }
+        }
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_injected_uses(ch, src, offset, c);
+    }
+}
+
 fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
     let kind = node.kind();
     let sr = node.start_position().row;
-    if spec.is_import(kind) {
+    if import_like(node, spec) {
         // the whole statement's rows count as import — a hunk that lands
         // anywhere in a multi-line `from x import (\n  a,\n  b,\n)` (tail,
         // middle, or head) is still an import hunk, not a bare "change".
@@ -364,6 +491,44 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             c.import_decls.push((row, name));
         }
         return; // don't descend: import identifiers are declarations, not uses
+    }
+    if let Some(label) = test_block_label(node, src, spec) {
+        let er = node.end_position().row;
+        let depth = stack.len();
+        // a nested block replaces its parent's entry for the duration, so the
+        // qualified name reads `describe "cli" > it "parses flags"` rather than
+        // repeating the parent through the language's scope separator
+        let parent = stack.last().filter(|s| is_test_label(s)).cloned();
+        let label = match &parent {
+            Some(p) => {
+                stack.pop();
+                format!("{p} > {label}")
+            }
+            None => label,
+        };
+        // a named block, not a declaration: it gets a `defines` entry (so
+        // adding or renaming one reads as such) but no symbol identity — a test
+        // name is not a symbol another file can reference, and must never seed
+        // a def→use edge or key a persisted review mark.
+        c.def_rows.insert(sr);
+        c.decls.push((sr, label.clone()));
+        stack.push(label);
+        c.defs.push(DefRec {
+            s: sr,
+            e: er,
+            name: stack.join(lang::scope_sep(spec)),
+            depth,
+            params: 0,
+        });
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            walk(ch, src, spec, stack, c);
+        }
+        stack.pop();
+        if let Some(p) = parent {
+            stack.push(p);
+        }
+        return;
     }
     if spec.is_def(kind) {
         // markdown's `section` end_position lands one row past its last
@@ -484,6 +649,10 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             }
         }
         // fall through: the bound value can still hold defs and uses
+    }
+    if spec.prose && kind == "fenced_code_block" {
+        inject_fence(node, src, c);
+        // fall through: the fence's own prose structure is still walked
     }
     if lang::is_ident(kind) {
         // A zero-width identifier node is a parse artifact (C++ template and
@@ -1081,7 +1250,13 @@ fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) 
     if spec.is_def(kind) {
         if let Some(name) = node_name(node, src) {
             let full = node.utf8_text(src).unwrap_or("");
-            let body = node.child_by_field_name("body");
+            // `value` is the body under another name: a macro (`preproc_def`,
+            // `preproc_function_def`) and a rust `const_item`/`static_item`
+            // hold theirs there, and without this every change to one reads as
+            // a signature change because the header would be the whole node.
+            let body = node
+                .child_by_field_name("body")
+                .or_else(|| node.child_by_field_name("value"));
             // header = everything before the body (the signature); body text drives
             // rename/relocation matching. Fall back to the whole node when unsplit.
             let header = match body {
@@ -1114,7 +1289,7 @@ fn collect_rows(
 ) {
     let kind = node.kind();
     let row = node.start_position().row + 1; // 1-based
-    if spec.is_import(kind) {
+    if import_like(node, spec) {
         for n in ident_texts(node, src) {
             imports.push((n, row));
         }
@@ -1144,7 +1319,7 @@ fn collect_syms(
     imports: &mut HashSet<String>,
 ) {
     let kind = node.kind();
-    if spec.is_import(kind) {
+    if import_like(node, spec) {
         for n in ident_texts(node, src) {
             imports.insert(n);
         }

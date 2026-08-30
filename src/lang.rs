@@ -11,6 +11,13 @@ pub struct LangSpec {
     pub language: fn() -> Language,
     /// node types that introduce an import
     pub imports: &'static [&'static str],
+    /// call names that introduce a *named block* rather than a definition —
+    /// `describe("…", () => …)` and friends. A test suite is the container a
+    /// reviewer navigates by, but it is a call, not a declaration, so it is
+    /// tracked separately from `defs` (see `extract::test_block_label`).
+    /// Matched on the callee's first segment, so `test.serial` and `it.only`
+    /// count too. Empty for languages with no such convention.
+    pub test_blocks: &'static [&'static str],
     /// node types that introduce a definition (fn / type / class / …)
     pub defs: &'static [&'static str],
     /// node types that are a *named member* of an enclosing definition — an enum
@@ -67,6 +74,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "python",
         language: py,
+        test_blocks: &[],
         imports: &[
             "import_statement",
             "import_from_statement",
@@ -84,6 +92,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "javascript",
         language: js,
+        test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
         imports: &["import_statement"],
         defs: &[
             "function_declaration",
@@ -108,6 +117,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "rust",
         language: rs,
+        test_blocks: &[],
         imports: &["use_declaration", "extern_crate_declaration"],
         defs: &[
             "function_item",
@@ -128,6 +138,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "typescript",
         language: ts,
+        test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
         imports: &["import_statement"],
         defs: &[
             "function_declaration",
@@ -157,6 +168,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "tsx",
         language: tsx,
+        test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
         imports: &["import_statement"],
         defs: &[
             "function_declaration",
@@ -184,6 +196,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "go",
         language: go,
+        test_blocks: &[],
         imports: &["import_declaration", "import_spec"],
         defs: &[
             "function_declaration",
@@ -197,12 +210,19 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "c",
         language: c,
+        test_blocks: &[],
         imports: &["preproc_include"],
         defs: &[
             "function_definition",
             "struct_specifier",
             "enum_specifier",
             "union_specifier",
+            // a macro is a definition: `#define CPOOL_LOCK(...)` names something
+            // the rest of the file uses, so a hunk inside its body belongs to it
+            // rather than to the file at large. Both kinds carry a `name` field
+            // (verified against tree-sitter-{c,cpp}-0.23.4's node-types.json).
+            "preproc_def",
+            "preproc_function_def",
         ],
         members: &["field_declaration", "enumerator"],
         prose: false,
@@ -211,6 +231,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "cpp",
         language: cpp,
+        test_blocks: &[],
         imports: &["preproc_include"],
         defs: &[
             "function_definition",
@@ -219,6 +240,12 @@ static SPECS: &[LangSpec] = &[
             "enum_specifier",
             "namespace_definition",
             "template_declaration",
+            // a macro is a definition: `#define CPOOL_LOCK(...)` names something
+            // the rest of the file uses, so a hunk inside its body belongs to it
+            // rather than to the file at large. Both kinds carry a `name` field
+            // (verified against tree-sitter-{c,cpp}-0.23.4's node-types.json).
+            "preproc_def",
+            "preproc_function_def",
         ],
         members: &["field_declaration", "enumerator"],
         prose: false,
@@ -227,6 +254,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "java",
         language: java,
+        test_blocks: &[],
         imports: &["import_declaration"],
         defs: &[
             "method_declaration",
@@ -251,6 +279,7 @@ static SPECS: &[LangSpec] = &[
         // lua: `require()` is a call, not a distinct import node → no imports
         name: "lua",
         language: lua,
+        test_blocks: &[],
         imports: &[],
         defs: &["function_declaration", "function_definition"],
         members: &["field"],
@@ -269,6 +298,7 @@ static SPECS: &[LangSpec] = &[
         // as a member of its parent for the P15 detail layer.
         name: "markdown",
         language: md,
+        test_blocks: &[],
         imports: &[],
         defs: &["section"],
         members: &["section"],
@@ -299,6 +329,31 @@ pub fn for_path(path: &str) -> Option<&'static LangSpec> {
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
+}
+
+/// Resolve a markdown fence's info string (```python, ```rs, ```C++) to a
+/// spec — the language *injected* into a prose file. Only names this crate has
+/// a grammar for resolve; a `console`, `json` or `diff` fence has no structure
+/// to read and returns None rather than being guessed at.
+pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
+    // an info string may carry attributes after the language (```py title=x)
+    let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();
+    let lower = word.to_ascii_lowercase();
+    let canonical = match lower.as_str() {
+        "py" | "python" | "python3" => "python",
+        "js" | "javascript" | "node" | "mjs" | "cjs" | "jsx" => "javascript",
+        "ts" | "typescript" => "typescript",
+        "tsx" => "tsx",
+        "rs" | "rust" => "rust",
+        "go" | "golang" => "go",
+        "c" => "c",
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" => "cpp",
+        "java" => "java",
+        "lua" => "lua",
+        "md" | "markdown" => "markdown",
+        _ => return None,
+    };
+    SPECS.iter().find(|s| s.name == canonical)
 }
 
 impl LangSpec {
