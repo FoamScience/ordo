@@ -114,6 +114,24 @@ miss one?" is a subtraction rather than a guess. The corpus suite checks the
 stronger property against git itself: every line `git diff -U0` calls changed
 must fall inside some hunk, kept or dropped.
 
+Not every hunk sits in a definition, and the ones that don't used to say only
+`change`. A hunk is now attributed to whatever really holds it, and
+`enclosing_kind` says what that is when it isn't a plain definition:
+
+| `enclosing_kind` | what holds the hunk | example `enclosing` |
+| --- | --- | --- |
+| *(omitted)* | a definition — a function, class, macro, … | `parse_cfg` |
+| `test` | a named block: `describe`/`it`/`test`, or a rust test macro | `describe "cli" > it "parses flags"` |
+| `region` | conditional compilation | `#ifdef CURL_DISABLE_HTTP` |
+| `binding` | a file-scope binding whose multi-line value holds the hunk | `ALLOWED_IMPORTS` |
+| `call` | a file-scope call whose multi-line arguments hold it | `execa('unicorns')` |
+| `preamble` | prose before a document's first heading | `preamble` |
+| `front-matter` | a document's `---` metadata block | `front matter` |
+
+Only a definition is a symbol: a region name is never looked up, never enters
+`defines` or `symbols`, and never seeds a def→use edge. `#ifdef CURL_DISABLE_HTTP`
+*tests* that macro rather than defining it.
+
 `symbols` gives each definition a name + tree-sitter node `kind` + enclosing
 `scope`, so a consumer can tell whether the same name across two commits is the
 *same* symbol — a method `run` on class `A` and a module-level function `run`
@@ -300,6 +318,8 @@ never conflated under the enclosing `main`.
 | rename / delete | `renames foo → bar` · `removes old_helper` · `removes import sys` |
 | body deletion | `removes 31 lines` (a deletion inside a def, no symbol removed) |
 | move / extract | `moves foo from a.py` · `adds read_input, extracted from order` |
+| container | `edits it "parses flags"` · `edits #ifdef CURL_DISABLE_HTTP` · `edits ALLOWED_IMPORTS` |
+| switched off | `comments out code in run` · `uncomments code in run` |
 
 Import *additions* are skipped entirely — pure import hunks never appear in
 the reading order or seed edges. Cross-file lines only appear when the
