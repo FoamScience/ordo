@@ -5330,6 +5330,7 @@ mod tests {
             new_range: [1, 1],
             category: ordo::model::Category::Definition,
             enclosing: enclosing.map(str::to_string),
+            enclosing_kind: None,
             defines: vec![],
             uses: vec![],
             group: "g".to_string(),

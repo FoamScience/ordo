@@ -142,6 +142,26 @@ pub struct Advisory {
     pub verdict: bool,
 }
 
+/// What kind of thing an `enclosing` name refers to. Only `Definition` is a
+/// declaration a reviewer can navigate to; the rest are *regions* — real
+/// containers that hold a hunk and are worth naming, but declare nothing. The
+/// distinction matters to a consumer: a region name must never be looked up as
+/// a symbol, and must never seed a def→use edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerKind {
+    /// a function, class, macro, … — `enclosing` names a real symbol
+    Definition,
+    /// `describe("…", …)` and friends: a named block, not a declaration
+    Test,
+    /// a conditional-compilation region, e.g. `#ifdef CURL_DISABLE_HTTP`
+    Region,
+    /// prose before a document's first heading
+    Preamble,
+    /// a document's `---` metadata block
+    FrontMatter,
+}
+
 /// A defined symbol's identity: name + tree-sitter node kind + enclosing
 /// scope. Lets a consumer tell apart same-named symbols across commits (e.g.
 /// a method `run` on class `A` vs a module-level function `run`), per the
@@ -164,6 +184,11 @@ pub struct HunkOut {
     pub new_range: [usize; 2],
     pub category: Category,
     pub enclosing: Option<String>,
+    /// what `enclosing` names, when it is not a plain definition — a region
+    /// that holds the hunk but declares nothing (see `ContainerKind`).
+    /// Omitted for a definition, and when there is no enclosing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enclosing_kind: Option<ContainerKind>,
     pub defines: Vec<String>,
     pub uses: Vec<String>,
     pub group: String,

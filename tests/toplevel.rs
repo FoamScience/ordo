@@ -143,3 +143,89 @@ fn a_call_without_a_body_is_not_a_block() {
     );
     assert_eq!(out.files[0].hunks[0].enclosing, None);
 }
+
+// ---- regions: a container that holds code without declaring anything ----
+
+#[test]
+fn a_conditional_compilation_block_names_the_region_it_guards() {
+    let out = one(
+        "e.c",
+        "#ifdef CURL_DISABLE_HTTP\nint z = 1;\n#endif\n",
+        "#ifdef CURL_DISABLE_HTTP\nint z = 2;\n#endif\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing.as_deref(), Some("#ifdef CURL_DISABLE_HTTP"));
+    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Region));
+    assert_eq!(h.rationale, "edits #ifdef CURL_DISABLE_HTTP");
+}
+
+#[test]
+fn a_guarded_macro_does_not_swallow_the_line_after_it() {
+    // `#define GUARD_H` ends at column 0 of the NEXT row, so without the
+    // end-row correction the line after an include guard reads as part of the
+    // macro
+    let out = one(
+        "h.h",
+        "#ifndef GUARD_H\n#define GUARD_H\nint a = 1;\n#endif\n",
+        "#ifndef GUARD_H\n#define GUARD_H\nint a = 2;\n#endif\n",
+    );
+    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("#ifndef GUARD_H"));
+}
+
+#[test]
+fn an_ifndef_reads_differently_from_an_ifdef() {
+    let out = one("k.c", "#ifndef W\nint w = 1;\n#endif\n", "#ifndef W\nint w = 2;\n#endif\n");
+    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("#ifndef W"));
+}
+
+#[test]
+fn an_if_expression_keeps_its_spacing() {
+    let out = one(
+        "g.c",
+        "#if defined(A) && !defined(B)\nint z = 1;\n#endif\n",
+        "#if defined(A) && !defined(B)\nint z = 2;\n#endif\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].enclosing.as_deref(),
+        Some("#if defined(A) && !defined(B)")
+    );
+}
+
+#[test]
+fn a_region_declares_nothing_and_seeds_no_edge() {
+    // CURL_DISABLE_HTTP is *tested* by the guard, never defined by it
+    let out = run(serde_json::json!({ "changes": [
+        { "path": "a.c", "old": "#define FLAG 1\n", "new": "#define FLAG 2\n" },
+        { "path": "b.c", "old": "#ifdef FLAG\nint z = 1;\n#endif\n",
+          "new": "#ifdef FLAG\nint z = 2;\n#endif\n" },
+    ]}));
+    let b = out.files.iter().find(|f| f.path == "b.c").unwrap();
+    assert!(b.hunks[0].defines.is_empty(), "{:?}", b.hunks[0].defines);
+    assert!(b.hunks[0].symbols.is_empty());
+}
+
+#[test]
+fn a_documents_preamble_is_a_region_of_its_own() {
+    let out = one(
+        "R.md",
+        "![badge](a.svg)\n\nA tool.\n\n# Install\n\nrun it\n",
+        "![badge](a.svg)\n\nA better tool.\n\n# Install\n\nrun it\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing.as_deref(), Some("preamble"));
+    // "section" is the word for a prose definition; a region names itself
+    assert_eq!(h.rationale, "edits preamble");
+}
+
+#[test]
+fn front_matter_is_named_as_such() {
+    let out = one(
+        "F.md",
+        "---\nTitle: curl\nSee-also:\n  - a\n---\n\n# Name\n\ntext\n",
+        "---\nTitle: curl\nSee-also:\n  - a\n  - b\n---\n\n# Name\n\ntext\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing.as_deref(), Some("front matter"));
+    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::FrontMatter));
+    assert_eq!(h.rationale, "edits front matter");
+}

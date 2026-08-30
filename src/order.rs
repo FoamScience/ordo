@@ -735,7 +735,11 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     }
 
     if let Some(nm) = &s.enclosing {
-        return if ctx.is_prose(my_file) {
+        // "section" is the word for a prose *definition*; a region already
+        // names what it is ("preamble", "front matter", "#ifdef X"), so
+        // prefixing it would read as "edits section front matter"
+        let is_section = ctx.is_prose(my_file) && s.enclosing_kind.is_none();
+        return if is_section {
             format!("edits section {nm}")
         } else {
             format!("edits {nm}")

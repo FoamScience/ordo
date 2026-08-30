@@ -2,7 +2,7 @@
 //! enclosing definition, defines/uses. Parses the *new* content once with
 //! tree-sitter, exactly as gitplay's `order.lua` does.
 use crate::lang::{self, LangSpec};
-use crate::model::{Advisory, Category, Symbol};
+use crate::model::{Advisory, Category, ContainerKind, Symbol};
 use similar::TextDiff;
 use std::collections::HashSet;
 use tree_sitter::{Node, Parser};
@@ -19,6 +19,8 @@ pub struct RawHunk {
 pub struct HunkSem {
     pub category: Category,
     pub enclosing: Option<String>,
+    /// what `enclosing` names, when it is not a plain definition
+    pub enclosing_kind: Option<ContainerKind>,
     pub defines: Vec<String>,
     /// subset of `defines` that a hunk introduces via *import* nodes — used for
     /// rationale wording so an import+def hunk doesn't call function names imports
@@ -68,6 +70,7 @@ impl HunkSem {
         HunkSem {
             category: Category::Other,
             enclosing: None,
+            enclosing_kind: None,
             defines: vec![],
             imports: vec![],
             uses: vec![],
@@ -151,6 +154,9 @@ struct DefRec {
     name: String,
     depth: usize,  // enclosing def count (nesting)
     params: usize, // parameter count
+    /// what this container is: a declaration, or a region that merely holds
+    /// code (see `ContainerKind`)
+    kind: ContainerKind,
 }
 
 // Structural-smell thresholds (P13.1) — change-shape signals, not style rules.
@@ -199,19 +205,28 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         // container, so it's excluded — "enclosing" names the parent
         // instead of resolving to itself. Code languages are unaffected:
         // they keep the original r0-based, self-inclusive pick.
-        let enclosing = if spec.prose {
+        let container = if spec.prose {
             c.defs
                 .iter()
-                .filter(|d| d.s <= r1 && r1 <= d.e && !(r0 <= d.s && d.s <= r1))
+                .filter(|d| d.s <= r1 && r1 <= d.e)
+                // a *definition* that starts inside the hunk is what the hunk
+                // adds, not what contains it. A region can't be added that way
+                // — a document has one preamble whether or not this hunk
+                // touched its first line — so it stays eligible.
+                .filter(|d| d.kind != ContainerKind::Definition || !(r0 <= d.s && d.s <= r1))
                 .min_by_key(|d| d.e - d.s)
-                .map(|d| d.name.clone())
         } else {
             c.defs
                 .iter()
                 .filter(|d| d.s <= r0 && r0 <= d.e)
                 .min_by_key(|d| d.e - d.s)
-                .map(|d| d.name.clone())
         };
+        let enclosing = container.map(|d| d.name.clone());
+        // a plain definition is the default and says nothing extra; only a
+        // region (see `ContainerKind`) is worth reporting
+        let enclosing_kind = container
+            .map(|d| d.kind)
+            .filter(|k| *k != ContainerKind::Definition);
         let mut defines: Vec<String> = c
             .decls
             .iter()
@@ -329,6 +344,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         out.push(HunkSem {
             category,
             enclosing,
+            enclosing_kind,
             defines,
             imports,
             uses,
@@ -475,6 +491,77 @@ fn collect_injected_uses(node: Node, src: &[u8], offset: usize, c: &mut Collecte
     }
 }
 
+/// The last row a container actually covers.
+///
+/// tree-sitter ends a node at the position *after* its last byte, so a node
+/// whose text ends in a newline reports `end_position().row` one past its own
+/// content, at column 0 — a zero-width boundary that belongs to the next
+/// sibling. `#define GUARD_H` is the case that matters: it spans rows 1..=2 by
+/// that reckoning, so the line *after* an include guard's define would be
+/// attributed to the macro (verified against tree-sitter-c-0.23.4). Markdown
+/// `section` has the same shape for a different reason — its end lands exactly
+/// on the next sibling heading's row.
+fn end_row(node: Node, spec: &LangSpec) -> usize {
+    let e = node.end_position();
+    if spec.prose {
+        return e.row.saturating_sub(1);
+    }
+    if e.column == 0 && e.row > node.start_position().row {
+        e.row - 1
+    } else {
+        e.row
+    }
+}
+
+/// A *region*: a container that holds code without declaring anything — a
+/// conditional-compilation block, a document's preamble or its front matter.
+/// Naming it is the difference between "change" and "edits code under
+/// `#ifdef CURL_DISABLE_HTTP`", but it must never become a definition:
+/// `CURL_DISABLE_HTTP` is *tested* there, not defined, and putting it in
+/// `defines` would seed a def→use edge to whoever really defines it.
+///
+/// Node kinds verified against tree-sitter-{c,cpp}-0.23.4 (`preproc_ifdef` has
+/// a `name` field, `preproc_if` a `condition`) and tree-sitter-md-0.5.3
+/// (`minus_metadata`/`plus_metadata` for front matter; a `section` with no
+/// heading child is the content before the document's first heading).
+fn region_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<(String, ContainerKind)> {
+    let text_of = |n: Node| n.utf8_text(src).ok().map(tidy_ident).filter(|t| !t.is_empty());
+    match node.kind() {
+        // `#ifdef X` and `#ifndef X` share a node kind; the directive token
+        // itself says which, and a reviewer reads them very differently
+        "preproc_ifdef" => {
+            let name = text_of(node.child_by_field_name("name")?)?;
+            let directive = node
+                .child(0)
+                .and_then(|d| d.utf8_text(src).ok())
+                .map(|t| t.trim().to_string())
+                .unwrap_or_else(|| "#ifdef".to_string());
+            Some((format!("{directive} {name}"), ContainerKind::Region))
+        }
+        "preproc_if" => {
+            // a condition is an expression, not an identifier: collapse runs of
+            // whitespace but keep the single spaces that make it readable
+            let cond = node.child_by_field_name("condition")?.utf8_text(src).ok()?;
+            let cond = cond.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!cond.is_empty()).then(|| (format!("#if {cond}"), ContainerKind::Region))
+        }
+        "minus_metadata" | "plus_metadata" if spec.prose => {
+            Some(("front matter".to_string(), ContainerKind::FrontMatter))
+        }
+        // a section with no heading of its own is everything before the first
+        // heading: badges, a logo, an intro paragraph
+        "section"
+            if spec.prose
+                && !node
+                    .named_child(0)
+                    .is_some_and(|h| matches!(h.kind(), "atx_heading" | "setext_heading")) =>
+        {
+            Some(("preamble".to_string(), ContainerKind::Preamble))
+        }
+        _ => None,
+    }
+}
+
 fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
     let kind = node.kind();
     let sr = node.start_position().row;
@@ -492,8 +579,30 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         }
         return; // don't descend: import identifiers are declarations, not uses
     }
+    if let Some((label, kind)) = region_label(node, src, spec) {
+        // a region names itself and nothing else: no `def_rows` (it declares
+        // nothing, so a hunk in it is never a definition hunk), no `decls`
+        // (nothing to add to `defines`), no symbol identity. Its own name is
+        // still walked for uses below, so `#ifdef CURL_DISABLE_HTTP` counts as
+        // a use of that macro — which is exactly what it is.
+        let er = end_row(node, spec);
+        let depth = stack.len();
+        c.defs.push(DefRec {
+            s: sr,
+            e: er,
+            name: label,
+            depth,
+            params: 0,
+            kind,
+        });
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            walk(ch, src, spec, stack, c);
+        }
+        return;
+    }
     if let Some(label) = test_block_label(node, src, spec) {
-        let er = node.end_position().row;
+        let er = end_row(node, spec);
         let depth = stack.len();
         // a nested block replaces its parent's entry for the duration, so the
         // qualified name reads `describe "cli" > it "parses flags"` rather than
@@ -519,6 +628,7 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             name: stack.join(lang::scope_sep(spec)),
             depth,
             params: 0,
+            kind: ContainerKind::Test,
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
@@ -531,16 +641,7 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         return;
     }
     if spec.is_def(kind) {
-        // markdown's `section` end_position lands one row past its last
-        // content row and exactly on the next same-level sibling's heading
-        // row (a zero-width boundary), which would make that sibling look
-        // contained by this section too — pull it back a row so containment
-        // checks (enclosing lookup) treat the end row as inclusive, the way
-        // every other grammar's def nodes already do.
-        let er = node
-            .end_position()
-            .row
-            .saturating_sub(if spec.prose { 1 } else { 0 });
+        let er = end_row(node, spec);
         // A def with no name of its own names no container, so it is
         // transparent: descend without pushing a scope. This covers a c++
         // anonymous `namespace {`, a lambda, and the content before a markdown
@@ -613,6 +714,7 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             name: stack.join(lang::scope_sep(spec)),
             depth,
             params,
+            kind: ContainerKind::Definition,
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {

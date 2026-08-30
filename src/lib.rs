@@ -320,6 +320,7 @@ pub fn run(input: Input) -> Output {
                 new_range: raws[fi][li].new_range,
                 category: sems[fi][li].category,
                 enclosing: sems[fi][li].enclosing.clone(),
+                enclosing_kind: sems[fi][li].enclosing_kind,
                 defines: sems[fi][li].defines.clone(),
                 uses: sems[fi][li].uses.clone(),
                 group: gids[ordered.group_idx[gi]].clone(),
