@@ -98,7 +98,7 @@ pub fn run(input: Input) -> Output {
     let mut old_locals: Vec<HashSet<String>> = vec![];
     let mut new_defs_v: Vec<HashSet<String>> = vec![];
     let mut new_imports_v: Vec<HashSet<String>> = vec![];
-    let mut old_rows: Vec<(Vec<(String, usize)>, Vec<(String, usize)>)> = vec![];
+    let mut old_rows: Vec<extract::SymbolRows> = vec![];
     let mut old_body: Vec<Vec<extract::Body>> = vec![];
     let mut new_body: Vec<Vec<extract::Body>> = vec![];
     // file-scope bindings per side: a removed one is named rather than counted
@@ -312,19 +312,22 @@ pub fn run(input: Input) -> Output {
         }
     }
 
+    let facts = order::FileFacts {
+        old_defs: &old_defs,
+        old_imports: &old_imports,
+        old_locals: &old_locals,
+        rename: &rename,
+        moved_in: &moved_in,
+        relocated: &relocated,
+        body_only: &body_only,
+        removals: &removals,
+        comment_only: &comment_only,
+        switched: &switched,
+    };
     let ordered = order::order_all(
         &sems,
         &paths,
-        &old_defs,
-        &old_imports,
-        &old_locals,
-        &rename,
-        &moved_in,
-        &relocated,
-        &body_only,
-        &removals,
-        &comment_only,
-        &switched,
+        &facts,
         input.options.strategy,
         input.options.cross_file,
     );

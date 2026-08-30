@@ -1536,7 +1536,10 @@ fn collect_top_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(Str
     }
 }
 
-pub fn symbol_rows(spec: &LangSpec, content: &str) -> (Vec<(String, usize)>, Vec<(String, usize)>) {
+/// Declared names with their 1-based rows: `(definitions, imports)`.
+pub type SymbolRows = (Vec<(String, usize)>, Vec<(String, usize)>);
+
+pub fn symbol_rows(spec: &LangSpec, content: &str) -> SymbolRows {
     let mut defs = vec![];
     let mut imports = vec![];
     let mut parser = Parser::new();

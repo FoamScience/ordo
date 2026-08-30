@@ -49,17 +49,13 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Strategy {
+    #[default]
     Comprehension,
     DefsFirst,
     File,
-}
-impl Default for Strategy {
-    fn default() -> Self {
-        Strategy::Comprehension
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

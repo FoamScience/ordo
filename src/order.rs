@@ -82,6 +82,16 @@ fn join_frags(frags: &[String]) -> String {
 /// spends the whole budget on the container and leaves none for what changed.
 /// The innermost segment identifies it; anything still very long is elided
 /// rather than allowed to crowd out the rest of the sentence.
+/// Symbols grouped by the verb their change earns: adds, adds type, edits,
+/// changes signature of, changes type.
+type Verbs<'a> = (
+    Vec<&'a str>,
+    Vec<&'a str>,
+    Vec<&'a str>,
+    Vec<&'a str>,
+    Vec<&'a str>,
+);
+
 pub(crate) fn short_container(name: &str) -> String {
     // Only a *test* path collapses to its innermost segment: its outer levels
     // are sentences a reviewer already read in the file. A markdown section
@@ -148,23 +158,50 @@ fn cat_rank(c: Category) -> u8 {
     }
 }
 
+/// What the caller worked out about each file before ordering, every field
+/// indexed by file. Bundled rather than passed one by one: these travel
+/// together, are derived together, and the list grows whenever the rationale
+/// layer learns to say something new.
+pub struct FileFacts<'a> {
+    /// symbols each file defined / imported / bound locally, old side
+    pub old_defs: &'a [HashSet<String>],
+    pub old_imports: &'a [HashSet<String>],
+    pub old_locals: &'a [HashSet<String>],
+    /// new name → old name, per file (#7)
+    pub rename: &'a [HashMap<String, String>],
+    /// new name → the path it came from (P12.1)
+    pub moved_in: &'a [HashMap<String, String>],
+    /// new name → the def it was extracted from (P16)
+    pub relocated: &'a [HashMap<String, String>],
+    /// defs whose signature is unchanged, so a hunk in them is a body edit (#4)
+    pub body_only: &'a [HashSet<String>],
+    /// (old row, phrase) for everything the file no longer has (#5/#7)
+    pub removals: &'a [Vec<(usize, String)>],
+    /// per hunk: every changed line is a comment
+    pub comment_only: &'a [Vec<bool>],
+    /// per hunk: how it moved code across the comment boundary, if it did
+    pub switched: &'a [Vec<Option<crate::SideShift>>],
+}
+
 pub fn order_all(
     files: &[Vec<HunkSem>],
     paths: &[String],
-    old_defs: &[HashSet<String>],
-    old_imports: &[HashSet<String>],
-    old_locals: &[HashSet<String>],
-    rename: &[HashMap<String, String>],
-    moved_in: &[HashMap<String, String>],
-    relocated: &[HashMap<String, String>],
-    body_only: &[HashSet<String>],
-    removals: &[Vec<(usize, String)>],
-    comment_only: &[Vec<bool>],
-    // how each hunk moved code across the comment boundary, if it did
-    switched: &[Vec<Option<crate::SideShift>>],
+    facts: &FileFacts,
     strategy: Strategy,
     cross_file: bool,
 ) -> OrderedAll {
+    let FileFacts {
+        old_defs,
+        old_imports,
+        old_locals,
+        rename,
+        moved_in,
+        relocated,
+        body_only,
+        removals,
+        comment_only,
+        switched,
+    } = *facts;
     // ---- flatten all files into a global hunk list ----
     let mut coord = vec![];
     let mut sem: Vec<&HunkSem> = vec![];
@@ -431,12 +468,12 @@ pub fn order_all(
         }
     }
     let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
-    for gi in 0..g {
+    for (gi, group) in groups.iter().enumerate().take(g) {
         let r = uf_find(&mut parent, gi);
         by_root
             .entry(r)
             .or_default()
-            .extend(groups[gi].members.iter().copied());
+            .extend(group.members.iter().copied());
     }
     let mut clusters: Vec<Vec<usize>> = by_root.into_values().collect();
     for c in &mut clusters {
@@ -636,13 +673,9 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         let mut move_pairs: Vec<(&str, &str)> = vec![];
         let mut rename_pairs: Vec<(&str, &str)> = vec![];
         let mut extract_pairs: Vec<(&str, &str)> = vec![];
-        let (mut adds, mut adds_ty, mut edits, mut ch_sig, mut ch_ty): (
-            Vec<&str>,
-            Vec<&str>,
-            Vec<&str>,
-            Vec<&str>,
-            Vec<&str>,
-        ) = Default::default();
+        // one bucket per verb: same-verb symbols are listed together, so a hunk
+        // that adds two functions reads "adds a, b" rather than twice over
+        let (mut adds, mut adds_ty, mut edits, mut ch_sig, mut ch_ty): Verbs = Default::default();
         for d in real.iter().copied() {
             if let Some(src) = ctx.moved_in.get(my_file).and_then(|m| m.get(d)) {
                 move_pairs.push((d.as_str(), src.as_str()));
