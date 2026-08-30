@@ -6,6 +6,7 @@ mod lang;
 pub mod model;
 mod order;
 mod patch;
+pub mod refine;
 
 use extract::{analyze, compute_hunks, symbol_sets, HunkSem, RawHunk};
 use lang::LangSpec;
