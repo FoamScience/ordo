@@ -1518,7 +1518,7 @@ fn category_label(c: Category) -> &'static str {
 /// but never in *which key does what*.
 fn action_help(a: Action) -> (Category, &'static str) {
     match a {
-        Action::Quit => (Category::General, "quit (or dismiss an open popup)"),
+        Action::Quit => (Category::General, "quit (or dismiss an open popup or search)"),
         Action::Next => (Category::Navigation, "next item / move cursor down"),
         Action::Prev => (Category::Navigation, "previous item / move cursor up"),
         Action::First => (Category::Navigation, "jump to the first item / top"),
@@ -2837,15 +2837,55 @@ fn parse_cached<'a>(
 // The identifier node at `cursor`, widening from whatever node is directly
 // under it until an `identifier`-kind ancestor is found.
 fn identifier_at<'a>(parsed: &'a ParsedFile, nl: &[String], cursor: Cursor) -> Option<Node<'a>> {
+    let line = nl.get(cursor.line)?;
+    let col = char_byte(line, cursor.col);
     let point = Point {
         row: cursor.line,
-        column: char_byte(&nl[cursor.line], cursor.col),
+        column: col,
     };
-    let mut node = parsed.tree.root_node().descendant_for_point_range(point, point)?;
-    while !node.kind().contains("identifier") {
-        node = node.parent()?;
+    if let Some(mut node) = parsed
+        .tree
+        .root_node()
+        .descendant_for_point_range(point, point)
+    {
+        loop {
+            if node.kind().contains("identifier") {
+                return Some(node);
+            }
+            match node.parent() {
+                // stop widening at the line: an identifier further up the tree
+                // begins somewhere else entirely
+                Some(p) if p.start_position().row == cursor.line => node = p,
+                _ => break,
+            }
+        }
     }
-    Some(node)
+    first_identifier_on_line(parsed, cursor.line, col)
+}
+
+/// The leftmost identifier node beginning at or after `col` on `row`.
+fn first_identifier_on_line<'a>(
+    parsed: &'a ParsedFile,
+    row: usize,
+    col: usize,
+) -> Option<Node<'a>> {
+    let mut cur = parsed.tree.walk();
+    let mut stack = vec![parsed.tree.root_node()];
+    let mut best: Option<Node<'a>> = None;
+    while let Some(n) = stack.pop() {
+        let (s, e) = (n.start_position(), n.end_position());
+        if s.row > row || e.row < row {
+            continue;
+        }
+        if n.kind().contains("identifier") && s.row == row && s.column >= col {
+            if best.is_none_or(|b| s.column < b.start_position().column) {
+                best = Some(n);
+            }
+            continue;
+        }
+        stack.extend(n.named_children(&mut cur));
+    }
+    best
 }
 
 /// `K` / `F12` — resolve the symbol under the cursor via tree-sitter (not by
@@ -3695,6 +3735,10 @@ fn apply(app: &mut App, a: Action) -> bool {
         return false;
     }
     match a {
+        // an active search is showing state too: clear its highlights first,
+        // the way dismissing a popup does, so Esc after a search doesn't end
+        // the review session
+        Action::Quit if app.search.is_some() => app.search = None,
         Action::Quit => return true,
         Action::Focus(p) => app.focus = p,
         Action::FocusNext => app.focus = app.focus.next(),
