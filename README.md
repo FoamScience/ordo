@@ -36,6 +36,9 @@ it as such.
   escalation ladder and a verdict only when the pattern is concretely wrong.
 - **Noise flags** — generated, lock and pure-formatting hunks marked so a
   client can dim or drop them.
+- **Full accounting** — every hunk the diff produced is either in the reading
+  order or recorded in `dropped` with the reason, so a consumer can prove
+  nothing went missing silently.
 - **A reviewer TUI** — `ordo-tui`, a first-party client that shells to git and
   renders the whole thing in the terminal.
 
@@ -100,6 +103,13 @@ context.
 every non-comment hunk before ordering, so `order`/`groups`/`edges`/`clusters`
 cover only comment/docstring changes — a lightweight pass over documentation
 edits without the noise of the surrounding code.
+
+Each file entry also carries `dropped`: the hunks removed before ordering
+(pure imports, and non-comment hunks under `only_comments`) with the range each
+covered. `hunks` + `dropped` is exactly what the diff produced, so "did ordo
+miss one?" is a subtraction rather than a guess. The corpus suite checks the
+stronger property against git itself: every line `git diff -U0` calls changed
+must fall inside some hunk, kept or dropped.
 
 `symbols` gives each definition a name + tree-sitter node `kind` + enclosing
 `scope`, so a consumer can tell whether the same name across two commits is the
@@ -197,6 +207,7 @@ command's own arguments:
 | `:keys <preset>` | swap the keymap live (`vim`, `vscode`) |
 | `:strategy <name>` | re-order the review in place (`comprehension`, `defs-first`, `file`) |
 | `:group` | toggle group-reason headers in the reading-order list |
+| `:audit` | account for every hunk and file not on screen, and why |
 | `:goto <path>` | select the first hunk of `<path>`, focus the code pane |
 | `:e <rev>` | review a different revision, without restarting |
 | `:q` | quit |
@@ -365,6 +376,11 @@ back to file order.
   Note `ordo-tui`'s `--only-comments` does NOT use the engine flag: it asks
   for every hunk and filters the view, so `:only-comments` can toggle back off
   with something to reveal.
+
+  Because the client filters and the engine does not, `:audit` is what ties the
+  two together: it charges every hunk not on screen to the thing that removed
+  it — view filter, engine drop, or a file never sent at all — and says so
+  outright when a hidden hunk matches no known reason.
 - **Rationale heuristics** — rename detection is 1:1 per file (a file that
   renames *and* adds/removes other defs falls back to `adds`/`removes`);
   removals attach by old-line overlap (precise for isolated deletions).
