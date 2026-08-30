@@ -340,3 +340,25 @@ fn a_real_edit_is_never_called_formatting() {
     );
     assert!(!out.files[0].hunks[0].noise);
 }
+
+#[test]
+fn a_rust_test_macro_names_its_test() {
+    let out = one(
+        "r.rs",
+        "rgtest!(r428_style, |dir: Dir| {\n    dir.create(\"foo\", \"bar\");\n});\n",
+        "rgtest!(r428_style, |dir: Dir| {\n    dir.create(\"foo\", \"baz\");\n});\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing.as_deref(), Some("rgtest! r428_style"));
+    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Test));
+}
+
+#[test]
+fn an_ordinary_macro_is_not_a_test_block() {
+    let out = one(
+        "s.rs",
+        "fn main() {\n    println!(\"a\");\n}\n",
+        "fn main() {\n    println!(\"b\");\n}\n",
+    );
+    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("main"));
+}

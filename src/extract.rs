@@ -395,7 +395,34 @@ fn import_like(node: Node, spec: &LangSpec) -> bool {
 /// argument, and a function argument to hold the body. A bare `test(name)` with
 /// no body is a call, not a block, and is left alone.
 fn test_block_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
-    if spec.test_blocks.is_empty() || node.kind() != "call_expression" {
+    if spec.test_blocks.is_empty() {
+        return None;
+    }
+    // rust names tests through a macro rather than a call: `rgtest!(name, |…| {…})`,
+    // `test_case!(…)`. The name is an identifier, not a string, and the entry is
+    // matched as a *substring* of the macro name so one entry ("test") covers the
+    // family. Verified against tree-sitter-rust-0.23.3: `macro_invocation` has a
+    // `macro` field and a `token_tree` holding the arguments.
+    if node.kind() == "macro_invocation" {
+        let name = node.child_by_field_name("macro")?.utf8_text(src).ok()?;
+        if !spec.test_blocks.iter().any(|t| name.contains(t)) {
+            return None;
+        }
+        let args = node
+            .named_children(&mut node.walk())
+            .find(|n| n.kind() == "token_tree")?;
+        let first = args.named_children(&mut args.walk()).next()?;
+        if !lang::is_ident(first.kind()) {
+            return None;
+        }
+        let label = first
+            .utf8_text(src)
+            .ok()
+            .map(tidy_ident)
+            .filter(|t| !t.is_empty())?;
+        return Some(format!("{name}! {label}"));
+    }
+    if node.kind() != "call_expression" {
         return None;
     }
     let callee = callee_text(node, src)?;

@@ -117,7 +117,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "rust",
         language: rs,
-        test_blocks: &[],
+        test_blocks: &["test"],
         imports: &["use_declaration", "extern_crate_declaration"],
         defs: &[
             "function_item",
