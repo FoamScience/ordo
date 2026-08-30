@@ -160,6 +160,8 @@ pub enum ContainerKind {
     Preamble,
     /// a document's `---` metadata block
     FrontMatter,
+    /// a top-level binding whose multi-line value holds the hunk
+    Binding,
 }
 
 /// A defined symbol's identity: name + tree-sitter node kind + enclosing

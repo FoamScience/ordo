@@ -513,6 +513,52 @@ fn end_row(node: Node, spec: &LangSpec) -> usize {
     }
 }
 
+/// A top-level binding whose value spans more than one line — a settings dict,
+/// an allow-list, a lookup table. The lines *inside* that value have no
+/// definition around them, so without this they read as a bare "change"; with
+/// it they belong to the binding whose value they are.
+///
+/// Scoped deliberately: only at file scope (a local inside a function already
+/// has that function as its container) and only when the value is genuinely
+/// multi-line (a one-line binding is its own hunk, and naming it would add
+/// nothing the rationale doesn't already say). The binding is a *container*,
+/// not a definition — it records no symbol, so nothing here can seed a def→use
+/// edge or key a review mark.
+fn binding_container(node: Node, src: &[u8], spec: &LangSpec, stack: &[String]) -> Option<String> {
+    if !stack.is_empty() || !spec.is_local(node.kind()) || node.has_error() {
+        return None;
+    }
+    if end_row(node, spec) <= node.start_position().row {
+        return None;
+    }
+    let ident = binding_idents(node, node.kind()).into_iter().next()?;
+    ident
+        .utf8_text(src)
+        .ok()
+        .map(tidy_ident)
+        .filter(|n| !n.is_empty())
+}
+
+/// The elements of a multi-line literal, as members of the binding that holds
+/// it — so the detail layer can say *which* entry was added rather than only
+/// that the table changed. A list element has no name of its own, so its own
+/// text is its name (`"typing_extensions"`), which is exactly how a reviewer
+/// refers to it.
+fn literal_elements<'t>(node: Node<'t>) -> Vec<Node<'t>> {
+    let value = ["right", "value"]
+        .iter()
+        .find_map(|f| node.child_by_field_name(f))
+        .or_else(|| node.named_children(&mut node.walk()).last());
+    let Some(v) = value else { return vec![] };
+    if !matches!(
+        v.kind(),
+        "list" | "set" | "tuple" | "array" | "dictionary" | "object" | "table_constructor"
+    ) {
+        return vec![];
+    }
+    v.named_children(&mut v.walk()).collect()
+}
+
 /// A *region*: a container that holds code without declaring anything — a
 /// conditional-compilation block, a document's preamble or its front matter.
 /// Naming it is the difference between "change" and "edits code under
@@ -578,6 +624,40 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
             c.import_decls.push((row, name));
         }
         return; // don't descend: import identifiers are declarations, not uses
+    }
+    if let Some(name) = binding_container(node, src, spec, stack) {
+        // container only: no `def_rows`, no `decls`, no symbol — see
+        // `binding_container`. The value's own elements become members so the
+        // detail layer can name what changed inside it.
+        for el in literal_elements(node) {
+            // an element the language already treats as a member (a js/py
+            // `pair`) is registered by the member branch below, by its key —
+            // adding its whole text here as a second member would report the
+            // same change twice, once named and once as raw text
+            if spec.is_member(el.kind()) {
+                continue;
+            }
+            if let Ok(text) = el.utf8_text(src) {
+                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !text.is_empty() {
+                    c.member_rows.push((
+                        el.start_position().row,
+                        text.clone(),
+                        text,
+                        Some(name.clone()),
+                    ));
+                }
+            }
+        }
+        c.defs.push(DefRec {
+            s: sr,
+            e: end_row(node, spec),
+            name,
+            depth: stack.len(),
+            params: 0,
+            kind: ContainerKind::Binding,
+        });
+        // fall through: the value still holds locals, uses and nested defs
     }
     if let Some((label, kind)) = region_label(node, src, spec) {
         // a region names itself and nothing else: no `def_rows` (it declares
