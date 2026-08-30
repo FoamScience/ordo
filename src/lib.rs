@@ -25,9 +25,10 @@ pub fn run(input: Input) -> Output {
     let mut sems: Vec<Vec<HunkSem>> = vec![];
     let mut degraded: Vec<bool> = vec![];
     let mut comment_only: Vec<Vec<bool>> = vec![];
+    let mut switched: Vec<Vec<Option<bool>>> = vec![];
     let mut dropped: Vec<Vec<DroppedHunk>> = vec![];
     for change in &input.changes {
-        let (raw, sem, deg, com) = build_change(change, input.options.full_context);
+        let (raw, sem, deg, com, sw) = build_change(change, input.options.full_context);
         if deg {
             eprintln!(
                 "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
@@ -46,7 +47,8 @@ pub fn run(input: Input) -> Output {
         let mut sem_kept = vec![];
         let mut com_kept = vec![];
         let mut gone = vec![];
-        for ((r, s), c) in raw.into_iter().zip(sem).zip(com) {
+        let mut sw_kept = vec![];
+        for (((r, s), c), w) in raw.into_iter().zip(sem).zip(com).zip(sw) {
             let reason = if s.category == Category::Import {
                 Some(DropReason::Import)
             } else if input.options.only_comments && !c {
@@ -64,6 +66,7 @@ pub fn run(input: Input) -> Output {
                     raw_kept.push(r);
                     sem_kept.push(s);
                     com_kept.push(c);
+                    sw_kept.push(w);
                 }
             }
         }
@@ -72,6 +75,7 @@ pub fn run(input: Input) -> Output {
         sems.push(sem);
         degraded.push(deg);
         comment_only.push(com);
+        switched.push(sw_kept);
         dropped.push(gone);
     }
 
@@ -271,6 +275,7 @@ pub fn run(input: Input) -> Output {
         &body_only,
         &removals,
         &comment_only,
+        &switched,
         input.options.strategy,
         input.options.cross_file,
     );
@@ -485,7 +490,9 @@ pub fn pack(out: &Output) -> String {
 /// carried a diff but full content couldn't be obtained, so ordering is
 /// positional only. `comment_only` parallels `hunks`: true when every changed
 /// line is a comment (drives the "adds/edits comment" rationale fallback).
-fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkSem>, bool, Vec<bool>) {
+type ChangeParts = (Vec<RawHunk>, Vec<HunkSem>, bool, Vec<bool>, Vec<Option<bool>>);
+
+fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let old = change.old.as_deref();
     let (raw, new, degraded): (Vec<RawHunk>, String, bool) = if let Some(new) = &change.new {
         (compute_hunks(old.unwrap_or(""), new), new.clone(), false)
@@ -544,7 +551,11 @@ fn build_change(change: &Change, full_context: bool) -> (Vec<RawHunk>, Vec<HunkS
             sems[i].details = d;
         }
     }
-    (raw, sems, degraded, comment_only)
+    let switched: Vec<Option<bool>> = raw
+        .iter()
+        .map(|h| commented_out_hunk(h, &old_lines, &new_lines, ext))
+        .collect();
+    (raw, sems, degraded, comment_only, switched)
 }
 
 // A hunk whose changed lines are all comments: every non-blank line on
@@ -672,6 +683,68 @@ fn is_comment_line(trimmed: &str, ext: &str) -> bool {
         "lua" => trimmed.starts_with("--"),
         _ => trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*'),
     }
+}
+
+/// Code turned into a comment, or a comment turned back into code.
+///
+/// A hunk whose new side is the old side with comment markers added is not an
+/// edit and not a comment change: it is code being switched off, which is a
+/// thing a reviewer specifically looks for. The test is exact — strip the
+/// markers and the two sides must match once whitespace is normalised — so a
+/// hunk that merely replaces code with unrelated prose is never described this
+/// way. `Some(true)` = commented out, `Some(false)` = uncommented.
+fn commented_out_hunk(
+    h: &RawHunk,
+    old_lines: &[&str],
+    new_lines: &[&str],
+    ext: &str,
+) -> Option<bool> {
+    let side = |lines: &[&str], r: [usize; 2]| -> Option<Vec<String>> {
+        if r[0] == 0 || r[0] > r[1] || r[1] > lines.len() {
+            return None;
+        }
+        let v: Vec<String> = lines[r[0] - 1..r[1]]
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        (!v.is_empty()).then_some(v)
+    };
+    let (old, new) = (side(old_lines, h.old_range)?, side(new_lines, h.new_range)?);
+    let all_comment = |v: &[String]| v.iter().all(|l| is_comment_line(l, ext));
+    let stripped = |v: &[String]| -> Vec<String> {
+        v.iter()
+            .map(|l| {
+                strip_comment_marker(l, ext)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    match (all_comment(&old), all_comment(&new)) {
+        (false, true) => (stripped(&new) == old).then_some(true),
+        (true, false) => (stripped(&old) == new).then_some(false),
+        _ => None,
+    }
+}
+
+/// The text of a comment line without its marker. Only the markers
+/// `is_comment_line` recognises, so the two stay in step.
+fn strip_comment_marker<'a>(line: &'a str, ext: &str) -> &'a str {
+    let t = line.trim();
+    let out = match ext {
+        "py" | "pyi" => t.strip_prefix('#'),
+        "lua" => t.strip_prefix("---").or_else(|| t.strip_prefix("--")),
+        _ => t
+            .strip_prefix("///")
+            .or_else(|| t.strip_prefix("//"))
+            .or_else(|| t.strip_prefix("/*"))
+            .or_else(|| t.strip_prefix('*')),
+    };
+    out.unwrap_or(t).trim_end_matches("*/").trim()
 }
 
 /// What a hunk did to the named members of its container(s). New-side members

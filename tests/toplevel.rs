@@ -466,3 +466,43 @@ fn a_one_line_call_is_not_a_container() {
     let out = one("t.js", "run(1);\nconst a = 1;\n", "run(2);\nconst a = 1;\n");
     assert_eq!(out.files[0].hunks[0].enclosing, None);
 }
+
+// ---- code switched off (or back on) ----
+
+#[test]
+fn commenting_code_out_says_so() {
+    let out = one(
+        "a.lua",
+        "local function f()\n  vim.print(spec.plugins.bar)\n  return 1\nend\n",
+        "local function f()\n  -- vim.print(spec.plugins.bar)\n  return 1\nend\n",
+    );
+    assert_eq!(out.files[0].hunks[0].rationale, "comments out code in f");
+}
+
+#[test]
+fn uncommenting_code_says_so_too() {
+    let out = one(
+        "b.py",
+        "def g():\n    # legacy = compute(1)\n    return 2\n",
+        "def g():\n    legacy = compute(1)\n    return 2\n",
+    );
+    assert_eq!(out.files[0].hunks[0].rationale, "uncomments code in g");
+}
+
+#[test]
+fn replacing_code_with_unrelated_prose_is_not_commenting_out() {
+    // the test is exact: strip the markers and the two sides must match. A
+    // hunk that swaps code for a different comment is an ordinary edit.
+    let out = one(
+        "c.js",
+        "function h() {\n  const a = 1;\n  return a;\n}\n",
+        "function h() {\n  // a totally different comment\n  return a;\n}\n",
+    );
+    assert_eq!(out.files[0].hunks[0].rationale, "edits h");
+}
+
+#[test]
+fn commenting_out_at_file_scope_needs_no_container() {
+    let out = one("d.js", "run(1);\n", "// run(1);\n");
+    assert_eq!(out.files[0].hunks[0].rationale, "comments out code");
+}
