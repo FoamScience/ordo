@@ -803,13 +803,16 @@ fn detail_phrases(
 // At most three names, then a count — a detail line is a glance, not a listing.
 fn name_list(names: &[&str]) -> String {
     const SHOWN: usize = 3;
-    if names.len() <= SHOWN {
-        return names.join(", ");
+    // names can be container labels as well as symbols (a test block's label is
+    // a sentence), so each one is shortened to what a rationale can afford
+    let short: Vec<String> = names.iter().map(|n| order::short_container(n)).collect();
+    if short.len() <= SHOWN {
+        return short.join(", ");
     }
     format!(
         "{}, and {} more",
-        names[..SHOWN].join(", "),
-        names.len() - SHOWN
+        short[..SHOWN].join(", "),
+        short.len() - SHOWN
     )
 }
 

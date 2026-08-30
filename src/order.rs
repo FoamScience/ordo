@@ -74,6 +74,36 @@ fn join_frags(frags: &[String]) -> String {
 /// many paths — fragments, provenance clauses, binding clauses — each capped on
 /// its own, and no single one of them can see the finished length. Clamping
 /// once, where every path lands, is what actually holds the contract.
+/// A container name as the *rationale* should say it.
+///
+/// `enclosing` carries the full path because a consumer navigating to the hunk
+/// wants it, but a rationale is one line: a nested test label
+/// (`describe "compiler: transform v-bind" > it "errors on a bad argument"`)
+/// spends the whole budget on the container and leaves none for what changed.
+/// The innermost segment identifies it; anything still very long is elided
+/// rather than allowed to crowd out the rest of the sentence.
+pub(crate) fn short_container(name: &str) -> String {
+    // Only a *test* path collapses to its innermost segment: its outer levels
+    // are sentences a reviewer already read in the file. A markdown section
+    // path is the opposite — `Project > Install` is the navigation, and
+    // dropping `Project` would point at the wrong heading — so prose keeps its
+    // full path. A test label always carries the quotes of the string it was
+    // named by; a heading does not.
+    let quoted = |s: &str| s.contains('"') || s.contains('`') || s.contains('\'');
+    let inner = match name.rsplit_once(" > ") {
+        Some((_, last)) if quoted(last) => last,
+        _ => name,
+    };
+    if inner.chars().count() <= CONTAINER_BUDGET {
+        return inner.to_string();
+    }
+    let head: String = inner.chars().take(CONTAINER_BUDGET - 1).collect();
+    format!("{head}…")
+}
+
+/// How much of a rationale one container name may occupy.
+const CONTAINER_BUDGET: usize = 60;
+
 fn clamp_rationale(r: String) -> String {
     if r.chars().count() <= MAX_RATIONALE {
         return r;
@@ -724,7 +754,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             return r;
         }
         if let Some(nm) = &s.enclosing {
-            return format!("edits {nm}");
+            return format!("edits {}", short_container(nm));
         }
         let names: Vec<&str> = s.uses.iter().map(String::as_str).collect();
         return format!("uses {}", name_list(&names));
@@ -739,6 +769,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // names what it is ("preamble", "front matter", "#ifdef X"), so
         // prefixing it would read as "edits section front matter"
         let is_section = ctx.is_prose(my_file) && s.enclosing_kind.is_none();
+        let nm = short_container(nm);
         return if is_section {
             format!("edits section {nm}")
         } else {
@@ -778,7 +809,7 @@ fn comment_rationale(old_range: [usize; 2], new_empty: bool, enclosing: Option<&
         ("edits", "in")
     };
     match enclosing {
-        Some(nm) => format!("{verb} comment {prep} {nm}"),
+        Some(nm) => format!("{verb} comment {prep} {}", short_container(nm)),
         None => format!("{verb} comment"),
     }
 }

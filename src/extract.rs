@@ -1021,7 +1021,18 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
 // within one hunk collide onto the same key — the same class of limitation
 // documented at `symbol_identity_key` (src/bin/ordo-tui.rs).
 fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -> Option<String> {
-    call_container(node, src).or_else(|| (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec))))
+    call_container(node, src).or_else(|| {
+        // a test block's label is a sentence, and a nested one is two: naming
+        // the innermost is what a detail line can afford. `describe "compiler:
+        // transform v-bind" > test "error on invalid static argument"` becomes
+        // `test "error on invalid static argument"`, which still identifies the
+        // container while leaving room for what actually changed.
+        let last = stack.last()?;
+        if is_test_label(last) {
+            return last.rsplit(" > ").next().map(str::to_string);
+        }
+        (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)))
+    })
 }
 
 // A member is a call's container only when it is a *direct* child of that

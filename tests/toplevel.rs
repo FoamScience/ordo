@@ -89,9 +89,12 @@ fn a_hunk_inside_a_test_is_attributed_to_that_test() {
         "describe(\"cli\", () => {\n  it(\"parses flags\", () => {\n    expect(run([\"-v\", \"-q\"])).toBe(2);\n  });\n});\n",
     );
     let h = &out.files[0].hunks[0];
-    // nested blocks read with ` > `, not the language's scope separator
+    // `enclosing` carries the full path, joined with ` > ` rather than the
+    // language's scope separator...
     assert_eq!(h.enclosing.as_deref(), Some("describe \"cli\" > it \"parses flags\""));
-    assert_eq!(h.rationale, "edits describe \"cli\" > it \"parses flags\"");
+    // ...while the rationale names the innermost block, which is what
+    // identifies the hunk without spending the whole line on its container
+    assert_eq!(h.rationale, "edits it \"parses flags\"");
 }
 
 #[test]
@@ -101,7 +104,10 @@ fn adding_a_test_reads_as_adding_it() {
         "describe(\"cli\", () => {\n  it(\"a\", () => {\n    ok();\n  });\n});\n",
         "describe(\"cli\", () => {\n  it(\"a\", () => {\n    ok();\n  });\n\n  it(\"handles empty input\", () => {\n    ok();\n  });\n});\n",
     );
-    assert_eq!(rationales(&out), vec!["adds describe \"cli\" > it \"handles empty input\""]);
+    // the rationale names the innermost block: the outer `describe` is a
+    // sentence the reviewer already has on screen, and spending the line on it
+    // leaves no room for what changed (`enclosing` still carries the full path)
+    assert_eq!(rationales(&out), vec!["adds it \"handles empty input\""]);
 }
 
 #[test]
@@ -398,4 +404,32 @@ fn busted_style_lua_tests_are_blocks_too() {
         out.files[0].hunks[0].enclosing.as_deref(),
         Some("describe \"spec\" > it \"works\"")
     );
+}
+
+#[test]
+fn a_prose_section_path_is_never_shortened() {
+    // a markdown path is the navigation itself: `Project > Install` must not
+    // collapse to `Install`, which points at a different heading
+    let out = one(
+        "d.md",
+        "# Project\n\n## Install\n\nold text\n",
+        "# Project\n\n## Install\n\nnew text\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].rationale,
+        "edits section Project > Install"
+    );
+}
+
+#[test]
+fn a_very_long_container_name_is_elided_not_left_to_crowd_the_line() {
+    let name = "x".repeat(120);
+    let out = one(
+        "t.js",
+        &format!("it(\"{name}\", () => {{\n  ok(1);\n}});\n"),
+        &format!("it(\"{name}\", () => {{\n  ok(2);\n}});\n"),
+    );
+    let r = &out.files[0].hunks[0].rationale;
+    assert!(r.ends_with('…'), "{r}");
+    assert!(r.chars().count() < 80, "{r}");
 }
