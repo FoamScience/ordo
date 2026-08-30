@@ -265,6 +265,22 @@ or source text.
 `--theme dark|light` (also `$ORDO_TUI_THEME`, default `dark`) picks the five
 diff/selection background tints for a dark or light terminal.
 
+Keys are configurable in `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml`, on top
+of whichever preset is in use:
+
+```toml
+preset = "vim"            # the preset to start from (--keys still wins)
+
+[binds]
+"C-n" = "next"            # add or replace a binding
+"g d" = "jump-to-edge"    # a chord: prefix, space, key
+"x" = "none"              # remove a binding
+```
+
+Action names are the ones `?`/`F1` lists. A line that names a key or an action
+that doesn't exist is reported with its line number and skipped, so a typo costs
+one binding rather than the session.
+
 </details>
 
 ## Detail layer, rationale patterns & advisories

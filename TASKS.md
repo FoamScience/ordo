@@ -210,4 +210,5 @@ git line-coverage check holding.
 - [x] fold the reading order by group (`za`/`zo`/`zc`/`zR`/`zM`, `C-k` chords)
 - [x] `Esc` clears a search before it quits; `K` finds the line's symbol and
       names the function a parameter belongs to
-- [ ] configurable keybind presets (`~/.config/ordo/tui.toml`)
+- [x] configurable keybind presets (`~/.config/ordo/tui.toml`) — preset choice
+      plus per-key add/replace/remove, validated against the action table

@@ -326,6 +326,9 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     let mut globs: Vec<String> = vec![];
     let mut skip_generated = true;
     let mut only_comments = false;
+    // whether the preset was *chosen* (flag or env) — a config file's own
+    // `preset =` only applies when it wasn't
+    let mut preset_given = std::env::var("ORDO_TUI_KEYS").is_ok();
     let mut preset = std::env::var("ORDO_TUI_KEYS").unwrap_or_else(|_| "vim".to_string());
     let mut theme_name = std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "dark".to_string());
     let mut want_preset = false;
@@ -333,6 +336,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     for a in std::env::args().skip(1) {
         if want_preset {
             preset = a;
+            preset_given = true;
             want_preset = false;
             continue;
         }
@@ -376,9 +380,26 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         eprintln!("ordo-tui: --theme needs a value\n\n{USAGE}");
         return Err(2);
     }
+    // the config's preset is a default; an explicit --keys still wins
+    let cfg = config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| parse_key_config(&t));
+    let preset = match (&cfg, preset_given) {
+        (Some(c), false) => c.preset.clone().unwrap_or(preset),
+        _ => preset,
+    };
     let Some(keys) = keymap(&preset) else {
         eprintln!("ordo-tui: unknown key preset '{preset}' (want: vim, vscode)");
         return Err(2);
+    };
+    let keys = match &cfg {
+        Some(c) => {
+            for p in &c.problems {
+                eprintln!("ordo-tui: tui.toml: {p}");
+            }
+            apply_key_config(keys, c)
+        }
+        None => keys,
     };
     let Some(theme) = theme(&theme_name) else {
         eprintln!("ordo-tui: unknown theme '{theme_name}' (want: dark, light)");
@@ -1196,7 +1217,7 @@ fn save_marks(path: &Path, marks: &HashMap<u64, u64>) {
 // ----------------------------------------------------------------------- keys
 
 /// The three panes, in focus-cycle order.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Pane {
     List,
     Code,
@@ -1220,7 +1241,7 @@ impl Pane {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Action {
     Quit,
     Next,
@@ -1601,6 +1622,199 @@ fn action_help(a: Action) -> (Category, &'static str) {
         ),
         Action::CommandGoto => (Category::General, "open the command bar pre-filled with `goto `"),
     }
+}
+
+/// Every action, by the name a config file calls it. The inverse of
+/// `key_label`'s job: `key_label` renders a key for humans, this names an
+/// action for them. One table, used to parse a config and to check it — a name
+/// missing here simply cannot be bound, and the error says which names exist.
+const ACTION_NAMES: &[(&str, Action)] = &[
+    ("quit", Action::Quit),
+    ("next", Action::Next),
+    ("prev", Action::Prev),
+    ("first", Action::First),
+    ("last", Action::Last),
+    ("toggle-reviewed", Action::ToggleReviewed),
+    ("page-down", Action::PageDown),
+    ("page-up", Action::PageUp),
+    ("half-down", Action::HalfDown),
+    ("half-up", Action::HalfUp),
+    ("focus-next", Action::FocusNext),
+    ("focus-prev", Action::FocusPrev),
+    ("focus-list", Action::Focus(Pane::List)),
+    ("focus-code", Action::Focus(Pane::Code)),
+    ("focus-why", Action::Focus(Pane::Why)),
+    ("cursor-left", Action::CursorLeft),
+    ("cursor-right", Action::CursorRight),
+    ("word-next", Action::WordNext),
+    ("word-prev", Action::WordPrev),
+    ("word-end", Action::WordEnd),
+    ("line-start", Action::LineStart),
+    ("line-end", Action::LineEnd),
+    ("para-prev", Action::ParaPrev),
+    ("para-next", Action::ParaNext),
+    ("hover", Action::Hover),
+    ("search", Action::SearchOpen),
+    ("symbol-next", Action::SymbolNext),
+    ("symbol-prev", Action::SymbolPrev),
+    ("search-next", Action::SearchNext),
+    ("search-prev", Action::SearchPrev),
+    ("open-editor", Action::OpenEditor),
+    ("help", Action::Help),
+    ("command", Action::CommandOpen),
+    ("command-goto", Action::CommandGoto),
+    ("jump-to-edge", Action::JumpToEdge),
+    ("jump-back", Action::JumpBack),
+    ("fold-toggle", Action::Fold(Fold::Toggle)),
+    ("fold-open", Action::Fold(Fold::Open)),
+    ("fold-close", Action::Fold(Fold::Close)),
+    ("fold-open-all", Action::Fold(Fold::OpenAll)),
+    ("fold-close-all", Action::Fold(Fold::CloseAll)),
+    ("scroll-left", Action::ScrollLeft),
+    ("scroll-right", Action::ScrollRight),
+];
+
+fn action_by_name(name: &str) -> Option<Action> {
+    ACTION_NAMES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, a)| *a)
+}
+
+/// Parse one key as a config writes it: `j`, `C-w`, `S-F3`, `Esc`, `Space`.
+/// The inverse of `key_label`, and checked against it by test.
+fn parse_key(text: &str) -> Option<Key> {
+    let mut mods = KeyModifiers::NONE;
+    let mut rest = text.trim();
+    loop {
+        let (m, tail) = match rest.split_at_checked(2) {
+            Some(("C-", t)) => (KeyModifiers::CONTROL, t),
+            Some(("S-", t)) => (KeyModifiers::SHIFT, t),
+            Some(("A-", t)) => (KeyModifiers::ALT, t),
+            _ => break,
+        };
+        // a lone "C-" with nothing after it names no key
+        if tail.is_empty() {
+            return None;
+        }
+        mods |= m;
+        rest = tail;
+    }
+    let code = match rest {
+        "Space" => KeyCode::Char(' '),
+        "Esc" => KeyCode::Esc,
+        "Enter" => KeyCode::Enter,
+        "Backspace" => KeyCode::Backspace,
+        "Tab" => KeyCode::Tab,
+        "Up" => KeyCode::Up,
+        "Down" => KeyCode::Down,
+        "Left" => KeyCode::Left,
+        "Right" => KeyCode::Right,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
+        f if f.starts_with('F') && f.len() > 1 => KeyCode::F(f[1..].parse().ok()?),
+        c if c.chars().count() == 1 => KeyCode::Char(c.chars().next()?),
+        _ => return None,
+    };
+    Some((code, mods))
+}
+
+/// A binding as a config writes it: one key, or two separated by a space for a
+/// chord (`g d`, `C-w l`, `z a`). Chords are written with the space so `zh` and
+/// `z h` can't be confused — the former is not a key at all.
+fn parse_bind_keys(text: &str) -> Option<(Option<Key>, Key)> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    match parts.as_slice() {
+        [one] => Some((None, parse_key(one)?)),
+        [prefix, key] => Some((Some(parse_key(prefix)?), parse_key(key)?)),
+        _ => None,
+    }
+}
+
+/// The user's keymap overrides, read from
+/// `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml`:
+///
+/// ```toml
+/// preset = "vim"        # which built-in preset to start from
+///
+/// [binds]
+/// "C-n" = "next"        # add or replace a binding
+/// "g d" = "jump-to-edge"  # a chord: prefix, space, key
+/// "x" = "none"          # remove a binding
+/// ```
+///
+/// Deliberately a small hand-read subset rather than a TOML dependency: the
+/// file has two shapes of line, and a parser for exactly those cannot drift
+/// from what the docs promise. Anything it cannot read is reported by line
+/// number and skipped — a typo costs one binding, never the session.
+struct KeyConfig {
+    preset: Option<String>,
+    binds: Vec<(Option<Key>, Key, Option<Action>)>,
+    problems: Vec<String>,
+}
+
+fn config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("ordo").join("tui.toml"))
+}
+
+fn parse_key_config(text: &str) -> KeyConfig {
+    let mut cfg = KeyConfig { preset: None, binds: vec![], problems: vec![] };
+    let mut in_binds = false;
+    for (n, raw) in text.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(section) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            in_binds = section.trim() == "binds";
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            cfg.problems.push(format!("line {}: expected `key = value`", n + 1));
+            continue;
+        };
+        let unquote = |s: &str| s.trim().trim_matches('"').trim_matches('\'').to_string();
+        let (k, v) = (unquote(k), unquote(v));
+        if !in_binds {
+            if k == "preset" {
+                cfg.preset = Some(v);
+            } else {
+                cfg.problems.push(format!("line {}: unknown setting `{k}`", n + 1));
+            }
+            continue;
+        }
+        let Some((prefix, key)) = parse_bind_keys(&k) else {
+            cfg.problems.push(format!("line {}: `{k}` is not a key", n + 1));
+            continue;
+        };
+        if v == "none" {
+            cfg.binds.push((prefix, key, None));
+            continue;
+        }
+        match action_by_name(&v) {
+            Some(a) => cfg.binds.push((prefix, key, Some(a))),
+            None => cfg.problems.push(format!("line {}: unknown action `{v}`", n + 1)),
+        }
+    }
+    cfg
+}
+
+/// Apply overrides to a preset: a bound key replaces whatever held it, and
+/// `none` removes it. Order is the config's, so a file can be read top to
+/// bottom to know what it did.
+fn apply_key_config(mut km: Keymap, cfg: &KeyConfig) -> Keymap {
+    for (prefix, key, action) in &cfg.binds {
+        km.binds.retain(|(p, k, _)| !(p == prefix && k == key));
+        if let Some(a) = action {
+            km.binds.push((*prefix, *key, *a));
+        }
+    }
+    km
 }
 
 /// One key, rendered legibly: `C-`/`S-`/`A-` modifier prefixes, named special
@@ -6600,6 +6814,92 @@ mod tests {
         let DisplayRow::Header(reason) = &rows[0] else { panic!("expected a header") };
         // the header carries its fold marker and how many hunks it covers
         assert_eq!(reason, "▾ same definition: run (2)");
+    }
+
+    // ---- configurable keybinds ----
+
+    #[test]
+    fn every_action_has_a_config_name_and_every_name_resolves() {
+        // the table is the only way to name an action in a config file: an
+        // action missing from it simply cannot be bound
+        for km in ["vim", "vscode"] {
+            for (_, _, action) in keymap(km).unwrap().binds {
+                assert!(
+                    ACTION_NAMES.iter().any(|(_, a)| *a == action),
+                    "{action:?} is bound in {km} but has no config name"
+                );
+            }
+        }
+        for (name, action) in ACTION_NAMES {
+            assert_eq!(action_by_name(name), Some(*action));
+        }
+    }
+
+    #[test]
+    fn parse_key_is_the_inverse_of_key_label() {
+        for km in ["vim", "vscode"] {
+            for (prefix, key, _) in keymap(km).unwrap().binds {
+                for k in prefix.into_iter().chain([key]) {
+                    assert_eq!(parse_key(&key_label(k)), Some(k), "{}", key_label(k));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_config_can_add_replace_and_remove_bindings() {
+        let cfg = parse_key_config(
+            "preset = \"vscode\"\n\n[binds]\n\"C-n\" = \"next\"\n\"g d\" = \"jump-to-edge\"\n\"x\" = \"none\"\n",
+        );
+        assert!(cfg.problems.is_empty(), "{:?}", cfg.problems);
+        assert_eq!(cfg.preset.as_deref(), Some("vscode"));
+
+        let km = apply_key_config(keymap("vim").unwrap(), &cfg);
+        let has = |p: Option<Key>, k: Key, a: Action| km.binds.contains(&(p, k, a));
+        assert!(has(None, ctrl('n'), Action::Next), "added binding");
+        assert!(
+            has(Some(ch('g')), ch('d'), Action::JumpToEdge),
+            "chord binding"
+        );
+        assert!(
+            !km.binds
+                .iter()
+                .any(|(p, k, _)| p.is_none() && *k == ch('x')),
+            "`none` removes the binding"
+        );
+    }
+
+    #[test]
+    fn a_config_binding_replaces_the_presets_own() {
+        let cfg = parse_key_config("[binds]\n\"j\" = \"prev\"\n");
+        let km = apply_key_config(keymap("vim").unwrap(), &cfg);
+        let bound: Vec<Action> = km
+            .binds
+            .iter()
+            .filter(|(p, k, _)| p.is_none() && *k == ch('j'))
+            .map(|(_, _, a)| *a)
+            .collect();
+        assert_eq!(bound, vec![Action::Prev], "one binding, the config's");
+    }
+
+    #[test]
+    fn a_bad_config_line_is_reported_by_number_and_skipped() {
+        let cfg = parse_key_config(
+            "[binds]\n\"C-n\" = \"nonsense\"\n\"!!\" = \"next\"\nnot a pair\n\"C-y\" = \"help\"\n",
+        );
+        assert_eq!(cfg.problems.len(), 3, "{:?}", cfg.problems);
+        assert!(cfg.problems[0].contains("line 2"), "{:?}", cfg.problems);
+        assert!(cfg.problems[1].contains("line 3"), "{:?}", cfg.problems);
+        // the good line still lands
+        assert_eq!(cfg.binds.len(), 1);
+        assert_eq!(cfg.binds[0].2, Some(Action::Help));
+    }
+
+    #[test]
+    fn comments_and_blank_lines_are_ignored() {
+        let cfg = parse_key_config("# a comment\n\npreset = \"vim\"  # trailing\n");
+        assert!(cfg.problems.is_empty(), "{:?}", cfg.problems);
+        assert_eq!(cfg.preset.as_deref(), Some("vim"));
     }
 
     #[test]
