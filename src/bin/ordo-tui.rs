@@ -4273,14 +4273,16 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     app.scroll = app.scroll.min(last_line(app.code_len));
     app.why_scroll = app.why_scroll.min(last_line(app.why_len));
     app.why_sel = app.why_sel.min(last_line(app.why_len) as usize);
-    // the current line reverses, same idiom as the list's selection and the
-    // code pane's cursor cell
+    // the current line takes the list's selection tint, not REVERSED: this pane
+    // is prose, and swapping fg/bg on a whole wrapped paragraph reads as a
+    // block of colour rather than as "you are here". The code pane's cursor
+    // stays reversed — one cell, where the swap is exactly right.
     let why: Vec<Line> = why_content
         .iter()
         .enumerate()
         .map(|(i, r)| {
             let style = if app.focus == Pane::Why && i == app.why_sel {
-                r.style.add_modifier(Modifier::REVERSED)
+                r.style.bg(app.theme.select_bg)
             } else {
                 r.style
             };
