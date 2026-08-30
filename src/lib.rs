@@ -24,6 +24,7 @@ pub fn run(input: Input) -> Output {
     let mut sems: Vec<Vec<HunkSem>> = vec![];
     let mut degraded: Vec<bool> = vec![];
     let mut comment_only: Vec<Vec<bool>> = vec![];
+    let mut dropped: Vec<Vec<DroppedHunk>> = vec![];
     for change in &input.changes {
         let (raw, sem, deg, com) = build_change(change, input.options.full_context);
         if deg {
@@ -37,14 +38,32 @@ pub fn run(input: Input) -> Output {
         // drops non-comment hunks the same way, keeping order/groups/edges/
         // clusters internally consistent (a post-filter of the finished
         // Output would leave them referring to hunks no longer present).
+        // Each drop is recorded with its range, so `hunks + dropped` accounts
+        // for every hunk the diff produced and a missing one can be told from a
+        // deliberately removed one.
         let mut raw_kept = vec![];
         let mut sem_kept = vec![];
         let mut com_kept = vec![];
+        let mut gone = vec![];
         for ((r, s), c) in raw.into_iter().zip(sem).zip(com) {
-            if s.category != Category::Import && (!input.options.only_comments || c) {
-                raw_kept.push(r);
-                sem_kept.push(s);
-                com_kept.push(c);
+            let reason = if s.category == Category::Import {
+                Some(DropReason::Import)
+            } else if input.options.only_comments && !c {
+                Some(DropReason::NonComment)
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => gone.push(DroppedHunk {
+                    reason,
+                    old_range: r.old_range,
+                    new_range: r.new_range,
+                }),
+                None => {
+                    raw_kept.push(r);
+                    sem_kept.push(s);
+                    com_kept.push(c);
+                }
             }
         }
         let (raw, sem, com) = (raw_kept, sem_kept, com_kept);
@@ -52,6 +71,7 @@ pub fn run(input: Input) -> Output {
         sems.push(sem);
         degraded.push(deg);
         comment_only.push(com);
+        dropped.push(gone);
     }
 
     let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
@@ -317,6 +337,7 @@ pub fn run(input: Input) -> Output {
             hunks,
             degraded: degraded[fi],
             unsupported: lang::for_path(&change.path).is_none(),
+            dropped: std::mem::take(&mut dropped[fi]),
         });
     }
 

@@ -70,6 +70,26 @@ pub enum Category {
     Other,
 }
 
+/// Why the engine removed a hunk before ordering. Both reasons are stated
+/// selections (imports are always dropped; `only_comments` is asked for), so a
+/// consumer can always account for the difference between the hunks a file had
+/// and the hunks it can see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DropReason {
+    Import,
+    NonComment,
+}
+
+/// A hunk that never reached the reading order, with the range it covered — so
+/// a caller can tell a hunk that was dropped from one that was never found.
+#[derive(Debug, Clone, Serialize)]
+pub struct DroppedHunk {
+    pub reason: DropReason,
+    pub old_range: [usize; 2],
+    pub new_range: [usize; 2],
+}
+
 #[derive(Debug, Serialize)]
 pub struct Output {
     pub schema: u32,
@@ -100,6 +120,11 @@ pub struct FileOut {
     /// carry no structural analysis at all. Omitted when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub unsupported: bool,
+    /// hunks this file had that were dropped before ordering, with the reason.
+    /// `hunks.len() + dropped.len()` is what the diff actually produced, so a
+    /// consumer can prove nothing went missing silently. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<DroppedHunk>,
 }
 
 fn is_false(b: &bool) -> bool {

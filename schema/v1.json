@@ -68,6 +68,19 @@
                 "type": "boolean",
                 "description": "true when the file's extension has no tree-sitter grammar, so hunks carry no structural analysis; omitted when false"
               },
+              "dropped": {
+                "type": "array",
+                "description": "hunks removed before ordering, with the reason; hunks + dropped is what the diff produced, so a consumer can prove nothing went missing silently; omitted when empty",
+                "items": {
+                  "type": "object",
+                  "required": ["reason", "old_range", "new_range"],
+                  "properties": {
+                    "reason": { "enum": ["import", "non_comment"] },
+                    "old_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                    "new_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
+                  }
+                }
+              },
               "hunks": {
                 "type": "array",
                 "items": {

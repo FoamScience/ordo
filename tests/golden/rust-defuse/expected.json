@@ -70,6 +70,19 @@
             }
           ]
         }
+      ],
+      "dropped": [
+        {
+          "reason": "import",
+          "old_range": [
+            1,
+            0
+          ],
+          "new_range": [
+            1,
+            1
+          ]
+        }
       ]
     }
   ],
