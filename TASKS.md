@@ -169,3 +169,45 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 ## P16 — relocation / extraction detection  ✅
 - [x] `symbol_bodies` also returns each def's substantial body lines
 - [x] an added def whose body-lines overlap a still-present old def (≥3 shared, ≥50%) → "adds X, extracted from Y" (catches extractions where the body was also edited and the source name is reused — exact rename/move miss these). Tested (`p16_extraction_from_present_def`).
+
+## P17 — containers: every hunk belongs to something  ✅
+
+A hunk outside any definition used to carry the bare rationale `change`. 372 of
+them across the 10-repo corpus (47k hunks); the cause was singular — nothing in
+`defs` held them — so the fix was to widen what counts as a container without
+widening what counts as a *definition*. `enclosing_kind` (schema, optional) says
+which: a region name is never a symbol, never enters `defines`, never seeds an
+edge.
+
+- [x] **macros are definitions** — `preproc_def`/`preproc_function_def` (c/cpp);
+      a macro's `value` is its body, so a body edit stops reading as a signature
+      change (the same bug hit rust `const_item`/`static_item`)
+- [x] **test blocks** — `describe`/`it`/`test`/`context`/`suite`/`bench` in
+      js/ts/tsx and lua (busted), rust test macros (`rgtest!`); nested labels
+      join with ` > `, the rationale names the innermost
+- [x] **regions** — `#ifdef`/`#ifndef`/`#if`, markdown preamble and front matter
+- [x] **bindings** — a file-scope binding whose multi-line value holds the hunk,
+      with its literal's elements as detail-layer members
+- [x] **calls** — a file-scope call whose multi-line arguments hold the hunk
+- [x] **re-exports are bookkeeping** — `export * from`, `export {} `; NOT
+      `export default <value>`, which fills `value` rather than `declaration`
+- [x] **whitespace** — a blank-line-only hunk is formatting noise; an import
+      line that moved leaving a blank behind is too
+- [x] **switched-off code** — `comments out code` / `uncomments code` (exact
+      match after stripping markers), `replaces N lines with a comment` when it
+      is documentation arriving where code left
+- [x] **removed file-scope bindings** are named, not counted as lines
+- [x] language injection — a markdown fence is parsed with its own grammar, and
+      contributes *uses only*: a sample documents an API, it does not define it
+
+Result: 372 → 0 bare `change` across the corpus, with the invariants and the
+git line-coverage check holding.
+
+## P18 — reviewer polish  ✅
+- [x] intra-line refinement (`ordo::refine`) — leaf-level LCS, only the part of
+      a changed line that differs is tinted
+- [x] `:audit` — every hunk and file not on screen, charged to what removed it
+- [x] fold the reading order by group (`za`/`zo`/`zc`/`zR`/`zM`, `C-k` chords)
+- [x] `Esc` clears a search before it quits; `K` finds the line's symbol and
+      names the function a parameter belongs to
+- [ ] configurable keybind presets (`~/.config/ordo/tui.toml`)
