@@ -39,6 +39,9 @@ it as such.
 - **Full accounting** — every hunk the diff produced is either in the reading
   order or recorded in `dropped` with the reason, so a consumer can prove
   nothing went missing silently.
+- **Intra-line refinement** — when a removed and an added line are the same line
+  edited, only the part that changed is highlighted, over grammar leaves rather
+  than characters: adding a parameter reads as adding that parameter.
 - **A reviewer TUI** — `ordo-tui`, a first-party client that shells to git and
   renders the whole thing in the terminal.
 
@@ -130,6 +133,26 @@ the change **in comprehension order**: a reading-order list (advisories `⚠`,
 noise dimmed, reviewed `✓`) beside a detail pane with tree-sitter
 syntax-highlighted, Neovim-style diff rendering, over the rationale, notes,
 def→use edges and advisory ladders. The engine never learns what git is.
+
+Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
+removed line is paired with the added line it became, and only the differing
+part carries the strong tint —
+
+```diff
+- fn content_matches(info: &AgentInfo, node: &AgentNode) -> bool {
++ fn content_matches(info: &AgentInfo, node: &AgentNode, label: Option<&str>) -> bool {
+                                                       └── only this is highlighted
+```
+
+The unit of comparison is the tree-sitter **leaf node**, never a character or a
+whitespace-split word, so `AgentNode` → `AgentNodeRef` reads as one identifier
+replaced rather than a three-character suffix appended. Lines with too little in
+common are left unrefined and render whole, so a rewrite is never dressed up as
+a small edit. The algorithm is `ordo::refine`, a public library module — a
+leaf-level LCS, deliberately not a full tree alignment (difftastic's
+Dijkstra-over-graphs, or `syndiff`): those buy accuracy on moved and
+restructured code at a cost this does not need to pay to say "an argument was
+added".
 
 <details>
 <summary><b>Revision syntax, path filters, GitButler support</b></summary>

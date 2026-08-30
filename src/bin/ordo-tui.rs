@@ -545,7 +545,8 @@ fn load(target: Target, filter: Filter, only_comments: bool, rev: String, tx: mp
             ordo::model::DropReason::NonComment => ledger.hunks_non_comment += 1,
         }
     }
-    let items = build_items(&out);
+    let mut items = build_items(&out);
+    refine_items(&mut items, &sources);
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None);
     if view.is_empty() {
@@ -1029,6 +1030,11 @@ struct Item {
     /// the engine's `HunkOut::group` id — drives `:group`'s header rows (see
     /// `App::groups` for the id -> reason lookup)
     group: String,
+    /// intra-line refinement (`ordo::refine`), parallel to the hunk's lines on
+    /// each side: `Some(spans)` means the line was paired with its counterpart
+    /// and only those char spans changed; `None` means it renders whole. Empty
+    /// when the file has no grammar or the hunk was too large to refine.
+    refined: ordo::refine::Refined,
 }
 
 /// One `dep` line's rendered label plus the target hunk's resolved position in
@@ -1921,9 +1927,26 @@ fn build_items(out: &Output) -> Vec<Item> {
                 symbols: h.symbols.clone(),
                 enclosing: h.enclosing.clone(),
                 group: h.group.clone(),
+                refined: ordo::refine::Refined::default(),
             })
         })
         .collect()
+}
+
+/// Fill in each item's intra-line refinement. One `Refiner` per file, not per
+/// hunk: it parses both sides, which is the expensive part, and a file usually
+/// carries several hunks.
+fn refine_items(items: &mut [Item], sources: &Sources) {
+    let mut by_path: HashMap<String, Option<ordo::refine::Refiner>> = HashMap::new();
+    for it in items.iter_mut() {
+        let Some((ol, nl)) = sources.get(&it.path) else { continue };
+        let refiner = by_path
+            .entry(it.path.clone())
+            .or_insert_with(|| ordo::refine::Refiner::new(&it.path, ol, nl));
+        if let Some(r) = refiner {
+            it.refined = r.refine(it.old_range, it.new_range);
+        }
+    }
 }
 
 /// Which of `items` are currently visible, in order — the client-side view a
@@ -2384,6 +2407,11 @@ fn highlight_file(path: &str, src: &str) -> Option<Vec<LineSpans>> {
 struct Theme {
     add_bg: Color,
     del_bg: Color,
+    /// the *changed part* of a line whose counterpart was identified — the
+    /// line keeps the quiet add/del tint, and only what actually changed gets
+    /// these (Neovim's DiffText over DiffChange)
+    add_strong_bg: Color,
+    del_strong_bg: Color,
     /// reading-order list's selected-row tint — a neutral slate, subtle next
     /// to add_bg/del_bg rather than the full fg/bg swap REVERSED gives
     select_bg: Color,
@@ -2398,6 +2426,8 @@ impl Theme {
         Theme {
             add_bg: Color::Rgb(20, 40, 25),
             del_bg: Color::Rgb(50, 24, 28),
+            add_strong_bg: Color::Rgb(34, 84, 46),
+            del_strong_bg: Color::Rgb(104, 40, 46),
             select_bg: Color::Rgb(45, 50, 62),
             match_bg: Color::Rgb(70, 60, 10),
             match_cur_bg: Color::Rgb(140, 110, 15),
@@ -2410,6 +2440,8 @@ impl Theme {
         Theme {
             add_bg: Color::Rgb(214, 240, 218),
             del_bg: Color::Rgb(248, 214, 214),
+            add_strong_bg: Color::Rgb(160, 220, 175),
+            del_strong_bg: Color::Rgb(245, 174, 174),
             select_bg: Color::Rgb(222, 226, 236),
             match_bg: Color::Rgb(255, 236, 170),
             match_cur_bg: Color::Rgb(255, 202, 68),
@@ -2571,8 +2603,24 @@ fn code_view(
         let shown = len.saturating_sub(hscroll).min(avail);
         (slice_range(content, hscroll, avail), shown, clipped)
     };
+    // a line paired with its counterpart (see `ordo::refine`) keeps the quiet
+    // tint and gets the strong one only where it actually differs; an unpaired
+    // line has no counterpart to compare against and tints whole
+    let emphasize = |mut spans: Vec<Span<'static>>,
+                     refined: Option<&Vec<(usize, usize)>>,
+                     bg: Color|
+     -> Vec<Span<'static>> {
+        for &(cs, ce) in refined.map(|v| v.as_slice()).unwrap_or(&[]) {
+            if ce <= hscroll || cs >= hscroll + avail {
+                continue;
+            }
+            let (ls, le) = (cs.saturating_sub(hscroll), (ce - hscroll).min(avail));
+            spans = overlay_range(spans, GUTTER_W + ls, GUTTER_W + le, |st| st.bg(bg));
+        }
+        spans
+    };
     let emit_removed = |out: &mut Vec<Line<'static>>| {
-        for r in &removed {
+        for (k, r) in removed.iter().enumerate() {
             let content = vec![Span::styled((*r).clone(), Style::default().fg(Color::Red).bg(theme.del_bg))];
             let (visible, shown, clipped) = window(content, r.chars().count());
             right_clip.set(right_clip.get() | clipped);
@@ -2582,6 +2630,7 @@ fn code_view(
             ];
             spans.extend(visible);
             pad(&mut spans, GUTTER_W + shown, theme.del_bg);
+            spans = emphasize(spans, it.refined.removed.get(k).and_then(|s| s.as_ref()), theme.del_strong_bg);
             out.push(Line::from(spans));
         }
     };
@@ -2612,6 +2661,8 @@ fn code_view(
         spans.extend(visible);
         if added {
             pad(&mut spans, GUTTER_W + shown, bg);
+            let k = ln - n0;
+            spans = emphasize(spans, it.refined.added.get(k).and_then(|s| s.as_ref()), theme.add_strong_bg);
         }
         for (mi, &(ml, s, e)) in matches.iter().enumerate() {
             // only a match that intersects the visible horizontal window can
@@ -5770,6 +5821,7 @@ mod tests {
             symbols: vec![],
             enclosing: None,
             group: String::new(),
+            refined: ordo::refine::Refined::default(),
         }
     }
 
@@ -5807,6 +5859,65 @@ mod tests {
         // both directions were clipped at this width, so both report it
         assert!(right_clip_0);
         assert!(right_clip_5);
+    }
+
+    #[test]
+    fn code_view_tints_only_the_refined_span_of_a_paired_line() {
+        let old = "fn f(a: A) {}".to_string();
+        let new = "fn f(a: A, b: B) {}".to_string();
+        let mut it = test_item("f.rs");
+        it.old_range = [1, 1];
+        it.new_range = [1, 1];
+        let mut sources: Sources = HashMap::new();
+        sources.insert("f.rs".to_string(), (vec![old.clone()], vec![new.clone()]));
+        let mut items = vec![it];
+        refine_items(&mut items, &sources);
+        let it = &items[0];
+        assert_eq!(
+            it.refined.added[0],
+            Some(vec![(9, 15)]),
+            "expected only `, b: B` to be refined"
+        );
+
+        let theme = Theme::dark();
+        let (rows, _) = code_view(it, &sources, &HashMap::new(), 60, 0, None, &[], None, &theme);
+        // the added row is the one carrying the add tint (the removed row
+        // comes first, on the del tint)
+        let added = rows.last().expect("an added row");
+        // walk the row char by char: the strong tint covers `, b: B` and
+        // nothing else
+        let mut strong = String::new();
+        for span in &added.spans {
+            if span.style.bg == Some(theme.add_strong_bg) {
+                strong.push_str(&span.content);
+            }
+        }
+        assert_eq!(strong, ", b: B");
+    }
+
+    #[test]
+    fn code_view_tints_a_whole_unpaired_line() {
+        // nothing in common with the removed line, so no span is singled out
+        let mut it = test_item("f.rs");
+        it.old_range = [1, 1];
+        it.new_range = [1, 1];
+        let mut sources: Sources = HashMap::new();
+        sources.insert(
+            "f.rs".to_string(),
+            (vec!["use std::io;".to_string()], vec!["fn totally(different: X) {}".to_string()]),
+        );
+        let mut items = vec![it];
+        refine_items(&mut items, &sources);
+        assert_eq!(items[0].refined.added[0], None);
+
+        let theme = Theme::dark();
+        let (rows, _) =
+            code_view(&items[0], &sources, &HashMap::new(), 60, 0, None, &[], None, &theme);
+        let added = rows.last().unwrap();
+        assert!(
+            added.spans.iter().all(|s| s.style.bg != Some(theme.add_strong_bg)),
+            "an unpaired line must not be partially tinted"
+        );
     }
 
     #[test]
