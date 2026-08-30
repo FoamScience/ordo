@@ -506,3 +506,29 @@ fn commenting_out_at_file_scope_needs_no_container() {
     let out = one("d.js", "run(1);\n", "// run(1);\n");
     assert_eq!(out.files[0].hunks[0].rationale, "comments out code");
 }
+
+#[test]
+fn a_removed_module_constant_is_named_not_counted() {
+    let out = one(
+        "b.ts",
+        "export const OLD = 24;\nexport function run() { return 1; }\n",
+        "export function run() { return 1; }\n",
+    );
+    assert_eq!(out.files[0].hunks[0].rationale, "removes OLD");
+}
+
+#[test]
+fn a_removed_local_is_still_part_of_editing_its_function() {
+    // only file-scope bindings are named: a local's removal belongs to the
+    // function it lived in, which the rationale already names
+    let out = one(
+        "c.py",
+        "def run():\n    tmp = 1\n    return 2\n",
+        "def run():\n    return 2\n",
+    );
+    assert!(
+        !out.files[0].hunks[0].rationale.contains("removes tmp"),
+        "{}",
+        out.files[0].hunks[0].rationale
+    );
+}

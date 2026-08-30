@@ -101,6 +101,9 @@ pub fn run(input: Input) -> Output {
     let mut old_rows: Vec<(Vec<(String, usize)>, Vec<(String, usize)>)> = vec![];
     let mut old_body: Vec<Vec<extract::Body>> = vec![];
     let mut new_body: Vec<Vec<extract::Body>> = vec![];
+    // file-scope bindings per side: a removed one is named rather than counted
+    let mut old_binds: Vec<Vec<(String, usize)>> = vec![];
+    let mut new_binds: Vec<HashSet<String>> = vec![];
     for c in &input.changes {
         let spec = lang::for_path(&c.path);
         let rows = match (c.old.as_deref(), spec) {
@@ -130,6 +133,17 @@ pub fn run(input: Input) -> Output {
         old_rows.push(rows);
         old_body.push(ob);
         new_body.push(nb);
+        old_binds.push(match (c.old.as_deref(), spec) {
+            (Some(old), Some(sp)) => extract::top_level_bindings(sp, old),
+            _ => vec![],
+        });
+        new_binds.push(match (c.new.as_deref(), spec) {
+            (Some(nw), Some(sp)) => extract::top_level_bindings(sp, nw)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            _ => HashSet::new(),
+        });
     }
     // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
     let mut appeared: HashMap<(String, String), usize> = HashMap::new();
@@ -258,6 +272,13 @@ pub fn run(input: Input) -> Output {
         for (name, row) in oir {
             if !ni.contains(name) {
                 rem.push((*row, format!("removes import {name}")));
+            }
+        }
+        // a removed file-scope binding: not a definition, but naming it beats
+        // the "removes N lines" fallback a module constant would get otherwise
+        for (name, row) in &old_binds[fi] {
+            if !new_binds[fi].contains(name) && !nd.contains(name) && !od.contains(name) {
+                rem.push((*row, format!("removes {name}")));
             }
         }
         rename[fi] = ren;

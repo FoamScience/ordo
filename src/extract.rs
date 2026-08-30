@@ -1486,6 +1486,47 @@ pub fn member_rows(spec: &LangSpec, content: &str) -> Vec<MemberRow> {
     c.member_rows
 }
 
+/// Names bound at file scope, with their 1-based rows — a module constant, a
+/// lookup table, an exported literal. They are not definitions (see
+/// `binding_container`), but a *removed* one is worth naming: "removes 1 line"
+/// is what a reviewer gets otherwise. Function-local bindings are deliberately
+/// excluded: their removal is part of editing the function that holds them.
+pub fn top_level_bindings(spec: &LangSpec, content: &str) -> Vec<(String, usize)> {
+    let mut out = vec![];
+    let mut parser = Parser::new();
+    if parser.set_language(&(spec.language)()).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return out;
+    };
+    collect_top_binds(tree.root_node(), content.as_bytes(), spec, &mut out);
+    out
+}
+
+/// Walks the file scope only: it descends through wrappers (`export const …`
+/// nests the declaration two levels down) but never into a definition, whose
+/// bindings are locals belonging to it rather than to the file.
+fn collect_top_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(String, usize)>) {
+    let mut cur = node.walk();
+    for child in node.named_children(&mut cur) {
+        if spec.is_def(child.kind()) {
+            continue;
+        }
+        if spec.is_local(child.kind()) && !child.has_error() {
+            for id in binding_idents(child, child.kind()) {
+                if let Ok(name) = id.utf8_text(src).map(tidy_ident) {
+                    if !name.is_empty() {
+                        out.push((name, child.start_position().row + 1));
+                    }
+                }
+            }
+            continue;
+        }
+        collect_top_binds(child, src, spec, out);
+    }
+}
+
 pub fn symbol_rows(spec: &LangSpec, content: &str) -> (Vec<(String, usize)>, Vec<(String, usize)>) {
     let mut defs = vec![];
     let mut imports = vec![];
