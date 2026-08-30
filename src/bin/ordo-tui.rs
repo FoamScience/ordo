@@ -2863,6 +2863,45 @@ fn identifier_at<'a>(parsed: &'a ParsedFile, nl: &[String], cursor: Cursor) -> O
     first_identifier_on_line(parsed, cursor.line, col)
 }
 
+/// The definition this identifier names a *parameter* of, if it does. Looks up
+/// from the identifier to the enclosing definition and checks that definition's
+/// own parameter list — so a parameter reads the same whether the cursor is on
+/// its declaration or on a use of it further down the body. A parameter has no
+/// definition to find, and reporting "not defined in this file" sends the
+/// reviewer looking through other files for something that was never there.
+fn parameter_owner(node: Node, kinds: &[&str], src: &str) -> Option<String> {
+    let name = node_text(node, src);
+    let mut cur = node;
+    loop {
+        cur = cur.parent()?;
+        if !kinds.contains(&cur.kind()) {
+            continue;
+        }
+        let params = cur.child_by_field_name("parameters")?;
+        if !subtree_names(params, src).contains(&name) {
+            return None; // the enclosing definition binds it some other way
+        }
+        let owner = cur
+            .child_by_field_name("name")
+            .or_else(|| cur.child_by_field_name("declarator"))?;
+        return Some(node_text(owner, src));
+    }
+}
+
+/// Every identifier text inside a subtree.
+fn subtree_names(node: Node, src: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = node.walk();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind().contains("identifier") {
+            out.push(node_text(n, src));
+        }
+        stack.extend(n.named_children(&mut cur));
+    }
+    out
+}
+
 /// The leftmost identifier node beginning at or after `col` on `row`.
 fn first_identifier_on_line<'a>(
     parsed: &'a ParsedFile,
@@ -2940,6 +2979,10 @@ fn hover(app: &mut App) {
         }
         let id = (def.kind().to_string(), def.start_position().row, parsed.src.clone());
         (lines, Some(id))
+    } else if let Some(owner) = parameter_owner(node, kinds, &parsed.src) {
+        // a parameter has no definition to find, and saying so as "not defined
+        // in this file" points the reviewer at other files for no reason
+        (vec![format!("parameter of {owner}")], None)
     } else {
         (vec!["not defined in this file".to_string()], None)
     };
