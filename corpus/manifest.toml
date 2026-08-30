@@ -56,14 +56,6 @@ max_commits = 200
 # touch 300+, so this one is the slowest entry (~450ms/commit).
 
 [[repo]]
-name = "fmt"
-lang = "cpp"
-url = "https://github.com/fmtlib/fmt.git"
-rev = "e76a9520a3c339d2cb6a1510db43a05ea9bd8ae6"
-max_commits = 350
-# template- and class-heavy — class_specifier / enumerator coverage
-
-[[repo]]
 name = "cobra"
 lang = "go"
 url = "https://github.com/spf13/cobra.git"
@@ -94,6 +86,16 @@ url = "https://github.com/vuejs/core.git"
 rev = "d63616ca17de965ed32dcb449a4c5cd9982f15d2"
 max_commits = 250
 # strong conventional-commit adherence; heavy TS interface/enum use
+
+[[repo]]
+name = "excalidraw"
+lang = "tsx"
+url = "https://github.com/excalidraw/excalidraw.git"
+rev = "e1bb9ff8f8931e783c11d104abb8967ac6605c9a"
+max_commits = 300
+# the only repo that exercises the tsx grammar in bulk (1110 .tsx files changed
+# in this window against vue's 4): JSX inside typed components, forwardRef and
+# hook-heavy call sites. Median 3 files per commit, ~98% conventional messages.
 
 [[repo]]
 name = "lazy"

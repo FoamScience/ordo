@@ -29,6 +29,16 @@
     "with_details": 156,
     "with_symbols": 439
   },
+  "excalidraw": {
+    "anonymous": 0,
+    "bare_change": 116,
+    "degraded_files": 0,
+    "hunks": 7715,
+    "longest_rationale": 239,
+    "unsupported_files": 0,
+    "with_details": 2034,
+    "with_symbols": 720
+  },
   "execa": {
     "anonymous": 0,
     "bare_change": 63,
@@ -38,16 +48,6 @@
     "unsupported_files": 0,
     "with_details": 2546,
     "with_symbols": 2676
-  },
-  "fmt": {
-    "anonymous": 0,
-    "bare_change": 23,
-    "degraded_files": 0,
-    "hunks": 1298,
-    "longest_rationale": 187,
-    "unsupported_files": 0,
-    "with_details": 71,
-    "with_symbols": 174
   },
   "junit5": {
     "anonymous": 0,
