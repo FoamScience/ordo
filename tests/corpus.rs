@@ -114,7 +114,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 /// One commit's changed files as engine input: both sides' full blobs, so hunks
 /// get full semantics rather than degrading to a context-limited patch.
-fn commit_input(dir: &Path, sha: &str) -> Option<Input> {
+fn commit_input(dir: &Path, sha: &str) -> Option<(String, Input)> {
     let parent = git(dir, &["rev-parse", "--verify", "-q", &format!("{sha}^")]);
     let parent = parent.trim();
     // A commit whose parent is missing sits on the shallow clone's boundary, not
@@ -136,10 +136,109 @@ fn commit_input(dir: &Path, sha: &str) -> Option<Input> {
             diff: None,
         })
         .collect();
-    (!changes.is_empty()).then(|| Input {
-        changes,
-        options: Options::default(),
+    (!changes.is_empty()).then(|| {
+        (
+            parent.to_string(),
+            Input {
+                changes,
+                options: Options::default(),
+            },
+        )
     })
+}
+
+/// Every line git considers changed must fall inside a hunk the engine emitted
+/// or explicitly recorded as dropped. This is the only check here that does not
+/// trust ordo's own diff: git's Myers implementation is the independent witness,
+/// so a line the engine never turned into a hunk at all shows up as a gap.
+///
+/// Hunk *counts* are deliberately not compared — git and ordo split and merge
+/// adjacent changes differently, and both are right. Coverage is the invariant.
+fn check_coverage(label: &str, dir: &Path, parent: &str, sha: &str, out: &Output) {
+    // `-U0` so each header's range is exactly the changed lines, nothing else
+    let diff = git(dir, &["diff", "-U0", parent, sha]);
+    let spans = |file: &ordo::model::FileOut, old: bool| -> Vec<[usize; 2]> {
+        let kept = file
+            .hunks
+            .iter()
+            .map(|h| if old { h.old_range } else { h.new_range });
+        let gone = file
+            .dropped
+            .iter()
+            .map(|d| if old { d.old_range } else { d.new_range });
+        // an empty span (end < start) is a pure insertion/deletion on this side
+        kept.chain(gone).filter(|r| r[1] >= r[0]).collect()
+    };
+    let covered =
+        |spans: &[[usize; 2]], line: usize| spans.iter().any(|r| line >= r[0] && line <= r[1]);
+
+    // `+++ b/<path>` / `--- a/<path>`, with /dev/null for an add or delete
+    let strip = |s: &str| -> Option<String> {
+        let p = s.split_once(' ').map(|(_, p)| p).unwrap_or("").trim();
+        (p != "/dev/null").then(|| {
+            p.split_once('/')
+                .map_or(p.to_string(), |(_, r)| r.to_string())
+        })
+    };
+    let by_path: BTreeMap<&str, &ordo::model::FileOut> =
+        out.files.iter().map(|f| (f.path.as_str(), f)).collect();
+
+    let (mut a_path, mut b_path) = (None, None);
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("--- ") {
+            a_path = strip(rest);
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            b_path = strip(rest);
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("@@ ") else {
+            continue;
+        };
+        let Some((ranges, _)) = rest.split_once(" @@") else {
+            continue;
+        };
+        let mut sides = ranges.split_whitespace();
+        let (Some(minus), Some(plus)) = (sides.next(), sides.next()) else {
+            continue;
+        };
+        let parse = |s: &str| -> (usize, usize) {
+            let s = &s[1..];
+            match s.split_once(',') {
+                Some((a, b)) => (a.parse().unwrap_or(0), b.parse().unwrap_or(0)),
+                None => (s.parse().unwrap_or(0), 1),
+            }
+        };
+        // the old side is only comparable when both sides name the same path —
+        // a rename means the engine saw the new path against an empty old one
+        let same_path = a_path.is_none() || b_path.is_none() || a_path == b_path;
+        for (side_is_old, header) in [(true, minus), (false, plus)] {
+            if side_is_old && !same_path {
+                continue;
+            }
+            let Some(path) = (if side_is_old {
+                a_path.as_deref()
+            } else {
+                b_path.as_deref()
+            }) else {
+                continue;
+            };
+            let Some(file) = by_path.get(path) else {
+                continue;
+            };
+            let (start, count) = parse(header);
+            let s = spans(file, side_is_old);
+            for line_no in start..start + count {
+                assert!(
+                    covered(&s, line_no),
+                    "{label}: {path}: {} line {line_no} is changed but lies in no hunk \
+                     (kept or dropped) — the engine lost it",
+                    if side_is_old { "old" } else { "new" }
+                );
+            }
+        }
+    }
 }
 
 #[derive(Default, PartialEq)]
@@ -252,11 +351,13 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
     let mut m = Metrics::default();
     let mut swept = 0usize;
     for sha in shas.lines() {
-        let Some(input) = commit_input(dir, sha) else {
+        let Some((parent, input)) = commit_input(dir, sha) else {
             continue;
         };
         let out = ordo::run(input);
-        check_invariants(&format!("{} {}", repo.name, &sha[..8]), &out);
+        let label = format!("{} {}", repo.name, &sha[..8]);
+        check_invariants(&label, &out);
+        check_coverage(&label, dir, &parent, sha, &out);
         swept += 1;
         for f in &out.files {
             m.degraded_files += f.degraded as usize;
