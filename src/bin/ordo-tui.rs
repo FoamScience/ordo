@@ -4,7 +4,7 @@
 //! highlighted in context, plus rationale, advisories and def→use edges. The
 //! engine stays git-free; gated behind the `tui` feature so the default build
 //! never pulls a UI stack.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -1275,10 +1275,23 @@ enum Action {
     /// `C-o` (vim) / `Alt-Left` (vscode) — pop the position stack `JumpToEdge`
     /// pushed, returning to where the jump was made from
     JumpBack,
+    /// `za`/`zo`/`zc`/`zR`/`zM` (vim), `C-k C-l`/`C-k C-0`/`C-k C-j` (vscode) —
+    /// fold the reading-order list by group
+    Fold(Fold),
     /// `zh`/`zl` (vim), shift-left/shift-right (vscode) — scroll the code
     /// pane's horizontal window without moving the cursor
     ScrollLeft,
     ScrollRight,
+}
+
+/// Which way a fold key moves the group under the selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fold {
+    Toggle,
+    Open,
+    Close,
+    OpenAll,
+    CloseAll,
 }
 
 type Key = (KeyCode, KeyModifiers);
@@ -1387,6 +1400,11 @@ fn keymap(name: &str) -> Option<Keymap> {
                 // commands, e.g. zh/zl to scroll a `nowrap` window sideways)
                 (Some(ch('z')), ch('h'), Action::ScrollLeft),
                 (Some(ch('z')), ch('l'), Action::ScrollRight),
+                (Some(ch('z')), ch('a'), Action::Fold(Fold::Toggle)),
+                (Some(ch('z')), ch('o'), Action::Fold(Fold::Open)),
+                (Some(ch('z')), ch('c'), Action::Fold(Fold::Close)),
+                (Some(ch('z')), ch('R'), Action::Fold(Fold::OpenAll)),
+                (Some(ch('z')), ch('M'), Action::Fold(Fold::CloseAll)),
                 (None, ch('K'), Action::Hover),
                 (None, ch('/'), Action::SearchOpen),
                 (None, ch('*'), Action::SymbolNext),
@@ -1451,6 +1469,12 @@ fn keymap(name: &str) -> Option<Keymap> {
                 // horizontal-scroll pair vscode has no dedicated key for
                 (None, (KeyCode::Left, KeyModifiers::SHIFT), Action::ScrollLeft),
                 (None, (KeyCode::Right, KeyModifiers::SHIFT), Action::ScrollRight),
+                // vscode's own folding chords. `Ctrl+Shift+[` / `]` (its
+                // fold/unfold pair) can't be told apart from Esc by a terminal,
+                // so the `Ctrl+K` chords — which vscode also ships — are used.
+                (Some(ctrl('k')), ctrl('l'), Action::Fold(Fold::Toggle)),
+                (Some(ctrl('k')), ctrl('0'), Action::Fold(Fold::CloseAll)),
+                (Some(ctrl('k')), ctrl('j'), Action::Fold(Fold::OpenAll)),
                 (None, plain(KeyCode::F(12)), Action::Hover),
                 (None, ctrl('f'), Action::SearchOpen),
                 (None, plain(KeyCode::F(3)), Action::SearchNext),
@@ -1542,6 +1566,11 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::LineEnd => (Category::Navigation, "move to line end / pane bottom"),
         Action::ParaPrev => (Category::Navigation, "jump to the previous blank line"),
         Action::ParaNext => (Category::Navigation, "jump to the next blank line"),
+        Action::Fold(Fold::Toggle) => (Category::Review, "fold/unfold the selected hunk's group"),
+        Action::Fold(Fold::Open) => (Category::Review, "unfold the selected hunk's group"),
+        Action::Fold(Fold::Close) => (Category::Review, "fold the selected hunk's group"),
+        Action::Fold(Fold::OpenAll) => (Category::Review, "unfold every group"),
+        Action::Fold(Fold::CloseAll) => (Category::Review, "fold every group"),
         Action::ScrollLeft => (
             Category::Navigation,
             "scroll the code pane (or an open popup) left",
@@ -1823,6 +1852,9 @@ struct App {
     /// group id -> the engine's `Group::reason`, carried out of `load()`
     /// alongside `items` so headers can show it without re-touching the engine
     groups: HashMap<String, String>,
+    /// group ids whose hunks are folded away under their header (`za` and
+    /// friends); empty means everything is expanded
+    collapsed: HashSet<String>,
     /// what the filters and the engine dropped on the way here — `:audit`
     ledger: Ledger,
 }
@@ -2025,6 +2057,7 @@ fn display_rows(
     items: &[Item],
     groups: &HashMap<String, String>,
     show_groups: bool,
+    collapsed: &HashSet<String>,
 ) -> Vec<DisplayRow> {
     if !show_groups {
         return view.iter().map(|&i| DisplayRow::Item(i)).collect();
@@ -2033,14 +2066,78 @@ fn display_rows(
     let mut last: Option<&str> = None;
     for &i in view {
         let gid = items[i].group.as_str();
+        let folded = collapsed.contains(gid);
         if last != Some(gid) {
-            let reason = groups.get(gid).map(String::as_str).unwrap_or(gid).to_string();
-            rows.push(DisplayRow::Header(reason));
+            let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
+            let n = view.iter().filter(|&&j| items[j].group == gid).count();
+            // a folded group still says how much it is hiding — otherwise the
+            // list silently shrinks and a reviewer can lose track of what is left
+            let marker = if folded { "▸" } else { "▾" };
+            rows.push(DisplayRow::Header(format!("{marker} {reason} ({n})")));
             last = Some(gid);
         }
-        rows.push(DisplayRow::Item(i));
+        if !folded {
+            rows.push(DisplayRow::Item(i));
+        }
     }
     rows
+}
+
+/// The items a fold state actually shows — `view` minus everything inside a
+/// collapsed group. The selected hunk is always kept: folding the group you are
+/// standing in moves you to its header, it never leaves the selection pointing
+/// at a row that isn't drawn.
+fn folded_view(app: &App) -> Vec<usize> {
+    if !app.show_groups || app.collapsed.is_empty() {
+        return app.view.clone();
+    }
+    let visible: Vec<usize> = app
+        .view
+        .iter()
+        .copied()
+        .filter(|&i| !app.collapsed.contains(&app.items[i].group))
+        .collect();
+    if visible.is_empty() {
+        app.view.clone()
+    } else {
+        visible
+    }
+}
+
+/// Fold state change for the group holding the selected hunk (or every group).
+fn fold(app: &mut App, how: Fold) {
+    // folding is a statement about groups: turning the headers on is what the
+    // reviewer meant, not an error to report
+    app.show_groups = true;
+    let gid = app.items[app.sel].group.clone();
+    match how {
+        Fold::Toggle if app.collapsed.contains(&gid) => {
+            app.collapsed.remove(&gid);
+        }
+        Fold::Toggle | Fold::Close => {
+            app.collapsed.insert(gid);
+        }
+        Fold::Open => {
+            app.collapsed.remove(&gid);
+        }
+        Fold::CloseAll => {
+            app.collapsed = app.items.iter().map(|it| it.group.clone()).collect();
+        }
+        Fold::OpenAll => app.collapsed.clear(),
+    }
+    // folding one group steps off it, so the selection stays on a hunk rather
+    // than on a header. Folding *everything* leaves nowhere to step to: the
+    // selection then stays put and its header carries the highlight.
+    let all_folded = app
+        .view
+        .iter()
+        .all(|&i| app.collapsed.contains(&app.items[i].group));
+    if !all_folded && app.collapsed.contains(&app.items[app.sel].group) {
+        let visible = folded_view(app);
+        if let Some(&next) = visible.iter().find(|&&i| i >= app.sel).or(visible.last()) {
+            select(app, next);
+        }
+    }
 }
 
 /// The row index `display_rows` would give the hunk at `view[pos]` — how many
@@ -2048,22 +2145,39 @@ fn display_rows(
 /// always points at an `Item` row, never a `Header` one. Doesn't need
 /// `groups` (only `display_rows` renders a header's text) — same header
 /// *placement* rule as `display_rows`, is all this needs to agree with it.
-fn display_row_of(view: &[usize], items: &[Item], show_groups: bool, pos: usize) -> usize {
+fn display_row_of(
+    view: &[usize],
+    items: &[Item],
+    show_groups: bool,
+    collapsed: &HashSet<String>,
+    pos: usize,
+) -> usize {
     if !show_groups {
         return pos;
     }
-    let mut row = 0;
+    let mut row: usize = 0;
     let mut last: Option<&str> = None;
     for (i, &vi) in view.iter().enumerate() {
         let gid = items[vi].group.as_str();
+        let mut header_row = None;
         if last != Some(gid) {
+            header_row = Some(row);
             row += 1;
             last = Some(gid);
         }
         if i == pos {
-            return row;
+            // inside a folded group the hunk itself isn't drawn: the highlight
+            // belongs on its header, the way vim highlights the fold line the
+            // cursor is inside
+            return match collapsed.contains(gid) {
+                true => header_row.unwrap_or(row.saturating_sub(1)),
+                false => row,
+            };
         }
-        row += 1;
+        // a folded group draws its header and nothing else
+        if !collapsed.contains(gid) {
+            row += 1;
+        }
     }
     row
 }
@@ -3625,6 +3739,7 @@ fn run(
                         theme,
                         show_groups: false,
                         groups,
+                        collapsed: HashSet::new(),
                         ledger,
                     }));
                 }
@@ -3865,6 +3980,7 @@ fn apply(app: &mut App, a: Action) -> bool {
         | Action::SymbolPrev
         | Action::SearchNext
         | Action::SearchPrev => {} // only meaningful with the code pane focused
+        Action::Fold(how) => fold(app, how),
         Action::ScrollLeft if app.focus == Pane::Code => {
             app.hscroll = app.hscroll.saturating_sub(1);
         }
@@ -3962,9 +4078,12 @@ fn last_line(len: usize) -> u16 {
 fn step(app: &mut App, by: isize) {
     match app.focus {
         Pane::List => {
-            let pos = view_pos(&app.view, app.sel);
-            let to = (pos as isize + by).clamp(0, app.view.len() as isize - 1) as usize;
-            select(app, app.view[to]);
+            // fold-aware: a hunk inside a folded group is not on screen, so
+            // j/k step over it rather than selecting something invisible
+            let view = folded_view(app);
+            let pos = view_pos(&view, app.sel);
+            let to = (pos as isize + by).clamp(0, view.len() as isize - 1) as usize;
+            select(app, view[to]);
         }
         Pane::Code => cursor_move(app, |c, lines| move_line(c, lines, by)),
         Pane::Why => why_cursor_move(app, by),
@@ -3981,10 +4100,10 @@ fn view_pos(view: &[usize], sel: usize) -> usize {
 /// The first/last currently visible item — `view` is never empty once
 /// loading finishes (`set_filters` rejects any change that would empty it).
 fn first_visible(app: &App) -> usize {
-    app.view[0]
+    folded_view(app)[0]
 }
 fn last_visible(app: &App) -> usize {
-    *app.view.last().expect("view is never empty")
+    *folded_view(app).last().expect("view is never empty")
 }
 
 /// Move the why pane's line cursor by `by`, clamp to its content, and scroll
@@ -4235,7 +4354,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     // left — reading order
     let symbol = "▶ ";
     let text_w = (cols[0].width as usize).saturating_sub(2 + symbol.chars().count());
-    let display = display_rows(&app.view, &app.items, &app.groups, app.show_groups);
+    let display = display_rows(&app.view, &app.items, &app.groups, app.show_groups, &app.collapsed);
     let rows: Vec<ListItem> = display
         .iter()
         .map(|row| match row {
@@ -4275,7 +4394,13 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         .collect();
     let done = app.view.iter().filter(|&&i| app.reviewed[i]).count();
     let mut state = ListState::default();
-    let sel_row = display_row_of(&app.view, &app.items, app.show_groups, view_pos(&app.view, app.sel));
+    let sel_row = display_row_of(
+        &app.view,
+        &app.items,
+        app.show_groups,
+        &app.collapsed,
+        view_pos(&app.view, app.sel),
+    );
     state.select(Some(sel_row));
     let filtered = app.view.len() < app.items.len();
     let list = List::new(rows)
@@ -6173,6 +6298,7 @@ mod tests {
             theme: Theme::dark(),
             show_groups: false,
             groups: HashMap::new(),
+            collapsed: HashSet::new(),
             ledger: Ledger::default(),
         }
     }
@@ -6462,7 +6588,7 @@ mod tests {
         groups.insert("g1".to_string(), "same scope: top-level".to_string());
         let view = vec![0, 1, 2];
 
-        let rows = display_rows(&view, &items, &groups, true);
+        let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
         let kinds: Vec<&str> = rows
             .iter()
             .map(|r| match r {
@@ -6472,7 +6598,87 @@ mod tests {
             .collect();
         assert_eq!(kinds, vec!["header", "item", "item", "header", "item"]);
         let DisplayRow::Header(reason) = &rows[0] else { panic!("expected a header") };
-        assert_eq!(reason, "same definition: run");
+        // the header carries its fold marker and how many hunks it covers
+        assert_eq!(reason, "▾ same definition: run (2)");
+    }
+
+    #[test]
+    fn a_folded_group_shows_its_header_and_hides_its_hunks() {
+        let items = vec![
+            grouped_item("a.rs", "g0"),
+            grouped_item("a.rs", "g0"),
+            grouped_item("b.rs", "g1"),
+        ];
+        let mut groups = HashMap::new();
+        groups.insert("g0".to_string(), "same definition: run".to_string());
+        groups.insert("g1".to_string(), "same scope: top-level".to_string());
+        let view = vec![0, 1, 2];
+        let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
+
+        let rows = display_rows(&view, &items, &groups, true, &collapsed);
+        let kinds: Vec<&str> = rows
+            .iter()
+            .map(|r| match r {
+                DisplayRow::Header(_) => "header",
+                DisplayRow::Item(_) => "item",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["header", "header", "item"]);
+        let DisplayRow::Header(h) = &rows[0] else {
+            panic!("expected a header")
+        };
+        assert_eq!(
+            h, "▸ same definition: run (2)",
+            "a folded header says what it hides"
+        );
+    }
+
+    #[test]
+    fn a_folded_groups_rows_are_skipped_when_placing_the_selection() {
+        let items = vec![
+            grouped_item("a.rs", "g0"),
+            grouped_item("a.rs", "g0"),
+            grouped_item("b.rs", "g1"),
+        ];
+        let view = vec![0, 1, 2];
+        let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
+        // rows are: [g0 header][g1 header][item 2] — the third view entry is
+        // the item at row 2
+        assert_eq!(display_row_of(&view, &items, true, &collapsed, 2), 2);
+    }
+
+    #[test]
+    fn folding_moves_the_selection_out_of_the_group_it_folds() {
+        let mut app = test_app(0);
+        app.items = vec![
+            grouped_item("a.rs", "g0"),
+            grouped_item("a.rs", "g0"),
+            grouped_item("b.rs", "g1"),
+        ];
+        app.view = vec![0, 1, 2];
+        app.reviewed = vec![false; 3];
+        app.sel = 1;
+        app.show_groups = true;
+
+        fold(&mut app, Fold::Close);
+        assert!(app.collapsed.contains("g0"));
+        assert_eq!(app.sel, 2, "selection must land on a row that is drawn");
+        assert_eq!(folded_view(&app), vec![2]);
+
+        fold(&mut app, Fold::OpenAll);
+        assert!(app.collapsed.is_empty());
+        assert_eq!(folded_view(&app), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn folding_turns_group_headers_on_because_that_is_what_was_meant() {
+        let mut app = test_app(0);
+        app.items = vec![grouped_item("a.rs", "g0")];
+        app.view = vec![0];
+        app.reviewed = vec![false];
+        app.show_groups = false;
+        fold(&mut app, Fold::Toggle);
+        assert!(app.show_groups);
     }
 
     #[test]
@@ -6480,7 +6686,7 @@ mod tests {
         let items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
         let groups = HashMap::new();
         let view = vec![0, 1];
-        let rows = display_rows(&view, &items, &groups, false);
+        let rows = display_rows(&view, &items, &groups, false, &HashSet::new());
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| matches!(r, DisplayRow::Item(_))));
     }
@@ -6494,10 +6700,10 @@ mod tests {
         ];
         let groups = HashMap::new(); // reason lookup irrelevant to row placement
         let view = vec![0, 1, 2];
-        let rows = display_rows(&view, &items, &groups, true);
+        let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
 
         for pos in 0..view.len() {
-            let row = display_row_of(&view, &items, true, pos);
+            let row = display_row_of(&view, &items, true, &HashSet::new(), pos);
             assert!(
                 matches!(rows[row], DisplayRow::Item(_)),
                 "selection at view pos {pos} landed on row {row}, which is a header"
@@ -6506,7 +6712,9 @@ mod tests {
         // and the header count lines up: 2 groups among 3 items -> 2 headers,
         // so row indices for view positions [0,1,2] are [1,2,4]
         assert_eq!(
-            (0..view.len()).map(|p| display_row_of(&view, &items, true, p)).collect::<Vec<_>>(),
+            (0..view.len())
+                .map(|p| display_row_of(&view, &items, true, &HashSet::new(), p))
+                .collect::<Vec<_>>(),
             vec![1, 2, 4]
         );
     }
@@ -6514,8 +6722,14 @@ mod tests {
     #[test]
     fn display_row_of_is_identity_when_groups_are_off() {
         let items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
-        assert_eq!(display_row_of(&[0, 1], &items, false, 0), 0);
-        assert_eq!(display_row_of(&[0, 1], &items, false, 1), 1);
+        assert_eq!(
+            display_row_of(&[0, 1], &items, false, &HashSet::new(), 0),
+            0
+        );
+        assert_eq!(
+            display_row_of(&[0, 1], &items, false, &HashSet::new(), 1),
+            1
+        );
     }
 
     // ---- `:e` — reload carry-forward ----

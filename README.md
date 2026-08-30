@@ -230,6 +230,7 @@ always drives the code pane.
 | mark reviewed (`n/N` count) | `x` | `space`, `enter` |
 | code cursor | `h`/`l`/`w`/`b`/`e`/`0`/`$`/`{`/`}`, `zh`/`zl` hscroll | `←`/`→`/`C-←`/`C-→`/`Home`/`End`, `S-←`/`S-→` hscroll |
 | symbol/dep hover, jump | `K`, `gd`/`Enter`, `C-o` back | `F12`, `C-Enter`, `Alt-←` back |
+| fold a group (`:group`) | `za`/`zo`/`zc` · `zR`/`zM` all | `C-k C-l` · `C-k C-j`/`C-k C-0` all |
 | search / symbol occurrence | `/`, `*`/`#`, `n`/`N` | `C-f`, `C-F12`/`shift-C-F12`, `F3`/`shift-F3` |
 | open in `$VISUAL`/`$EDITOR` | `ge` | `C-o` |
 | command bar | `:` | `C-Shift-P` (`C-P` pre-fills `goto `) |
@@ -247,7 +248,7 @@ command's own arguments:
 | `:filter <glob>` | narrow the review to paths matching `<glob>` (empty clears it) |
 | `:keys <preset>` | swap the keymap live (`vim`, `vscode`) |
 | `:strategy <name>` | re-order the review in place (`comprehension`, `defs-first`, `file`) |
-| `:group` | toggle group-reason headers in the reading-order list |
+| `:group` | toggle group-reason headers — a fold tree, see the fold keys above |
 | `:audit` | account for every hunk and file not on screen, and why |
 | `:goto <path>` | select the first hunk of `<path>`, focus the code pane |
 | `:e <rev>` | review a different revision, without restarting |
