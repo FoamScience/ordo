@@ -39,6 +39,9 @@ it as such.
 - **Full accounting** — every hunk the diff produced is either in the reading
   order or recorded in `dropped` with the reason, so a consumer can prove
   nothing went missing silently.
+- **Your own rules** — conventions as data (path/name facts plus tree-sitter
+  queries) that annotate, flag, or move a hunk earlier in the reading order,
+  without ever overriding definitions-before-uses.
 - **Intra-line refinement** — when a removed and an added line are the same line
   edited, only the part that changed is highlighted, over grammar leaves rather
   than characters: adding a parameter reads as adding that parameter.
@@ -136,6 +139,47 @@ Only a definition is a symbol: a region name is never looked up, never enters
 `scope`, so a consumer can tell whether the same name across two commits is the
 *same* symbol — a method `run` on class `A` and a module-level function `run`
 share a name but differ in kind and/or scope, so they're different symbols.
+
+## Reviewing rules
+
+Your own conventions, applied to the change in front of you — the things a
+reviewer has to *remember* and a linter cannot know.
+
+```toml
+# <repo>/.ordo/rules.toml, or ~/.config/ordo/rules.toml — both apply
+[[rule]]
+name = "frozen-contract"
+path = "schema/v1.json"
+note = "schema v1 is frozen: additive OPTIONAL fields only"
+priority = 100                    # and put it first
+
+[[rule]]
+name = "prefer-pathlib"
+lang = "python"
+query-file = "rules/prefer-pathlib.scm"   # a tree-sitter query
+warn = "prefer pathlib.Path over os.path.*"
+```
+
+A rule matches on facts the engine already computes — `path`, `lang`,
+`category`, `enclosing-kind`, `defines`/`uses`/`imports` — and/or a tree-sitter
+query for conventions about code *shape*. It can `note`, `warn`, mark a hunk
+`noise`, or give it a `priority`.
+
+Three properties make this safe to hand to a config file:
+
+- **A rule is data.** Globs and a query, matched deterministically. Nothing is
+  executed, so the same input still produces the same output.
+- **`priority` cannot break P2.** It replaces the file-position tiebreaker among
+  groups the dependency graph has *already freed* — a preference can never pull
+  a use ahead of its definition. There is a test named after that.
+- **The engine reads no rule files.** They arrive in `Options.rules`; a client
+  collects them. `ordo order --json` stays a function of its arguments.
+
+And the reason a query rule isn't a linter: it fires on rows **inside the
+hunk**, so it reports what *this change introduces*, not the 400 pre-existing
+occurrences a whole-file lint would list. Full reference:
+[`docs/rules.md`](docs/rules.md); ordo's own rules are in
+[`.ordo/rules.toml`](.ordo/rules.toml).
 
 ## Reviewer TUI (`ordo-tui`)
 

@@ -216,3 +216,23 @@ git line-coverage check holding.
       dracula, solarized) beside the two terminal-palette ones, `:theme` to swap
       live, and every role overridable in `[theme]`. Rounded pane borders; the
       whole palette lives in `Theme`, nothing hardcoded at a call site
+
+## P19 — reviewing rules  ✅
+
+The caller's own conventions, as data. No plugin runtime: a rule is globs plus a
+tree-sitter query, matched deterministically against facts the engine already
+computes, so ordering influence is safe to hand to a config file.
+
+- [x] **facts** — `path`, `lang`, `category`, `enclosing-kind`,
+      `defines`/`uses`/`imports`, `noise`, `comment`; ANDed, globs throughout
+- [x] **queries** — tree-sitter source (inline or `query-file`), matched only on
+      rows *inside the hunk*: a review signal, not a lint backlog
+- [x] **actions** — `note`, `warn`, `noise`, `priority`
+- [x] **ordering influence that cannot break P2** — priority replaces the
+      file-position tiebreaker among groups the graph has already freed
+- [x] **two scopes** — `~/.config/ordo/rules.toml` then `<repo>/.ordo/rules.toml`
+- [x] **engine reads nothing** — rules arrive in `Options.rules`; the client
+      collects the files
+- [x] **a rule that cannot work says so** — bad glob, bad query, a query that
+      compiles for no language in the change → `Output.problems`
+- [x] ordo's own rules in `.ordo/` — contract, purity, invariants, wording
