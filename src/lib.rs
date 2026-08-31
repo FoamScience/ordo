@@ -36,23 +36,27 @@ pub fn run(input: Input) -> Output {
                 change.path
             );
         }
-        // Imports are skipped entirely: drop pure-import hunks so they neither
-        // appear in the reading order nor seed def→use edges. `only_comments`
-        // drops non-comment hunks the same way, keeping order/groups/edges/
-        // clusters internally consistent (a post-filter of the finished
-        // Output would leave them referring to hunks no longer present).
-        // Each drop is recorded with its range, so `hunks + dropped` accounts
-        // for every hunk the diff produced and a missing one can be told from a
-        // deliberately removed one.
+        // A pure-import hunk is *noise*, not nothing: it follows from the real
+        // change rather than being it, so it never leads the reading order and
+        // never seeds a def→use edge — but it stays visible, dimmed, where the
+        // diff put it. Dropping it outright made ordo asymmetric in a way
+        // reviewers noticed: a removed import was reported ("removes import
+        // loguru", from the deletion path) while an added one vanished, so a
+        // moved import read as a deletion with no counterpart.
+        //
+        // `only_comments` still drops, because there the caller asked for a
+        // subset; the drop is recorded with its range so `hunks + dropped`
+        // accounts for every hunk the diff produced.
         let mut raw_kept = vec![];
         let mut sem_kept = vec![];
         let mut com_kept = vec![];
         let mut gone = vec![];
         let mut sw_kept = vec![];
-        for (((r, s), c), w) in raw.into_iter().zip(sem).zip(com).zip(sw) {
-            let reason = if s.category == Category::Import {
-                Some(DropReason::Import)
-            } else if input.options.only_comments && !c {
+        for (((r, mut s), c), w) in raw.into_iter().zip(sem).zip(com).zip(sw) {
+            if s.category == Category::Import {
+                s.noise = true;
+            }
+            let reason = if input.options.only_comments && !c {
                 Some(DropReason::NonComment)
             } else {
                 None
@@ -285,6 +289,41 @@ pub fn run(input: Input) -> Output {
         rename[fi] = ren;
         removals[fi] = rem;
     }
+    // A pure-import hunk whose statements all existed in the old file is a
+    // reordering, not an arrival: "moves import pg" rather than "changes".
+    for fi in 0..n {
+        let (Some(spec), Some(old_src)) =
+            (lang::for_path(&paths[fi]), input.changes[fi].old.as_deref())
+        else {
+            continue;
+        };
+        let Some(new_src) = input.changes[fi].new.as_deref() else {
+            continue;
+        };
+        let before = extract::import_statements(spec, old_src);
+        if before.is_empty() {
+            continue;
+        }
+        let new_lines: Vec<&str> = new_src.lines().collect();
+        for (li, sem) in sems[fi].iter_mut().enumerate() {
+            if sem.category != Category::Import {
+                continue;
+            }
+            let [r0, r1] = raws[fi][li].new_range;
+            if r0 == 0 || r0 > r1 {
+                continue;
+            }
+            // every non-blank line of the hunk has to be an import the old file
+            // already had; one new line among them makes this an arrival
+            let mut lines = (r0..=r1)
+                .filter_map(|r| new_lines.get(r - 1))
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|l| !l.is_empty())
+                .peekable();
+            sem.import_moved = lines.peek().is_some() && lines.all(|l| before.contains(&l));
+        }
+    }
+
     // An import line that moved, leaving a blank line behind, reads as a bare
     // change: the new side carries no rows to classify by, and the old side is
     // where the meaning was. ordo already treats pure-import hunks as

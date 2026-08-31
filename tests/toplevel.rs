@@ -1,7 +1,7 @@
 //! Hunks that sit outside any definition — the single structural cause of a
 //! bare "change" rationale. Each test here pins one container the engine now
 //! recognises.
-use ordo::model::{Category, DropReason, Input, Output};
+use ordo::model::{Category, Input, Output};
 
 fn run(v: serde_json::Value) -> Output {
     ordo::run(serde_json::from_value::<Input>(v).unwrap())
@@ -51,21 +51,32 @@ fn a_cpp_macro_body_is_attributed_to_the_macro() {
 #[test]
 fn a_re_export_is_module_bookkeeping_like_an_import() {
     // `export * from "./b"` forwards names defined elsewhere: it follows from
-    // the real change rather than being it, exactly as an import does
+    // the real change rather than being it, exactly as an import does — so it
+    // is classified as one, and carries an import's noise flag
     let out = one(
         "i.ts",
         "export * from \"./a\";\n\nexport const x = 1;\n",
         "export * from \"./a\";\nexport * from \"./b\";\n\nexport const x = 1;\n",
     );
-    assert!(out.files[0].hunks.is_empty(), "{:?}", rationales(&out));
-    assert_eq!(out.files[0].dropped[0].reason, DropReason::Import);
+    let h = out.files[0]
+        .hunks
+        .iter()
+        .find(|h| h.new_range[0] == 2)
+        .expect("the export hunk");
+    assert_eq!(h.category, Category::Import);
+    assert!(h.noise, "bookkeeping is skippable");
 }
 
 #[test]
 fn the_bare_export_module_marker_is_bookkeeping_too() {
-    let out = one("t.d.ts", "type A = string;\n", "type A = string;\n\nexport {};\n");
-    assert!(out.files[0].hunks.is_empty(), "{:?}", rationales(&out));
-    assert_eq!(out.files[0].dropped[0].reason, DropReason::Import);
+    let out = one(
+        "t.d.ts",
+        "type A = string;\n",
+        "type A = string;\n\nexport {};\n",
+    );
+    let h = out.files[0].hunks.last().expect("the marker hunk");
+    assert_eq!(h.category, Category::Import);
+    assert!(h.noise);
 }
 
 #[test]
@@ -574,17 +585,29 @@ fn a_default_exported_call_keeps_its_contents_too() {
         "export default defineConfig({\n  test: {\n    timeout: 20,\n  },\n})\n",
     );
     assert_eq!(out.files[0].hunks.len(), 1, "{:?}", out.files[0].dropped);
-    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("defineConfig"));
+    assert_eq!(
+        out.files[0].hunks[0].enclosing.as_deref(),
+        Some("defineConfig")
+    );
 }
 
 #[test]
 fn the_bookkeeping_forms_are_still_bookkeeping() {
     for (old, new) in [
-        ("export * from \"./a\";\n", "export * from \"./a\";\nexport * from \"./b\";\n"),
+        (
+            "export * from \"./a\";\n",
+            "export * from \"./a\";\nexport * from \"./b\";\n",
+        ),
         ("type A = 1;\n", "type A = 1;\n\nexport {};\n"),
     ] {
         let out = one("b.ts", old, new);
-        assert!(out.files[0].hunks.is_empty(), "{old:?} -> {new:?}");
-        assert_eq!(out.files[0].dropped[0].reason, ordo::model::DropReason::Import);
+        assert!(
+            out.files[0]
+                .hunks
+                .iter()
+                .any(|h| h.category == Category::Import && h.noise),
+            "{old:?} -> {new:?}: {:?}",
+            rationales(&out)
+        );
     }
 }

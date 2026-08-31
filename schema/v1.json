@@ -114,12 +114,12 @@
               },
               "dropped": {
                 "type": "array",
-                "description": "hunks removed before ordering, with the reason; hunks + dropped is what the diff produced, so a consumer can prove nothing went missing silently; omitted when empty",
+                "description": "hunks removed before ordering (only `only_comments` removes any: an import hunk is kept and marked noise); hunks + dropped is what the diff produced, so a consumer can prove nothing went missing silently; omitted when empty",
                 "items": {
                   "type": "object",
                   "required": ["reason", "old_range", "new_range"],
                   "properties": {
-                    "reason": { "enum": ["import", "non_comment"] },
+                    "reason": { "enum": ["non_comment"] },
                     "old_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
                     "new_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
                   }

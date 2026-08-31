@@ -58,12 +58,13 @@ fn p4_signature_and_type_changes() {
 }
 
 #[test]
-fn p5_imports_skipped() {
-    // a pure-import add is skipped entirely — no reviewable hunk, no rationale
+fn p5_an_added_import_is_named_and_marked_skippable() {
+    // a pure-import add is noise, not nothing: it never leads the reading order
+    // and seeds no edge, but a new dependency is worth seeing arrive
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": "# x\n", "new": "import os\n# x\n" } ]
     }));
-    assert!(rats.is_empty(), "import hunks are skipped: {rats:?}");
+    assert_eq!(rats, vec!["adds import os"]);
 }
 
 #[test]
@@ -1192,7 +1193,7 @@ def beta():
 }
 
 #[test]
-fn tail_fragment_of_a_multiline_import_is_dropped_not_bare_change() {
+fn tail_fragment_of_a_multiline_import_is_an_import_not_a_bare_change() {
     // only the closing "} from '...'" line changes — the import node's own
     // start row is several lines above the hunk, so a row-based check that
     // only recognizes an import by its *start* row would miss this hunk
@@ -1202,11 +1203,15 @@ fn tail_fragment_of_a_multiline_import_is_dropped_not_bare_change() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.ts", "old": old, "new": new } ]
     }));
-    assert!(rats.is_empty(), "a fragment of an import is still an import hunk, skipped like any other: {rats:?}");
+    assert_eq!(
+        rats,
+        vec!["changes import a, b"],
+        "a fragment of an import is still an import hunk"
+    );
 }
 
 #[test]
-fn middle_fragment_of_a_multiline_import_list_is_dropped_not_bare_change() {
+fn middle_fragment_of_a_multiline_import_list_is_an_import_not_a_bare_change() {
     // a name inserted in the middle of a parenthesized `from x import (...)`
     // list — its row sits well after the import statement's own start row.
     let old = "from a.b import (\n    c,\n    d,\n)\n";
@@ -1214,7 +1219,12 @@ fn middle_fragment_of_a_multiline_import_list_is_dropped_not_bare_change() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    assert!(rats.is_empty(), "a fragment of an import is still an import hunk, skipped like any other: {rats:?}");
+    // the statement's whole name list, since that is what the import now binds
+    assert_eq!(
+        rats,
+        vec!["changes import c, d, e"],
+        "a fragment of an import is still an import hunk"
+    );
 }
 
 #[test]

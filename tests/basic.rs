@@ -37,14 +37,16 @@ fn permutation_nothing_lost() {
 }
 
 #[test]
-fn imports_skipped_and_def_before_use() {
+fn imports_are_noise_and_defs_come_before_uses() {
     let out = ordo::run(input("comprehension"));
     let hunks = &out.files[0].hunks;
 
-    assert!(
-        !hunks.iter().any(|h| h.category == Category::Import),
-        "import hunks must be skipped entirely"
-    );
+    // an import hunk is visible but skippable: it follows from the real change
+    // rather than being it. Dropping it outright hid new dependencies and made
+    // a moved import read as a deletion with no counterpart.
+    for h in hunks.iter().filter(|h| h.category == Category::Import) {
+        assert!(h.noise, "an import hunk is noise");
+    }
     let def_oi = hunks
         .iter()
         .find(|h| h.category == Category::Definition)

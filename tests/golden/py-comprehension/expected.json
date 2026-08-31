@@ -8,6 +8,10 @@
     {
       "path": "m.py",
       "hunk": "h1"
+    },
+    {
+      "path": "m.py",
+      "hunk": "h2"
     }
   ],
   "files": [
@@ -16,6 +20,25 @@
       "hunks": [
         {
           "id": "h0",
+          "old_range": [
+            1,
+            0
+          ],
+          "new_range": [
+            1,
+            1
+          ],
+          "category": "import",
+          "enclosing": null,
+          "defines": [],
+          "uses": [],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "adds import os",
+          "noise": true
+        },
+        {
+          "id": "h1",
           "old_range": [
             3,
             2
@@ -33,8 +56,8 @@
             "getpid",
             "os"
           ],
-          "group": "g0",
-          "order_index": 0,
+          "group": "g1",
+          "order_index": 1,
           "rationale": "adds helper, used below",
           "symbols": [
             {
@@ -45,7 +68,7 @@
           ]
         },
         {
-          "id": "h1",
+          "id": "h2",
           "old_range": [
             5,
             4
@@ -61,22 +84,9 @@
             "helper",
             "x"
           ],
-          "group": "g1",
-          "order_index": 1,
+          "group": "g2",
+          "order_index": 2,
           "rationale": "uses helper, defined above"
-        }
-      ],
-      "dropped": [
-        {
-          "reason": "import",
-          "old_range": [
-            1,
-            0
-          ],
-          "new_range": [
-            1,
-            1
-          ]
         }
       ]
     }
@@ -84,30 +94,40 @@
   "groups": [
     {
       "id": "g0",
-      "reason": "same definition: helper",
+      "reason": "same scope: imports",
       "members": [
         "h0"
       ]
     },
     {
       "id": "g1",
-      "reason": "same scope: top-level",
+      "reason": "same definition: helper",
       "members": [
         "h1"
+      ]
+    },
+    {
+      "id": "g2",
+      "reason": "same scope: top-level",
+      "members": [
+        "h2"
       ]
     }
   ],
   "edges": [
     {
-      "from": "h0",
-      "to": "h1",
+      "from": "h1",
+      "to": "h2",
       "why": "def→use: helper"
     }
   ],
   "clusters": [
     [
-      "h0",
-      "h1"
+      "h0"
+    ],
+    [
+      "h1",
+      "h2"
     ]
   ]
 }

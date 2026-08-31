@@ -226,14 +226,21 @@ pub fn order_all(
     let mut group_idx = vec![0usize; n];
     for i in 0..n {
         let (fi, _) = coord[i];
-        let key = match &sem[i].enclosing {
-            Some(nm) => format!("{fi}\u{0}def:{nm}"),
-            None => format!("{fi}\u{0}top"),
+        // imports group together, apart from the module-level code they sit
+        // among: they are bookkeeping, they read as a block, and mixing them
+        // into the top-level group would drag that group up to the first import
+        // line — which cost the `file` strategy its positional promise.
+        let import = sem[i].category == Category::Import;
+        let key = match (&sem[i].enclosing, import) {
+            (_, true) => format!("{fi}\u{0}imports"),
+            (Some(nm), _) => format!("{fi}\u{0}def:{nm}"),
+            (None, _) => format!("{fi}\u{0}top"),
         };
         let gi = *idx_of_key.entry(key).or_insert_with(|| {
-            let reason = match &sem[i].enclosing {
-                Some(nm) => format!("same definition: {nm}"),
-                None => "same scope: top-level".to_string(),
+            let reason = match (&sem[i].enclosing, import) {
+                (_, true) => "same scope: imports".to_string(),
+                (Some(nm), _) => format!("same definition: {nm}"),
+                (None, _) => "same scope: top-level".to_string(),
             };
             groups.push(GroupInfo {
                 reason,
@@ -254,13 +261,6 @@ pub fn order_all(
             .min()
             .unwrap_or(0)
     };
-    let gimport = |gi: usize, groups: &[GroupInfo]| {
-        groups[gi]
-            .members
-            .iter()
-            .all(|&i| sem[i].category == Category::Import)
-    };
-
     // ---- group defines/uses ----
     let mut gdef: Vec<HashSet<String>> = vec![HashSet::new(); g];
     let mut guse: Vec<HashSet<String>> = vec![HashSet::new(); g];
@@ -393,9 +393,13 @@ pub fn order_all(
                     .max()
                     .unwrap_or(0)
             };
+            // Imports sort where they live, not first. Ranking them ahead of
+            // everything made sense while they were dropped and never seen; now
+            // that they are visible noise, leading with forty dimmed rows
+            // buries the change they came with. A reviewer who does want them
+            // first can say so with a rule (`priority`).
             let key = |gi: usize, groups: &[GroupInfo]| {
                 (
-                    if gimport(gi, groups) { 0 } else { 1 },
                     std::cmp::Reverse(gprio(gi, groups)),
                     gfile(gi, groups),
                     grow(gi, groups),
@@ -603,8 +607,11 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     let my_file = ctx.group_file[mine];
     let g = ctx.groups.len();
 
-    // P12.2: noise hunks are skippable — say why, skip semantic wording
-    if s.noise {
+    // P12.2: noise hunks are skippable — say why, skip semantic wording.
+    // An import hunk is noise too, but it has something better to say than
+    // "formatting only": which import arrived or changed. Its own branch runs
+    // first for that reason.
+    if s.noise && s.category != Category::Import {
         return if crate::lang::is_generated_path(&ctx.paths[my_file]) {
             "generated file".to_string()
         } else {
@@ -616,15 +623,17 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         if s.imports.is_empty() {
             return "import".to_string();
         }
-        // #5 (add side): new import(s) → "adds import"; a touched existing one → "changes import"
+        // #5 (add side): new import(s) → "adds import"; a touched existing one →
+        // "changes import"; the same statement, somewhere else in the file →
+        // "moves import", which is what a reordered import block really did
         let all_new = s
             .imports
             .iter()
             .all(|im| !ctx.old_imports.get(my_file).is_some_and(|o| o.contains(im)));
-        let verb = if all_new {
-            "adds import"
-        } else {
-            "changes import"
+        let verb = match (s.import_moved, all_new) {
+            (true, _) => "moves import",
+            (false, true) => "adds import",
+            (false, false) => "changes import",
         };
         let names: Vec<&str> = s.imports.iter().map(String::as_str).collect();
         return format!("{verb} {}", name_list(&names));

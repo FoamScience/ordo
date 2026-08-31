@@ -8,7 +8,10 @@ fn run(v: serde_json::Value) -> Output {
 }
 
 #[test]
-fn dropped_imports_are_recorded_with_their_range() {
+fn an_import_hunk_is_kept_as_noise_rather_than_dropped() {
+    // it follows from the real change rather than being it — but a reviewer
+    // still wants to see a new dependency arrive, and a dropped one used to
+    // make a *moved* import read as a deletion with no counterpart
     let out = run(serde_json::json!({
         "changes": [{
             "path": "a.py",
@@ -17,11 +20,14 @@ fn dropped_imports_are_recorded_with_their_range() {
         }]
     }));
     let f = &out.files[0];
-    let d: Vec<_> = f.dropped.iter().filter(|d| d.reason == DropReason::Import).collect();
-    assert_eq!(d.len(), 1, "{:?}", f.dropped);
-    // the recorded range is the import hunk's own, not the file's
-    assert_eq!(d[0].new_range, [2, 2], "{:?}", d[0]);
-    assert!(f.hunks.iter().all(|h| h.new_range[0] != 2));
+    assert!(f.dropped.is_empty(), "{:?}", f.dropped);
+    let imp = f
+        .hunks
+        .iter()
+        .find(|h| h.new_range[0] == 2)
+        .expect("the import hunk");
+    assert!(imp.noise, "an import hunk is skippable, not invisible");
+    assert_eq!(imp.rationale, "adds import sys");
 }
 
 #[test]

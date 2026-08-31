@@ -278,14 +278,15 @@ enum Dir {
 
 /// Hard invariants — these must hold whatever the wording is.
 fn check_invariants(label: &str, out: &Output) {
-    // `order` is a permutation of the non-import hunks (the README's claim,
-    // never before checked at scale)
+    // `order` is a permutation of every hunk (the README's claim, never before
+    // checked at scale). Import hunks are part of it: they are noise — visible
+    // but skippable — rather than dropped, since a dropped import made a new
+    // dependency invisible and a moved one read as a bare deletion.
     let mut ordered: Vec<&str> = out.order.iter().map(|o| o.hunk.as_str()).collect();
     let mut all: Vec<&str> = out
         .files
         .iter()
         .flat_map(|f| f.hunks.iter())
-        .filter(|h| h.category != Category::Import)
         .map(|h| h.id.as_str())
         .collect();
     ordered.sort_unstable();
@@ -297,6 +298,12 @@ fn check_invariants(label: &str, out: &Output) {
 
     for f in &out.files {
         for h in &f.hunks {
+            assert!(
+                h.category != Category::Import || h.noise,
+                "{label}: {}:L{} is an import hunk but not noise",
+                f.path,
+                h.new_range[0]
+            );
             let r = &h.rationale;
             assert!(
                 r.chars().count() <= MAX_RATIONALE,

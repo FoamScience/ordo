@@ -8,6 +8,10 @@
     {
       "path": "lib.rs",
       "hunk": "h1"
+    },
+    {
+      "path": "lib.rs",
+      "hunk": "h2"
     }
   ],
   "files": [
@@ -16,6 +20,25 @@
       "hunks": [
         {
           "id": "h0",
+          "old_range": [
+            1,
+            0
+          ],
+          "new_range": [
+            1,
+            1
+          ],
+          "category": "import",
+          "enclosing": null,
+          "defines": [],
+          "uses": [],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "adds import fmt, std",
+          "noise": true
+        },
+        {
+          "id": "h1",
           "old_range": [
             3,
             2
@@ -30,8 +53,8 @@
             "make"
           ],
           "uses": [],
-          "group": "g0",
-          "order_index": 0,
+          "group": "g1",
+          "order_index": 1,
           "rationale": "adds make, used by run below",
           "symbols": [
             {
@@ -42,7 +65,7 @@
           ]
         },
         {
-          "id": "h1",
+          "id": "h2",
           "old_range": [
             5,
             4
@@ -59,8 +82,8 @@
           "uses": [
             "make"
           ],
-          "group": "g1",
-          "order_index": 1,
+          "group": "g2",
+          "order_index": 2,
           "rationale": "adds run",
           "symbols": [
             {
@@ -70,49 +93,46 @@
             }
           ]
         }
-      ],
-      "dropped": [
-        {
-          "reason": "import",
-          "old_range": [
-            1,
-            0
-          ],
-          "new_range": [
-            1,
-            1
-          ]
-        }
       ]
     }
   ],
   "groups": [
     {
       "id": "g0",
-      "reason": "same definition: make",
+      "reason": "same scope: imports",
       "members": [
         "h0"
       ]
     },
     {
       "id": "g1",
-      "reason": "same definition: run",
+      "reason": "same definition: make",
       "members": [
         "h1"
+      ]
+    },
+    {
+      "id": "g2",
+      "reason": "same definition: run",
+      "members": [
+        "h2"
       ]
     }
   ],
   "edges": [
     {
-      "from": "h0",
-      "to": "h1",
+      "from": "h1",
+      "to": "h2",
       "why": "def→use: make"
     }
   ],
   "clusters": [
     [
-      "h0",
-      "h1"
+      "h0"
+    ],
+    [
+      "h1",
+      "h2"
     ]
   ]
 }

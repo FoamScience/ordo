@@ -43,6 +43,9 @@ pub struct HunkSem {
     /// symbol identity (name + tree-sitter kind + scope) for each def this
     /// hunk introduces — matches `defines`, minus imports
     pub symbols: Vec<Symbol>,
+    /// the hunk is a pure-import hunk whose statements all existed in the old
+    /// file: the import moved rather than arriving or changing
+    pub import_moved: bool,
     /// ordering influence from a matching rule (`Options.rules`) — higher
     /// sorts earlier, but only among hunks the dependency graph has freed
     pub priority: i64,
@@ -84,6 +87,7 @@ impl HunkSem {
             notes: vec![],
             advisories: vec![],
             symbols: vec![],
+            import_moved: false,
             priority: 0,
             bindings: vec![],
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
@@ -359,6 +363,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             notes,
             advisories,
             symbols,
+            import_moved: false,
             priority: 0,
             bindings,
             start_row: r0,
@@ -697,9 +702,17 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         for r in sr..=er {
             c.import_rows.insert(r);
         }
-        for (row, name) in ident_text_rows(node, src) {
-            c.decls.push((row, name.clone()));
-            c.import_decls.push((row, name));
+        // A name is attributed to every row of its statement, not just the row
+        // it is written on: a hunk that touches the tail of a multi-line import
+        // list (`} from './y'`) still has the statement's names to report, and
+        // "import" with nothing after it tells a reviewer nothing.
+        for (_, name) in
+            import_bound_names(node, src, spec).unwrap_or_else(|| ident_text_rows(node, src))
+        {
+            for r in sr..=er {
+                c.decls.push((r, name.clone()));
+                c.import_decls.push((r, name.clone()));
+            }
         }
         return; // don't descend: import identifiers are declarations, not uses
     }
@@ -1629,8 +1642,9 @@ fn collect_rows(
     let kind = node.kind();
     let row = node.start_position().row + 1; // 1-based
     if import_like(node, spec) {
-        for n in ident_texts(node, src) {
-            imports.push((n, row));
+        match import_bound_names(node, src, spec) {
+            Some(names) => imports.extend(names.into_iter().map(|(_, n)| (n, row))),
+            None => imports.extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
         }
         return;
     }
@@ -1659,8 +1673,9 @@ fn collect_syms(
 ) {
     let kind = node.kind();
     if import_like(node, spec) {
-        for n in ident_texts(node, src) {
-            imports.insert(n);
+        match import_bound_names(node, src, spec) {
+            Some(names) => imports.extend(names.into_iter().map(|(_, n)| n)),
+            None => imports.extend(ident_texts(node, src)),
         }
         return;
     }
@@ -1697,6 +1712,82 @@ fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
 // like `ident_texts`, but paired with each identifier's own row — an import
 // statement spans several lines, and a hunk touching only one of them must
 // find the names that actually sit on that line, not the statement's first.
+/// Every import statement in a file, as normalized text. An import that appears
+/// in both sides of a change *moved*; one that does not is new or changed —
+/// which is the difference between "moves import pg" and "changes import pg",
+/// and the reason a reordered import block does not read as a pile of edits.
+pub fn import_statements(spec: &LangSpec, content: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut parser = Parser::new();
+    if parser.set_language(&(spec.language)()).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return out;
+    };
+    collect_imports(tree.root_node(), content.as_bytes(), spec, &mut out);
+    out
+}
+
+fn collect_imports(node: Node, src: &[u8], spec: &LangSpec, out: &mut HashSet<String>) {
+    if import_like(node, spec) {
+        if let Ok(t) = node.utf8_text(src) {
+            out.insert(t.split_whitespace().collect::<Vec<_>>().join(" "));
+        }
+        return;
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_imports(ch, src, spec, out);
+    }
+}
+
+/// The names an import statement actually *binds*, rather than every identifier
+/// in it. `from ppump.diagnostics import degrade` binds `degrade`; the module
+/// path is how it was found, not what the file now has. Reporting all three
+/// ("changes import degrade, diagnostics, ppump") both reads badly and decides
+/// add-vs-change on the wrong evidence, since `ppump` is imported all over.
+///
+/// Fields verified against tree-sitter-python-0.23.6 and
+/// tree-sitter-{javascript-0.23.1,typescript-0.23.2}'s node-types.json.
+/// Languages whose imports are already one name per statement (rust `use`, go,
+/// java, c `#include`) fall through to every identifier, which is that same
+/// answer.
+fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(usize, String)>> {
+    // `import_statement` is python's kind *and* javascript/typescript's, and
+    // they are shaped nothing alike: python has `name:` children, js has an
+    // `import_clause` and a `source`. Gate on the language rather than trust a
+    // shared kind name.
+    if spec.name != "python" {
+        return None;
+    }
+    let row = node.start_position().row;
+    let text = |n: Node| n.utf8_text(src).ok().map(|t| (row, t.to_string()));
+    match node.kind() {
+        // python: `import a.b` binds `a`; `from a.b import c, d as e` binds c, e
+        "import_statement" | "import_from_statement" => {
+            let from = node.kind() == "import_from_statement";
+            let mut cur = node.walk();
+            let out: Vec<(usize, String)> = node
+                .children_by_field_name("name", &mut cur)
+                .filter_map(|n| match n.kind() {
+                    "aliased_import" => text(n.child_by_field_name("alias")?),
+                    // a dotted name binds its last segment when imported *from*
+                    // a module, and its first when the module itself is imported
+                    "dotted_name" => {
+                        let mut c2 = n.walk();
+                        let parts: Vec<Node> = n.named_children(&mut c2).collect();
+                        text(*(if from { parts.last()? } else { parts.first()? }))
+                    }
+                    _ => text(n),
+                })
+                .collect();
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
     let mut out = vec![];
     let mut cur = node.walk();

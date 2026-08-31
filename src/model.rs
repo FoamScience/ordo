@@ -73,14 +73,13 @@ pub enum Category {
     Other,
 }
 
-/// Why the engine removed a hunk before ordering. Both reasons are stated
-/// selections (imports are always dropped; `only_comments` is asked for), so a
-/// consumer can always account for the difference between the hunks a file had
-/// and the hunks it can see.
+/// Why the engine removed a hunk before ordering — a selection the caller
+/// *asked* for, so the difference between the hunks a file had and the hunks it
+/// can see is always accountable. An import is no longer among these: it is
+/// kept and marked `noise`, because dropping it hid new dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DropReason {
-    Import,
     NonComment,
 }
 
