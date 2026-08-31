@@ -496,7 +496,23 @@ fn main() -> std::io::Result<()> {
     // range's tip, or HEAD standing in for the uncommitted area (`zz`)
     let review_sha = review_commit_sha(&target);
     let uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
-    run(rev, keys, target, filter, only_comments, review_sha, uncommitted, theme)
+    // rules are the client's to collect: this user's, then this repository's
+    let repo_root = git(&["rev-parse", "--show-toplevel"]);
+    let (rules, problems) = load_rules(repo_root.trim());
+    for p in &problems {
+        eprintln!("ordo-tui: {p}");
+    }
+    run(
+        rev,
+        keys,
+        target,
+        filter,
+        only_comments,
+        review_sha,
+        uncommitted,
+        theme,
+        rules,
+    )
 }
 
 /// What the worker thread reports back over the channel while `gather`,
@@ -558,6 +574,8 @@ fn load(
     // highlighting happens here, off the draw loop, so the worker needs the
     // theme's syntax colours rather than re-highlighting on every redraw
     syn: Syntax,
+    // the reviewer's own rules (user + repo), collected by `main`
+    rules: Vec<ordo::model::Rule>,
     tx: mpsc::Sender<LoadMsg>,
 ) {
     let progress = |msg: String| {
@@ -602,6 +620,8 @@ fn load(
     let (hl_ms, hl_files) = (t.elapsed().as_millis(), highlights.len());
     let t = std::time::Instant::now();
     progress("ordering…".to_string());
+    let mut input = input;
+    input.options.rules = rules;
     let out = ordo::run(input);
     // the engine records what it dropped and why; fold it into the same ledger
     // the path filter has been filling in, so `:audit` reads one set of numbers
@@ -1097,6 +1117,8 @@ struct Item {
     /// the engine's `HunkOut::group` id — drives `:group`'s header rows (see
     /// `App::groups` for the id -> reason lookup)
     group: String,
+    /// reviewing rules that matched this hunk (`ordo::model::Rule`)
+    rules: Vec<ordo::model::RuleHit>,
     /// intra-line refinement (`ordo::refine`), parallel to the hunk's lines on
     /// each side: `Some(spans)` means the line was paired with its counterpart
     /// and only those char spans changed; `None` means it renders whole. Empty
@@ -1889,6 +1911,146 @@ fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
     t
 }
 
+// ------------------------------------------------------------ reviewing rules
+
+/// Where rules come from, in the order they are read: this user's own, then the
+/// repository's. Both apply — a personal preference and a team convention are
+/// different things, and a reviewer wants both. The repo's file is read last so
+/// its rules are reported after the user's on a hunk they both match.
+///
+/// Rule *files* are the client's business: the engine reads nothing (see
+/// `ordo::model::Options::rules`), which is what keeps `ordo order --json` a
+/// function of its arguments and the corpus tests meaningful.
+fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
+    let mut out = vec![];
+    if let Some(dir) = config_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
+        out.push(dir.join("rules.toml"));
+    }
+    if !repo_root.is_empty() {
+        out.push(PathBuf::from(repo_root).join(".ordo").join("rules.toml"));
+    }
+    out
+}
+
+/// Read the rule files that exist, layering user rules then repo rules.
+/// A `query` may be given inline or as `query-file`, resolved relative to the
+/// rules file itself — a query is a block of tree-sitter, and keeping it in its
+/// own `.scm` is how anyone would want to write one.
+fn load_rules(repo_root: &str) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    let mut rules = vec![];
+    let mut problems = vec![];
+    for path in rule_sources(repo_root) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let (mut got, probs) = parse_rules(&text, path.parent().unwrap_or(Path::new(".")));
+        for p in probs {
+            problems.push(format!("{}: {p}", path.display()));
+        }
+        rules.append(&mut got);
+    }
+    (rules, problems)
+}
+
+/// The rules file: a sequence of `[[rule]]` blocks, read the same way
+/// `tui.toml` is (see `parse_key_config`) — the same small subset, so a reader
+/// of one file can read the other.
+fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    use ordo::model::{Rule, When};
+    let mut rules: Vec<Rule> = vec![];
+    let mut problems = vec![];
+    let mut open = false;
+    for (n, raw) in text.lines().enumerate() {
+        let line = strip_comment(raw).trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "[[rule]]" {
+            rules.push(Rule {
+                name: String::new(),
+                when: When::default(),
+                note: None,
+                warn: None,
+                noise: false,
+                priority: 0,
+            });
+            open = true;
+            continue;
+        }
+        if line.starts_with('[') {
+            problems.push(format!(
+                "line {}: expected `[[rule]]`, found `{line}`",
+                n + 1
+            ));
+            open = false;
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            problems.push(format!("line {}: expected `key = value`", n + 1));
+            continue;
+        };
+        if !open {
+            problems.push(format!(
+                "line {}: `{}` is outside any [[rule]]",
+                n + 1,
+                k.trim()
+            ));
+            continue;
+        }
+        let key = k.trim().to_string();
+        let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
+        let rule = rules.last_mut().expect("open implies a rule");
+        match key.as_str() {
+            "name" => rule.name = val,
+            "note" => rule.note = Some(val),
+            "warn" => rule.warn = Some(val),
+            "noise" => rule.noise = val == "true",
+            "priority" => match val.parse() {
+                Ok(p) => rule.priority = p,
+                Err(_) => {
+                    problems.push(format!("line {}: priority `{val}` is not a number", n + 1))
+                }
+            },
+            "path" => rule.when.path = Some(val),
+            "lang" => rule.when.lang = Some(val),
+            "category" => match val.as_str() {
+                "import" => rule.when.category = Some(ordo::model::Category::Import),
+                "definition" => rule.when.category = Some(ordo::model::Category::Definition),
+                "other" => rule.when.category = Some(ordo::model::Category::Other),
+                _ => problems.push(format!(
+                    "line {}: category `{val}` (want: import, definition, other)",
+                    n + 1
+                )),
+            },
+            "enclosing-kind" => rule.when.enclosing_kind = Some(val),
+            "defines" => rule.when.defines = Some(val),
+            "uses" => rule.when.uses = Some(val),
+            "imports" => rule.when.imports = Some(val),
+            "noise-when" => rule.when.noise = Some(val == "true"),
+            "comment" => rule.when.comment = Some(val == "true"),
+            "query" => rule.when.query = Some(val),
+            "query-file" => match std::fs::read_to_string(base.join(&val)) {
+                Ok(q) => rule.when.query = Some(q),
+                Err(e) => problems.push(format!("line {}: {val}: {e}", n + 1)),
+            },
+            _ => problems.push(format!("line {}: unknown rule key `{key}`", n + 1)),
+        }
+    }
+    // a rule with no name can't report itself, and a reviewer would see an
+    // annotation with nothing to look up
+    for (i, r) in rules.iter_mut().enumerate() {
+        if r.name.is_empty() {
+            r.name = format!("rule-{}", i + 1);
+            problems.push(format!(
+                "rule {} has no name; calling it `{}`",
+                i + 1,
+                r.name
+            ));
+        }
+    }
+    (rules, problems)
+}
+
 /// The config file ordo would write for the current preset and theme — every
 /// binding and every colour, commented out, at its real value.
 ///
@@ -2423,6 +2585,9 @@ struct App {
     collapsed: HashSet<String>,
     /// what the filters and the engine dropped on the way here — `:audit`
     ledger: Ledger,
+    /// the reviewer's own rules, carried so a re-order or an `:e` reload keeps
+    /// applying them
+    rules: Vec<ordo::model::Rule>,
 }
 
 /// Bound on the position stack `JumpToEdge`/`JumpBack` maintain — generous
@@ -2485,7 +2650,8 @@ fn build_items(out: &Output) -> Vec<Item> {
         .filter_map(|o| {
             let (path, h) = by_id.get(o.hunk.as_str())?;
             let cat = format!("{:?}", h.category).to_lowercase();
-            let mark = if !h.advisories.is_empty() {
+            let warned = h.rules.iter().any(|r| r.level == "warn");
+            let mark = if !h.advisories.is_empty() || warned {
                 "⚠ "
             } else if h.noise {
                 "· "
@@ -2525,6 +2691,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 symbols: h.symbols.clone(),
                 enclosing: h.enclosing.clone(),
                 group: h.group.clone(),
+                rules: h.rules.clone(),
                 refined: ordo::refine::Refined::default(),
             })
         })
@@ -4640,6 +4807,7 @@ fn run(
     review_sha: Option<String>,
     uncommitted: bool,
     theme: Theme,
+    rules: Vec<ordo::model::Rule>,
 ) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -4655,7 +4823,18 @@ fn run(
     let (tx, rx) = mpsc::channel();
     let mut rx = rx;
     let worker_rev = rev.clone();
-    thread::spawn(move || load(target, filter, only_comments, worker_rev, theme.syn, tx));
+    let worker_rules = rules.clone();
+    thread::spawn(move || {
+        load(
+            target,
+            filter,
+            only_comments,
+            worker_rev,
+            theme.syn,
+            worker_rules,
+            tx,
+        )
+    });
 
     let mut rev = rev;
     let mut review_sha = review_sha;
@@ -4735,6 +4914,7 @@ fn run(
                         groups,
                         collapsed: HashSet::new(),
                         ledger,
+                        rules: rules.clone(),
                     }));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -4827,7 +5007,18 @@ fn run(
                                 let (new_tx, new_rx) = mpsc::channel();
                                 rx = new_rx;
                                 let filt = base_filter.clone();
-                                thread::spawn(move || load(target, filt, only_comments, new_rev, theme.syn, new_tx));
+                                let reload_rules = rules.clone();
+                                thread::spawn(move || {
+                                    load(
+                                        target,
+                                        filt,
+                                        only_comments,
+                                        new_rev,
+                                        theme.syn,
+                                        reload_rules,
+                                        new_tx,
+                                    )
+                                });
                             }
                         }
                         continue;
@@ -5185,6 +5376,17 @@ fn why_rows(it: &Item, view: &[usize], theme: &Theme) -> Vec<WhyRow> {
         rows.push(WhyRow {
             text: format!("- {d}"),
             style: Style::default().fg(theme.accent),
+            kind: WhyKind::Text,
+        });
+    }
+    for r in &it.rules {
+        let (color, tag) = match r.level {
+            "warn" => (theme.warn, "⚠"),
+            _ => (theme.reviewed, "·"),
+        };
+        rows.push(WhyRow {
+            text: format!("{tag} {} — {}", r.rule, r.message),
+            style: Style::default().fg(color),
             kind: WhyKind::Text,
         });
     }
@@ -6065,7 +6267,13 @@ fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
         .ok_or_else(|| format!("unknown strategy '{name}' (want: comprehension, defs-first, file)"))?;
     let input = Input {
         changes: changes_from_sources(&app.sources),
-        options: Options { strategy, cross_file: true, full_context: false, only_comments: false },
+        options: Options {
+            strategy,
+            cross_file: true,
+            full_context: false,
+            only_comments: false,
+            rules: app.rules.clone(),
+        },
     };
     let out = ordo::run(input);
     let items = build_items(&out);
@@ -6647,6 +6855,7 @@ mod tests {
             category: ordo::model::Category::Definition,
             enclosing: enclosing.map(str::to_string),
             enclosing_kind: None,
+            rules: vec![],
             defines: vec![],
             uses: vec![],
             group: "g".to_string(),
@@ -7141,6 +7350,7 @@ mod tests {
             symbols: vec![],
             enclosing: None,
             group: String::new(),
+            rules: vec![],
             refined: ordo::refine::Refined::default(),
         }
     }
@@ -7329,6 +7539,7 @@ mod tests {
                 },
             ],
             clusters: vec![],
+            problems: vec![],
         };
         let items = build_items(&out);
         assert_eq!(items.len(), 2);
@@ -7440,6 +7651,7 @@ mod tests {
             groups: HashMap::new(),
             collapsed: HashSet::new(),
             ledger: Ledger::default(),
+            rules: vec![],
         }
     }
 
@@ -7740,6 +7952,79 @@ mod tests {
         let DisplayRow::Header(reason) = &rows[0] else { panic!("expected a header") };
         // the header carries its fold marker and how many hunks it covers
         assert_eq!(reason, "▾ same definition: run (2)");
+    }
+
+    // ---- reviewing rules: the client half ----
+
+    #[test]
+    fn rules_come_from_the_user_then_the_repository() {
+        let srcs = rule_sources("/repo");
+        assert_eq!(srcs.len(), 2);
+        assert!(srcs[0].ends_with("ordo/rules.toml"), "{:?}", srcs[0]);
+        assert_eq!(srcs[1], PathBuf::from("/repo/.ordo/rules.toml"));
+    }
+
+    #[test]
+    fn a_rules_file_parses_into_rules() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"security-first\"\npath = \"src/security/**\"\nnote = \"sensitive\"\npriority = 100\n\n             [[rule]]\nname = \"vendored\"\npath = \"vendor/**\"\nnoise = true\n",
+            Path::new("."),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].name, "security-first");
+        assert_eq!(rules[0].when.path.as_deref(), Some("src/security/**"));
+        assert_eq!(rules[0].note.as_deref(), Some("sensitive"));
+        assert_eq!(rules[0].priority, 100);
+        assert!(rules[1].noise);
+    }
+
+    #[test]
+    fn a_rule_without_a_name_gets_one_and_says_so() {
+        // an unnamed rule can't report itself, and an annotation with nothing
+        // to look up is worse than a complaint
+        let (rules, problems) =
+            parse_rules("[[rule]]\npath = \"a/**\"\nnote = \"n\"\n", Path::new("."));
+        assert_eq!(rules[0].name, "rule-1");
+        assert!(problems[0].contains("no name"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_bad_rules_line_is_reported_by_number() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"a\"\nnonsense = \"x\"\npriority = \"soon\"\ncategory = \"nope\"\n",
+            Path::new("."),
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems[0].contains("line 3"), "{problems:?}");
+        assert!(problems[1].contains("line 4"), "{problems:?}");
+        assert!(problems[2].contains("line 5"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_key_outside_any_rule_block_is_reported() {
+        let (rules, problems) = parse_rules("name = \"loose\"\n", Path::new("."));
+        assert!(rules.is_empty());
+        assert!(problems[0].contains("outside any [[rule]]"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_query_can_live_in_its_own_file() {
+        let dir = std::env::temp_dir().join(format!("ordo-rules-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let q = "(call function: (identifier) @fn)";
+        std::fs::write(dir.join("q.scm"), q).unwrap();
+        let (rules, problems) =
+            parse_rules("[[rule]]\nname = \"q\"\nquery-file = \"q.scm\"\n", &dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(rules[0].when.query.as_deref(), Some(q));
+
+        // and a missing one is reported rather than silently never matching
+        let (_, problems) =
+            parse_rules("[[rule]]\nname = \"q\"\nquery-file = \"nope.scm\"\n", &dir);
+        assert!(problems[0].contains("nope.scm"), "{problems:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- --init-config ----
