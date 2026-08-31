@@ -7,6 +7,7 @@ pub mod model;
 mod order;
 mod patch;
 pub mod refine;
+mod rules;
 
 use extract::{analyze, compute_hunks, symbol_sets, HunkSem, RawHunk};
 use lang::LangSpec;
@@ -312,6 +313,50 @@ pub fn run(input: Input) -> Output {
         }
     }
 
+    // ---- reviewing rules (Options.rules) ----
+    // Evaluated after the semantics they match on, and before the ordering they
+    // can influence. A rule's `noise` and `priority` reach the hunk itself; its
+    // notes ride along to the output.
+    let mut rule_engine = rules::Rules::new(&input.options.rules);
+    let mut rule_hits: Vec<Vec<Vec<RuleHit>>> = vec![vec![]; n];
+    if !rule_engine.is_empty() {
+        for (fi, change) in input.changes.iter().enumerate() {
+            let path = &change.path;
+            let query_rows = match (lang::for_path(path), change.new.as_deref()) {
+                (Some(spec), Some(new)) => rule_engine.query_rows(spec, new),
+                _ => HashMap::new(),
+            };
+            let mut per_file = vec![];
+            for li in 0..raws[fi].len() {
+                let sem = &sems[fi][li];
+                let [r0, r1] = raws[fi][li].new_range;
+                let hits = rule_engine.hits(
+                    path,
+                    (r0, r1),
+                    sem.category,
+                    sem.enclosing_kind,
+                    &sem.defines,
+                    &sem.uses,
+                    &sem.imports,
+                    sem.noise,
+                    comment_only[fi][li],
+                    &query_rows,
+                );
+                per_file.push(hits);
+            }
+            rule_hits[fi] = per_file;
+        }
+        rule_engine.finish();
+        for fi in 0..n {
+            for (li, hits) in rule_hits[fi].iter().enumerate() {
+                if rules::Rules::any_noise(hits, &input.options.rules) {
+                    sems[fi][li].noise = true;
+                }
+                sems[fi][li].priority = rules::Rules::priority(hits, &input.options.rules);
+            }
+        }
+    }
+
     let facts = order::FileFacts {
         old_defs: &old_defs,
         old_imports: &old_imports,
@@ -389,6 +434,7 @@ pub fn run(input: Input) -> Output {
                 notes: sems[fi][li].notes.clone(),
                 advisories: sems[fi][li].advisories.clone(),
                 symbols: sems[fi][li].symbols.clone(),
+                rules: rule_hits[fi].get(li).cloned().unwrap_or_default(),
             });
         }
         files.push(FileOut {
@@ -437,6 +483,13 @@ pub fn run(input: Input) -> Output {
         groups: groups_out,
         edges: edges_out,
         clusters,
+        problems: {
+            // one file kind repeats across a changeset; a broken rule should
+            // be reported once, not once per file
+            let mut p = rule_engine.problems.clone();
+            p.dedup();
+            p
+        },
     }
 }
 

@@ -35,6 +35,50 @@
               "type": "boolean",
               "default": false,
               "description": "drop every non-comment/docstring hunk before ordering, so order/files/groups/edges/clusters cover only comment-only hunks"
+            },
+            "rules": {
+              "type": "array",
+              "description": "reviewing rules: the caller's own conventions, matched against the facts the engine computes. The engine reads no rule files — a client collects them (per-user, per-repo) and passes them here, so `ordo order` stays a function of its arguments",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "when": {
+                    "type": "object",
+                    "description": "conditions, ANDed; an empty `when` matches every hunk",
+                    "properties": {
+                      "path": { "type": "string", "description": "glob against the file path" },
+                      "lang": { "type": "string" },
+                      "category": { "enum": ["import", "definition", "other"] },
+                      "rules": {
+                      "type": "array",
+                      "description": "reviewing rules that matched this hunk; omitted when none did",
+                      "items": {
+                        "type": "object",
+                        "required": ["rule", "message", "level"],
+                        "properties": {
+                          "rule": { "type": "string" },
+                          "message": { "type": "string" },
+                          "level": { "enum": ["note", "warn"] }
+                        }
+                      }
+                    },
+                    "enclosing_kind": { "enum": ["definition", "test", "region", "preamble", "front-matter", "binding", "call"] },
+                      "defines": { "type": "string", "description": "glob against any name the hunk defines" },
+                      "uses": { "type": "string" },
+                      "imports": { "type": "string" },
+                      "noise": { "type": "boolean" },
+                      "comment": { "type": "boolean" },
+                      "query": { "type": "string", "description": "tree-sitter query source; only rows inside the hunk count, so a rule fires on what the change introduces rather than on everything the file already contained" }
+                    }
+                  },
+                  "note": { "type": "string" },
+                  "warn": { "type": "string" },
+                  "noise": { "type": "boolean", "description": "treat a matching hunk as skippable" },
+                  "priority": { "type": "integer", "description": "ordering influence: higher sorts earlier, but only among hunks the dependency graph has already freed — a preference can never reorder a definition after its use" }
+                }
+              }
             }
           }
         }
@@ -175,7 +219,12 @@
             }
           }
         },
-        "clusters": {
+        "problems": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "what the engine could not make sense of in the caller's own input — a rule whose glob or query does not compile. Reported rather than silently never matching; omitted when empty"
+      },
+      "clusters": {
           "type": "array",
           "description": "independent parts of the change (connected components of the group def→use graph); each is an array of hunk ids. One cluster = atomic; multiple = candidate PR split.",
           "items": { "type": "array", "items": { "type": "string" } }

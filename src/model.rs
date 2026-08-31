@@ -34,6 +34,12 @@ pub struct Options {
     /// default.
     #[serde(default)]
     pub only_comments: bool,
+    /// Reviewing rules: the caller's own conventions, evaluated against the
+    /// facts the engine already computes. Empty by default — the engine has no
+    /// rules of its own, and reads no config (a client collects them; see
+    /// `Rule`).
+    #[serde(default)]
+    pub rules: Vec<Rule>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -42,6 +48,7 @@ impl Default for Options {
             cross_file: true,
             full_context: false,
             only_comments: false,
+            rules: vec![],
         }
     }
 }
@@ -58,7 +65,7 @@ pub enum Strategy {
     File,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
     Import,
@@ -96,6 +103,11 @@ pub struct Output {
     /// P12.3: independent parts of the change (hunk ids per cluster). One
     /// cluster ⇒ atomic; multiple ⇒ candidate PR split.
     pub clusters: Vec<Vec<String>>,
+    /// what the engine could not make sense of in the caller's own input — a
+    /// rule whose glob or query does not compile, reported rather than silently
+    /// never matching. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,6 +148,83 @@ pub struct Advisory {
     pub message: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub verdict: bool,
+}
+
+/// One reviewing rule: what to match, and what to say or do about it.
+///
+/// A rule is *data*, evaluated deterministically against a hunk's own facts —
+/// there is no rule runtime, nothing is executed, and the same input always
+/// produces the same output. The engine never reads a rule from disk: a client
+/// collects them (per-user, per-repo) and passes them in `Options.rules`, which
+/// keeps `ordo order` a function of its arguments.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Rule {
+    /// how the rule identifies itself in `hunks[].rules` — a short slug
+    pub name: String,
+    #[serde(default)]
+    pub when: When,
+    /// something worth knowing about this hunk
+    #[serde(default)]
+    pub note: Option<String>,
+    /// something worth stopping at — reported at `warn` level
+    #[serde(default)]
+    pub warn: Option<String>,
+    /// treat a matching hunk as skippable (the caller's own noise policy, on
+    /// top of the engine's formatting/generated detection)
+    #[serde(default)]
+    pub noise: bool,
+    /// Ordering influence. Higher sorts earlier, but **only among hunks the
+    /// dependency graph has already freed**: priority replaces the file-position
+    /// tiebreaker, it never reorders a definition after its use. A preference
+    /// cannot break P2.
+    #[serde(default)]
+    pub priority: i64,
+}
+
+/// A rule's conditions. Every field given must hold (they are ANDed); a rule
+/// with no conditions matches every hunk, which is occasionally what you want
+/// (a whole-changeset note) and otherwise a mistake the rule's own name makes
+/// obvious.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct When {
+    /// glob against the file path, e.g. `src/security/**`
+    #[serde(default)]
+    pub path: Option<String>,
+    /// language name as `src/lang.rs` knows it (`python`, `cpp`, `markdown`, …)
+    #[serde(default)]
+    pub lang: Option<String>,
+    #[serde(default)]
+    pub category: Option<Category>,
+    /// what holds the hunk; `definition` matches a plain definition
+    #[serde(default)]
+    pub enclosing_kind: Option<String>,
+    /// glob against any name the hunk defines / uses / imports
+    #[serde(default)]
+    pub defines: Option<String>,
+    #[serde(default)]
+    pub uses: Option<String>,
+    #[serde(default)]
+    pub imports: Option<String>,
+    /// require (or forbid) the engine's own noise / comment classification
+    #[serde(default)]
+    pub noise: Option<bool>,
+    #[serde(default)]
+    pub comment: Option<bool>,
+    /// a tree-sitter query over the hunk's own lines — the pattern half of a
+    /// rule, for conventions that are about code shape rather than about paths
+    /// and names (see `docs/rules.md`). The query source itself, not a path:
+    /// the engine reads no files.
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+/// A rule that matched, on the hunk it matched.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleHit {
+    pub rule: String,
+    pub message: String,
+    /// `note` | `warn`
+    pub level: &'static str,
 }
 
 /// What kind of thing an `enclosing` name refers to. Only `Definition` is a
@@ -215,6 +304,10 @@ pub struct HunkOut {
     /// definition this hunk introduces; omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<Symbol>,
+    /// reviewing rules (`Options.rules`) that matched this hunk; omitted when
+    /// none did
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RuleHit>,
 }
 
 #[derive(Debug, Serialize)]

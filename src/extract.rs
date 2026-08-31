@@ -43,6 +43,9 @@ pub struct HunkSem {
     /// symbol identity (name + tree-sitter kind + scope) for each def this
     /// hunk introduces — matches `defines`, minus imports
     pub symbols: Vec<Symbol>,
+    /// ordering influence from a matching rule (`Options.rules`) — higher
+    /// sorts earlier, but only among hunks the dependency graph has freed
+    pub priority: i64,
     /// local-variable bindings this hunk introduces (not defs, not imports —
     /// see `lang::LangSpec::locals`), with where each is used elsewhere in the
     /// file. Rationale wording only; never added to `defines`/`symbols`.
@@ -81,6 +84,7 @@ impl HunkSem {
             notes: vec![],
             advisories: vec![],
             symbols: vec![],
+            priority: 0,
             bindings: vec![],
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
@@ -355,6 +359,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             notes,
             advisories,
             symbols,
+            priority: 0,
             bindings,
             start_row: r0,
             old_range: h.old_range,

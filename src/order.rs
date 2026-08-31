@@ -380,9 +380,23 @@ pub fn order_all(
                 succ[a].push(b);
                 indeg[b] += 1;
             }
+            // A group's rule priority is the highest any of its hunks carries.
+            // It enters the key *after* the import rank and *before* file
+            // position, so it replaces the positional tiebreaker among groups
+            // the graph has already freed — never the graph itself. A rule
+            // cannot pull a use ahead of its definition.
+            let gprio = |gi: usize, groups: &[GroupInfo]| {
+                groups[gi]
+                    .members
+                    .iter()
+                    .map(|&i| sem[i].priority)
+                    .max()
+                    .unwrap_or(0)
+            };
             let key = |gi: usize, groups: &[GroupInfo]| {
                 (
                     if gimport(gi, groups) { 0 } else { 1 },
+                    std::cmp::Reverse(gprio(gi, groups)),
                     gfile(gi, groups),
                     grow(gi, groups),
                     gi,
