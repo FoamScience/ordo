@@ -262,8 +262,42 @@ hunk's content changes underneath it. Marks older than 90 days are pruned
 automatically. The file records only opaque hashes, never a path, symbol name
 or source text.
 
-`--theme dark|light` (also `$ORDO_TUI_THEME`, default `dark`) picks the five
-diff/selection background tints for a dark or light terminal.
+### Themes
+
+`--theme <name>` (also `$ORDO_TUI_THEME`, default `dark`); `:theme` lists them
+and swaps live.
+
+| | |
+| --- | --- |
+| `dark`, `light` | keep the **terminal's own** foreground palette and only tint the diff backgrounds — the default, because it matches the rest of your setup for free |
+| `catppuccin-`{`mocha`,`macchiato`,`frappe`,`latte`} | |
+| `tokyonight-`{`night`,`storm`,`moon`,`day`} | |
+| `gruvbox-`{`dark`,`light`}, `nord`, `dracula`, `solarized-`{`dark`,`light`} | truecolor: every colour named by the theme, so the reviewer matches your editor rather than your shell |
+
+No theme paints a window background, so terminal transparency and blur survive.
+What a theme *does* assume is a terminal background of matching lightness —
+which is why the choice is an explicit flag rather than a detection (OSC 11
+background queries aren't reliably supported).
+
+Every role is overridable, on top of any theme:
+
+```toml
+[theme]
+name = "catppuccin-mocha"
+border-focus = "#f5c2e7"    # the focused pane's border
+syntax-keyword = "#f38ba8"
+add-bg = "#1e3a24"          # the quiet tint on an added line
+```
+
+Roles: `fg`, `dim`, `border`, `border-focus`, `accent`, `category`, `mark`,
+`reviewed`, `warn`, `add-fg`, `del-fg`, `add-bg`, `del-bg`, `add-strong-bg`,
+`del-strong-bg`, `select-bg`, `match-bg`, `match-current-bg`, and
+`syntax-`{`comment`, `keyword`, `string`, `number`, `function`, `type`,
+`property`, `operator`, `variable`, `builtin`, `parameter`, `attribute`}.
+
+A theme colours twelve *syntax roles* rather than the twenty-six tree-sitter
+capture names mapped onto them, so a new grammar's captures never mean touching
+every theme.
 
 Keys are configurable in `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml`, on top
 of whichever preset is in use:

@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use tree_sitter::{Node, Parser, Point, Tree};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
@@ -28,7 +28,7 @@ const USAGE: &str = "\
 ordo-tui — interactive review of a commit, ordered for comprehension.
 
 usage:
-  ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <dark|light>] [--all] [--only-comments]
+  ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--all] [--only-comments]
   ordo-tui --help
   ordo-tui --version
 
@@ -56,10 +56,14 @@ where it appears relative to the positives, and a later positive never
 re-includes something a negative excluded. Quote them so the shell doesn't
 expand them first.
 
---theme selects the diff/selection background palette (also read from
-$ORDO_TUI_THEME, default dark) — dark or light, matched to a dark or light
-terminal background. Only the five hardcoded backgrounds change; every
-foreground colour already follows the terminal's own palette.
+--theme selects the palette (also read from $ORDO_TUI_THEME, default dark).
+`dark` and `light` keep the terminal's own foreground colours and only tint the
+diff backgrounds; the truecolor themes — catppuccin (mocha, macchiato, frappe,
+latte), tokyonight (night, storm, moon, day), gruvbox (dark, light), nord,
+dracula, solarized (dark, light) — name every colour themselves. `:theme` lists
+them and swaps live. No theme paints a window background, so terminal
+transparency survives; what a theme does assume is a background of matching
+lightness. Roles are overridable in tui.toml's [theme] section.
 
 --only-comments limits the review to comment/docstring-only hunks (ordered
 among themselves, as the engine's --only-comments does) — a starting point
@@ -330,6 +334,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     // `preset =` only applies when it wasn't
     let mut preset_given = std::env::var("ORDO_TUI_KEYS").is_ok();
     let mut preset = std::env::var("ORDO_TUI_KEYS").unwrap_or_else(|_| "vim".to_string());
+    let mut theme_given = std::env::var("ORDO_TUI_THEME").is_ok();
     let mut theme_name = std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "dark".to_string());
     let mut want_preset = false;
     let mut want_theme = false;
@@ -342,14 +347,21 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         }
         if want_theme {
             theme_name = a;
+            theme_given = true;
             want_theme = false;
             continue;
         }
         match a.as_str() {
             "--keys" => want_preset = true,
-            s if s.starts_with("--keys=") => preset = s["--keys=".len()..].to_string(),
+            s if s.starts_with("--keys=") => {
+                preset = s["--keys=".len()..].to_string();
+                preset_given = true;
+            }
             "--theme" => want_theme = true,
-            s if s.starts_with("--theme=") => theme_name = s["--theme=".len()..].to_string(),
+            s if s.starts_with("--theme=") => {
+                theme_name = s["--theme=".len()..].to_string();
+                theme_given = true;
+            }
             "--all" => skip_generated = false,
             "--only-comments" => only_comments = true,
             "-h" | "--help" | "help" => {
@@ -401,9 +413,21 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         }
         None => keys,
     };
+    // same precedence as the keymap: an explicit --theme beats the config's
+    let theme_name = match (&cfg, theme_given) {
+        (Some(c), false) => c.theme.clone().unwrap_or(theme_name),
+        _ => theme_name,
+    };
     let Some(theme) = theme(&theme_name) else {
-        eprintln!("ordo-tui: unknown theme '{theme_name}' (want: dark, light)");
+        eprintln!(
+            "ordo-tui: unknown theme '{theme_name}' (want: {})",
+            theme_names().join(", ")
+        );
         return Err(2);
+    };
+    let theme = match &cfg {
+        Some(c) => apply_theme_colors(theme, &c.colors),
+        None => theme,
     };
     let globs = build_globs(&globs).map_err(|e| {
         eprintln!("ordo-tui: {e}");
@@ -513,7 +537,16 @@ fn group_reasons(out: &Output) -> HashMap<String, String> {
 /// positional order — unreachable here, since every `Change` this file
 /// builds always sets `new` (see `gather_range`/`gather_uncommitted`), which
 /// is the one branch in `build_change` that never degrades.
-fn load(target: Target, filter: Filter, only_comments: bool, rev: String, tx: mpsc::Sender<LoadMsg>) {
+fn load(
+    target: Target,
+    filter: Filter,
+    only_comments: bool,
+    rev: String,
+    // highlighting happens here, off the draw loop, so the worker needs the
+    // theme's syntax colours rather than re-highlighting on every redraw
+    syn: Syntax,
+    tx: mpsc::Sender<LoadMsg>,
+) {
     let progress = |msg: String| {
         let _ = tx.send(LoadMsg::Progress(msg));
     };
@@ -549,7 +582,7 @@ fn load(target: Target, filter: Filter, only_comments: bool, rev: String, tx: mp
     let mut highlights: Highlights = HashMap::new();
     for (i, c) in candidates.iter().enumerate() {
         progress(highlight_progress(i, total));
-        if let Some(h) = highlight_file(&c.path, c.new.as_ref().unwrap()) {
+        if let Some(h) = highlight_file(&c.path, c.new.as_ref().unwrap(), &syn) {
             highlights.insert(c.path.clone(), h);
         }
     }
@@ -1752,7 +1785,95 @@ fn parse_bind_keys(text: &str) -> Option<(Option<Key>, Key)> {
 struct KeyConfig {
     preset: Option<String>,
     binds: Vec<(Option<Key>, Key, Option<Action>)>,
+    /// `[theme] name = "…"`, and any per-role `#rrggbb` overrides on top of it
+    theme: Option<String>,
+    colors: Vec<(String, Color)>,
     problems: Vec<String>,
+}
+
+/// `#rrggbb` (or `rrggbb`) as a colour. Deliberately the only accepted form: a
+/// theme file names colours the way every palette publishes them.
+fn parse_hex(text: &str) -> Option<Color> {
+    let t = text.trim().trim_start_matches('#');
+    if t.len() != 6 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(hex(u32::from_str_radix(t, 16).ok()?))
+}
+
+/// The theme roles a config file may set, each the name of a `Theme` field.
+const THEME_ROLES: &[&str] = &[
+    "fg",
+    "dim",
+    "border",
+    "border-focus",
+    "accent",
+    "category",
+    "mark",
+    "reviewed",
+    "warn",
+    "add-fg",
+    "del-fg",
+    "add-bg",
+    "del-bg",
+    "add-strong-bg",
+    "del-strong-bg",
+    "select-bg",
+    "match-bg",
+    "match-current-bg",
+    "syntax-comment",
+    "syntax-keyword",
+    "syntax-string",
+    "syntax-number",
+    "syntax-function",
+    "syntax-type",
+    "syntax-property",
+    "syntax-operator",
+    "syntax-variable",
+    "syntax-builtin",
+    "syntax-parameter",
+    "syntax-attribute",
+];
+
+/// Overlay a config's colour overrides onto a theme. Unknown roles are rejected
+/// at parse time, so everything reaching here names a field.
+fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
+    for (role, c) in colors {
+        match role.as_str() {
+            "fg" => t.fg = *c,
+            "dim" => t.dim = *c,
+            "border" => t.border = *c,
+            "border-focus" => t.border_focus = *c,
+            "accent" => t.accent = *c,
+            "category" => t.category = *c,
+            "mark" => t.mark = *c,
+            "reviewed" => t.reviewed = *c,
+            "warn" => t.warn = *c,
+            "add-fg" => t.add_fg = *c,
+            "del-fg" => t.del_fg = *c,
+            "add-bg" => t.add_bg = *c,
+            "del-bg" => t.del_bg = *c,
+            "add-strong-bg" => t.add_strong_bg = *c,
+            "del-strong-bg" => t.del_strong_bg = *c,
+            "select-bg" => t.select_bg = *c,
+            "match-bg" => t.match_bg = *c,
+            "match-current-bg" => t.match_cur_bg = *c,
+            "syntax-comment" => t.syn.comment = *c,
+            "syntax-keyword" => t.syn.keyword = *c,
+            "syntax-string" => t.syn.string = *c,
+            "syntax-number" => t.syn.number = *c,
+            "syntax-function" => t.syn.function = *c,
+            "syntax-type" => t.syn.type_ = *c,
+            "syntax-property" => t.syn.property = *c,
+            "syntax-operator" => t.syn.operator = *c,
+            "syntax-variable" => t.syn.variable = *c,
+            "syntax-builtin" => t.syn.builtin = *c,
+            "syntax-parameter" => t.syn.param = *c,
+            "syntax-attribute" => t.syn.attribute = *c,
+            _ => {}
+        }
+    }
+    t
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -1762,43 +1883,106 @@ fn config_path() -> Option<PathBuf> {
     Some(base.join("ordo").join("tui.toml"))
 }
 
+/// A config line without its trailing comment. `#` opens a comment only
+/// *outside* quotes: a colour is written `"#89b4fa"`, and cutting at the first
+/// `#` regardless would eat every palette value in the file.
+fn strip_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (None, '"') | (None, '\'') => quote = Some(c),
+            (None, '#') => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// Which section of the config the reader is in.
+#[derive(PartialEq, Eq)]
+enum Section {
+    Top,
+    Binds,
+    Theme,
+}
+
 fn parse_key_config(text: &str) -> KeyConfig {
-    let mut cfg = KeyConfig { preset: None, binds: vec![], problems: vec![] };
-    let mut in_binds = false;
+    let mut cfg = KeyConfig {
+        preset: None,
+        binds: vec![],
+        theme: None,
+        colors: vec![],
+        problems: vec![],
+    };
+    let mut section = Section::Top;
     for (n, raw) in text.lines().enumerate() {
-        let line = raw.split('#').next().unwrap_or("").trim();
+        let line = strip_comment(raw);
+        let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(section) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            in_binds = section.trim() == "binds";
+        if let Some(head) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = match head.trim() {
+                "binds" => Section::Binds,
+                "theme" => Section::Theme,
+                other => {
+                    cfg.problems
+                        .push(format!("line {}: unknown section `[{other}]`", n + 1));
+                    Section::Top
+                }
+            };
             continue;
         }
         let Some((k, v)) = line.split_once('=') else {
-            cfg.problems.push(format!("line {}: expected `key = value`", n + 1));
+            cfg.problems
+                .push(format!("line {}: expected `key = value`", n + 1));
             continue;
         };
         let unquote = |s: &str| s.trim().trim_matches('"').trim_matches('\'').to_string();
         let (k, v) = (unquote(k), unquote(v));
-        if !in_binds {
-            if k == "preset" {
-                cfg.preset = Some(v);
-            } else {
-                cfg.problems.push(format!("line {}: unknown setting `{k}`", n + 1));
+        match section {
+            Section::Top => match k.as_str() {
+                "preset" => cfg.preset = Some(v),
+                // `theme` reads naturally at the top of the file as well as
+                // inside `[theme]`, and a config is read, not just written
+                "theme" => cfg.theme = Some(v),
+                _ => cfg
+                    .problems
+                    .push(format!("line {}: unknown setting `{k}`", n + 1)),
+            },
+            Section::Theme => {
+                if k == "name" {
+                    cfg.theme = Some(v);
+                } else if !THEME_ROLES.contains(&k.as_str()) {
+                    cfg.problems
+                        .push(format!("line {}: unknown theme role `{k}`", n + 1));
+                } else {
+                    match parse_hex(&v) {
+                        Some(c) => cfg.colors.push((k, c)),
+                        None => cfg
+                            .problems
+                            .push(format!("line {}: `{v}` is not a #rrggbb colour", n + 1)),
+                    }
+                }
             }
-            continue;
-        }
-        let Some((prefix, key)) = parse_bind_keys(&k) else {
-            cfg.problems.push(format!("line {}: `{k}` is not a key", n + 1));
-            continue;
-        };
-        if v == "none" {
-            cfg.binds.push((prefix, key, None));
-            continue;
-        }
-        match action_by_name(&v) {
-            Some(a) => cfg.binds.push((prefix, key, Some(a))),
-            None => cfg.problems.push(format!("line {}: unknown action `{v}`", n + 1)),
+            Section::Binds => {
+                let Some((prefix, key)) = parse_bind_keys(&k) else {
+                    cfg.problems
+                        .push(format!("line {}: `{k}` is not a key", n + 1));
+                    continue;
+                };
+                if v == "none" {
+                    cfg.binds.push((prefix, key, None));
+                    continue;
+                }
+                match action_by_name(&v) {
+                    Some(a) => cfg.binds.push((prefix, key, Some(a))),
+                    None => cfg
+                        .problems
+                        .push(format!("line {}: unknown action `{v}`", n + 1)),
+                }
+            }
         }
     }
     cfg
@@ -2615,33 +2799,35 @@ fn follow_hscroll(col: usize, hscroll: u16, width: u16) -> u16 {
 
 // tree-sitter highlight capture names we color, with their fg. The `Highlight`
 // index a walk yields is the position of the matched name in this list.
-const HL: &[(&str, Color)] = &[
-    ("attribute", Color::Cyan),
-    ("boolean", Color::Cyan),
-    ("comment", Color::DarkGray),
-    ("constant", Color::Cyan),
-    ("constant.builtin", Color::Cyan),
-    ("constructor", Color::Yellow),
-    ("escape", Color::Cyan),
-    ("function", Color::Blue),
-    ("function.builtin", Color::Blue),
-    ("function.method", Color::Blue),
-    ("keyword", Color::Magenta),
-    ("label", Color::Magenta),
-    ("number", Color::Cyan),
-    ("operator", Color::Gray),
-    ("property", Color::LightBlue),
-    ("punctuation", Color::Gray),
-    ("punctuation.bracket", Color::Gray),
-    ("punctuation.delimiter", Color::Gray),
-    ("string", Color::Green),
-    ("string.special", Color::Green),
-    ("tag", Color::Blue),
-    ("type", Color::Yellow),
-    ("type.builtin", Color::Yellow),
-    ("variable", Color::Reset),
-    ("variable.builtin", Color::Red),
-    ("variable.parameter", Color::LightRed),
+/// Highlight capture → role. The names are tree-sitter's; the roles are what a
+/// theme colours. Verified against each grammar's own highlights query.
+const HL: &[(&str, Role)] = &[
+    ("attribute", Role::Attribute),
+    ("boolean", Role::Number),
+    ("comment", Role::Comment),
+    ("constant", Role::Number),
+    ("constant.builtin", Role::Number),
+    ("constructor", Role::Type),
+    ("escape", Role::Number),
+    ("function", Role::Function),
+    ("function.builtin", Role::Function),
+    ("function.method", Role::Function),
+    ("keyword", Role::Keyword),
+    ("label", Role::Attribute),
+    ("number", Role::Number),
+    ("operator", Role::Operator),
+    ("property", Role::Property),
+    ("punctuation", Role::Operator),
+    ("punctuation.bracket", Role::Operator),
+    ("punctuation.delimiter", Role::Operator),
+    ("string", Role::Str),
+    ("string.special", Role::Str),
+    ("tag", Role::Attribute),
+    ("type", Role::Type),
+    ("type.builtin", Role::Type),
+    ("variable", Role::Variable),
+    ("variable.builtin", Role::Builtin),
+    ("variable.parameter", Role::Param),
 ];
 
 type LineSpans = Vec<(String, Color)>;
@@ -2685,7 +2871,7 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
 
 // Syntax-highlight `src` into per-line colored segments. None when the language
 // is unsupported or the grammar/query fails to build → caller renders plain.
-fn highlight_file(path: &str, src: &str) -> Option<Vec<LineSpans>> {
+fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>> {
     let (language, query) = highlight_spec(path)?;
     let names: Vec<&str> = HL.iter().map(|(n, _)| *n).collect();
     let mut cfg = HighlightConfiguration::new(language, path, &query, "", "").ok()?;
@@ -2698,13 +2884,13 @@ fn highlight_file(path: &str, src: &str) -> Option<Vec<LineSpans>> {
     for ev in events {
         match ev.ok()? {
             HighlightEvent::HighlightStart(h) => {
-                stack.push(HL.get(h.0).map(|(_, c)| *c).unwrap_or(Color::Reset));
+                stack.push(HL.get(h.0).map(|(_, r)| syn.of(*r)).unwrap_or(syn.variable));
             }
             HighlightEvent::HighlightEnd => {
                 stack.pop();
             }
             HighlightEvent::Source { start, end } => {
-                let color = stack.last().copied().unwrap_or(Color::Reset);
+                let color = stack.last().copied().unwrap_or(syn.variable);
                 let mut first = true;
                 for piece in src.get(start..end).unwrap_or("").split('\n') {
                     if !first {
@@ -2723,16 +2909,105 @@ fn highlight_file(path: &str, src: &str) -> Option<Vec<LineSpans>> {
 
 // ------------------------------------------------------------------- code view
 
-// Diff backgrounds/bars (Neovim gitsigns style): a colored sign bar plus a
-// subtle full-width background tint, with the code itself syntax-colored.
-// Every foreground colour in this file is a named ANSI colour and already
-// follows the terminal's own palette; these five are the only truecolor
-// values, and the only ones that assume a dark terminal background — hence
-// `Theme`, selected once at launch (`--theme`/`$ORDO_TUI_THEME`) rather than
-// detected (OSC 11 background-colour queries aren't reliably supported
-// across terminals, so an explicit flag is the point, not a fallback).
+// The reviewer's whole palette, in one place.
+//
+// Two kinds of theme live here. A **terminal** theme (`dark`, `light`) names
+// its foregrounds with ANSI colours, so it inherits whatever palette the
+// terminal is already configured with — the right default, since it matches the
+// rest of the user's setup for free. A **truecolor** theme (catppuccin,
+// tokyonight, …) names every colour itself, for a reviewer who wants ordo to
+// look like their editor rather than like their shell.
+//
+// No theme paints a window background: leaving it to the terminal keeps
+// transparency and blur setups intact. What a theme's tints *do* assume is a
+// terminal background of roughly matching lightness — hence `--theme` /
+// `$ORDO_TUI_THEME` / `[theme] name` being an explicit choice rather than a
+// detection (OSC 11 background queries aren't reliably supported).
+
+/// `0x89b4fa` → `Color::Rgb(0x89, 0xb4, 0xfa)`.
+const fn hex(v: u32) -> Color {
+    Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// What a highlight capture *means*. A theme colours these twelve roles rather
+/// than the twenty-six capture names `HL` maps onto them, so adding a grammar's
+/// capture never means touching every theme.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Role {
+    Comment,
+    Keyword,
+    Str,
+    Number,
+    Function,
+    Type,
+    Property,
+    Operator,
+    Variable,
+    Builtin,
+    Param,
+    Attribute,
+}
+
+#[derive(Clone, Copy)]
+struct Syntax {
+    comment: Color,
+    keyword: Color,
+    string: Color,
+    number: Color,
+    function: Color,
+    type_: Color,
+    property: Color,
+    operator: Color,
+    variable: Color,
+    builtin: Color,
+    param: Color,
+    attribute: Color,
+}
+
+impl Syntax {
+    fn of(&self, role: Role) -> Color {
+        match role {
+            Role::Comment => self.comment,
+            Role::Keyword => self.keyword,
+            Role::Str => self.string,
+            Role::Number => self.number,
+            Role::Function => self.function,
+            Role::Type => self.type_,
+            Role::Property => self.property,
+            Role::Operator => self.operator,
+            Role::Variable => self.variable,
+            Role::Builtin => self.builtin,
+            Role::Param => self.param,
+            Role::Attribute => self.attribute,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Theme {
+    name: &'static str,
+    // ---- chrome
+    /// default text; `Reset` on a terminal theme, so the terminal's own
+    /// foreground shows through
+    fg: Color,
+    /// gutters, context line numbers, noise rows — present but recessive
+    dim: Color,
+    border: Color,
+    /// the focused pane's border, the one piece of chrome that must be obvious
+    border_focus: Color,
+    /// line numbers in the reading order
+    accent: Color,
+    /// a hunk's `[category]`
+    category: Color,
+    /// the `⚠` advisory mark
+    mark: Color,
+    /// a reviewed row's `✓`
+    reviewed: Color,
+    /// an advisory's verdict line, and the command bar's error text
+    warn: Color,
+    // ---- diff
+    add_fg: Color,
+    del_fg: Color,
     add_bg: Color,
     del_bg: Color,
     /// the *changed part* of a line whose counterpart was identified — the
@@ -2747,41 +3022,372 @@ struct Theme {
     /// it reads as "here" among however many others are also highlighted
     match_bg: Color,
     match_cur_bg: Color,
+    // ---- code
+    syn: Syntax,
 }
 
 impl Theme {
-    fn dark() -> Theme {
-        Theme {
-            add_bg: Color::Rgb(20, 40, 25),
-            del_bg: Color::Rgb(50, 24, 28),
-            add_strong_bg: Color::Rgb(34, 84, 46),
-            del_strong_bg: Color::Rgb(104, 40, 46),
-            select_bg: Color::Rgb(45, 50, 62),
-            match_bg: Color::Rgb(70, 60, 10),
-            match_cur_bg: Color::Rgb(140, 110, 15),
+    /// The terminal's own palette for text, with truecolor diff tints. The
+    /// default, and the only themes that inherit the user's terminal colours.
+    fn terminal(name: &'static str, light: bool) -> Theme {
+        let syn = Syntax {
+            comment: Color::DarkGray,
+            keyword: Color::Magenta,
+            string: Color::Green,
+            number: Color::Cyan,
+            function: Color::Blue,
+            type_: Color::Yellow,
+            property: Color::LightBlue,
+            operator: Color::Gray,
+            variable: Color::Reset,
+            builtin: Color::Red,
+            param: Color::LightRed,
+            attribute: Color::Cyan,
+        };
+        let chrome = Theme {
+            name,
+            fg: Color::Reset,
+            dim: Color::DarkGray,
+            border: Color::Reset,
+            border_focus: Color::Cyan,
+            accent: Color::Blue,
+            category: Color::Magenta,
+            mark: Color::Yellow,
+            reviewed: Color::Green,
+            warn: Color::Red,
+            add_fg: Color::Green,
+            del_fg: Color::Red,
+            // filled in per lightness below
+            add_bg: Color::Reset,
+            del_bg: Color::Reset,
+            add_strong_bg: Color::Reset,
+            del_strong_bg: Color::Reset,
+            select_bg: Color::Reset,
+            match_bg: Color::Reset,
+            match_cur_bg: Color::Reset,
+            syn,
+        };
+        if light {
+            // pale tints of the same hues, at light-terminal weight — not the
+            // dark values inverted, which would read as loud on a light page
+            Theme {
+                add_bg: hex(0xd6f0da),
+                del_bg: hex(0xf8d6d6),
+                add_strong_bg: hex(0xa0dcaf),
+                del_strong_bg: hex(0xf5aeae),
+                select_bg: hex(0xdee2ec),
+                match_bg: hex(0xffecaa),
+                match_cur_bg: hex(0xffca44),
+                ..chrome
+            }
+        } else {
+            Theme {
+                add_bg: hex(0x142819),
+                del_bg: hex(0x32181c),
+                add_strong_bg: hex(0x22542e),
+                del_strong_bg: hex(0x68282e),
+                select_bg: hex(0x2d323e),
+                match_bg: hex(0x463c0a),
+                match_cur_bg: hex(0x8c6e0f),
+                ..chrome
+            }
         }
+    }
+}
+
+/// A truecolor theme, built from the eleven colours these palettes all publish.
+/// Every field of `Theme` is derived here, so a palette is eleven lines rather
+/// than twenty-five, and two themes can't disagree about which colour plays
+/// which role.
+struct Palette {
+    name: &'static str,
+    fg: u32,
+    dim: u32,
+    /// the palette's own "surface"/"current line" tone — the selection tint
+    surface: u32,
+    red: u32,
+    green: u32,
+    yellow: u32,
+    blue: u32,
+    magenta: u32,
+    cyan: u32,
+    orange: u32,
+    /// how far to lift a tint off the background: dark palettes need a floor,
+    /// light ones need to stay pale
+    light: bool,
+}
+
+impl Palette {
+    /// Mix `a` toward `b` by `w`/256 — how a diff tint is derived from a
+    /// palette colour rather than guessed at per theme.
+    const fn mix(a: u32, b: u32, w: u32) -> Color {
+        const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u8 {
+            let (x, y) = ((a >> sh) & 0xff, (b >> sh) & 0xff);
+            ((x * (256 - w) + y * w) / 256) as u8
+        }
+        Color::Rgb(ch(a, b, w, 16), ch(a, b, w, 8), ch(a, b, w, 0))
     }
 
-    // pale tints of the same hues, at light-terminal weight — not the dark
-    // values inverted, which would read as loud on a light background
-    fn light() -> Theme {
+    fn theme(&self) -> Theme {
+        // a tint is the accent mixed into the page: toward black on a dark
+        // palette, toward white on a light one
+        let ground = if self.light { 0xffffff } else { 0x000000 };
+        // how far the tint sits from the page: quiet enough to read a whole
+        // line over, strong enough that the refined span stands out inside it
+        let quiet = if self.light { 200 } else { 210 };
+        let strong = 130;
         Theme {
-            add_bg: Color::Rgb(214, 240, 218),
-            del_bg: Color::Rgb(248, 214, 214),
-            add_strong_bg: Color::Rgb(160, 220, 175),
-            del_strong_bg: Color::Rgb(245, 174, 174),
-            select_bg: Color::Rgb(222, 226, 236),
-            match_bg: Color::Rgb(255, 236, 170),
-            match_cur_bg: Color::Rgb(255, 202, 68),
+            name: self.name,
+            fg: hex(self.fg),
+            dim: hex(self.dim),
+            border: hex(self.surface),
+            border_focus: hex(self.blue),
+            accent: hex(self.blue),
+            category: hex(self.magenta),
+            mark: hex(self.yellow),
+            reviewed: hex(self.green),
+            warn: hex(self.red),
+            add_fg: hex(self.green),
+            del_fg: hex(self.red),
+            add_bg: Palette::mix(self.green, ground, quiet),
+            del_bg: Palette::mix(self.red, ground, quiet),
+            add_strong_bg: Palette::mix(self.green, ground, strong),
+            del_strong_bg: Palette::mix(self.red, ground, strong),
+            select_bg: hex(self.surface),
+            match_bg: Palette::mix(self.yellow, ground, quiet),
+            match_cur_bg: Palette::mix(self.yellow, ground, strong),
+            syn: Syntax {
+                comment: hex(self.dim),
+                keyword: hex(self.magenta),
+                string: hex(self.green),
+                number: hex(self.orange),
+                function: hex(self.blue),
+                type_: hex(self.yellow),
+                property: hex(self.cyan),
+                operator: hex(self.dim),
+                variable: hex(self.fg),
+                builtin: hex(self.red),
+                param: hex(self.orange),
+                attribute: hex(self.cyan),
+            },
         }
     }
+}
+
+/// The built-in truecolor palettes, as each project publishes them.
+const PALETTES: &[Palette] = &[
+    Palette {
+        name: "catppuccin-mocha",
+        fg: 0xcdd6f4,
+        dim: 0x6c7086,
+        surface: 0x313244,
+        red: 0xf38ba8,
+        green: 0xa6e3a1,
+        yellow: 0xf9e2af,
+        blue: 0x89b4fa,
+        magenta: 0xcba6f7,
+        cyan: 0x94e2d5,
+        orange: 0xfab387,
+        light: false,
+    },
+    Palette {
+        name: "catppuccin-macchiato",
+        fg: 0xcad3f5,
+        dim: 0x6e738d,
+        surface: 0x363a4f,
+        red: 0xed8796,
+        green: 0xa6da95,
+        yellow: 0xeed49f,
+        blue: 0x8aadf4,
+        magenta: 0xc6a0f6,
+        cyan: 0x8bd5ca,
+        orange: 0xf5a97f,
+        light: false,
+    },
+    Palette {
+        name: "catppuccin-frappe",
+        fg: 0xc6d0f5,
+        dim: 0x737994,
+        surface: 0x414559,
+        red: 0xe78284,
+        green: 0xa6d189,
+        yellow: 0xe5c890,
+        blue: 0x8caaee,
+        magenta: 0xca9ee6,
+        cyan: 0x81c8be,
+        orange: 0xef9f76,
+        light: false,
+    },
+    Palette {
+        name: "catppuccin-latte",
+        fg: 0x4c4f69,
+        dim: 0x8c8fa1,
+        surface: 0xccd0da,
+        red: 0xd20f39,
+        green: 0x40a02b,
+        yellow: 0xdf8e1d,
+        blue: 0x1e66f5,
+        magenta: 0x8839ef,
+        cyan: 0x179299,
+        orange: 0xfe640b,
+        light: true,
+    },
+    Palette {
+        name: "tokyonight-night",
+        fg: 0xc0caf5,
+        dim: 0x565f89,
+        surface: 0x292e42,
+        red: 0xf7768e,
+        green: 0x9ece6a,
+        yellow: 0xe0af68,
+        blue: 0x7aa2f7,
+        magenta: 0xbb9af7,
+        cyan: 0x7dcfff,
+        orange: 0xff9e64,
+        light: false,
+    },
+    Palette {
+        name: "tokyonight-storm",
+        fg: 0xc0caf5,
+        dim: 0x565f89,
+        surface: 0x2f334d,
+        red: 0xf7768e,
+        green: 0x9ece6a,
+        yellow: 0xe0af68,
+        blue: 0x7aa2f7,
+        magenta: 0xbb9af7,
+        cyan: 0x7dcfff,
+        orange: 0xff9e64,
+        light: false,
+    },
+    Palette {
+        name: "tokyonight-moon",
+        fg: 0xc8d3f5,
+        dim: 0x636da6,
+        surface: 0x2f334d,
+        red: 0xff757f,
+        green: 0xc3e88d,
+        yellow: 0xffc777,
+        blue: 0x82aaff,
+        magenta: 0xc099ff,
+        cyan: 0x86e1fc,
+        orange: 0xff966c,
+        light: false,
+    },
+    Palette {
+        name: "tokyonight-day",
+        fg: 0x3760bf,
+        dim: 0x848cb5,
+        surface: 0xc4c8da,
+        red: 0xf52a65,
+        green: 0x587539,
+        yellow: 0x8c6c3e,
+        blue: 0x2e7de9,
+        magenta: 0x9854f1,
+        cyan: 0x007197,
+        orange: 0xb15c00,
+        light: true,
+    },
+    Palette {
+        name: "gruvbox-dark",
+        fg: 0xebdbb2,
+        dim: 0x928374,
+        surface: 0x3c3836,
+        red: 0xfb4934,
+        green: 0xb8bb26,
+        yellow: 0xfabd2f,
+        blue: 0x83a598,
+        magenta: 0xd3869b,
+        cyan: 0x8ec07c,
+        orange: 0xfe8019,
+        light: false,
+    },
+    Palette {
+        name: "gruvbox-light",
+        fg: 0x3c3836,
+        dim: 0x7c6f64,
+        surface: 0xebdbb2,
+        red: 0x9d0006,
+        green: 0x79740e,
+        yellow: 0xb57614,
+        blue: 0x076678,
+        magenta: 0x8f3f71,
+        cyan: 0x427b58,
+        orange: 0xaf3a03,
+        light: true,
+    },
+    Palette {
+        name: "nord",
+        fg: 0xd8dee9,
+        dim: 0x4c566a,
+        surface: 0x3b4252,
+        red: 0xbf616a,
+        green: 0xa3be8c,
+        yellow: 0xebcb8b,
+        blue: 0x81a1c1,
+        magenta: 0xb48ead,
+        cyan: 0x88c0d0,
+        orange: 0xd08770,
+        light: false,
+    },
+    Palette {
+        name: "dracula",
+        fg: 0xf8f8f2,
+        dim: 0x6272a4,
+        surface: 0x44475a,
+        red: 0xff5555,
+        green: 0x50fa7b,
+        yellow: 0xf1fa8c,
+        blue: 0xbd93f9,
+        magenta: 0xff79c6,
+        cyan: 0x8be9fd,
+        orange: 0xffb86c,
+        light: false,
+    },
+    Palette {
+        name: "solarized-dark",
+        fg: 0x93a1a1,
+        dim: 0x586e75,
+        surface: 0x073642,
+        red: 0xdc322f,
+        green: 0x859900,
+        yellow: 0xb58900,
+        blue: 0x268bd2,
+        magenta: 0xd33682,
+        cyan: 0x2aa198,
+        orange: 0xcb4b16,
+        light: false,
+    },
+    Palette {
+        name: "solarized-light",
+        fg: 0x586e75,
+        dim: 0x93a1a1,
+        surface: 0xeee8d5,
+        red: 0xdc322f,
+        green: 0x859900,
+        yellow: 0xb58900,
+        blue: 0x268bd2,
+        magenta: 0xd33682,
+        cyan: 0x2aa198,
+        orange: 0xcb4b16,
+        light: true,
+    },
+];
+
+/// Every theme name, terminal ones first — the order `--theme` and `:theme`
+/// report, and the order `:theme` completes in.
+fn theme_names() -> Vec<String> {
+    ["dark".to_string(), "light".to_string()]
+        .into_iter()
+        .chain(PALETTES.iter().map(|p| p.name.to_string()))
+        .collect()
 }
 
 fn theme(name: &str) -> Option<Theme> {
     match name {
-        "dark" => Some(Theme::dark()),
-        "light" => Some(Theme::light()),
-        _ => None,
+        "dark" => Some(Theme::terminal("dark", false)),
+        "light" => Some(Theme::terminal("light", true)),
+        n => PALETTES.iter().find(|p| p.name == n).map(Palette::theme),
     }
 }
 
@@ -2913,7 +3519,7 @@ fn code_view(
     } else {
         vec![]
     };
-    let num = Style::default().fg(Color::DarkGray);
+    let num = Style::default().fg(theme.dim);
     let avail = width.saturating_sub(GUTTER_W);
     // fill the rest of the row so the background tint spans the full width
     let pad = |spans: &mut Vec<Span<'static>>, used: usize, bg: Color| {
@@ -2949,11 +3555,14 @@ fn code_view(
     };
     let emit_removed = |out: &mut Vec<Line<'static>>| {
         for (k, r) in removed.iter().enumerate() {
-            let content = vec![Span::styled((*r).clone(), Style::default().fg(Color::Red).bg(theme.del_bg))];
+            let content = vec![Span::styled(
+                (*r).clone(),
+                Style::default().fg(theme.del_fg).bg(theme.del_bg),
+            )];
             let (visible, shown, clipped) = window(content, r.chars().count());
             right_clip.set(right_clip.get() | clipped);
             let mut spans = vec![
-                Span::styled(BAR, Style::default().fg(Color::Red)),
+                Span::styled(BAR, Style::default().fg(theme.del_fg)),
                 Span::styled("     ".to_string(), num.bg(theme.del_bg)),
             ];
             spans.extend(visible);
@@ -2972,7 +3581,7 @@ fn code_view(
         let mut spans = vec![
             Span::styled(
                 if added { BAR } else { " " },
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.add_fg),
             ),
             Span::styled(format!("{ln:>4} "), num.bg(bg)),
         ];
@@ -2982,7 +3591,10 @@ fn code_view(
                 .iter()
                 .map(|(text, color)| Span::styled(text.clone(), Style::default().fg(*color).bg(bg)))
                 .collect(),
-            _ => vec![Span::styled(line.clone(), Style::default().bg(bg))],
+            _ => vec![Span::styled(
+                line.clone(),
+                Style::default().fg(theme.fg).bg(bg),
+            )],
         };
         let (visible, shown, clipped) = window(content, line.chars().count());
         right_clip.set(right_clip.get() | clipped);
@@ -3875,7 +4487,7 @@ fn run(
     let (tx, rx) = mpsc::channel();
     let mut rx = rx;
     let worker_rev = rev.clone();
-    thread::spawn(move || load(target, filter, only_comments, worker_rev, tx));
+    thread::spawn(move || load(target, filter, only_comments, worker_rev, theme.syn, tx));
 
     let mut rev = rev;
     let mut review_sha = review_sha;
@@ -4047,7 +4659,7 @@ fn run(
                                 let (new_tx, new_rx) = mpsc::channel();
                                 rx = new_rx;
                                 let filt = base_filter.clone();
-                                thread::spawn(move || load(target, filt, only_comments, new_rev, new_tx));
+                                thread::spawn(move || load(target, filt, only_comments, new_rev, theme.syn, new_tx));
                             }
                         }
                         continue;
@@ -4375,13 +4987,13 @@ struct WhyRow {
 // Actionable dep lines get a distinct look: bold+underlined when the target
 // resolves to a hunk in this review, dimmed when it doesn't — honest at a
 // glance about there being nothing to jump to.
-fn edge_style(target: Option<usize>) -> Style {
+fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
     if target.is_some() {
         Style::default()
-            .fg(Color::LightMagenta)
+            .fg(theme.category)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.dim)
     }
 }
 
@@ -4390,28 +5002,28 @@ fn edge_style(target: Option<usize>) -> Style {
 /// a dep line whose target is currently filtered out renders — and resolves
 /// — the same as one that was never part of the review) so it doubles as the
 /// source of truth for what `why_sel` is currently sitting on.
-fn why_rows(it: &Item, view: &[usize]) -> Vec<WhyRow> {
+fn why_rows(it: &Item, view: &[usize], theme: &Theme) -> Vec<WhyRow> {
     let mut rows = vec![];
     // The engine's terminal fallback rationale: it found nothing to say about
     // the hunk, so a "reason: change" line says nothing either — leave it out.
     if it.rationale != "change" {
         rows.push(WhyRow {
             text: format!("reason: {}", it.rationale),
-            style: Style::default().fg(Color::Cyan),
+            style: Style::default().fg(theme.border_focus),
             kind: WhyKind::Text,
         });
     }
     for d in &it.details {
         rows.push(WhyRow {
             text: format!("- {d}"),
-            style: Style::default().fg(Color::Blue),
+            style: Style::default().fg(theme.accent),
             kind: WhyKind::Text,
         });
     }
     if !it.notes.is_empty() {
         rows.push(WhyRow {
             text: format!("notes: {}", it.notes.join("; ")),
-            style: Style::default().fg(Color::Yellow),
+            style: Style::default().fg(theme.mark),
             kind: WhyKind::Text,
         });
     }
@@ -4419,15 +5031,15 @@ fn why_rows(it: &Item, view: &[usize]) -> Vec<WhyRow> {
         let target = e.target.filter(|t| view.contains(t));
         rows.push(WhyRow {
             text: format!("dep {}", e.label),
-            style: edge_style(target),
+            style: edge_style(target, theme),
             kind: WhyKind::Edge(target),
         });
     }
     for (construct, message, verdict) in &it.advisories {
         let (head, color) = if *verdict {
-            (format!("⚠ {construct}"), Color::Red)
+            (format!("⚠ {construct}"), theme.warn)
         } else {
-            (construct.clone(), Color::Magenta)
+            (construct.clone(), theme.category)
         };
         rows.push(WhyRow {
             text: head,
@@ -4437,7 +5049,7 @@ fn why_rows(it: &Item, view: &[usize]) -> Vec<WhyRow> {
         for ml in message.lines() {
             rows.push(WhyRow {
                 text: format!("  {ml}"),
-                style: Style::default(),
+                style: Style::default().fg(theme.fg),
                 kind: WhyKind::Text,
             });
         }
@@ -4447,7 +5059,7 @@ fn why_rows(it: &Item, view: &[usize]) -> Vec<WhyRow> {
 
 // the dep-line target at `app.why_sel`, if the cursor is on one at all
 fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
-    let rows = why_rows(&app.items[app.sel], &app.view);
+    let rows = why_rows(&app.items[app.sel], &app.view, &app.theme);
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
         WhyKind::Text => None,
@@ -4466,8 +5078,9 @@ fn excerpt(
     hl: Option<&Vec<LineSpans>>,
     n0: usize,
     n1: usize,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let num = Style::default().fg(Color::DarkGray);
+    let num = Style::default().fg(theme.dim);
     (n0..=n1)
         .filter_map(|ln| {
             let text = lines.get(ln - 1)?;
@@ -4504,14 +5117,20 @@ fn preview_edge(app: &mut App) {
         lines.push(prose(""));
         lines.push(Line::from(Span::styled(
             format!("reason: {}", t.rationale),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(app.theme.border_focus),
         )));
     }
     if let Some((_, nl)) = app.sources.get(&t.path) {
         let [n0, n1] = t.new_range;
         if n0 >= 1 && n0 <= nl.len() {
             lines.push(prose(""));
-            lines.extend(excerpt(nl, app.highlights.get(&t.path), n0, n1.min(nl.len())));
+            lines.extend(excerpt(
+                nl,
+                app.highlights.get(&t.path),
+                n0,
+                n1.min(nl.len()),
+                &app.theme,
+            ));
         }
     }
     app.popup = Some(Popup { title: "dep".to_string(), lines, scroll: 0, hscroll: 0 });
@@ -4552,13 +5171,26 @@ fn jump_back(app: &mut App) {
 }
 
 /// The focused pane gets a cyan border.
-fn pane_block(title: String, focused: bool) -> Block<'static> {
-    let b = Block::bordered().title(title);
-    if focused {
-        b.border_style(Style::default().fg(Color::Cyan))
+/// A pane's frame. Rounded corners and a dim border for context, the theme's
+/// focus colour for the pane that has it — the border is how the reviewer knows
+/// where the keys will land, so it is the one piece of chrome allowed to be loud.
+fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
+    let border = if focused {
+        theme.border_focus
     } else {
-        b
-    }
+        theme.border
+    };
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border))
+        .title(Span::styled(
+            title,
+            Style::default().fg(if focused {
+                theme.border_focus
+            } else {
+                theme.dim
+            }),
+        ))
 }
 
 fn draw(f: &mut Frame, app: &mut App, rev: &str) {
@@ -4568,14 +5200,22 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     // left — reading order
     let symbol = "▶ ";
     let text_w = (cols[0].width as usize).saturating_sub(2 + symbol.chars().count());
-    let display = display_rows(&app.view, &app.items, &app.groups, app.show_groups, &app.collapsed);
+    let display = display_rows(
+        &app.view,
+        &app.items,
+        &app.groups,
+        app.show_groups,
+        &app.collapsed,
+    );
     let rows: Vec<ListItem> = display
         .iter()
         .map(|row| match row {
             DisplayRow::Header(reason) => {
                 let spans = vec![Span::styled(
                     format!("· {reason}"),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(app.theme.border_focus)
+                        .add_modifier(Modifier::BOLD),
                 )];
                 ListItem::new(Line::from(slice_range(spans, 0, text_w)))
             }
@@ -4583,24 +5223,23 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                 let i = *i;
                 let it = &app.items[i];
                 let style = if it.noise {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(app.theme.dim)
                 } else if app.reviewed[i] {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(app.theme.reviewed)
                 } else {
-                    Style::default()
+                    Style::default().fg(app.theme.fg)
                 };
                 // head only — the full rationale lives in the "why" pane.
                 // Path, line number and category are separate spans so each
-                // reads at a glance; `style` (noise/reviewed) still tints
-                // the row as a whole.
-                let dim = |c: Color| {
-                    if style.fg.is_some() { style } else { style.fg(c) }
-                };
+                // reads at a glance; a noise or reviewed row overrides all
+                // three, because *that* is what the row is saying.
+                let tinted = it.noise || app.reviewed[i];
+                let dim = |c: Color| if tinted { style } else { style.fg(c) };
                 let spans = vec![
-                    Span::styled(it.mark.clone(), dim(Color::Yellow)),
+                    Span::styled(it.mark.clone(), dim(app.theme.mark)),
                     Span::styled(it.path.clone(), style),
-                    Span::styled(format!(":L{}", it.new_range[0]), dim(Color::Blue)),
-                    Span::styled(format!(" [{}]", it.cat), dim(Color::Magenta)),
+                    Span::styled(format!(":L{}", it.new_range[0]), dim(app.theme.accent)),
+                    Span::styled(format!(" [{}]", it.cat), dim(app.theme.category)),
                 ];
                 ListItem::new(Line::from(slice_range(spans, 0, text_w)))
             }
@@ -4626,6 +5265,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                 app.keys.name
             ),
             app.focus == Pane::List,
+            &app.theme,
         ))
         .highlight_style(Style::default().bg(app.theme.select_bg))
         .highlight_symbol(symbol);
@@ -4691,7 +5331,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         format!(" {}{clip}  ({}) ", it.path, app.keys.hint)
     };
 
-    let why_content = why_rows(it, &app.view);
+    let why_content = why_rows(it, &app.view, &app.theme);
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code.len();
     app.why_len = why_content.len();
@@ -4717,12 +5357,16 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         .collect();
 
     let code_view = Paragraph::new(Text::from(code))
-        .block(pane_block(code_title, app.focus == Pane::Code))
+        .block(pane_block(code_title, app.focus == Pane::Code, &app.theme))
         .scroll((app.scroll, 0));
     f.render_widget(code_view, rhs[0]);
 
     let info = Paragraph::new(Text::from(why))
-        .block(pane_block(" why ".to_string(), app.focus == Pane::Why))
+        .block(pane_block(
+            " why ".to_string(),
+            app.focus == Pane::Why,
+            &app.theme,
+        ))
         .scroll((app.why_scroll, 0))
         .wrap(Wrap { trim: false });
     f.render_widget(info, rhs[1]);
@@ -4743,7 +5387,8 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                 popup.title,
                 if clipped { " ‹›" } else { "" }
             ))
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(app.theme.mark));
         let p = Paragraph::new(Text::from(text))
             .block(block)
             .scroll((popup.scroll, popup.hscroll));
@@ -4757,8 +5402,9 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         let line = format!(":{}▏", bar.text);
         let p = Paragraph::new(Text::from(vec![Line::from(line)])).block(
             Block::bordered()
+                .border_type(BorderType::Rounded)
                 .title(" command ")
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(app.theme.border_focus)),
         );
         f.render_widget(p, bar_rect);
 
@@ -4838,29 +5484,66 @@ struct Cmd {
 /// matching arm there falls into that match's `unknown command` case rather
 /// than silently doing nothing.
 const COMMANDS: &[Cmd] = &[
-    Cmd { name: "only-comments", args: "", help: "toggle showing only comment/docstring hunks" },
-    Cmd { name: "all", args: "", help: "toggle showing generated/formatting-noise hunks" },
+    Cmd {
+        name: "only-comments",
+        args: "",
+        help: "toggle showing only comment/docstring hunks",
+    },
+    Cmd {
+        name: "all",
+        args: "",
+        help: "toggle showing generated/formatting-noise hunks",
+    },
     Cmd {
         name: "filter",
         args: "<glob>",
         help: "narrow the review to paths matching <glob>; no argument clears it",
     },
-    Cmd { name: "keys", args: "<preset>", help: "swap the keymap live (vim, vscode)" },
+    Cmd {
+        name: "keys",
+        args: "<preset>",
+        help: "swap the keymap live (vim, vscode)",
+    },
+    Cmd {
+        name: "theme",
+        args: "<name>",
+        help: "swap the palette live (:theme with no name lists them)",
+    },
     Cmd {
         name: "strategy",
         args: "<name>",
         help: "re-order the review (comprehension, defs-first, file)",
     },
-    Cmd { name: "group", args: "", help: "toggle group-reason headers in the reading-order list" },
-    Cmd { name: "goto", args: "<path>", help: "select the first hunk of <path>, focus the code pane" },
-    Cmd { name: "e", args: "<rev>", help: "review a different revision, without restarting" },
+    Cmd {
+        name: "group",
+        args: "",
+        help: "toggle group-reason headers in the reading-order list",
+    },
+    Cmd {
+        name: "goto",
+        args: "<path>",
+        help: "select the first hunk of <path>, focus the code pane",
+    },
+    Cmd {
+        name: "e",
+        args: "<rev>",
+        help: "review a different revision, without restarting",
+    },
     Cmd {
         name: "audit",
         args: "",
         help: "account for every hunk and file not on screen, and why",
     },
-    Cmd { name: "q", args: "", help: "quit" },
-    Cmd { name: "help", args: "", help: "list these commands" },
+    Cmd {
+        name: "q",
+        args: "",
+        help: "quit",
+    },
+    Cmd {
+        name: "help",
+        args: "",
+        help: "list these commands",
+    },
 ];
 
 /// `:audit`'s body — every hunk and file that isn't on screen, charged to the
@@ -4979,6 +5662,7 @@ fn arg_candidates(
 ) -> Vec<String> {
     match cmd {
         "keys" => vec!["vim".to_string(), "vscode".to_string()],
+        "theme" => theme_names(),
         "strategy" => vec!["comprehension".to_string(), "defs-first".to_string(), "file".to_string()],
         "goto" => goto_paths.to_vec(),
         "filter" => filter_dirs.to_vec(),
@@ -5341,6 +6025,42 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 Some((arg.to_string(), globs))
             };
             set_filters(app, app.comments_only, app.show_all, next)?;
+            Ok(CommandOutcome::None)
+        }
+        "theme" => {
+            let want = arg.trim();
+            if want.is_empty() {
+                // no argument: show what there is, rather than an error about
+                // the argument the reviewer is trying to discover
+                app.popup = Some(Popup {
+                    title: "themes".to_string(),
+                    lines: theme_names()
+                        .iter()
+                        .map(|n| {
+                            let mark = if *n == app.theme.name { "▸ " } else { "  " };
+                            prose(format!("{mark}{n}"))
+                        })
+                        .collect(),
+                    scroll: 0,
+                    hscroll: 0,
+                });
+                return Ok(CommandOutcome::None);
+            }
+            let Some(t) = theme(want) else {
+                return Err(format!("unknown theme '{want}' (try :theme to list them)"));
+            };
+            app.theme = t;
+            // syntax colours are baked into the highlight cache at load time,
+            // so a live theme swap has to re-highlight what is on screen
+            let paths: Vec<String> = app.highlights.keys().cloned().collect();
+            for path in paths {
+                let Some((_, nl)) = app.sources.get(&path) else {
+                    continue;
+                };
+                if let Some(h) = highlight_file(&path, &nl.join("\n"), &app.theme.syn) {
+                    app.highlights.insert(path, h);
+                }
+            }
             Ok(CommandOutcome::None)
         }
         "keys" => {
@@ -5890,7 +6610,7 @@ mod tests {
     fn excerpt_numbers_lines_and_uses_highlight_segments_when_present() {
         let lines: Vec<String> = vec!["fn a() {}".into(), "let x = 1;".into(), "done".into()];
         // no grammar: falls back to raw text, still gutter-numbered
-        let plainly = excerpt(&lines, None, 2, 3);
+        let plainly = excerpt(&lines, None, 2, 3, &Theme::terminal("dark", false));
         assert_eq!(plainly.len(), 2);
         let first: String = plainly[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(first, "    2 let x = 1;");
@@ -5901,7 +6621,7 @@ mod tests {
             vec![("let ".to_string(), Color::Magenta), ("x = 1;".to_string(), Color::Reset)],
             vec![],
         ];
-        let lit = excerpt(&lines, Some(&hl), 2, 2);
+        let lit = excerpt(&lines, Some(&hl), 2, 2, &Theme::terminal("dark", false));
         assert_eq!(lit.len(), 1);
         assert_eq!(lit[0].spans.len(), 3, "gutter + two coloured segments");
         assert_eq!(lit[0].spans[1].style.fg, Some(Color::Magenta));
@@ -5921,8 +6641,11 @@ mod tests {
     #[test]
     fn excerpt_stops_at_the_end_of_the_file() {
         let lines: Vec<String> = vec!["only".into()];
-        assert_eq!(excerpt(&lines, None, 1, 9).len(), 1);
-        assert!(excerpt(&lines, None, 5, 9).is_empty());
+        assert_eq!(
+            excerpt(&lines, None, 1, 9, &Theme::terminal("dark", false)).len(),
+            1
+        );
+        assert!(excerpt(&lines, None, 5, 9, &Theme::terminal("dark", false)).is_empty());
     }
 
     #[test]
@@ -6268,21 +6991,46 @@ mod tests {
         sources.insert("f.rs".to_string(), (vec![], vec![line]));
         let highlights: Highlights = HashMap::new();
         // width = gutter (6) + 10 cols of code
-        let (unscrolled, right_clip_0) =
-            code_view(&it, &sources, &highlights, 16, 0, None, &[], None, &Theme::dark());
-        let (scrolled, right_clip_5) =
-            code_view(&it, &sources, &highlights, 16, 5, None, &[], None, &Theme::dark());
+        let (unscrolled, right_clip_0) = code_view(
+            &it,
+            &sources,
+            &highlights,
+            16,
+            0,
+            None,
+            &[],
+            None,
+            &theme("dark").unwrap(),
+        );
+        let (scrolled, right_clip_5) = code_view(
+            &it,
+            &sources,
+            &highlights,
+            16,
+            5,
+            None,
+            &[],
+            None,
+            &theme("dark").unwrap(),
+        );
         assert_eq!(unscrolled.len(), 1);
         assert_eq!(scrolled.len(), 1);
         // the sign-bar and line-number gutter (the row's first two spans)
         // never move, regardless of horizontal scroll
         let gutter = |line: &Line<'static>| -> Vec<String> {
-            line.spans.iter().take(2).map(|s| s.content.to_string()).collect()
+            line.spans
+                .iter()
+                .take(2)
+                .map(|s| s.content.to_string())
+                .collect()
         };
         assert_eq!(gutter(&unscrolled[0]), gutter(&scrolled[0]));
         // but the code past the gutter does shift with hscroll
         let rest = |line: &Line<'static>| -> String {
-            line.spans[2..].iter().map(|s| s.content.to_string()).collect()
+            line.spans[2..]
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect()
         };
         assert_ne!(rest(&unscrolled[0]), rest(&scrolled[0]));
         // both directions were clipped at this width, so both report it
@@ -6308,7 +7056,7 @@ mod tests {
             "expected only `, b: B` to be refined"
         );
 
-        let theme = Theme::dark();
+        let theme = theme("dark").unwrap();
         let (rows, _) = code_view(it, &sources, &HashMap::new(), 60, 0, None, &[], None, &theme);
         // the added row is the one carrying the add tint (the removed row
         // comes first, on the del tint)
@@ -6339,7 +7087,7 @@ mod tests {
         refine_items(&mut items, &sources);
         assert_eq!(items[0].refined.added[0], None);
 
-        let theme = Theme::dark();
+        let theme = theme("dark").unwrap();
         let (rows, _) =
             code_view(&items[0], &sources, &HashMap::new(), 60, 0, None, &[], None, &theme);
         let added = rows.last().unwrap();
@@ -6355,7 +7103,17 @@ mod tests {
         let mut sources: Sources = HashMap::new();
         sources.insert("f.rs".to_string(), (vec![], vec!["short".to_string()]));
         let highlights: Highlights = HashMap::new();
-        let (_, right_clip) = code_view(&it, &sources, &highlights, 40, 0, None, &[], None, &Theme::dark());
+        let (_, right_clip) = code_view(
+            &it,
+            &sources,
+            &highlights,
+            40,
+            0,
+            None,
+            &[],
+            None,
+            &theme("dark").unwrap(),
+        );
         assert!(!right_clip);
     }
 
@@ -6457,7 +7215,7 @@ mod tests {
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3)), edge("→ b.rs:L1   calls it", None)];
         // target 3 must be in `view` to resolve — same as being part of the
         // review at all; a 4-item view (0..=3) covers it here
-        let rows = why_rows(&it, &[0, 1, 2, 3]);
+        let rows = why_rows(&it, &[0, 1, 2, 3], &Theme::terminal("dark", false));
         let edges: Vec<&WhyKind> = rows.iter().map(|r| &r.kind).filter(|k| matches!(k, WhyKind::Edge(_))).collect();
         assert!(matches!(edges[0], WhyKind::Edge(Some(3))));
         assert!(matches!(edges[1], WhyKind::Edge(None)));
@@ -6468,7 +7226,7 @@ mod tests {
         let mut it = test_item("a.rs");
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
         // target 3 exists (it's a valid item index) but isn't in `view`
-        let rows = why_rows(&it, &[0, 1, 2]);
+        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false));
         let edges: Vec<&WhyKind> = rows.iter().map(|r| &r.kind).filter(|k| matches!(k, WhyKind::Edge(_))).collect();
         assert!(matches!(edges[0], WhyKind::Edge(None)));
     }
@@ -6509,7 +7267,7 @@ mod tests {
             rev: "HEAD".to_string(),
             marks_path: None,
             marks: HashMap::new(),
-            theme: Theme::dark(),
+            theme: theme("dark").unwrap(),
             show_groups: false,
             groups: HashMap::new(),
             collapsed: HashSet::new(),
@@ -6768,8 +7526,8 @@ mod tests {
 
     #[test]
     fn light_theme_is_not_the_dark_values_inverted() {
-        let dark = Theme::dark();
-        let light = Theme::light();
+        let dark = theme("dark").unwrap();
+        let light = theme("light").unwrap();
         // a real, distinct palette — not a placeholder equal to dark, and not
         // literally 255-x of dark's channels either
         assert!(!colors_eq(dark.add_bg, light.add_bg));
@@ -6814,6 +7572,215 @@ mod tests {
         let DisplayRow::Header(reason) = &rows[0] else { panic!("expected a header") };
         // the header carries its fold marker and how many hunks it covers
         assert_eq!(reason, "▾ same definition: run (2)");
+    }
+
+    // ---- theming ----
+
+    #[test]
+    fn every_theme_name_resolves_and_truecolor_themes_leave_nothing_to_the_terminal() {
+        for name in theme_names() {
+            let t = theme(&name).expect(&name);
+            assert_eq!(t.name, name, "a theme must know its own name");
+            if name == "dark" || name == "light" {
+                // the promise of a terminal theme: text follows the terminal
+                assert_eq!(t.fg, Color::Reset, "{name}");
+                continue;
+            }
+            // a truecolor theme names everything; a stray Reset would show up
+            // as one element mysteriously following the terminal instead
+            let roles: Vec<(&str, Color)> = vec![
+                ("fg", t.fg),
+                ("dim", t.dim),
+                ("border", t.border),
+                ("border_focus", t.border_focus),
+                ("accent", t.accent),
+                ("category", t.category),
+                ("mark", t.mark),
+                ("reviewed", t.reviewed),
+                ("warn", t.warn),
+                ("add_fg", t.add_fg),
+                ("del_fg", t.del_fg),
+                ("add_bg", t.add_bg),
+                ("del_bg", t.del_bg),
+                ("add_strong_bg", t.add_strong_bg),
+                ("del_strong_bg", t.del_strong_bg),
+                ("select_bg", t.select_bg),
+                ("match_bg", t.match_bg),
+                ("match_cur_bg", t.match_cur_bg),
+                ("syn.comment", t.syn.comment),
+                ("syn.keyword", t.syn.keyword),
+                ("syn.string", t.syn.string),
+                ("syn.number", t.syn.number),
+                ("syn.function", t.syn.function),
+                ("syn.type", t.syn.type_),
+                ("syn.property", t.syn.property),
+                ("syn.operator", t.syn.operator),
+                ("syn.variable", t.syn.variable),
+                ("syn.builtin", t.syn.builtin),
+                ("syn.param", t.syn.param),
+                ("syn.attribute", t.syn.attribute),
+            ];
+            for (role, c) in roles {
+                assert!(
+                    matches!(c, Color::Rgb(..)),
+                    "{name}: {role} is not truecolor"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_diff_tint_is_distinguishable_from_the_selection_tint() {
+        // the three tints a row can carry must not collapse into each other,
+        // or an added line and a selected line look the same
+        for name in theme_names() {
+            let t = theme(&name).unwrap();
+            assert!(!colors_eq(t.add_bg, t.del_bg), "{name}: add/del");
+            assert!(!colors_eq(t.add_bg, t.select_bg), "{name}: add/select");
+            assert!(!colors_eq(t.del_bg, t.select_bg), "{name}: del/select");
+            assert!(
+                !colors_eq(t.add_bg, t.add_strong_bg),
+                "{name}: add/add-strong"
+            );
+            assert!(
+                !colors_eq(t.del_bg, t.del_strong_bg),
+                "{name}: del/del-strong"
+            );
+            assert!(
+                !colors_eq(t.match_bg, t.match_cur_bg),
+                "{name}: match/current"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_hex_takes_the_form_palettes_publish_and_nothing_else() {
+        assert_eq!(parse_hex("#89b4fa"), Some(Color::Rgb(0x89, 0xb4, 0xfa)));
+        assert_eq!(parse_hex("89b4fa"), Some(Color::Rgb(0x89, 0xb4, 0xfa)));
+        assert_eq!(parse_hex("  #000000 "), Some(Color::Rgb(0, 0, 0)));
+        assert_eq!(parse_hex("#89b4f"), None, "five digits");
+        assert_eq!(parse_hex("#89b4fag"), None, "not hex");
+        assert_eq!(parse_hex("blue"), None, "colour names are not accepted");
+    }
+
+    #[test]
+    fn every_documented_theme_role_actually_changes_the_theme() {
+        // THEME_ROLES is what the docs promise a config can set; a name listed
+        // there but missing from `apply_theme_colors` would silently do nothing
+        let base = theme("catppuccin-mocha").unwrap();
+        let sentinel = Color::Rgb(1, 2, 3);
+        for role in THEME_ROLES {
+            let got = apply_theme_colors(base, &[(role.to_string(), sentinel)]);
+            let changed = [
+                got.fg,
+                got.dim,
+                got.border,
+                got.border_focus,
+                got.accent,
+                got.category,
+                got.mark,
+                got.reviewed,
+                got.warn,
+                got.add_fg,
+                got.del_fg,
+                got.add_bg,
+                got.del_bg,
+                got.add_strong_bg,
+                got.del_strong_bg,
+                got.select_bg,
+                got.match_bg,
+                got.match_cur_bg,
+                got.syn.comment,
+                got.syn.keyword,
+                got.syn.string,
+                got.syn.number,
+                got.syn.function,
+                got.syn.type_,
+                got.syn.property,
+                got.syn.operator,
+                got.syn.variable,
+                got.syn.builtin,
+                got.syn.param,
+                got.syn.attribute,
+            ]
+            .iter()
+            .filter(|c| colors_eq(**c, sentinel))
+            .count();
+            assert_eq!(changed, 1, "role `{role}` set {changed} fields, expected 1");
+        }
+    }
+
+    #[test]
+    fn a_config_can_name_a_theme_and_override_its_roles() {
+        let cfg = parse_key_config(
+            "[theme]\nname = \"nord\"\nborder-focus = \"#ff0000\"\nsyntax-keyword = \"00ff00\"\n",
+        );
+        assert!(cfg.problems.is_empty(), "{:?}", cfg.problems);
+        assert_eq!(cfg.theme.as_deref(), Some("nord"));
+
+        let t = apply_theme_colors(theme(&cfg.theme.clone().unwrap()).unwrap(), &cfg.colors);
+        assert!(colors_eq(t.border_focus, Color::Rgb(0xff, 0, 0)));
+        assert!(colors_eq(t.syn.keyword, Color::Rgb(0, 0xff, 0)));
+        // everything not named keeps the palette's own value
+        assert!(colors_eq(t.syn.string, theme("nord").unwrap().syn.string));
+    }
+
+    #[test]
+    fn a_bad_theme_line_is_reported_by_number_and_skipped() {
+        let cfg = parse_key_config(
+            "[theme]\nnmae = \"nord\"\nborder-focus = \"redish\"\nmark = \"#ffcc00\"\n",
+        );
+        assert_eq!(cfg.problems.len(), 2, "{:?}", cfg.problems);
+        assert!(cfg.problems[0].contains("line 2"), "{:?}", cfg.problems);
+        assert!(cfg.problems[1].contains("line 3"), "{:?}", cfg.problems);
+        assert_eq!(cfg.colors.len(), 1, "the good line still lands");
+    }
+
+    #[test]
+    fn a_hash_opens_a_comment_only_outside_quotes() {
+        // every palette value starts with `#`; cutting at the first one
+        // regardless would eat the whole theme section
+        assert_eq!(
+            strip_comment("mark = \"#ffcc00\"  # the ⚠ colour"),
+            "mark = \"#ffcc00\"  "
+        );
+        assert_eq!(strip_comment("# whole line"), "");
+        assert_eq!(strip_comment("preset = \"vim\""), "preset = \"vim\"");
+
+        let cfg = parse_key_config("[theme]\nmark = \"#ffcc00\"  # trailing\n");
+        assert!(cfg.problems.is_empty(), "{:?}", cfg.problems);
+        assert_eq!(cfg.colors[0].0, "mark");
+        assert!(colors_eq(cfg.colors[0].1, Color::Rgb(0xff, 0xcc, 0)));
+    }
+
+    #[test]
+    fn an_unknown_section_is_reported_rather_than_silently_ignored() {
+        let cfg = parse_key_config("[colours]\nfg = \"#ffffff\"\n");
+        assert!(
+            cfg.problems[0].contains("unknown section"),
+            "{:?}",
+            cfg.problems
+        );
+    }
+
+    #[test]
+    fn theme_completes_from_the_theme_list() {
+        let got = command_completions("theme catp", &[], &[], &[]);
+        assert_eq!(got.len(), 4, "{got:?}");
+        assert!(got.iter().all(|n| n.starts_with("catppuccin-")), "{got:?}");
+    }
+
+    #[test]
+    fn the_theme_command_swaps_the_palette_and_rejects_an_unknown_name() {
+        let mut app = test_app(0);
+        assert!(execute_command(&mut app, "theme nord").is_ok());
+        assert_eq!(app.theme.name, "nord");
+        match execute_command(&mut app, "theme nonesuch") {
+            Err(msg) => assert!(msg.contains("unknown theme"), "{msg}"),
+            Ok(_) => panic!("an unknown theme must be refused"),
+        }
+        // and the refusal leaves the previous theme in place
+        assert_eq!(app.theme.name, "nord");
     }
 
     // ---- configurable keybinds ----
@@ -7038,10 +8005,11 @@ mod tests {
     fn carry_across_reload_keeps_keymap_and_theme() {
         let mut app = test_app(0);
         app.keys = keymap("vscode").unwrap();
-        app.theme = Theme::light();
-        let (keys, theme) = carry_across_reload(&app);
+        app.theme = theme("light").unwrap();
+        let (keys, carried) = carry_across_reload(&app);
         assert_eq!(keys.name, "vscode");
-        assert!(colors_eq(theme.add_bg, Theme::light().add_bg));
+        assert_eq!(carried.name, "light");
+        assert!(colors_eq(carried.add_bg, theme("light").unwrap().add_bg));
     }
 
     #[test]

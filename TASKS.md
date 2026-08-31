@@ -212,3 +212,7 @@ git line-coverage check holding.
       names the function a parameter belongs to
 - [x] configurable keybind presets (`~/.config/ordo/tui.toml`) — preset choice
       plus per-key add/replace/remove, validated against the action table
+- [x] themes — 14 truecolor palettes (catppuccin, tokyonight, gruvbox, nord,
+      dracula, solarized) beside the two terminal-palette ones, `:theme` to swap
+      live, and every role overridable in `[theme]`. Rounded pane borders; the
+      whole palette lives in `Theme`, nothing hardcoded at a call site
