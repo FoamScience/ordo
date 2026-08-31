@@ -299,8 +299,14 @@ A theme colours twelve *syntax roles* rather than the twenty-six tree-sitter
 capture names mapped onto them, so a new grammar's captures never mean touching
 every theme.
 
-Keys are configurable in `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml`, on top
-of whichever preset is in use:
+`ordo-tui --init-config` writes a starting config to
+`${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml` (`--force` to overwrite): every
+binding and every colour of the current preset and theme, at its real value,
+commented out. It is generated from the same tables the program reads, so it
+can't drift from what ordo accepts — a test uncomments the whole file and
+checks it parses cleanly and changes nothing.
+
+Keys are configurable in the same file, on top of whichever preset is in use:
 
 ```toml
 preset = "vim"            # the preset to start from (--keys still wins)

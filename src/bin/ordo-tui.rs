@@ -5,6 +5,7 @@
 //! engine stays git-free; gated behind the `tui` feature so the default build
 //! never pulls a UI stack.
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -29,6 +30,7 @@ ordo-tui — interactive review of a commit, ordered for comprehension.
 
 usage:
   ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--all] [--only-comments]
+  ordo-tui --init-config [--force]
   ordo-tui --help
   ordo-tui --version
 
@@ -338,6 +340,8 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     let mut theme_name = std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "dark".to_string());
     let mut want_preset = false;
     let mut want_theme = false;
+    let mut want_init = false;
+    let mut force = false;
     for a in std::env::args().skip(1) {
         if want_preset {
             preset = a;
@@ -364,6 +368,8 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
             }
             "--all" => skip_generated = false,
             "--only-comments" => only_comments = true,
+            "--init-config" => want_init = true,
+            "--force" => force = true,
             "-h" | "--help" | "help" => {
                 print!("{USAGE}");
                 return Err(0);
@@ -429,6 +435,13 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         Some(c) => apply_theme_colors(theme, &c.colors),
         None => theme,
     };
+    if want_init {
+        // `--init-config` is a whole run of its own: nothing is reviewed, and
+        // the exit code is the write's own (`Err(0)` on success, as `--help`
+        // and `--version` already report a clean stop)
+        write_init_config(&preset, &theme_name, force)?;
+        return Err(0);
+    }
     let globs = build_globs(&globs).map_err(|e| {
         eprintln!("ordo-tui: {e}");
         2
@@ -1874,6 +1887,161 @@ fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
         }
     }
     t
+}
+
+/// The config file ordo would write for the current preset and theme — every
+/// binding and every colour, commented out, at its real value.
+///
+/// Generated from the same tables the program reads (`keymap`, `ACTION_NAMES`,
+/// `THEME_ROLES`, the resolved `Theme`), never from a hand-written template, so
+/// it cannot drift from what the program actually accepts. A test uncomments
+/// the whole thing and checks it parses with no complaints and changes nothing.
+fn init_config(preset: &str, theme_name: &str) -> String {
+    let mut out = String::new();
+    let km = keymap(preset).unwrap_or_else(|| keymap("vim").expect("vim preset exists"));
+    let t = theme(theme_name).unwrap_or_else(|| theme("dark").expect("dark theme exists"));
+    for line in [
+        "# ordo-tui configuration — every line below is this build's own default,",
+        "# commented out. Uncomment and edit what you want to change.",
+        "#",
+        "# Written by `ordo-tui --init-config`; the values are this build's, for",
+        &format!("# preset `{preset}` and theme `{theme_name}`."),
+    ] {
+        let _ = writeln!(out, "{line}");
+    }
+    let _ = writeln!(out, "preset = \"{}\"", km.name);
+    let _ = writeln!(out, "theme = \"{}\"\n", t.name);
+
+    for line in [
+        "",
+        "# ---------------------------------------------------------------- keys",
+        "#",
+        "# A line binds one key to one action; the action `none` removes a binding.",
+        "# A chord is two keys separated by a space: `\"g d\"`, `\"C-w l\"`.",
+        "# Modifiers are `C-`, `S-`, `A-`; named keys are Esc, Enter, Tab, Space,",
+        "# Backspace, Up, Down, Left, Right, Home, End, PageUp, PageDown, F1..F12.",
+        "[binds]",
+    ] {
+        let _ = writeln!(out, "{line}");
+    }
+    for (prefix, key, action) in &km.binds {
+        let keys = match prefix {
+            Some(p) => format!("{} {}", key_label(*p), key_label(*key)),
+            None => key_label(*key),
+        };
+        let name = ACTION_NAMES
+            .iter()
+            .find(|(_, a)| a == action)
+            .map(|(n, _)| *n)
+            .unwrap_or("");
+        let (_, help) = action_help(*action);
+        let _ = writeln!(out, "# \"{keys}\" = \"{name}\"  # {help}");
+    }
+
+    for line in [
+        "".to_string(),
+        "# --------------------------------------------------------------- theme".to_string(),
+        "#".to_string(),
+        "# `name` picks a built-in palette; the roles below override it, as #rrggbb.".to_string(),
+        format!("# Built-in: {}.", theme_names().join(", ")),
+        "[theme]".to_string(),
+        format!("# name = \"{}\"", t.name),
+    ] {
+        let _ = writeln!(out, "{line}");
+    }
+    // a terminal theme leaves some roles to the terminal's own palette: there
+    // is no honest hex to print for those, and printing a placeholder would
+    // mean this file stops being valid the moment someone uncomments it
+    let inherited: Vec<&str> = THEME_ROLES
+        .iter()
+        .filter(|r| !matches!(theme_role_color(&t, r), Color::Rgb(..)))
+        .copied()
+        .collect();
+    if !inherited.is_empty() {
+        let _ = writeln!(
+            out,
+            "# These follow the terminal's own palette on this theme, so they have no\n             # default to show — set any of them to a colour to take it over:\n             #   {}",
+            inherited.join(", ")
+        );
+    }
+    for role in THEME_ROLES {
+        if let Color::Rgb(r, g, b) = theme_role_color(&t, role) {
+            let _ = writeln!(out, "# {role} = \"#{r:02x}{g:02x}{b:02x}\"");
+        }
+    }
+    out
+}
+
+/// `--init-config`: write the generated config, refusing to clobber one that
+/// already exists unless asked. Reports the path either way — the file is no
+/// use if the reviewer can't find it.
+fn write_init_config(preset: &str, theme_name: &str, force: bool) -> Result<(), i32> {
+    let Some(path) = config_path() else {
+        eprintln!("ordo-tui: no config directory (set $XDG_CONFIG_HOME or $HOME)");
+        return Err(2);
+    };
+    if path.exists() && !force {
+        eprintln!(
+            "ordo-tui: {} already exists — pass --force to overwrite it",
+            path.display()
+        );
+        return Err(1);
+    }
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("ordo-tui: {}: {e}", dir.display());
+            return Err(1);
+        }
+    }
+    match std::fs::write(&path, init_config(preset, theme_name)) {
+        Ok(()) => {
+            println!("wrote {}", path.display());
+            Err(0)
+        }
+        Err(e) => {
+            eprintln!("ordo-tui: {}: {e}", path.display());
+            Err(1)
+        }
+    }
+}
+
+/// A theme role's current colour, by the name a config file uses. The read
+/// side of `apply_theme_colors`, so `--init-config` prints what the program
+/// would actually read back.
+fn theme_role_color(t: &Theme, role: &str) -> Color {
+    match role {
+        "fg" => t.fg,
+        "dim" => t.dim,
+        "border" => t.border,
+        "border-focus" => t.border_focus,
+        "accent" => t.accent,
+        "category" => t.category,
+        "mark" => t.mark,
+        "reviewed" => t.reviewed,
+        "warn" => t.warn,
+        "add-fg" => t.add_fg,
+        "del-fg" => t.del_fg,
+        "add-bg" => t.add_bg,
+        "del-bg" => t.del_bg,
+        "add-strong-bg" => t.add_strong_bg,
+        "del-strong-bg" => t.del_strong_bg,
+        "select-bg" => t.select_bg,
+        "match-bg" => t.match_bg,
+        "match-current-bg" => t.match_cur_bg,
+        "syntax-comment" => t.syn.comment,
+        "syntax-keyword" => t.syn.keyword,
+        "syntax-string" => t.syn.string,
+        "syntax-number" => t.syn.number,
+        "syntax-function" => t.syn.function,
+        "syntax-type" => t.syn.type_,
+        "syntax-property" => t.syn.property,
+        "syntax-operator" => t.syn.operator,
+        "syntax-variable" => t.syn.variable,
+        "syntax-builtin" => t.syn.builtin,
+        "syntax-parameter" => t.syn.param,
+        "syntax-attribute" => t.syn.attribute,
+        _ => Color::Reset,
+    }
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -7574,6 +7742,92 @@ mod tests {
         assert_eq!(reason, "▾ same definition: run (2)");
     }
 
+    // ---- --init-config ----
+
+    #[test]
+    fn the_generated_config_is_one_the_program_accepts() {
+        // uncommenting the whole file must parse with no complaints: a
+        // generated config that ordo itself rejects is worse than none
+        for (preset, theme_name) in [("vim", "dark"), ("vscode", "catppuccin-mocha")] {
+            let text = init_config(preset, theme_name);
+            let live: String = text
+                .lines()
+                .map(|l| match l.trim_start().strip_prefix("# ") {
+                    // a `#` line that looks like a setting is a commented-out
+                    // default; anything else is prose
+                    Some(rest) if rest.contains(" = ") => rest.to_string(),
+                    _ => l.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let cfg = parse_key_config(&live);
+            assert!(
+                cfg.problems.is_empty(),
+                "{preset}/{theme_name}: {:?}",
+                cfg.problems
+            );
+            assert_eq!(cfg.preset.as_deref(), Some(preset));
+            assert_eq!(cfg.theme.as_deref(), Some(theme_name));
+        }
+    }
+
+    #[test]
+    fn the_generated_config_changes_nothing_when_fully_uncommented() {
+        // ...and the values it writes are the ones already in effect, so a
+        // reviewer who uncomments everything sees no difference
+        let text = init_config("vim", "catppuccin-mocha");
+        // keep the section headers: uncommenting the settings without them
+        // would file every line under the top level
+        let live: String = text
+            .lines()
+            .filter_map(|l| match l.trim_start().strip_prefix("# ") {
+                Some(rest) if rest.contains(" = ") => Some(rest.to_string()),
+                _ if l.starts_with('[') => Some(l.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cfg = parse_key_config(&live);
+        assert!(cfg.problems.is_empty(), "{:?}", cfg.problems);
+
+        let base = keymap("vim").unwrap();
+        let after = apply_key_config(keymap("vim").unwrap(), &cfg);
+        assert_eq!(
+            after.binds.len(),
+            base.binds.len(),
+            "no binding gained or lost"
+        );
+        for b in &base.binds {
+            assert!(after.binds.contains(b), "{:?} was dropped", key_label(b.1));
+        }
+
+        let t0 = theme("catppuccin-mocha").unwrap();
+        let t1 = apply_theme_colors(t0, &cfg.colors);
+        for role in THEME_ROLES {
+            assert!(
+                colors_eq(theme_role_color(&t0, role), theme_role_color(&t1, role)),
+                "role `{role}` changed"
+            );
+        }
+    }
+
+    #[test]
+    fn every_generated_binding_names_a_real_action() {
+        let text = init_config("vscode", "nord");
+        for line in text.lines().filter_map(|l| l.strip_prefix("# \"")) {
+            let Some((_, rest)) = line.split_once("\" = \"") else {
+                continue;
+            };
+            let Some((action, _)) = rest.split_once('"') else {
+                continue;
+            };
+            assert!(
+                action_by_name(action).is_some(),
+                "`{action}` is not an action"
+            );
+        }
+    }
+
     // ---- theming ----
 
     #[test]
@@ -7707,6 +7961,13 @@ mod tests {
             .filter(|c| colors_eq(**c, sentinel))
             .count();
             assert_eq!(changed, 1, "role `{role}` set {changed} fields, expected 1");
+            // and the read side must name the same field as the write side —
+            // without this, `--init-config` can print one role's colour under
+            // another role's name
+            assert!(
+                colors_eq(theme_role_color(&got, role), sentinel),
+                "role `{role}` reads back a different field than it writes"
+            );
         }
     }
 
