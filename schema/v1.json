@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/elwardi/ordo/schema/v1.json",
+  "$id": "https://github.com/FoamScience/ordo/schema/v1.json",
   "title": "ordo v1",
   "description": "Frozen contract for the ordo change-ordering engine. Input and output for `ordo order --json`.",
   "$defs": {

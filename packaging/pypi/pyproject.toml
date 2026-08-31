@@ -11,7 +11,7 @@ requires-python = ">=3.8"
 license = { text = "MIT" }
 
 [project.urls]
-Homepage = "https://github.com/elwardi/ordo"
+Homepage = "https://github.com/FoamScience/ordo"
 
 [project.scripts]
 ordo = "ordo.__main__:main"
