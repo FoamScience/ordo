@@ -236,3 +236,27 @@ computes, so ordering influence is safe to hand to a config file.
 - [x] **a rule that cannot work says so** — bad glob, bad query, a query that
       compiles for no language in the change → `Output.problems`
 - [x] ordo's own rules in `.ordo/` — contract, purity, invariants, wording
+
+## P20 — an import is noise, not nothing  ✅
+
+Reported from a real review: an added `from ppump.diagnostics import degrade`
+was invisible, while the loguru import it replaced was reported as removed. One
+asymmetry, two symptoms — a *moved* import read as a deletion with no
+counterpart.
+
+- [x] a pure-import hunk is kept and marked `noise` instead of dropped; it never
+      seeds an edge, and no longer leads the reading order either (forty dimmed
+      rows ahead of the change is not a reading order — `priority` in a rule can
+      put them back on top for anyone who wants that)
+- [x] imports group together (`same scope: imports`) rather than joining the
+      top-level group, which had cost the `file` strategy its positional promise
+- [x] an import statement's *bound* names, not every identifier in it:
+      `from ppump.diagnostics import degrade` binds `degrade`, so add-vs-change
+      is decided on the right evidence (python; other grammars already bind one
+      name per statement)
+- [x] a name is attributed to every row of its statement, so a hunk touching the
+      tail of a multi-line import list still has names to report
+- [x] `moves import pg` when the same statement existed in the old file — a
+      reordered import block is not a pile of edits
+- [x] `DropReason::Import` is gone: `only_comments` is now the only thing that
+      drops a hunk

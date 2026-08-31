@@ -58,7 +58,8 @@ Per file, `ordo` parses both sides of the diff with tree-sitter and, for each
 hunk: classifies it (`import` / `definition` / `other`), finds its enclosing
 definition, and extracts the symbols it **defines** and **uses** (imported
 names and local bindings are neither, so they can't seed spurious edges). Pure
-import hunks are dropped, the rest are grouped by enclosing definition (**P1**),
+import hunks are marked `noise` and grouped together, the rest are grouped by
+enclosing definition (**P1**),
 linked by **def→use** edges between groups (**P2**, across files when
 `cross_file` is on), and topologically sorted — ties and cycles broken by file
 position, so output is deterministic and a permutation of the non-import
@@ -421,10 +422,16 @@ never conflated under the enclosing `main`.
 | move / extract | `moves foo from a.py` · `adds read_input, extracted from order` |
 | container | `edits it "parses flags"` · `edits #ifdef CURL_DISABLE_HTTP` · `edits ALLOWED_IMPORTS` |
 | switched off | `comments out code in run` · `uncomments code in run` |
+| import | `adds import degrade` · `changes import c, d, e` · `moves import pg` · `removes import logger` |
 
-Import *additions* are skipped entirely — pure import hunks never appear in
-the reading order or seed edges. Cross-file lines only appear when the
-changeset is sent as one call with `cross_file: true`.
+An import hunk is **noise, not nothing**: it never leads the reading order and
+never seeds an edge, but it stays visible (dimmed) where the diff put it, and
+says which import arrived, changed or moved. Dropping it outright made a new
+dependency invisible, and made a *moved* import read as a deletion with no
+counterpart.
+
+Cross-file lines only appear when the changeset is sent as one call with
+`cross_file: true`.
 
 Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
 **advisories** — advanced-construct guidance with an escalation ladder, and a
@@ -512,7 +519,7 @@ back to file order.
 
   One deliberate exception: `options.only_comments` (`--only-comments`) *is*
   honoured by the engine, dropping non-comment hunks **before** grouping, the
-  same way pure-import hunks are dropped — filtering the finished `Output`
+  the one thing the engine drops — filtering the finished `Output`
   would leave `order`/`groups`/`edges`/`clusters` referring to hunks no longer
   in `files`. So the engine applies a selection the caller *states*; it never
   invents one.
