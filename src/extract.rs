@@ -1712,6 +1712,36 @@ fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
 // like `ident_texts`, but paired with each identifier's own row — an import
 // statement spans several lines, and a hunk touching only one of them must
 // find the names that actually sit on that line, not the statement's first.
+/// The 1-based rows every import statement in a file covers. A hunk that only
+/// *deletes* has no new side to classify from, so without this a removed import
+/// reads as a plain `other` hunk — the same asymmetry that made an added import
+/// invisible, one level down.
+pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
+    let mut out = HashSet::new();
+    let mut parser = Parser::new();
+    if parser.set_language(&(spec.language)()).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return out;
+    };
+    collect_import_rows(tree.root_node(), spec, &mut out);
+    out
+}
+
+fn collect_import_rows(node: Node, spec: &LangSpec, out: &mut HashSet<usize>) {
+    if import_like(node, spec) {
+        for r in node.start_position().row..=node.end_position().row {
+            out.insert(r + 1);
+        }
+        return;
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_import_rows(ch, spec, out);
+    }
+}
+
 /// Every import statement in a file, as normalized text. An import that appears
 /// in both sides of a change *moved*; one that does not is new or changed —
 /// which is the difference between "moves import pg" and "changes import pg",

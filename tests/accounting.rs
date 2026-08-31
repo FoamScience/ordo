@@ -77,3 +77,37 @@ fn nothing_dropped_leaves_the_field_empty() {
     }));
     assert!(out.files[0].dropped.is_empty());
 }
+
+#[test]
+fn a_deleted_import_is_an_import_hunk_too() {
+    // a hunk that only deletes has no new side to classify from; without
+    // reading the old side, a removed import read as a plain `other` hunk
+    // while an added one was an import — the same asymmetry, one level down
+    let out = run(serde_json::json!({
+        "changes": [{
+            "path": "a.py",
+            "old": "import os\nfrom loguru import logger\n\n\ndef run():\n    return 1\n",
+            "new": "import os\n\n\ndef run():\n    return 1\n",
+        }]
+    }));
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.category, ordo::model::Category::Import);
+    assert!(h.noise, "as skippable as the addition it mirrors");
+    // and the wording still comes from the removal path, which knows what left
+    assert_eq!(h.rationale, "removes import logger");
+}
+
+#[test]
+fn a_deleted_definition_is_not_mistaken_for_an_import() {
+    let out = run(serde_json::json!({
+        "changes": [{
+            "path": "a.py",
+            "old": "import os\n\n\ndef gone():\n    return 1\n\n\ndef stays():\n    return 2\n",
+            "new": "import os\n\n\ndef stays():\n    return 2\n",
+        }]
+    }));
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.category, ordo::model::Category::Other);
+    assert!(!h.noise);
+    assert_eq!(h.rationale, "removes gone");
+}

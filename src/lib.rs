@@ -289,6 +289,30 @@ pub fn run(input: Input) -> Output {
         rename[fi] = ren;
         removals[fi] = rem;
     }
+    // A hunk that only deletes has no new side to classify from, so a removed
+    // import used to read as a plain `other` hunk while an added one was an
+    // import. Classify a pure deletion from the side it actually has.
+    for fi in 0..n {
+        let (Some(spec), Some(old_src)) =
+            (lang::for_path(&paths[fi]), input.changes[fi].old.as_deref())
+        else {
+            continue;
+        };
+        let rows = extract::import_row_set(spec, old_src);
+        if rows.is_empty() {
+            continue;
+        }
+        for (li, sem) in sems[fi].iter_mut().enumerate() {
+            let [o0, o1] = sem.old_range;
+            let [n0, n1] = raws[fi][li].new_range;
+            let deletes_only = n0 > n1;
+            if deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r)) {
+                sem.category = Category::Import;
+                sem.noise = true;
+            }
+        }
+    }
+
     // A pure-import hunk whose statements all existed in the old file is a
     // reordering, not an arrival: "moves import pg" rather than "changes".
     for fi in 0..n {

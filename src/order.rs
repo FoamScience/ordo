@@ -608,10 +608,20 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     let g = ctx.groups.len();
 
     // P12.2: noise hunks are skippable — say why, skip semantic wording.
-    // An import hunk is noise too, but it has something better to say than
-    // "formatting only": which import arrived or changed. Its own branch runs
-    // first for that reason.
-    if s.noise && s.category != Category::Import {
+    //
+    // An import hunk is noise too, but it usually has something better to say:
+    // which import arrived or changed (its own branch, below), or which one
+    // left (the removal branch further down). What it has *nothing* better to
+    // say about is the empty half of a move — the old line of an import that
+    // still exists elsewhere in the file — and for that "formatting only" is
+    // exactly right, where "removes 1 line" would claim something left.
+    let import_speaks = s.category == Category::Import
+        && (!s.new_empty
+            || ctx.removals.get(my_file).is_some_and(|v| {
+                v.iter()
+                    .any(|(row, _)| *row >= s.old_range[0] && *row <= s.old_range[1])
+            }));
+    if s.noise && !import_speaks {
         return if crate::lang::is_generated_path(&ctx.paths[my_file]) {
             "generated file".to_string()
         } else {
@@ -619,7 +629,9 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         };
     }
 
-    if s.category == Category::Import {
+    // a deleted import has no new-side names to report: its wording comes from
+    // the removal path below ("removes import logger"), which knows what left
+    if s.category == Category::Import && !s.new_empty {
         if s.imports.is_empty() {
             return "import".to_string();
         }
