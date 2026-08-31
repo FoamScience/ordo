@@ -1,0 +1,106 @@
+# Reviewing rules for ordo itself.
+#
+# These are not lint rules — clippy and the test suite already have that job.
+# Each one encodes a decision this project has made, of the kind a reviewer has
+# to remember and a linter cannot know: what the contract promises, what the
+# engine is not allowed to do, which files carry an invariant that a passing
+# test suite would not catch.
+#
+# They fire on what a change *introduces*, in the reading order, on the hunk in
+# front of you. See docs/rules.md.
+
+# ---------------------------------------------------------------- contract
+
+[[rule]]
+name = "frozen-contract"
+path = "schema/v1.json"
+note = "schema v1 is frozen: additive OPTIONAL fields only. A new required field, a rename or a removal breaks every consumer, including the npm and pypi wrappers"
+priority = 100
+
+[[rule]]
+name = "contract-surface"
+path = "src/model.rs"
+note = "this is the wire format. A new field needs `skip_serializing_if` so old consumers keep working, and a matching entry in schema/v1.json"
+priority = 90
+
+[[rule]]
+name = "public-api"
+path = "src/{lib,refine,model}.rs"
+lang = "rust"
+query-file = "rules/pub-fn.scm"
+note = "a `pub fn` here is API for every consumer, forever — private by default; public is a decision"
+
+# ---------------------------------------------------------------- purity
+
+[[rule]]
+name = "engine-purity"
+path = "src/{lib,order,extract,rules,advisories,lang,patch,refine,model}.rs"
+lang = "rust"
+query-file = "rules/engine-io.scm"
+warn = "the engine is pure: no filesystem, no process, no environment. A client owns git and config — this is what keeps `ordo order` a function of its arguments"
+priority = 80
+
+[[rule]]
+name = "engine-must-not-panic"
+path = "src/{lib,order,extract,rules,advisories,lang,patch,refine}.rs"
+lang = "rust"
+query-file = "rules/panic.scm"
+warn = "a panic here takes down every consumer for one malformed input; the engine's own style is to degrade (None, `degraded: true`) rather than abort"
+
+# ---------------------------------------------------------------- invariants
+
+[[rule]]
+name = "ordering-key"
+path = "src/order.rs"
+lang = "rust"
+query-file = "rules/ordering-key.scm"
+warn = "P2 lives in this key: it decides what \"definitions before uses\" means. Run the permutation and def-before-use tests, and the corpus suite — not a spot check"
+priority = 70
+
+[[rule]]
+name = "determinism"
+path = "src/{order,lib,extract}.rs"
+lang = "rust"
+query-file = "rules/hash-iteration.scm"
+note = "anything reaching order/groups/edges/clusters must be sorted before it leaves: hash iteration order is not stable, and the whole output is supposed to be reproducible"
+
+[[rule]]
+name = "symbol-identity"
+path = "src/lang.rs"
+lang = "rust"
+query-file = "rules/defs-list.scm"
+warn = "these lists ARE symbol identity: `defines`, `symbols` and the persisted review-mark key all derive from them. Changing one silently invalidates marks a reviewer already placed"
+priority = 60
+
+[[rule]]
+name = "grammar-claim"
+path = "src/{lang,extract,advisories}.rs"
+lang = "rust"
+query-file = "rules/node-kind.scm"
+note = "a node-kind claim is verified against that grammar's node-types.json, never remembered — the corpus found four wrong ones that way"
+
+# ---------------------------------------------------------------- wording
+
+[[rule]]
+name = "rationale-wording"
+path = "src/order.rs"
+lang = "rust"
+query-file = "rules/wording.scm"
+note = "wording changes move corpus metrics (bare_change, with_details, longest_rationale). Re-record the baseline deliberately, with the deltas explained"
+
+[[rule]]
+name = "recorded-metrics"
+path = "corpus/baseline.json"
+note = "a metric moving the wrong way is either a regression or a superseded detail line. Know which before accepting this diff"
+
+[[rule]]
+name = "regenerated-goldens"
+path = "tests/golden/**/expected.json"
+note = "regenerated output: confirm the diff is the wording change you intended, and nothing else came along with it"
+
+# ---------------------------------------------------------------- clients
+
+[[rule]]
+name = "client-owns-policy"
+path = "src/bin/ordo-tui.rs"
+note = "the client owns filtering, git and config; the engine has no opinion about which files belong in a review (README: Ceilings)"
