@@ -1,4 +1,14 @@
 {
+  "buildtheworld": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 82,
+    "longest_rationale": 233,
+    "unsupported_files": 0,
+    "with_details": 14,
+    "with_symbols": 13
+  },
   "click": {
     "anonymous": 0,
     "bare_change": 0,

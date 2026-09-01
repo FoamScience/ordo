@@ -104,3 +104,15 @@ url = "https://github.com/folke/lazy.nvim.git"
 rev = "306a05526ada86a7b30af95c5cc81ffba93fef97"
 max_commits = 350
 # the realistic Lua corpus — ordo's least-exercised grammar
+
+[[repo]]
+name = "buildtheworld"
+lang = "xonsh"
+url = "https://github.com/tacaswell/build_the_world.git"
+rev = "a33a9b4e283f4ebe16f23cbcf97e34ccd089b43c"
+max_commits = 350
+# the xonsh ecosystem is small — 103 repos carry the language at all, and xonsh
+# itself is written in python. This is the densest real one: 96% xonsh, 142 of
+# its 343 commits touch a .xsh file. Build scripts, so the shapes are the ones
+# xonsh exists for: bare command lines at file scope, $ENV bindings, and
+# `with with_pushd(...)` blocks holding the actual work.
