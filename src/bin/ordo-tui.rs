@@ -6032,7 +6032,11 @@ fn arg_candidates(
     match cmd {
         "keys" => vec!["vim".to_string(), "vscode".to_string()],
         "theme" => theme_names(),
-        "strategy" => vec!["comprehension".to_string(), "defs-first".to_string(), "file".to_string()],
+        "strategy" => vec![
+            "comprehension".to_string(),
+            "defs-first".to_string(),
+            "file".to_string(),
+        ],
         "goto" => goto_paths.to_vec(),
         "filter" => filter_dirs.to_vec(),
         "e" => rev_candidates.to_vec(),

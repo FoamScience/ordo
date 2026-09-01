@@ -483,9 +483,9 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 
 ## Supported languages
 
-python, javascript, typescript, tsx, go, c, cpp, java, lua, markdown. Adding
-one is usually a single registry entry in `src/lang.rs` plus its grammar
-crate — no algorithm changes. Markdown is the one exception: a heading has no
+python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
+Adding one is usually a single registry entry in `src/lang.rs` plus its
+grammar crate — no algorithm changes. Markdown is the one exception: a heading has no
 identifier to name a def by, so a def is a *section* (heading + content,
 nested by heading level) instead — `adds section Usage`, `edits section
 Install`. This is a rationale-quality improvement, not an ordering one:
