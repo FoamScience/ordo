@@ -3136,24 +3136,57 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
     let ext = path.rsplit('.').next()?;
     let owned = |l: tree_sitter::Language, q: &str| (l, q.to_string());
     Some(match ext {
-        "py" | "pyi" => owned(tree_sitter_python::LANGUAGE.into(), tree_sitter_python::HIGHLIGHTS_QUERY),
-        "js" | "mjs" | "cjs" | "jsx" => {
-            owned(tree_sitter_javascript::LANGUAGE.into(), tree_sitter_javascript::HIGHLIGHT_QUERY)
-        }
-        "rs" => owned(tree_sitter_rust::LANGUAGE.into(), tree_sitter_rust::HIGHLIGHTS_QUERY),
+        "py" | "pyi" => owned(
+            tree_sitter_python::LANGUAGE.into(),
+            tree_sitter_python::HIGHLIGHTS_QUERY,
+        ),
+        // the xonsh crate does not export a highlights query yet; python's
+        // compiles against the superset grammar, so the python half of a
+        // `.xsh` file highlights and the shell forms stay plain
+        "xsh" | "xonsh" | "xonshrc" => owned(
+            tree_sitter_xonsh::LANGUAGE.into(),
+            tree_sitter_python::HIGHLIGHTS_QUERY,
+        ),
+        "js" | "mjs" | "cjs" | "jsx" => owned(
+            tree_sitter_javascript::LANGUAGE.into(),
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+        ),
+        "rs" => owned(
+            tree_sitter_rust::LANGUAGE.into(),
+            tree_sitter_rust::HIGHLIGHTS_QUERY,
+        ),
         "ts" | "mts" | "cts" => owned(
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             tree_sitter_typescript::HIGHLIGHTS_QUERY,
         ),
-        "tsx" => owned(tree_sitter_typescript::LANGUAGE_TSX.into(), tree_sitter_typescript::HIGHLIGHTS_QUERY),
-        "go" => owned(tree_sitter_go::LANGUAGE.into(), tree_sitter_go::HIGHLIGHTS_QUERY),
-        "c" | "h" => owned(tree_sitter_c::LANGUAGE.into(), tree_sitter_c::HIGHLIGHT_QUERY),
+        "tsx" => owned(
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        ),
+        "go" => owned(
+            tree_sitter_go::LANGUAGE.into(),
+            tree_sitter_go::HIGHLIGHTS_QUERY,
+        ),
+        "c" | "h" => owned(
+            tree_sitter_c::LANGUAGE.into(),
+            tree_sitter_c::HIGHLIGHT_QUERY,
+        ),
         "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => (
             tree_sitter_cpp::LANGUAGE.into(),
-            format!("{}\n{}", tree_sitter_c::HIGHLIGHT_QUERY, tree_sitter_cpp::HIGHLIGHT_QUERY),
+            format!(
+                "{}\n{}",
+                tree_sitter_c::HIGHLIGHT_QUERY,
+                tree_sitter_cpp::HIGHLIGHT_QUERY
+            ),
         ),
-        "java" => owned(tree_sitter_java::LANGUAGE.into(), tree_sitter_java::HIGHLIGHTS_QUERY),
-        "lua" => owned(tree_sitter_lua::LANGUAGE.into(), tree_sitter_lua::HIGHLIGHTS_QUERY),
+        "java" => owned(
+            tree_sitter_java::LANGUAGE.into(),
+            tree_sitter_java::HIGHLIGHTS_QUERY,
+        ),
+        "lua" => owned(
+            tree_sitter_lua::LANGUAGE.into(),
+            tree_sitter_lua::HIGHLIGHTS_QUERY,
+        ),
         // the engine has no TOML grammar (nothing to order in a config file), but
         // manifests show up in most diffs and read badly unhighlighted
         "toml" => owned(
@@ -3937,7 +3970,7 @@ fn char_byte(line: &str, col: usize) -> usize {
 // kinds, so a hover only ever lands on something with a clear signature/body.
 fn def_kinds(path: &str) -> &'static [&'static str] {
     match path.rsplit('.').next().unwrap_or("") {
-        "py" | "pyi" => &["function_definition", "class_definition"],
+        "py" | "pyi" | "xsh" | "xonsh" | "xonshrc" => &["function_definition", "class_definition"],
         "rs" => &[
             "function_item",
             "struct_item",
