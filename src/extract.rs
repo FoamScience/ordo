@@ -182,6 +182,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
     walk(tree.root_node(), src, spec, &mut stack, &mut c);
     let adv = crate::advisories::advise(spec, tree.root_node(), src, path);
 
+    let lines: Vec<&str> = new.lines().collect();
     let mut out = Vec::with_capacity(hunks.len());
     for h in hunks {
         let (r0, r1) = match h.new_r0 {
@@ -222,10 +223,20 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                 .filter(|d| d.kind != ContainerKind::Definition || !(r0 <= d.s && d.s <= r1))
                 .min_by_key(|d| d.e - d.s)
         } else {
-            c.defs
-                .iter()
-                .filter(|d| d.s <= r0 && r0 <= d.e)
-                .min_by_key(|d| d.e - d.s)
+            let at = |row: usize| {
+                c.defs
+                    .iter()
+                    .filter(|d| d.s <= row && row <= d.e)
+                    .min_by_key(|d| d.e - d.s)
+            };
+            // a hunk that starts on a blank line between two containers owns
+            // no row of either; its first line with something on it does
+            at(r0).or_else(|| {
+                // rows here are 0-based (see `RawHunk::new_r0`)
+                let first_real =
+                    (r0..=r1).find(|r| lines.get(*r).is_some_and(|l| !l.trim().is_empty()))?;
+                at(first_real)
+            })
         };
         let enclosing = container.map(|d| d.name.clone());
         // a plain definition is the default and says nothing extra; only a
@@ -366,7 +377,10 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             bindings,
             start_row: r0,
             old_range: h.old_range,
-            new_empty: false,
+            // a hunk whose new side is nothing but blank lines has as little
+            // to say for itself as a pure deletion, and the same wording fits:
+            // what a reviewer wants to know is what left
+            new_empty: (r0..=r1).all(|r| lines.get(r).is_none_or(|l| l.trim().is_empty())),
         });
     }
     Some(out)
@@ -647,7 +661,37 @@ fn call_statement_container(
 /// a `name` field, `preproc_if` a `condition`) and tree-sitter-md-0.5.3
 /// (`minus_metadata`/`plus_metadata` for front matter; a `section` with no
 /// heading child is the content before the document's first heading).
-fn region_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<(String, ContainerKind)> {
+/// The leading words of a xonsh command line: every `subprocess_word`
+/// argument up to the first flag, quoted string or python interpolation, so
+/// `git remote add @(name) @(url)` names itself `git remote add`.
+fn subprocess_label(node: Node, src: &[u8]) -> Option<String> {
+    let mut cur = node.walk();
+    let cmd = node
+        .named_children(&mut cur)
+        .find(|c| c.kind() == "subprocess_body")?
+        .named_child(0)
+        .filter(|c| c.kind() == "subprocess_command")?;
+    let mut words = vec![];
+    let mut c2 = cmd.walk();
+    for arg in cmd.named_children(&mut c2) {
+        let Some(word) = arg.named_child(0).filter(|w| w.kind() == "subprocess_word") else {
+            break;
+        };
+        let Ok(text) = word.utf8_text(src) else { break };
+        if text.starts_with('-') {
+            break;
+        }
+        words.push(text.to_string());
+    }
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+fn region_label(
+    node: Node,
+    src: &[u8],
+    spec: &LangSpec,
+    top_level: bool,
+) -> Option<(String, ContainerKind)> {
     let text_of = |n: Node| n.utf8_text(src).ok().map(tidy_ident).filter(|t| !t.is_empty());
     match node.kind() {
         // `#ifdef X` and `#ifndef X` share a node kind; the directive token
@@ -667,6 +711,31 @@ fn region_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<(String, Cont
             let cond = node.child_by_field_name("condition")?.utf8_text(src).ok()?;
             let cond = cond.split_whitespace().collect::<Vec<_>>().join(" ");
             (!cond.is_empty()).then(|| (format!("#if {cond}"), ContainerKind::Region))
+        }
+        // a `with` block at file scope: a script's real work often lives in
+        // one (a pushd, an open file, a lock), and a hunk inside it otherwise
+        // has no container at all. Nested inside a definition the definition
+        // is the better name, so this claims only the top level.
+        // Fields verified against tree-sitter-python-0.23.6 and
+        // tree-sitter-xonsh-0.2.3's node-types.json.
+        "with_statement" if top_level => {
+            let item = node
+                .named_child(0)
+                .filter(|c| c.kind() == "with_clause")?
+                .named_child(0)?;
+            // an expression, not an identifier: collapse runs of whitespace
+            // but keep the single spaces that make it readable, as `#if` does
+            let text = item.child_by_field_name("value")?.utf8_text(src).ok()?;
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then(|| (format!("with {text}"), ContainerKind::Region))
+        }
+        // xonsh: a command line at file scope is the script's actual work, and
+        // it is not a definition, a binding or a call node any other language
+        // has. Name it by the command and its subcommand words —
+        // `pip cache remove '*x*' || true` reads as "edits pip cache remove".
+        "bare_subprocess" | "uncaptured_subprocess" if top_level => {
+            let label = subprocess_label(node, src)?;
+            Some((label, ContainerKind::Call))
         }
         "minus_metadata" | "plus_metadata" if spec.prose => {
             Some(("front matter".to_string(), ContainerKind::FrontMatter))
@@ -744,7 +813,7 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         });
         // fall through: the value still holds locals, uses and nested defs
     }
-    if let Some((label, kind)) = region_label(node, src, spec) {
+    if let Some((label, kind)) = region_label(node, src, spec, stack.is_empty()) {
         // a region names itself and nothing else: no `def_rows` (it declares
         // nothing, so a hunk in it is never a definition hunk), no `decls`
         // (nothing to add to `defines`), no symbol identity. Its own name is

@@ -611,3 +611,42 @@ fn the_bookkeeping_forms_are_still_bookkeeping() {
         );
     }
 }
+
+#[test]
+fn a_file_scope_with_block_is_a_region() {
+    // python and xonsh scripts put real work in a `with` at file scope; a hunk
+    // inside one otherwise has no container at all
+    let out = one(
+        "w.py",
+        "with open(p) as fh:\n    data = fh.read()\n    total = 1\n",
+        "with open(p) as fh:\n    data = fh.read(4096)\n    total = 1\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing.as_deref(), Some("with open(p) as fh"));
+    assert_eq!(h.rationale, "edits with open(p) as fh");
+}
+
+#[test]
+fn a_with_block_inside_a_definition_leaves_the_definition_the_container() {
+    let out = one(
+        "w.py",
+        "def f(p):\n    with open(p) as fh:\n        return fh.read()\n",
+        "def f(p):\n    with open(p) as fh:\n        return fh.read(4096)\n",
+    );
+    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("f"));
+}
+
+#[test]
+fn a_new_side_of_nothing_but_blank_lines_reads_as_a_removal() {
+    // a line replaced by an empty one has as little to say as a pure deletion
+    let out = one(
+        "w.py",
+        "def f():\n    pass\n\nx = 1\ny = 2\n",
+        "def f():\n    pass\n\n\ny = 2\n",
+    );
+    assert!(
+        rationales(&out).iter().any(|r| r.contains("removes")),
+        "{:?}",
+        rationales(&out)
+    );
+}
