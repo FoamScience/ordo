@@ -695,7 +695,13 @@ fn load(
 // status check matters: `rev-parse --verify -q` still prints on failure (a range
 // echoes both endpoints), and taking that output would be read as a sha.
 fn git(args: &[&str]) -> String {
-    Command::new("git")
+    run_cmd("git", args)
+}
+
+// Runs a binary, returning its stdout as a string or empty on any failure to
+// launch or a nonzero exit — the shared body behind `git` and `but`.
+fn run_cmd(bin: &str, args: &[&str]) -> String {
+    Command::new(bin)
         .args(args)
         .output()
         .ok()
@@ -731,13 +737,7 @@ fn git_stdin(args: &[&str], input: &str) -> String {
 // GitButler CLI: empty string if `but` isn't installed or the call fails, so the
 // plain-git path is unaffected on non-GitButler repos.
 fn but(args: &[&str]) -> String {
-    Command::new("but")
-        .args(args)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+    run_cmd("but", args)
 }
 
 // Paths the repo's own `.gitattributes` marks as generated: `linguist-generated`
@@ -974,8 +974,11 @@ fn gather_range(base: &str, tip: &str, filter: &Filter, progress: &dyn Fn(String
 // entries. Changes assigned to a stack are picked up the same way. Full old/new
 // content — old from HEAD, new from the worktree — so hunks get full semantics
 // rather than degrading to a context-limited patch.
-fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
-    let ws = workspace().unwrap_or(serde_json::Value::Null);
+// Every path GitButler's workspace status lists as changed: `stacks[].assignedChanges`
+// plus `uncommittedChanges`, each entry's `filePath`. Shared by `gather_uncommitted`
+// and `gather_worktree_range`'s untracked-file branch — neither sorts nor dedups
+// here, that's each caller's own business.
+fn workspace_change_paths(ws: &serde_json::Value) -> Vec<String> {
     let assigned = ws
         .get("stacks")
         .and_then(|s| s.as_array())
@@ -984,8 +987,7 @@ fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
         .iter()
         .filter_map(|s| s.get("assignedChanges")?.as_array())
         .flatten();
-    let mut paths: Vec<String> = ws
-        .get("uncommittedChanges")
+    ws.get("uncommittedChanges")
         .and_then(|c| c.as_array())
         .map(|v| v.as_slice())
         .unwrap_or_default()
@@ -993,7 +995,12 @@ fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
         .chain(assigned)
         .map(|c| field(c, "filePath").to_string())
         .filter(|p| !p.is_empty())
-        .collect();
+        .collect()
+}
+
+fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
+    let ws = workspace().unwrap_or(serde_json::Value::Null);
+    let mut paths = workspace_change_paths(&ws);
     paths.dedup();
     let paths = filter.apply(paths);
     let total = paths.len();
@@ -1036,25 +1043,7 @@ fn gather_worktree_range(base: &str, filter: &Filter, progress: &dyn Fn(String))
         .map(str::to_string)
         .collect();
     let untracked: Vec<String> = match workspace() {
-        Some(ws) => {
-            let assigned = ws
-                .get("stacks")
-                .and_then(|s| s.as_array())
-                .map(|v| v.as_slice())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|s| s.get("assignedChanges")?.as_array())
-                .flatten();
-            ws.get("uncommittedChanges")
-                .and_then(|c| c.as_array())
-                .map(|v| v.as_slice())
-                .unwrap_or_default()
-                .iter()
-                .chain(assigned)
-                .map(|c| field(c, "filePath").to_string())
-                .filter(|p| !p.is_empty())
-                .collect()
-        }
+        Some(ws) => workspace_change_paths(&ws),
         None => git(&["ls-files", "--others", "--exclude-standard"])
             .split('\n')
             .map(str::trim)
@@ -1843,79 +1832,69 @@ fn parse_hex(text: &str) -> Option<Color> {
     Some(hex(u32::from_str_radix(t, 16).ok()?))
 }
 
-/// The theme roles a config file may set, each the name of a `Theme` field.
-const THEME_ROLES: &[&str] = &[
-    "fg",
-    "dim",
-    "border",
-    "border-focus",
-    "accent",
-    "category",
-    "mark",
-    "reviewed",
-    "warn",
-    "add-fg",
-    "del-fg",
-    "add-bg",
-    "del-bg",
-    "add-strong-bg",
-    "del-strong-bg",
-    "select-bg",
-    "match-bg",
-    "match-current-bg",
-    "syntax-comment",
-    "syntax-keyword",
-    "syntax-string",
-    "syntax-number",
-    "syntax-function",
-    "syntax-type",
-    "syntax-property",
-    "syntax-operator",
-    "syntax-variable",
-    "syntax-builtin",
-    "syntax-parameter",
-    "syntax-attribute",
-];
+/// Declares the theme roles a config file may set, each the name of a `Theme`
+/// field, generating the write side (`apply_theme_colors`) and read side
+/// (`theme_role_color`) from one list — so a role can't drift between the
+/// two, which is how "match-bg" once read back the wrong field.
+macro_rules! theme_roles {
+    ($($role:literal => $($seg:ident).+),* $(,)?) => {
+        const THEME_ROLES: &[&str] = &[$($role),*];
 
-/// Overlay a config's colour overrides onto a theme. Unknown roles are rejected
-/// at parse time, so everything reaching here names a field.
-fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
-    for (role, c) in colors {
-        match role.as_str() {
-            "fg" => t.fg = *c,
-            "dim" => t.dim = *c,
-            "border" => t.border = *c,
-            "border-focus" => t.border_focus = *c,
-            "accent" => t.accent = *c,
-            "category" => t.category = *c,
-            "mark" => t.mark = *c,
-            "reviewed" => t.reviewed = *c,
-            "warn" => t.warn = *c,
-            "add-fg" => t.add_fg = *c,
-            "del-fg" => t.del_fg = *c,
-            "add-bg" => t.add_bg = *c,
-            "del-bg" => t.del_bg = *c,
-            "add-strong-bg" => t.add_strong_bg = *c,
-            "del-strong-bg" => t.del_strong_bg = *c,
-            "select-bg" => t.select_bg = *c,
-            "match-bg" => t.match_bg = *c,
-            "match-current-bg" => t.match_cur_bg = *c,
-            "syntax-comment" => t.syn.comment = *c,
-            "syntax-keyword" => t.syn.keyword = *c,
-            "syntax-string" => t.syn.string = *c,
-            "syntax-number" => t.syn.number = *c,
-            "syntax-function" => t.syn.function = *c,
-            "syntax-type" => t.syn.type_ = *c,
-            "syntax-property" => t.syn.property = *c,
-            "syntax-operator" => t.syn.operator = *c,
-            "syntax-variable" => t.syn.variable = *c,
-            "syntax-builtin" => t.syn.builtin = *c,
-            "syntax-parameter" => t.syn.param = *c,
-            "syntax-attribute" => t.syn.attribute = *c,
-            _ => {}
+        /// Overlay a config's colour overrides onto a theme. Unknown roles are
+        /// rejected at parse time, so everything reaching here names a field.
+        fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
+            for (role, c) in colors {
+                match role.as_str() {
+                    $($role => t.$($seg).+ = *c,)*
+                    _ => {}
+                }
+            }
+            t
         }
-    }
-    t
+
+        /// A theme role's current colour, by the name a config file uses. The
+        /// read side of `apply_theme_colors`, so `--init-config` prints what
+        /// the program would actually read back.
+        fn theme_role_color(t: &Theme, role: &str) -> Color {
+            match role {
+                $($role => t.$($seg).+,)*
+                _ => Color::Reset,
+            }
+        }
+    };
+}
+
+theme_roles! {
+    "fg" => fg,
+    "dim" => dim,
+    "border" => border,
+    "border-focus" => border_focus,
+    "accent" => accent,
+    "category" => category,
+    "mark" => mark,
+    "reviewed" => reviewed,
+    "warn" => warn,
+    "add-fg" => add_fg,
+    "del-fg" => del_fg,
+    "add-bg" => add_bg,
+    "del-bg" => del_bg,
+    "add-strong-bg" => add_strong_bg,
+    "del-strong-bg" => del_strong_bg,
+    "select-bg" => select_bg,
+    "match-bg" => match_bg,
+    "match-current-bg" => match_cur_bg,
+    "syntax-comment" => syn.comment,
+    "syntax-keyword" => syn.keyword,
+    "syntax-string" => syn.string,
+    "syntax-number" => syn.number,
+    "syntax-function" => syn.function,
+    "syntax-type" => syn.type_,
+    "syntax-property" => syn.property,
+    "syntax-operator" => syn.operator,
+    "syntax-variable" => syn.variable,
+    "syntax-builtin" => syn.builtin,
+    "syntax-parameter" => syn.param,
+    "syntax-attribute" => syn.attribute,
 }
 
 // ------------------------------------------------------------ reviewing rules
@@ -2174,45 +2153,6 @@ fn write_init_config(preset: &str, theme_name: &str, force: bool) -> Result<(), 
     }
 }
 
-/// A theme role's current colour, by the name a config file uses. The read
-/// side of `apply_theme_colors`, so `--init-config` prints what the program
-/// would actually read back.
-fn theme_role_color(t: &Theme, role: &str) -> Color {
-    match role {
-        "fg" => t.fg,
-        "dim" => t.dim,
-        "border" => t.border,
-        "border-focus" => t.border_focus,
-        "accent" => t.accent,
-        "category" => t.category,
-        "mark" => t.mark,
-        "reviewed" => t.reviewed,
-        "warn" => t.warn,
-        "add-fg" => t.add_fg,
-        "del-fg" => t.del_fg,
-        "add-bg" => t.add_bg,
-        "del-bg" => t.del_bg,
-        "add-strong-bg" => t.add_strong_bg,
-        "del-strong-bg" => t.del_strong_bg,
-        "select-bg" => t.select_bg,
-        "match-bg" => t.match_bg,
-        "match-current-bg" => t.match_cur_bg,
-        "syntax-comment" => t.syn.comment,
-        "syntax-keyword" => t.syn.keyword,
-        "syntax-string" => t.syn.string,
-        "syntax-number" => t.syn.number,
-        "syntax-function" => t.syn.function,
-        "syntax-type" => t.syn.type_,
-        "syntax-property" => t.syn.property,
-        "syntax-operator" => t.syn.operator,
-        "syntax-variable" => t.syn.variable,
-        "syntax-builtin" => t.syn.builtin,
-        "syntax-parameter" => t.syn.param,
-        "syntax-attribute" => t.syn.attribute,
-        _ => Color::Reset,
-    }
-}
-
 fn config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -2464,6 +2404,19 @@ struct Popup {
     /// horizontal offset — popups do not wrap, matching the code pane, so a
     /// long line is reached by scrolling rather than reflowed
     hscroll: u16,
+}
+
+impl Popup {
+    /// A popup at the top, unscrolled — the common case; a popup that opens
+    /// pre-scrolled builds the struct directly.
+    fn new(title: impl Into<String>, lines: Vec<Line<'static>>) -> Popup {
+        Popup {
+            title: title.into(),
+            lines,
+            scroll: 0,
+            hscroll: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4221,24 +4174,17 @@ fn hover(app: &mut App) {
         return;
     }
     let Some((lang, _)) = highlight_spec(&path) else {
-        app.popup = Some(Popup {
-            title: "hover".to_string(),
-            lines: vec![prose("no grammar available for this file type")],
-            scroll: 0,
-            hscroll: 0,
-        });
+        app.popup = Some(Popup::new(
+            "hover",
+            vec![prose("no grammar available for this file type")],
+        ));
         return;
     };
     let Some(parsed) = parse_cached(&mut app.trees, &path, nl, lang) else {
         return;
     };
     let Some(node) = identifier_at(parsed, nl, app.cursor) else {
-        app.popup = Some(Popup {
-            title: "hover".to_string(),
-            lines: vec![prose("no symbol here")],
-            scroll: 0,
-            hscroll: 0,
-        });
+        app.popup = Some(Popup::new("hover", vec![prose("no symbol here")]));
         return;
     };
     let name = node_text(node, &parsed.src);
@@ -4275,7 +4221,7 @@ fn hover(app: &mut App) {
         lines.extend(history_lines(app, &path, &name, &kind, row, &content));
     }
     let lines = lines.into_iter().map(prose).collect();
-    app.popup = Some(Popup { title: name, lines, scroll: 0, hscroll: 0 });
+    app.popup = Some(Popup::new(name, lines));
 }
 
 // ------------------------------------------------------------ cross-commit history
@@ -4431,24 +4377,30 @@ fn compute_history(review_sha: &str, path: &str, target: &Symbol) -> Vec<String>
     let later = bound_later(later_all, HISTORY_WINDOW);
 
     let mut out = vec![];
-    let mut first = true;
-    for sha in &earlier {
-        if let Some(label) = classify_commit(sha, path, target) {
-            let tag = if first { "earlier" } else { "" };
-            first = false;
-            out.push(format!("{:<7}  {}  {label}", tag, short_sha(sha)));
-        }
-    }
+    history_lines_for(&earlier, "earlier", path, target, &mut out);
     out.push(format!("{:<7}  {}", "CURRENT", short_sha(review_sha)));
+    history_lines_for(&later, "later", path, target, &mut out);
+    out
+}
+
+// One direction's rows in `compute_history`'s output: `tag` labels only the
+// first commit that actually classifies, matching the reading-order convention
+// where a repeated column reads as blank rather than restating itself.
+fn history_lines_for(
+    shas: &[String],
+    tag: &str,
+    path: &str,
+    target: &Symbol,
+    out: &mut Vec<String>,
+) {
     let mut first = true;
-    for sha in &later {
+    for sha in shas {
         if let Some(label) = classify_commit(sha, path, target) {
-            let tag = if first { "later" } else { "" };
+            let tag = if first { tag } else { "" };
             first = false;
             out.push(format!("{:<7}  {}  {label}", tag, short_sha(sha)));
         }
     }
-    out
 }
 
 /// The `K` popup's history section: resolves the hovered def's identity, then
@@ -4751,12 +4703,10 @@ fn open_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal) {
     let (path, line, approx) = edit_target(app);
     let spec = resolve_editor();
     let Some((program, args)) = build_command(&spec, &path, line) else {
-        app.popup = Some(Popup {
-            title: "edit".to_string(),
-            lines: vec![prose("no editor command to run ($VISUAL/$EDITOR)")],
-            scroll: 0,
-            hscroll: 0,
-        });
+        app.popup = Some(Popup::new(
+            "edit",
+            vec![prose("no editor command to run ($VISUAL/$EDITOR)")],
+        ));
         return;
     };
     ratatui::restore();
@@ -4774,12 +4724,7 @@ fn open_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal) {
         Ok(status) => format!("{program} exited with {status}{note}"),
         Err(e) => format!("failed to launch '{program}': {e}"),
     };
-    app.popup = Some(Popup {
-        title: "edit".to_string(),
-        lines: vec![prose(msg)],
-        scroll: 0,
-        hscroll: 0,
-    });
+    app.popup = Some(Popup::new("edit", vec![prose(msg)]));
 }
 
 /// While loading: just a status line under the pane border, same idiom as
@@ -5181,12 +5126,10 @@ fn apply(app: &mut App, a: Action) -> bool {
         }
         Action::ScrollLeft | Action::ScrollRight => {} // only meaningful with the code pane focused
         Action::Help => {
-            app.popup = Some(Popup {
-                title: format!("keybindings — {}", app.keys.name),
-                lines: build_help(&app.keys).into_iter().map(prose).collect(),
-                scroll: 0,
-                hscroll: 0,
-            });
+            app.popup = Some(Popup::new(
+                format!("keybindings — {}", app.keys.name),
+                build_help(&app.keys).into_iter().map(prose).collect(),
+            ));
         }
         Action::CommandOpen => open_command_bar(app, String::new()),
         Action::CommandGoto => open_command_bar(app, "goto ".to_string()),
@@ -5477,15 +5420,13 @@ fn excerpt(
 fn preview_edge(app: &mut App) {
     let Some(target) = edge_at_cursor(app) else { return };
     let Some(idx) = target else {
-        app.popup = Some(Popup {
-            title: "dep".to_string(),
-            lines: vec![
+        app.popup = Some(Popup::new(
+            "dep",
+            vec![
                 prose("the referenced change isn't part of this review"),
                 prose("(excluded by a glob, --only-comments, or a file not sent to ordo)"),
             ],
-            scroll: 0,
-            hscroll: 0,
-        });
+        ));
         return;
     };
     let t = &app.items[idx];
@@ -5510,7 +5451,7 @@ fn preview_edge(app: &mut App) {
             ));
         }
     }
-    app.popup = Some(Popup { title: "dep".to_string(), lines, scroll: 0, hscroll: 0 });
+    app.popup = Some(Popup::new("dep", lines));
 }
 
 /// `Enter`/`gd` (vim), `C-Enter` (vscode) while the why pane is focused:
@@ -6211,7 +6152,7 @@ fn accept_command(app: &mut App) -> CommandOutcome {
     match execute_command(app, &line) {
         Ok(outcome) => outcome,
         Err(msg) => {
-            app.popup = Some(Popup { title: "command".to_string(), lines: vec![prose(msg)], scroll: 0, hscroll: 0 });
+            app.popup = Some(Popup::new("command", vec![prose(msg)]));
             CommandOutcome::None
         }
     }
@@ -6377,12 +6318,10 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         "" => Ok(CommandOutcome::None),
         "q" => Ok(CommandOutcome::Quit),
         "help" => {
-            app.popup = Some(Popup {
-                title: "commands".to_string(),
-                lines: build_command_help().into_iter().map(prose).collect(),
-                scroll: 0,
-                hscroll: 0,
-            });
+            app.popup = Some(Popup::new(
+                "commands",
+                build_command_help().into_iter().map(prose).collect(),
+            ));
             Ok(CommandOutcome::None)
         }
         "audit" => {
@@ -6392,9 +6331,9 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 app.show_all,
                 app.path_filter.as_ref().map(|(_, g)| g),
             );
-            app.popup = Some(Popup {
-                title: "audit".to_string(),
-                lines: build_audit(
+            app.popup = Some(Popup::new(
+                "audit",
+                build_audit(
                     &app.items,
                     app.view.len(),
                     &hidden,
@@ -6404,9 +6343,7 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 .into_iter()
                 .map(prose)
                 .collect(),
-                scroll: 0,
-                hscroll: 0,
-            });
+            ));
             Ok(CommandOutcome::None)
         }
         "only-comments" => {
@@ -6433,18 +6370,16 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
             if want.is_empty() {
                 // no argument: show what there is, rather than an error about
                 // the argument the reviewer is trying to discover
-                app.popup = Some(Popup {
-                    title: "themes".to_string(),
-                    lines: theme_names()
+                app.popup = Some(Popup::new(
+                    "themes",
+                    theme_names()
                         .iter()
                         .map(|n| {
                             let mark = if *n == app.theme.name { "▸ " } else { "  " };
                             prose(format!("{mark}{n}"))
                         })
                         .collect(),
-                    scroll: 0,
-                    hscroll: 0,
-                });
+                ));
                 return Ok(CommandOutcome::None);
             }
             let Some(t) = theme(want) else {
