@@ -5,7 +5,7 @@ use crate::lang::{self, LangSpec};
 use crate::model::{Advisory, Category, ContainerKind, Symbol};
 use similar::TextDiff;
 use std::collections::HashSet;
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
 pub struct RawHunk {
     pub old_range: [usize; 2],
@@ -175,9 +175,7 @@ const MANY_PARAMS: usize = 6;
 /// Parse `new`, walk once, then classify each hunk. Returns None when the
 /// grammar can't parse (caller falls back to file order).
 pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Option<Vec<HunkSem>> {
-    let mut parser = Parser::new();
-    parser.set_language(&(spec.language)()).ok()?;
-    let tree = parser.parse(new, None)?;
+    let tree = lang::parse(spec, new)?;
     let src = new.as_bytes();
     let mut c = Collected::default();
     let mut stack: Vec<String> = vec![];
@@ -514,11 +512,7 @@ fn inject_fence(node: Node, src: &[u8], c: &mut Collected) {
     let Ok(text) = content.utf8_text(src) else {
         return;
     };
-    let mut parser = Parser::new();
-    if parser.set_language(&(inner.language)()).is_err() {
-        return;
-    }
-    let Some(tree) = parser.parse(text, None) else {
+    let Some(tree) = lang::parse(inner, text) else {
         return;
     };
     // rows inside the fence are relative to the fence; report them in the
@@ -1425,16 +1419,10 @@ fn normalize_heading(raw: &str) -> Option<String> {
 // Follow a chain of declarator wrappers (c/cpp pointer/array/init/function
 // declarators, java variable_declarator) down to the leaf name.
 fn declarator_name(node: Node, src: &[u8]) -> Option<String> {
-    if let Some(n) = node.child_by_field_name("name") {
-        return n.utf8_text(src).ok().map(|s| s.to_string());
-    }
-    if let Some(d) = node.child_by_field_name("declarator") {
-        return declarator_name(d, src);
-    }
-    if lang::is_ident(node.kind()) {
-        return node.utf8_text(src).ok().map(|s| s.to_string());
-    }
-    None
+    declarator_ident(node)?
+        .utf8_text(src)
+        .ok()
+        .map(str::to_string)
 }
 
 fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
@@ -1454,11 +1442,7 @@ fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
 /// old-side comparison set for P17: a name already locally bound in the old
 /// file isn't "introduced" by a hunk that only edits its value.
 pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return HashSet::new();
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return HashSet::new();
     };
     let mut c = Collected::default();
@@ -1470,23 +1454,9 @@ pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
 /// All def names and import names present in `content` (whole file). Used for
 /// old-side comparison: add-vs-edit (#3), import removal (#5), rename (#7).
 pub fn symbol_sets(spec: &LangSpec, content: &str) -> (HashSet<String>, HashSet<String>) {
-    let mut defs = HashSet::new();
-    let mut imports = HashSet::new();
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return (defs, imports);
-    }
-    let Some(tree) = parser.parse(content, None) else {
-        return (defs, imports);
-    };
-    collect_syms(
-        tree.root_node(),
-        content.as_bytes(),
-        spec,
-        &mut defs,
-        &mut imports,
-    );
-    (defs, imports)
+    let (defs, imports) = symbol_rows(spec, content);
+    let set = |v: Vec<(String, usize)>| v.into_iter().map(|(n, _)| n).collect();
+    (set(defs), set(imports))
 }
 
 /// Like `symbol_sets` but with each symbol's 1-based start row, for locating a
@@ -1500,11 +1470,7 @@ pub type MemberRow = (usize, String, String, Option<String>);
 /// Every container member in `content` — the old-side counterpart of what
 /// `analyze` collects for the new one.
 pub fn member_rows(spec: &LangSpec, content: &str) -> Vec<MemberRow> {
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return vec![];
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return vec![];
     };
     let mut c = Collected::default();
@@ -1520,11 +1486,7 @@ pub fn member_rows(spec: &LangSpec, content: &str) -> Vec<MemberRow> {
 /// excluded: their removal is part of editing the function that holds them.
 pub fn top_level_bindings(spec: &LangSpec, content: &str) -> Vec<(String, usize)> {
     let mut out = vec![];
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return out;
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
     collect_top_binds(tree.root_node(), content.as_bytes(), spec, &mut out);
@@ -1560,11 +1522,7 @@ pub type SymbolRows = (Vec<(String, usize)>, Vec<(String, usize)>);
 pub fn symbol_rows(spec: &LangSpec, content: &str) -> SymbolRows {
     let mut defs = vec![];
     let mut imports = vec![];
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return (defs, imports);
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return (defs, imports);
     };
     collect_rows(
@@ -1586,11 +1544,7 @@ pub type Body = (String, String, String, Vec<String>);
 
 pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<Body> {
     let mut out = vec![];
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return out;
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
     collect_bodies(tree.root_node(), content.as_bytes(), spec, &mut out);
@@ -1664,37 +1618,6 @@ fn collect_rows(
     }
 }
 
-fn collect_syms(
-    node: Node,
-    src: &[u8],
-    spec: &LangSpec,
-    defs: &mut HashSet<String>,
-    imports: &mut HashSet<String>,
-) {
-    let kind = node.kind();
-    if import_like(node, spec) {
-        match import_bound_names(node, src, spec) {
-            Some(names) => imports.extend(names.into_iter().map(|(_, n)| n)),
-            None => imports.extend(ident_texts(node, src)),
-        }
-        return;
-    }
-    if spec.is_def(kind) {
-        if let Some(n) = node_name(node, src) {
-            defs.insert(n);
-        }
-        let mut cur = node.walk();
-        for ch in node.named_children(&mut cur) {
-            collect_syms(ch, src, spec, defs, imports);
-        }
-        return;
-    }
-    let mut cur = node.walk();
-    for ch in node.named_children(&mut cur) {
-        collect_syms(ch, src, spec, defs, imports);
-    }
-}
-
 fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
     let mut out = vec![];
     let mut cur = node.walk();
@@ -1718,27 +1641,26 @@ fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
 /// invisible, one level down.
 pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
     let mut out = HashSet::new();
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return out;
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
-    collect_import_rows(tree.root_node(), spec, &mut out);
+    each_import(tree.root_node(), spec, &mut |n| {
+        for r in n.start_position().row..=n.end_position().row {
+            out.insert(r + 1);
+        }
+    });
     out
 }
 
-fn collect_import_rows(node: Node, spec: &LangSpec, out: &mut HashSet<usize>) {
+/// Visits every import statement, without descending into one.
+fn each_import(node: Node, spec: &LangSpec, f: &mut impl FnMut(Node)) {
     if import_like(node, spec) {
-        for r in node.start_position().row..=node.end_position().row {
-            out.insert(r + 1);
-        }
+        f(node);
         return;
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        collect_import_rows(ch, spec, out);
+        each_import(ch, spec, f);
     }
 }
 
@@ -1748,28 +1670,16 @@ fn collect_import_rows(node: Node, spec: &LangSpec, out: &mut HashSet<usize>) {
 /// and the reason a reordered import block does not read as a pile of edits.
 pub fn import_statements(spec: &LangSpec, content: &str) -> HashSet<String> {
     let mut out = HashSet::new();
-    let mut parser = Parser::new();
-    if parser.set_language(&(spec.language)()).is_err() {
-        return out;
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
-    collect_imports(tree.root_node(), content.as_bytes(), spec, &mut out);
-    out
-}
-
-fn collect_imports(node: Node, src: &[u8], spec: &LangSpec, out: &mut HashSet<String>) {
-    if import_like(node, spec) {
-        if let Ok(t) = node.utf8_text(src) {
+    let src = content.as_bytes();
+    each_import(tree.root_node(), spec, &mut |n| {
+        if let Ok(t) = n.utf8_text(src) {
             out.insert(t.split_whitespace().collect::<Vec<_>>().join(" "));
         }
-        return;
-    }
-    let mut cur = node.walk();
-    for ch in node.named_children(&mut cur) {
-        collect_imports(ch, src, spec, out);
-    }
+    });
+    out
 }
 
 /// The names an import statement actually *binds*, rather than every identifier

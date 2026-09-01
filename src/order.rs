@@ -5,7 +5,7 @@
 use crate::extract::{BindingUse, HunkSem};
 use crate::model::{Category, Strategy};
 use crate::name_list;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub struct GroupInfo {
     pub reason: String,
@@ -275,37 +275,51 @@ pub fn order_all(
     }
 
     // ---- def→use edges (union symbol tables; cross-file only when enabled) ----
-    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    // `users` inverts guse once (symbol → the groups using it, ascending), so a
+    // group's defs look up their users directly instead of scanning every other
+    // group: the corpus reaches ~15k hunks in one repo, where g² does not hold.
+    let mut users: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (b, u) in guse.iter().enumerate() {
+        for s in u {
+            users.entry(s.as_str()).or_default().push(b);
+        }
+    }
+    let mut definers: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (b, d) in gdef.iter().enumerate() {
+        for s in d {
+            definers.entry(s.as_str()).or_default().push(b);
+        }
+    }
     let mut edges: Vec<(usize, usize, String)> = vec![];
     let mut gedges: Vec<(usize, usize)> = vec![];
     for a in 0..g {
         let mut defs_a: Vec<&String> = gdef[a].iter().collect();
         defs_a.sort();
-        for b in 0..g {
-            if a == b {
-                continue;
-            }
-            if !cross_file && gfile(a, &groups) != gfile(b, &groups) {
-                continue;
-            }
-            for s in &defs_a {
-                if guse[b].contains(*s) && seen.insert((a, b)) {
-                    let from_h = groups[a]
-                        .members
-                        .iter()
-                        .find(|&&i| sem[i].defines.contains(*s))
-                        .copied()
-                        .unwrap_or(groups[a].members[0]);
-                    let to_h = groups[b]
-                        .members
-                        .iter()
-                        .find(|&&i| sem[i].uses.contains(*s))
-                        .copied()
-                        .unwrap_or(groups[b].members[0]);
-                    edges.push((from_h, to_h, format!("def→use: {s}")));
-                    gedges.push((a, b));
+        // one edge per (a, b), named by a's first symbol that b uses
+        let mut reached: BTreeMap<usize, &String> = BTreeMap::new();
+        for s in &defs_a {
+            for &b in users.get(s.as_str()).into_iter().flatten() {
+                if b == a || (!cross_file && gfile(a, &groups) != gfile(b, &groups)) {
+                    continue;
                 }
+                reached.entry(b).or_insert(s);
             }
+        }
+        for (b, s) in reached {
+            let from_h = groups[a]
+                .members
+                .iter()
+                .find(|&&i| sem[i].defines.contains(s))
+                .copied()
+                .unwrap_or(groups[a].members[0]);
+            let to_h = groups[b]
+                .members
+                .iter()
+                .find(|&&i| sem[i].uses.contains(s))
+                .copied()
+                .unwrap_or(groups[b].members[0]);
+            edges.push((from_h, to_h, format!("def→use: {s}")));
+            gedges.push((a, b));
         }
     }
 
@@ -453,8 +467,8 @@ pub fn order_all(
         .collect();
     let ctx = RatCtx {
         groups: &groups,
-        gdef: &gdef,
-        guse: &guse,
+        definers: &definers,
+        users: &users,
         group_file: &group_file,
         group_row: &group_row,
         paths,
@@ -520,8 +534,11 @@ fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
 
 struct RatCtx<'a> {
     groups: &'a [GroupInfo],
-    gdef: &'a [HashSet<String>],
-    guse: &'a [HashSet<String>],
+    /// symbol → the groups defining / using it, ascending. Provenance asks
+    /// "who else touches this name" once per hunk; scanning every group for
+    /// the answer is O(hunks × groups).
+    definers: &'a HashMap<&'a str, Vec<usize>>,
+    users: &'a HashMap<&'a str, Vec<usize>>,
     group_file: &'a [usize],
     group_row: &'a [usize],
     paths: &'a [String],
@@ -540,6 +557,13 @@ struct RatCtx<'a> {
 }
 
 impl RatCtx<'_> {
+    // groups defining / using `sym`, in group order
+    fn definers(&self, sym: &str) -> &[usize] {
+        self.definers.get(sym).map_or(&[], Vec::as_slice)
+    }
+    fn users(&self, sym: &str) -> &[usize] {
+        self.users.get(sym).map_or(&[], Vec::as_slice)
+    }
     // a candidate group is usable as provenance if it's another group and (when
     // cross_file is off) lives in the same file as the hunk's group
     fn ok(&self, mine: usize, other: usize) -> bool {
@@ -605,7 +629,6 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     let s = sem[i];
     let mine = group_idx[i];
     let my_file = ctx.group_file[mine];
-    let g = ctx.groups.len();
 
     // P12.2: noise hunks are skippable — say why, skip semantic wording.
     //
@@ -753,20 +776,17 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         frags.extend(extracts);
         frags.extend(renames);
         frags.extend(moves);
-        if !adds.is_empty() {
-            let list = name_list(&adds);
-            let label = if prose { prose_noun(adds.len(), &list) } else { list };
-            frags.push(format!("adds {label}"));
-        }
-        if !adds_ty.is_empty() {
-            let list = name_list(&adds_ty);
-            let label = if prose { prose_noun(adds_ty.len(), &list) } else { list };
-            frags.push(format!("adds type {label}"));
-        }
-        if !edits.is_empty() {
-            let list = name_list(&edits);
-            let label = if prose { prose_noun(edits.len(), &list) } else { list };
-            frags.push(format!("edits {label}"));
+        for (verb, items) in [("adds", &adds), ("adds type", &adds_ty), ("edits", &edits)] {
+            if items.is_empty() {
+                continue;
+            }
+            let list = name_list(items);
+            let label = if prose {
+                prose_noun(items.len(), &list)
+            } else {
+                list
+            };
+            frags.push(format!("{verb} {label}"));
         }
         if !ch_sig.is_empty() {
             frags.push(format!("changes signature of {}", name_list(&ch_sig)));
@@ -778,8 +798,10 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // provenance: a defined symbol used by another group. Name it only when
         // several constructs are listed (otherwise "used by X" is unambiguous).
         if let Some((d, b)) = real.iter().find_map(|d| {
-            (0..g)
-                .find(|&b| ctx.ok(mine, b) && ctx.guse[b].contains(*d))
+            ctx.users(d)
+                .iter()
+                .copied()
+                .find(|&b| ctx.ok(mine, b))
                 .map(|b| ((*d).clone(), b))
         }) {
             let prov = if ctx.group_file[b] != my_file {
@@ -834,10 +856,11 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // #6: from a test file, prefer a symbol defined in a non-test file
         if is_test_path(&ctx.paths[my_file]) {
             if let Some((u, b)) = s.uses.iter().find_map(|u| {
-                (0..g)
+                ctx.definers(u)
+                    .iter()
+                    .copied()
                     .find(|&b| {
                         ctx.ok(mine, b)
-                            && ctx.gdef[b].contains(u)
                             && ctx.group_file[b] != my_file
                             && !is_test_path(&ctx.paths[ctx.group_file[b]])
                     })
@@ -847,8 +870,10 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             }
         }
         if let Some((u, b)) = s.uses.iter().find_map(|u| {
-            (0..g)
-                .find(|&b| ctx.ok(mine, b) && ctx.gdef[b].contains(u))
+            ctx.definers(u)
+                .iter()
+                .copied()
+                .find(|&b| ctx.ok(mine, b))
                 .map(|b| (u.clone(), b))
         }) {
             return ctx.use_of_phrase(&u, mine, b);
@@ -877,7 +902,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         let is_section = ctx.is_prose(my_file) && s.enclosing_kind.is_none();
         let nm = short_container(nm);
         return if is_section {
-            format!("edits section {nm}")
+            format!("edits {}", prose_noun(1, &nm))
         } else {
             format!("edits {nm}")
         };

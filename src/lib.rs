@@ -13,7 +13,7 @@ use extract::{analyze, compute_hunks, symbol_sets, HunkSem, RawHunk};
 use lang::LangSpec;
 use model::*;
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
 pub use lang::is_generated_path;
 pub use patch::split_patch;
@@ -785,9 +785,7 @@ fn comment_only_hunk(
 // they're covered by the first check without special casing. Returns `None`
 // when the source doesn't parse.
 fn ts_comment_lines(spec: &LangSpec, src: &str) -> Option<HashSet<usize>> {
-    let mut parser = Parser::new();
-    parser.set_language(&(spec.language)()).ok()?;
-    let tree = parser.parse(src, None)?;
+    let tree = lang::parse(spec, src)?;
     let mut out = HashSet::new();
     collect_comment_lines(tree.root_node(), spec.name, &mut out);
     Some(out)

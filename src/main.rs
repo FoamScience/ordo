@@ -46,14 +46,7 @@ fn review(args: &[String]) {
             eprintln!("ordo: cannot read '{f}': {e}");
             exit(1);
         }),
-        None => {
-            let mut buf = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
-                eprintln!("ordo: failed to read stdin: {e}");
-                exit(1);
-            }
-            buf
-        }
+        None => read_stdin(),
     };
     let changes = ordo::split_patch(&src)
         .into_iter()
@@ -74,12 +67,17 @@ fn review(args: &[String]) {
     emit(ordo::run(input));
 }
 
-fn read_input(only_comments: bool) -> ordo::model::Input {
+fn read_stdin() -> String {
     let mut buf = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
         eprintln!("ordo: failed to read stdin: {e}");
         exit(1);
     }
+    buf
+}
+
+fn read_input(only_comments: bool) -> ordo::model::Input {
+    let buf = read_stdin();
     let mut input: ordo::model::Input = serde_json::from_str(&buf).unwrap_or_else(|e| {
         eprintln!("ordo: invalid input json: {e}");
         exit(1);

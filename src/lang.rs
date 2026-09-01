@@ -4,7 +4,7 @@
 //! is the one exception: it also needed a small, `prose`-gated naming path in
 //! extract.rs and order.rs, since a heading has no identifier to name a def by).
 //! Tier-1: python, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
-use tree_sitter::Language;
+use tree_sitter::{Language, Parser, Tree};
 
 pub struct LangSpec {
     pub name: &'static str,
@@ -463,4 +463,12 @@ pub fn is_type_kind(kind: &str) -> bool {
             | "union_specifier"
             | "class_specifier"
     )
+}
+
+/// Parse `content` with this spec's grammar. `None` when the grammar refuses
+/// to load or the parse fails — callers degrade rather than abort.
+pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
+    let mut parser = Parser::new();
+    parser.set_language(&(spec.language)()).ok()?;
+    parser.parse(content, None)
 }

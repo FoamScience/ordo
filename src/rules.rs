@@ -20,7 +20,7 @@ use crate::lang::{self, LangSpec};
 use crate::model::{Category, ContainerKind, Rule, RuleHit};
 use globset::{Glob, GlobMatcher};
 use std::collections::HashMap;
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
 /// A rule with its globs and query compiled once, plus whatever refused to
 /// compile — reported rather than silently dropped, since a rule that never
@@ -204,11 +204,7 @@ impl<'r> Rules<'r> {
             return out;
         }
         let language = (spec.language)();
-        let mut parser = Parser::new();
-        if parser.set_language(&language).is_err() {
-            return out;
-        }
-        let Some(tree) = parser.parse(content, None) else {
+        let Some(tree) = lang::parse(spec, content) else {
             return out;
         };
         for (name, src, explicit) in queries {
