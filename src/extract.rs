@@ -1025,7 +1025,9 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
 // unlisted kinds yield nothing rather than guessing.
 fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
     let field = match kind {
-        "assignment" | "short_var_declaration" => "left",
+        // xonsh `$FOO = …`: `left` is an `env_variable` wrapping the plain
+        // identifier, so the bound name matches a use of `$FOO` elsewhere
+        "assignment" | "short_var_declaration" | "env_assignment" => "left",
         "let_declaration" => "pattern",
         "var_spec" | "variable_declarator" => "name",
         // java local_variable_declaration / c/cpp declaration: one or more
@@ -1767,7 +1769,7 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
     // they are shaped nothing alike: python has `name:` children, js has an
     // `import_clause` and a `source`. Gate on the language rather than trust a
     // shared kind name.
-    if spec.name != "python" {
+    if !matches!(spec.name, "python" | "xonsh") {
         return None;
     }
     let row = node.start_position().row;

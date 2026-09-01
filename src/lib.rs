@@ -807,7 +807,7 @@ fn collect_comment_lines(node: Node, lang_name: &str, out: &mut HashSet<usize>) 
         }
         return; // no need to recurse inside a comment node
     }
-    if lang_name == "python" {
+    if matches!(lang_name, "python" | "xonsh") {
         let is_doc_container = kind == "module"
             || (kind == "block"
                 && node.parent().is_some_and(|p| {
@@ -854,7 +854,7 @@ fn is_comment_line(trimmed: &str, ext: &str) -> bool {
         return true;
     }
     match ext {
-        "py" | "pyi" => {
+        "py" | "pyi" | "xsh" | "xonsh" | "xonshrc" => {
             trimmed.starts_with('#') || trimmed.starts_with("\"\"\"") || trimmed.starts_with("'''")
         }
         "lua" => trimmed.starts_with("--"),

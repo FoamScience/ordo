@@ -10,7 +10,7 @@ use tree_sitter::Node;
 pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize, Advisory)> {
     let mut out = vec![];
     let walker: Rule = match spec.name {
-        "python" => walk_python,
+        "python" | "xonsh" => walk_python,
         "rust" => walk_rust,
         "javascript" | "typescript" | "tsx" => walk_js,
         "go" => walk_go,

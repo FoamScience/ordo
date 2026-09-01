@@ -3,7 +3,8 @@
 //! entry here plus its grammar crate in Cargo.toml — no logic changes (markdown
 //! is the one exception: it also needed a small, `prose`-gated naming path in
 //! extract.rs and order.rs, since a heading has no identifier to name a def by).
-//! Tier-1: python, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
+//! Tier-1: python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua,
+//! markdown.
 use tree_sitter::{Language, Parser, Tree};
 
 pub struct LangSpec {
@@ -36,6 +37,9 @@ pub struct LangSpec {
 
 fn py() -> Language {
     tree_sitter_python::LANGUAGE.into()
+}
+fn xonsh() -> Language {
+    tree_sitter_xonsh::LANGUAGE.into()
 }
 fn js() -> Language {
     tree_sitter_javascript::LANGUAGE.into()
@@ -88,6 +92,28 @@ static SPECS: &[LangSpec] = &[
         members: &["pair", "keyword_argument"],
         prose: false,
         locals: &["assignment"],
+    },
+    // a python superset: every node kind python's entry names exists in this
+    // grammar too (checked against its node-types.json), plus the shell forms.
+    LangSpec {
+        name: "xonsh",
+        language: xonsh,
+        test_blocks: &[],
+        imports: &[
+            "import_statement",
+            "import_from_statement",
+            "future_import_statement",
+        ],
+        defs: &[
+            "function_definition",
+            "class_definition",
+            "decorated_definition",
+        ],
+        members: &["pair", "keyword_argument"],
+        prose: false,
+        // `env_assignment` is xonsh's own: `$FOO = …` binds a name no python
+        // `assignment` node covers
+        locals: &["assignment", "env_assignment"],
     },
     LangSpec {
         name: "javascript",
@@ -313,6 +339,7 @@ pub fn for_path(path: &str) -> Option<&'static LangSpec> {
     let ext = path.rsplit('.').next()?;
     let name = match ext {
         "py" | "pyi" => "python",
+        "xsh" | "xonsh" | "xonshrc" => "xonsh",
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "rs" => "rust",
         "ts" | "mts" | "cts" => "typescript",
@@ -341,6 +368,7 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
     let lower = word.to_ascii_lowercase();
     let canonical = match lower.as_str() {
         "py" | "python" | "python3" => "python",
+        "xsh" | "xonsh" => "xonsh",
         "js" | "javascript" | "node" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" | "typescript" => "typescript",
         "tsx" => "tsx",
