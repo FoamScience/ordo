@@ -161,10 +161,31 @@ query-file = "rules/prefer-pathlib.scm"   # a tree-sitter query
 warn = "prefer pathlib.Path over os.path.*"
 ```
 
-A rule matches on facts the engine already computes — `path`, `lang`,
-`category`, `enclosing-kind`, `defines`/`uses`/`imports` — and/or a tree-sitter
-query for conventions about code *shape*. It can `note`, `warn`, mark a hunk
-`noise`, or give it a `priority`.
+A rule matches on facts the engine already computes — `path`/`path-not`, `lang`,
+`category`, `enclosing-kind`, `defines`/`uses`/`imports` — on a **shape the hunk
+introduces** (`kind`, with `with`/`without` for what its children must have or
+lack, `text` for a regex on the node), on a **limit** (`max-params`,
+`max-lines`, `max-nesting`, `max-file-lines`), on a **relationship** the engine
+already knows (`recursive`, `container-with`/`container-without`,
+`member-uninitialized` — decided across the whole change, header and `.cpp`
+together), and only then on a tree-sitter query, for relationships *between*
+nodes. It can `note`, `warn`, mark a hunk `noise`, or give it a `priority`.
+
+```toml
+[[rule]]
+name = "initialize-members"
+lang = "cpp"
+kind = "field_declaration"
+without = "default_value"       # absence, as a table entry
+warn = "[H.5] initialize at declaration"
+
+[[rule]]
+name = "equals-needs-hashcode"
+lang = "java"
+defines = "equals"
+container-without = "hashCode"
+warn = "override hashCode with equals"
+```
 
 Three properties make this safe to hand to a config file:
 
@@ -181,6 +202,29 @@ hunk**, so it reports what *this change introduces*, not the 400 pre-existing
 occurrences a whole-file lint would list. Full reference:
 [`docs/rules.md`](docs/rules.md); ordo's own rules are in
 [`.ordo/rules.toml`](.ordo/rules.toml).
+
+### Shipped rulesets
+
+Published guideline sets, as rules, under [`rulesets/`](rulesets/) — each one
+verified against a sample in which every rule fires:
+
+| file | source |
+| --- | --- |
+| `cpp-default-guidelines.toml` | Jan Wilmans' C++ Default Guidelines (H.1–H.18 and the details) |
+| `go-uber-guide.toml` | the Uber Go Style Guide and Go Code Review Comments |
+| `python-google-style.toml` | Google's Python Style Guide, §2 Language Rules |
+| `rust-api-guidelines.toml` | the Rust API Guidelines checklist, change-scoped |
+| `c-power-of-ten.toml` | NASA/JPL's Power of Ten |
+| `java-effective-java.toml` | Effective Java, the construct-level items |
+| `typescript-clean-code.toml`, `javascript-airbnb.toml` | the subset an eslint config doesn't already own |
+| `lua-style-guide.toml`, `markdown.toml` | the few rules those guides have that are about structure |
+
+```sh
+ordo-tui HEAD~3 --rules rulesets/go-uber-guide.toml     # on top of your own rules
+```
+
+Each file's header says what it deliberately leaves out — style that belongs to a
+formatter, lints a linter already owns, and anything needing dataflow.
 
 ## Reviewer TUI (`ordo-tui`)
 
