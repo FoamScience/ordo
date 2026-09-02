@@ -29,7 +29,7 @@ const USAGE: &str = "\
 ordo-tui — interactive review of a commit, ordered for comprehension.
 
 usage:
-  ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--all] [--only-comments]
+  ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
   ordo-tui --init-config [--force]
   ordo-tui --help
   ordo-tui --version
@@ -335,7 +335,10 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
     Ok(PathGlobs { include, exclude })
 }
 
-fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
+/// rev, keymap, path filter, --only-comments, theme, --rules files
+type ParsedArgs = (String, Keymap, Filter, bool, Theme, Vec<String>);
+
+fn parse_args() -> Result<ParsedArgs, i32> {
     let mut rev: Option<String> = None;
     let mut globs: Vec<String> = vec![];
     let mut skip_generated = true;
@@ -348,6 +351,8 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     let mut theme_name = std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "dark".to_string());
     let mut want_preset = false;
     let mut want_theme = false;
+    let mut want_rules = false;
+    let mut extra_rules: Vec<String> = vec![];
     let mut want_init = false;
     let mut force = false;
     for a in std::env::args().skip(1) {
@@ -363,6 +368,11 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
             want_theme = false;
             continue;
         }
+        if want_rules {
+            extra_rules.push(a);
+            want_rules = false;
+            continue;
+        }
         match a.as_str() {
             "--keys" => want_preset = true,
             s if s.starts_with("--keys=") => {
@@ -374,6 +384,8 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
                 theme_name = s["--theme=".len()..].to_string();
                 theme_given = true;
             }
+            "--rules" => want_rules = true,
+            s if s.starts_with("--rules=") => extra_rules.push(s["--rules=".len()..].to_string()),
             "--all" => skip_generated = false,
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
@@ -466,6 +478,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         filter,
         only_comments,
         theme,
+        extra_rules,
     ))
 }
 
@@ -489,7 +502,7 @@ fn highlight_progress(i: usize, total: usize) -> String {
 }
 
 fn main() -> std::io::Result<()> {
-    let (rev, keys, filter, only_comments, theme) = match parse_args() {
+    let (rev, keys, filter, only_comments, theme, extra_rules) = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
     };
@@ -506,7 +519,7 @@ fn main() -> std::io::Result<()> {
     let uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
     // rules are the client's to collect: this user's, then this repository's
     let repo_root = git(&["rev-parse", "--show-toplevel"]);
-    let (rules, problems) = load_rules(repo_root.trim());
+    let (rules, problems) = load_rules(repo_root.trim(), &extra_rules);
     for p in &problems {
         eprintln!("ordo-tui: {p}");
     }
@@ -1958,12 +1971,22 @@ fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
 /// A `query` may be given inline or as `query-file`, resolved relative to the
 /// rules file itself — a query is a block of tree-sitter, and keeping it in its
 /// own `.scm` is how anyone would want to write one.
-fn load_rules(repo_root: &str) -> (Vec<ordo::model::Rule>, Vec<String>) {
+fn load_rules(repo_root: &str, extra: &[String]) -> (Vec<ordo::model::Rule>, Vec<String>) {
     let mut rules = vec![];
     let mut problems = vec![];
-    for path in rule_sources(repo_root) {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
+    // the two implicit files may be absent; a `--rules` file was asked for
+    let implicit = rule_sources(repo_root).len();
+    for (i, path) in rule_sources(repo_root).into_iter().chain(extra.iter().map(PathBuf::from)).enumerate() {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if i < implicit => {
+                let _ = e;
+                continue;
+            }
+            Err(e) => {
+                problems.push(format!("{}: {e}", path.display()));
+                continue;
+            }
         };
         let (mut got, probs) = parse_rules(&text, path.parent().unwrap_or(Path::new(".")));
         for p in probs {
@@ -1974,100 +1997,179 @@ fn load_rules(repo_root: &str) -> (Vec<ordo::model::Rule>, Vec<String>) {
     (rules, problems)
 }
 
-/// The rules file: a sequence of `[[rule]]` blocks, read the same way
-/// `tui.toml` is (see `parse_key_config`) — the same small subset, so a reader
-/// of one file can read the other.
-fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
-    use ordo::model::{Rule, When};
-    let mut rules: Vec<Rule> = vec![];
-    let mut problems = vec![];
-    let mut open = false;
-    for (n, raw) in text.lines().enumerate() {
-        let line = strip_comment(raw).trim().to_string();
-        if line.is_empty() {
-            continue;
+/// `kind = "x"` and `kind = ["x", "y"]` both read; a one-entry list is the
+/// common case and shouldn't need brackets. Mirrors `model::string_or_vec`,
+/// which is private to that module.
+fn string_or_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<V>::deserialize(d)? {
+        None => None,
+        Some(V::One(s)) => Some(vec![s]),
+        Some(V::Many(v)) => Some(v),
+    })
+}
+
+/// Flat TOML shape of one `[[rule]]` block: the file keeps rule fields and
+/// `when` conditions in one table, while `ordo::model::Rule` nests the
+/// conditions under `when` — this is the shape that gets converted.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RuleToml {
+    name: String,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    warn: Option<String>,
+    #[serde(default)]
+    noise: bool,
+    #[serde(default)]
+    priority: i64,
+
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    path_not: Option<String>,
+    #[serde(default)]
+    lang: Option<String>,
+    #[serde(default)]
+    category: Option<ordo::model::Category>,
+    #[serde(default)]
+    enclosing_kind: Option<String>,
+    #[serde(default)]
+    defines: Option<String>,
+    #[serde(default)]
+    uses: Option<String>,
+    #[serde(default)]
+    imports: Option<String>,
+    #[serde(default)]
+    noise_when: Option<bool>,
+    #[serde(default)]
+    comment: Option<bool>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    query_file: Option<String>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    kind: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    with: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    without: Option<Vec<String>>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    text_not: Option<String>,
+    #[serde(default)]
+    max_params: Option<usize>,
+    #[serde(default)]
+    max_lines: Option<usize>,
+    #[serde(default)]
+    max_nesting: Option<usize>,
+    #[serde(default)]
+    max_file_lines: Option<usize>,
+    #[serde(default)]
+    recursive: Option<bool>,
+    #[serde(default)]
+    container_with: Option<String>,
+    #[serde(default)]
+    container_without: Option<String>,
+    #[serde(default)]
+    member_uninitialized: Option<bool>,
+}
+
+/// Convert one already-parsed `[[rule]]` table into a `Rule`, independently of
+/// every other rule in the file — a bad type or an unknown key in one block
+/// must not cost the file its other, good rules. `query-file` is read
+/// relative to `base` and lands in `When.query`, same as an inline `query`;
+/// a missing file is a problem, not a panic.
+fn rule_from_toml(
+    v: toml::Value,
+    idx: usize,
+    base: &Path,
+    problems: &mut Vec<String>,
+) -> Option<ordo::model::Rule> {
+    let label = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("rule {}", idx + 1));
+    let parsed: RuleToml = match serde::Deserialize::deserialize(v) {
+        Ok(p) => p,
+        Err(e) => {
+            problems.push(format!("{label}: {e}"));
+            return None;
         }
-        if line == "[[rule]]" {
-            rules.push(Rule {
-                name: String::new(),
-                when: When::default(),
-                note: None,
-                warn: None,
-                noise: false,
-                priority: 0,
-            });
-            open = true;
-            continue;
-        }
-        if line.starts_with('[') {
-            problems.push(format!(
-                "line {}: expected `[[rule]]`, found `{line}`",
-                n + 1
-            ));
-            open = false;
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            problems.push(format!("line {}: expected `key = value`", n + 1));
-            continue;
-        };
-        if !open {
-            problems.push(format!(
-                "line {}: `{}` is outside any [[rule]]",
-                n + 1,
-                k.trim()
-            ));
-            continue;
-        }
-        let key = k.trim().to_string();
-        let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-        let rule = rules.last_mut().expect("open implies a rule");
-        match key.as_str() {
-            "name" => rule.name = val,
-            "note" => rule.note = Some(val),
-            "warn" => rule.warn = Some(val),
-            "noise" => rule.noise = val == "true",
-            "priority" => match val.parse() {
-                Ok(p) => rule.priority = p,
-                Err(_) => {
-                    problems.push(format!("line {}: priority `{val}` is not a number", n + 1))
-                }
-            },
-            "path" => rule.when.path = Some(val),
-            "lang" => rule.when.lang = Some(val),
-            "category" => match val.as_str() {
-                "import" => rule.when.category = Some(ordo::model::Category::Import),
-                "definition" => rule.when.category = Some(ordo::model::Category::Definition),
-                "other" => rule.when.category = Some(ordo::model::Category::Other),
-                _ => problems.push(format!(
-                    "line {}: category `{val}` (want: import, definition, other)",
-                    n + 1
-                )),
-            },
-            "enclosing-kind" => rule.when.enclosing_kind = Some(val),
-            "defines" => rule.when.defines = Some(val),
-            "uses" => rule.when.uses = Some(val),
-            "imports" => rule.when.imports = Some(val),
-            "noise-when" => rule.when.noise = Some(val == "true"),
-            "comment" => rule.when.comment = Some(val == "true"),
-            "query" => rule.when.query = Some(val),
-            "query-file" => match std::fs::read_to_string(base.join(&val)) {
-                Ok(q) => rule.when.query = Some(q),
-                Err(e) => problems.push(format!("line {}: {val}: {e}", n + 1)),
-            },
-            _ => problems.push(format!("line {}: unknown rule key `{key}`", n + 1)),
+    };
+    let mut when = ordo::model::When {
+        path: parsed.path,
+        path_not: parsed.path_not,
+        lang: parsed.lang,
+        category: parsed.category,
+        enclosing_kind: parsed.enclosing_kind,
+        defines: parsed.defines,
+        uses: parsed.uses,
+        imports: parsed.imports,
+        noise: parsed.noise_when,
+        comment: parsed.comment,
+        query: parsed.query,
+        kind: parsed.kind,
+        with: parsed.with,
+        without: parsed.without,
+        text: parsed.text,
+        text_not: parsed.text_not,
+        max_params: parsed.max_params,
+        max_lines: parsed.max_lines,
+        max_nesting: parsed.max_nesting,
+        max_file_lines: parsed.max_file_lines,
+        recursive: parsed.recursive,
+        container_with: parsed.container_with,
+        container_without: parsed.container_without,
+        member_uninitialized: parsed.member_uninitialized,
+    };
+    if let Some(qf) = &parsed.query_file {
+        match std::fs::read_to_string(base.join(qf)) {
+            Ok(q) => when.query = Some(q),
+            Err(e) => problems.push(format!("{label}: {qf}: {e}")),
         }
     }
-    // a rule with no name can't report itself, and a reviewer would see an
-    // annotation with nothing to look up
-    for (i, r) in rules.iter_mut().enumerate() {
-        if r.name.is_empty() {
-            r.name = format!("rule-{}", i + 1);
-            problems.push(format!(
-                "rule {} has no name; calling it `{}`",
-                i + 1,
-                r.name
-            ));
+    Some(ordo::model::Rule {
+        name: parsed.name,
+        when,
+        note: parsed.note,
+        warn: parsed.warn,
+        noise: parsed.noise,
+        priority: parsed.priority,
+    })
+}
+
+/// The rules file: a sequence of `[[rule]]` blocks, real TOML — arrays
+/// (`kind = [...]`) and multi-line `'''...'''` query strings read like
+/// anywhere else in TOML. A syntax error, or a key outside `rule`, fails the
+/// whole file (there is no document to salvage rules from); once the document
+/// itself parses, each rule converts independently so one bad rule can't sink
+/// the rest (see `rule_from_toml`).
+fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RulesFile {
+        #[serde(default)]
+        rule: Vec<toml::Value>,
+    }
+    let doc: RulesFile = match toml::from_str(text) {
+        Ok(d) => d,
+        Err(e) => return (vec![], vec![e.to_string()]),
+    };
+    let mut rules = vec![];
+    let mut problems = vec![];
+    for (i, v) in doc.rule.into_iter().enumerate() {
+        if let Some(r) = rule_from_toml(v, i, base, &mut problems) {
+            rules.push(r);
         }
     }
     (rules, problems)
@@ -9020,33 +9122,51 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_without_a_name_gets_one_and_says_so() {
-        // an unnamed rule can't report itself, and an annotation with nothing
-        // to look up is worse than a complaint
+    fn a_rule_without_a_name_is_a_problem_not_a_silent_default() {
+        // the old line-based parser couldn't tell "missing" from "empty" and
+        // papered over it with an auto name (`rule-1`); real TOML makes `name`
+        // a required field, so a rule without one fails to convert and is
+        // reported, rather than kept under a name nobody wrote
         let (rules, problems) =
             parse_rules("[[rule]]\npath = \"a/**\"\nnote = \"n\"\n", Path::new("."));
-        assert_eq!(rules[0].name, "rule-1");
-        assert!(problems[0].contains("no name"), "{problems:?}");
+        assert!(rules.is_empty(), "{rules:?}");
+        assert!(problems[0].contains("missing field `name`"), "{problems:?}");
     }
 
     #[test]
-    fn a_bad_rules_line_is_reported_by_number() {
+    fn a_bad_rule_is_reported_and_dropped_not_partially_applied() {
+        // the old parser evaluated each `key = value` line independently, so
+        // a rule with a bad line still got kept with whatever lines *did*
+        // parse, plus a problem per bad line. A typed table deserializes
+        // atomically: an unknown key fails the whole rule, one problem,
+        // nothing partially applied
         let (rules, problems) = parse_rules(
-            "[[rule]]\nname = \"a\"\nnonsense = \"x\"\npriority = \"soon\"\ncategory = \"nope\"\n",
+            "[[rule]]\nname = \"a\"\nnonsense = \"x\"\n",
             Path::new("."),
         );
-        assert_eq!(rules.len(), 1);
-        assert_eq!(problems.len(), 3, "{problems:?}");
-        assert!(problems[0].contains("line 3"), "{problems:?}");
-        assert!(problems[1].contains("line 4"), "{problems:?}");
-        assert!(problems[2].contains("line 5"), "{problems:?}");
+        assert!(rules.is_empty(), "{rules:?}");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("nonsense"), "{problems:?}");
     }
 
     #[test]
-    fn a_key_outside_any_rule_block_is_reported() {
+    fn one_broken_rule_does_not_sink_the_others() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"bad\"\npriority = \"soon\"\n\n[[rule]]\nname = \"good\"\npath = \"x/**\"\n",
+            Path::new("."),
+        );
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert_eq!(rules[0].name, "good");
+        assert_eq!(rules[0].when.path.as_deref(), Some("x/**"));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("bad"), "{problems:?}");
+    }
+
+    #[test]
+    fn an_unknown_key_names_itself_in_the_problem() {
         let (rules, problems) = parse_rules("name = \"loose\"\n", Path::new("."));
         assert!(rules.is_empty());
-        assert!(problems[0].contains("outside any [[rule]]"), "{problems:?}");
+        assert!(problems[0].contains("name"), "{problems:?}");
     }
 
     #[test]
@@ -9065,6 +9185,70 @@ mod tests {
             parse_rules("[[rule]]\nname = \"q\"\nquery-file = \"nope.scm\"\n", &dir);
         assert!(problems[0].contains("nope.scm"), "{problems:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_multi_line_query_and_a_kind_list_both_read() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"loop-shapes\"\nkind = [\"for_statement\", \"while_statement\"]\nquery = '''\n(call\n  function: (identifier) @f)\n'''\n",
+            Path::new("."),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            rules[0].when.kind.as_deref(),
+            Some(&["for_statement".to_string(), "while_statement".to_string()][..])
+        );
+        assert_eq!(
+            rules[0].when.query.as_deref(),
+            Some("(call\n  function: (identifier) @f)\n")
+        );
+    }
+
+    #[test]
+    fn kind_as_a_bare_string_also_reads_as_a_one_entry_list() {
+        let (rules, problems) =
+            parse_rules("[[rule]]\nname = \"one-kind\"\nkind = \"for_statement\"\n", Path::new("."));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(rules[0].when.kind.as_deref(), Some(&["for_statement".to_string()][..]));
+    }
+
+    #[test]
+    fn kebab_case_keys_reach_the_matching_when_fields() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"limits\"\npath-not = \"vendor/**\"\nmax-params = 4\ncontainer-without = \"Drop\"\nmember-uninitialized = true\n",
+            Path::new("."),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let w = &rules[0].when;
+        assert_eq!(w.path_not.as_deref(), Some("vendor/**"));
+        assert_eq!(w.max_params, Some(4));
+        assert_eq!(w.container_without.as_deref(), Some("Drop"));
+        assert_eq!(w.member_uninitialized, Some(true));
+    }
+
+    #[test]
+    fn a_rules_flag_file_is_layered_last_and_a_missing_one_is_a_problem() {
+        let dir = std::env::temp_dir().join(format!("ordo-rules-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let extra = dir.join("extra.toml");
+        std::fs::write(&extra, "[[rule]]\nname = \"from-flag\"\nkind = \"type_definition\"\nnote = \"n\"\n").unwrap();
+        let (rules, problems) = load_rules("", &[extra.to_string_lossy().into_owned()]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(rules.iter().any(|r| r.name == "from-flag"));
+        // the implicit user/repo files may be absent; a file named on the
+        // command line was asked for, so its absence is reported
+        let (_, problems) = load_rules("", &[dir.join("nope.toml").to_string_lossy().into_owned()]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("nope.toml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ordos_own_rules_file_loads_with_zero_problems() {
+        let text = std::fs::read_to_string(".ordo/rules.toml").expect("repo has .ordo/rules.toml");
+        let (rules, problems) = parse_rules(&text, Path::new(".ordo"));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!rules.is_empty());
     }
 
     // ---- --init-config ----
