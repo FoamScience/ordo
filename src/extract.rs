@@ -4,7 +4,7 @@
 use crate::lang::{self, LangSpec};
 use crate::model::{Advisory, Category, ContainerKind, Symbol};
 use similar::TextDiff;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 pub struct RawHunk {
@@ -58,6 +58,19 @@ pub struct HunkSem {
     pub old_range: [usize; 2],
     /// hunk adds no new lines (pure deletion) — drives removal wording
     pub new_empty: bool,
+    /// longest definition the hunk starts, in lines, and the most parameters
+    /// one takes — the facts a `max-lines` / `max-params` rule reads
+    pub def_lines: usize,
+    pub def_params: usize,
+    /// deepest control-flow nesting any row of the hunk sits at
+    pub nesting: usize,
+    /// a definition starting in the hunk uses its own name
+    pub recursive: bool,
+    /// names the hunk's container already has — methods, fields, variants —
+    /// so a rule can ask "defines `equals` in a class without `hashCode`"
+    pub container_members: Vec<String>,
+    /// data members the hunk adds that nothing in the change initializes
+    pub uninit_members: Vec<String>,
 }
 
 /// A local binding introduced by this hunk and where its name is used
@@ -93,6 +106,12 @@ impl HunkSem {
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
             new_empty: h.new_r0.is_none(),
+            def_lines: 0,
+            def_params: 0,
+            nesting: 0,
+            recursive: false,
+            container_members: vec![],
+            uninit_members: vec![],
         }
     }
 }
@@ -154,7 +173,32 @@ struct Collected {
     /// search's raw material, kept separate from `uses` (which already feeds
     /// the def→use edge graph and must not gain binding-target entries)
     all_idents: Vec<(usize, String, usize)>,
+    /// deepest control-flow construct each row sits inside (0 = none)
+    nest_rows: HashMap<usize, usize>,
+    nest_depth: usize,
 }
+
+/// Node kinds that open a level of control flow, across the grammars ordo
+/// ships. A kind another grammar doesn't have simply never matches.
+const CONTROL_KINDS: &[&str] = &[
+    "if_statement",
+    "for_statement",
+    "while_statement",
+    "do_statement",
+    "switch_statement",
+    "for_range_loop",
+    "for_in_statement",
+    "try_statement",
+    "with_statement",
+    "match_expression",
+    "if_expression",
+    "loop_expression",
+    "while_expression",
+    "for_expression",
+    "if_let_expression",
+    "repeat_statement",
+    "elif_clause",
+];
 
 struct DefRec {
     s: usize,
@@ -298,6 +342,66 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                 notes.push(format!("{} params", d.params));
             }
         }
+        // the same measurements, as facts a rule can put its own limit on
+        let started: Vec<&DefRec> = c
+            .defs
+            .iter()
+            .filter(|d| r0 <= d.s && d.s <= r1 && d.kind == ContainerKind::Definition)
+            .collect();
+        let def_lines = started.iter().map(|d| d.e - d.s + 1).max().unwrap_or(0);
+        let def_params = started.iter().map(|d| d.params).max().unwrap_or(0);
+        let nesting = (r0..=r1)
+            .filter_map(|r| c.nest_rows.get(&r))
+            .copied()
+            .max()
+            .unwrap_or(0);
+        // a definition that names itself inside its own body — over and above
+        // the declaring identifier, which `uses` also carries
+        let recursive = started.iter().any(|d| {
+            let declared = c
+                .decls
+                .iter()
+                .filter(|(row, n)| *row == d.s && *n == d.name)
+                .count();
+            let named = c
+                .uses
+                .iter()
+                .filter(|(row, n)| d.s <= *row && *row <= d.e && *n == d.name)
+                .count();
+            named > declared
+        });
+        // the container a defined symbol lives in (its scope), else the hunk's
+        // enclosing one; its members are every symbol declared with that scope
+        // plus the detail layer's members of it
+        let container: Option<String> = defines
+            .first()
+            .and_then(|d| {
+                c.sym_decls
+                    .iter()
+                    .find(|(row, n, _, _)| r0 <= *row && *row <= r1 && n == d)
+                    .and_then(|(_, _, _, scope)| scope.clone())
+            })
+            .or_else(|| enclosing.clone());
+        let container_members: Vec<String> = match &container {
+            None => vec![],
+            Some(cn) => {
+                let mut m: Vec<String> = c
+                    .sym_decls
+                    .iter()
+                    .filter(|(_, _, _, scope)| scope.as_deref() == Some(cn.as_str()))
+                    .map(|(_, n, _, _)| n.clone())
+                    .chain(
+                        c.member_rows
+                            .iter()
+                            .filter(|(_, _, _, key)| key.as_deref() == Some(cn.as_str()))
+                            .map(|(_, n, _, _)| n.clone()),
+                    )
+                    .collect();
+                m.sort();
+                m.dedup();
+                m
+            }
+        };
         let advisories: Vec<Advisory> = adv
             .iter()
             .filter(|(row, _)| r0 <= *row && *row <= r1)
@@ -385,6 +489,12 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             // to say for itself as a pure deletion, and the same wording fits:
             // what a reviewer wants to know is what left
             new_empty: (r0..=r1).all(|r| lines.get(r).is_none_or(|l| l.trim().is_empty())),
+            def_lines,
+            def_params,
+            nesting,
+            recursive,
+            container_members,
+            uninit_members: vec![],
         });
     }
     Some(out)
@@ -770,6 +880,21 @@ fn region_label(
 }
 
 fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
+    let control = CONTROL_KINDS.contains(&node.kind());
+    if control {
+        c.nest_depth += 1;
+        for r in node.start_position().row..=node.end_position().row {
+            let d = c.nest_rows.entry(r).or_insert(0);
+            *d = (*d).max(c.nest_depth);
+        }
+    }
+    walk_node(node, src, spec, stack, c);
+    if control {
+        c.nest_depth -= 1;
+    }
+}
+
+fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
     let kind = node.kind();
     let sr = node.start_position().row;
     if import_like(node, spec) {

@@ -282,3 +282,260 @@ fn a_language_less_query_that_parses_nowhere_is_still_reported() {
         out.problems
     );
 }
+
+// ---------------------------------------------------------------- limits
+
+fn one_with(path: &str, old: &str, new: &str, rules: serde_json::Value) -> Output {
+    run(serde_json::json!({
+        "changes": [{ "path": path, "old": old, "new": new }],
+        "options": { "rules": rules }
+    }))
+}
+
+#[test]
+fn max_params_fires_only_past_the_limit() {
+    let rules = serde_json::json!([{ "name": "few-args", "when": { "max_params": 3 }, "note": "too many" }]);
+    let over = one_with(
+        "a.py",
+        "x = 1\n",
+        "x = 1\ndef f(a, b, c, d):\n    return a\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&over, "a.py"), vec!["note:few-args"]);
+    let at = one_with(
+        "a.py",
+        "x = 1\n",
+        "x = 1\ndef f(a, b, c):\n    return a\n",
+        rules,
+    );
+    assert!(hits(&at, "a.py").is_empty());
+}
+
+#[test]
+fn max_lines_measures_the_definition_the_hunk_starts() {
+    let rules =
+        serde_json::json!([{ "name": "short-fns", "when": { "max_lines": 3 }, "note": "long" }]);
+    let long = one_with(
+        "a.py",
+        "x = 1\n",
+        "x = 1\ndef f():\n    a = 1\n    b = 2\n    c = 3\n    return a\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&long, "a.py"), vec!["note:short-fns"]);
+    let short = one_with("a.py", "x = 1\n", "x = 1\ndef f():\n    return 1\n", rules);
+    assert!(hits(&short, "a.py").is_empty());
+}
+
+#[test]
+fn max_nesting_counts_control_flow_not_definitions() {
+    let rules =
+        serde_json::json!([{ "name": "flat", "when": { "max_nesting": 2 }, "warn": "deep" }]);
+    let deep = one_with(
+        "a.py",
+        "def f(x):\n    return x\n",
+        "def f(x):\n    if x:\n        for i in x:\n            if i:\n                return i\n    return x\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&deep, "a.py"), vec!["warn:flat"]);
+    let ok = one_with(
+        "a.py",
+        "def f(x):\n    return x\n",
+        "def f(x):\n    if x:\n        return 1\n    return x\n",
+        rules,
+    );
+    assert!(hits(&ok, "a.py").is_empty());
+}
+
+#[test]
+fn max_file_lines_fires_only_when_this_change_crosses_it() {
+    let rules = serde_json::json!([{ "name": "file-size", "when": { "max_file_lines": 4 }, "note": "big file" }]);
+    let crossing = one_with(
+        "a.py",
+        "a = 1\nb = 2\n",
+        "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&crossing, "a.py"), vec!["note:file-size"]);
+    // already over: a one-line edit in a 6-line file is not the moment
+    let already = one_with(
+        "a.py",
+        "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n",
+        "a = 9\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n",
+        rules,
+    );
+    assert!(hits(&already, "a.py").is_empty());
+}
+
+// ---------------------------------------------------------------- path-not
+
+#[test]
+fn path_not_excludes_third_party_code() {
+    let rules = serde_json::json!([{ "name": "ours-only", "when": { "path_not": "third_party/**" }, "note": "ours" }]);
+    let out = run(serde_json::json!({
+        "changes": [
+            { "path": "src/a.py", "old": "x = 1\n", "new": "x = 2\n" },
+            { "path": "third_party/b.py", "old": "x = 1\n", "new": "x = 2\n" },
+        ],
+        "options": { "rules": rules }
+    }));
+    assert_eq!(hits(&out, "src/a.py"), vec!["note:ours-only"]);
+    assert!(hits(&out, "third_party/b.py").is_empty());
+}
+
+// ---------------------------------------------------------------- recursion
+
+#[test]
+fn recursive_is_a_definition_that_calls_itself() {
+    let rules = serde_json::json!([{ "name": "no-recursion", "when": { "recursive": true }, "warn": "recursion" }]);
+    let rec = one_with(
+        "a.c",
+        "int keep;\n",
+        "int keep;\nint fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&rec, "a.c"), vec!["warn:no-recursion"]);
+    let plain = one_with(
+        "a.c",
+        "int keep;\n",
+        "int keep;\nint twice(int n) { return n * 2; }\n",
+        rules,
+    );
+    assert!(hits(&plain, "a.c").is_empty());
+}
+
+// ---------------------------------------------------------------- container members
+
+#[test]
+fn container_without_sees_the_class_the_hunk_defines_into() {
+    let rules = serde_json::json!([{
+        "name": "equals-needs-hashcode",
+        "when": { "defines": "equals", "container_without": "hashCode" },
+        "warn": "override hashCode too"
+    }]);
+    let old = "class P {\n    int x;\n}\n";
+    let bad = one_with(
+        "P.java",
+        old,
+        "class P {\n    int x;\n    public boolean equals(Object o) { return true; }\n}\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&bad, "P.java"), vec!["warn:equals-needs-hashcode"]);
+    let good = one_with(
+        "P.java", old,
+        "class P {\n    int x;\n    public boolean equals(Object o) { return true; }\n    public int hashCode() { return 1; }\n}\n",
+        rules,
+    );
+    assert!(hits(&good, "P.java").is_empty());
+}
+
+// ---------------------------------------------------------------- introduced shapes
+
+#[test]
+fn kind_matches_a_node_the_hunk_introduces() {
+    let rules = serde_json::json!([{ "name": "no-typedef", "when": { "lang": "cpp", "kind": "type_definition" }, "note": "use using" }]);
+    let out = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\ntypedef int handle_t;\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&out, "a.cpp"), vec!["note:no-typedef"]);
+    let none = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\nusing handle_t = int;\n",
+        rules,
+    );
+    assert!(hits(&none, "a.cpp").is_empty());
+}
+
+#[test]
+fn kind_accepts_a_list() {
+    let rules = serde_json::json!([{ "name": "raw-loop", "when": { "kind": ["for_statement", "while_statement"] }, "note": "loop" }]);
+    let out = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\nvoid f() { while (1) { break; } }\n",
+        rules,
+    );
+    assert_eq!(hits(&out, "a.cpp"), vec!["note:raw-loop"]);
+}
+
+#[test]
+fn without_expresses_absence_of_a_named_child() {
+    // `int x = 0;` carries a default_value child; `double y;` does not
+    let rules = serde_json::json!([{
+        "name": "uninit-member",
+        "when": { "kind": "field_declaration", "without": "default_value" },
+        "warn": "initialize"
+    }]);
+    let out = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\nstruct S { int x = 0; };\n",
+        rules.clone(),
+    );
+    assert!(hits(&out, "a.cpp").is_empty());
+    let out = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\nstruct S { double y; };\n",
+        rules,
+    );
+    assert_eq!(hits(&out, "a.cpp"), vec!["warn:uninit-member"]);
+}
+
+#[test]
+fn without_reads_keyword_tokens_too() {
+    // `virtual` is an anonymous token — invisible to a query anchor, but a child
+    let rules = serde_json::json!([{
+        "name": "virtual-dtor",
+        "when": { "kind": "declaration", "with": "function_declarator", "without": "virtual", "text": "~" },
+        "warn": "make it virtual"
+    }]);
+    let plain = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\nstruct A { ~A(); };\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&plain, "a.cpp"), vec!["warn:virtual-dtor"]);
+    let virt = one_with(
+        "a.cpp",
+        "int keep;\n",
+        "int keep;\nstruct B { virtual ~B(); };\n",
+        rules,
+    );
+    assert!(hits(&virt, "a.cpp").is_empty());
+}
+
+#[test]
+fn text_not_filters_by_the_node_text() {
+    let rules = serde_json::json!([{
+        "name": "mutable-global",
+        "when": { "lang": "python", "kind": "expression_statement", "text_not": "^[A-Z_]+ =" },
+        "note": "global state"
+    }]);
+    let out = one_with(
+        "a.py",
+        "def f():\n    pass\n",
+        "def f():\n    pass\ncounter = 0\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&out, "a.py"), vec!["note:mutable-global"]);
+    let constant = one_with(
+        "a.py",
+        "def f():\n    pass\n",
+        "def f():\n    pass\nLIMIT = 0\n",
+        rules,
+    );
+    assert!(hits(&constant, "a.py").is_empty());
+}
+
+#[test]
+fn a_bad_regex_is_reported_not_ignored() {
+    let rules = serde_json::json!([{ "name": "broken", "when": { "kind": "x", "text": "(" }, "note": "n" }]);
+    let out = one_with("a.py", "x = 1\n", "x = 2\n", rules);
+    let problems = &out.problems;
+    assert!(problems.iter().any(|p| p.contains("broken") && p.contains("regex")), "{problems:?}");
+}

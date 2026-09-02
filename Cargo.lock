@@ -339,6 +339,7 @@ dependencies = [
  "diffy",
  "globset",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
  "similar",

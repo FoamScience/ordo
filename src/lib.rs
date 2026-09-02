@@ -389,23 +389,33 @@ pub fn run(input: Input) -> Output {
                 (Some(spec), Some(new)) => rule_engine.query_rows(spec, new),
                 _ => HashMap::new(),
             };
+            let file_lines = (
+                change.old.as_deref().map(|o| o.lines().count()),
+                change.new.as_deref().map_or(0, |n| n.lines().count()),
+            );
             let mut per_file = vec![];
             for li in 0..raws[fi].len() {
                 let sem = &sems[fi][li];
                 let [r0, r1] = raws[fi][li].new_range;
-                let hits = rule_engine.hits(
+                let facts = rules::HunkFacts {
                     path,
-                    (r0, r1),
-                    sem.category,
-                    sem.enclosing_kind,
-                    &sem.defines,
-                    &sem.uses,
-                    &sem.imports,
-                    sem.noise,
-                    comment_only[fi][li],
-                    &query_rows,
-                );
-                per_file.push(hits);
+                    rows: (r0, r1),
+                    category: sem.category,
+                    enclosing_kind: sem.enclosing_kind,
+                    defines: &sem.defines,
+                    uses: &sem.uses,
+                    imports: &sem.imports,
+                    noise: sem.noise,
+                    comment: comment_only[fi][li],
+                    def_lines: sem.def_lines,
+                    def_params: sem.def_params,
+                    nesting: sem.nesting,
+                    file_lines,
+                    recursive: sem.recursive,
+                    container_members: &sem.container_members,
+                    uninit_members: &sem.uninit_members,
+                };
+                per_file.push(rule_engine.hits(&facts, &query_rows));
             }
             rule_hits[fi] = per_file;
         }

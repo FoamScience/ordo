@@ -215,6 +215,67 @@ pub struct When {
     /// the engine reads no files.
     #[serde(default)]
     pub query: Option<String>,
+
+    // ---- introduced shapes: fires when the hunk introduces a node …
+    /// … of one of these kinds
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub kind: Option<Vec<String>>,
+    /// … whose direct children include each of these — a named kind, or a
+    /// keyword token such as `virtual`
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub with: Option<Vec<String>>,
+    /// … and none of these. Absence, as a table entry
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub without: Option<Vec<String>>,
+    /// … and whose text matches / does not match this regex
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub text_not: Option<String>,
+    /// glob the file path must NOT match — third-party code, a framework carve-out
+    #[serde(default)]
+    pub path_not: Option<String>,
+
+    // ---- limits: fires when a definition the hunk introduces exceeds one
+    #[serde(default)]
+    pub max_params: Option<usize>,
+    #[serde(default)]
+    pub max_lines: Option<usize>,
+    /// deepest control-flow nesting any row of the hunk sits at
+    #[serde(default)]
+    pub max_nesting: Option<usize>,
+    /// fires on the hunks of a file this change pushed past the limit
+    #[serde(default)]
+    pub max_file_lines: Option<usize>,
+
+    // ---- relationships the engine already knows
+    /// a definition starting in the hunk calls itself
+    #[serde(default)]
+    pub recursive: Option<bool>,
+    /// glob against the member names of the container the hunk defines into
+    #[serde(default)]
+    pub container_with: Option<String>,
+    #[serde(default)]
+    pub container_without: Option<String>,
+    /// the hunk adds a data member that nothing in this change initializes
+    #[serde(default)]
+    pub member_uninitialized: Option<bool>,
+}
+
+/// `kind = "x"` and `kind = ["x", "y"]` both read; a one-entry list is the
+/// common case and shouldn't need brackets.
+fn string_or_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<V>::deserialize(d)? {
+        None => None,
+        Some(V::One(s)) => Some(vec![s]),
+        Some(V::Many(v)) => Some(v),
+    })
 }
 
 /// A rule that matched, on the hunk it matched.
