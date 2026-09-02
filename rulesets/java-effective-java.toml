@@ -1,0 +1,135 @@
+# Effective Java (Joshua Bloch) — item numbers per the 3rd edition, wording
+# from https://github.com/HugoMatilla/Effective-JAVA-Summary
+#
+# Use: `ordo-tui --rules rulesets/java-effective-java.toml`, or copy the rules
+# you want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's advisory catalog already fires on them with no
+# config: empty catch blocks (Item 65, "don't ignore exceptions"), reflection
+# via setAccessible (Item 65's cousin on breaking encapsulation).
+#
+# Also not here: naming conventions (Item 56 — a formatter's job, no shape to
+# match), doc-comment coverage (Item 44 — presence of Javadoc isn't a tree
+# shape ordo can see), and the concurrency-design items (68's neighbors on
+# synchronization, thread confinement, `wait`/`notify`) — "document thread
+# safety" and "prefer concurrency utilities to synchronized" are judgment
+# calls with no construct to anchor on, not a pattern a hunk introduces.
+
+# ------------------------------------------------------------ [Item 7] finalizers
+
+[[rule]]
+name = "no-finalizers"
+lang = "java"
+defines = "finalize"
+warn = "[Item 7] avoid finalizers — unpredictable, often never run; use an explicit close/try-with-resources instead"
+
+# ------------------------------------------------------------ [Item 9/10] value-class contract
+
+[[rule]]
+name = "equals-needs-hashcode"
+lang = "java"
+defines = "equals"
+container-without = "hashCode"
+warn = "[Item 9] override hashCode when you override equals — equal objects must have equal hash codes"
+
+[[rule]]
+name = "equals-needs-tostring"
+lang = "java"
+defines = "equals"
+container-without = "toString"
+note = "[Item 10] a value class worth an equals is worth a toString — it turns a debug dump into something readable"
+
+# ------------------------------------------------------------ [Item 13/14] accessibility
+
+[[rule]]
+name = "no-public-fields"
+lang = "java"
+kind = "field_declaration"
+text = "^public"
+text-not = "static\\s+final"
+note = "[Item 13/14] a public mutable field skips the accessor — nothing can enforce an invariant or change the representation later"
+
+# ------------------------------------------------------------ [Item 15] mutability
+
+[[rule]]
+name = "minimize-mutability"
+lang = "java"
+kind = "field_declaration"
+text-not = "\\bfinal\\b"
+note = "[Item 15] can this field be final? an immutable field is simpler to reason about and safe to share"
+
+# ------------------------------------------------------------ [Item 45/15] initialization
+
+[[rule]]
+name = "initialize-members"
+lang = "java"
+member-uninitialized = true
+warn = "[Item 45/15] no constructor in this change initializes this member — in-class or via `this.x = …`"
+
+# ------------------------------------------------------------ [Item 30] enums
+
+[[rule]]
+name = "enum-over-int-constants"
+lang = "java"
+query = '''
+((class_body
+   (field_declaration (modifiers) @m1 type: (integral_type) declarator: (variable_declarator value: (decimal_integer_literal)))
+   (field_declaration (modifiers) @m2 type: (integral_type) declarator: (variable_declarator value: (decimal_integer_literal)))) @run
+ (#match? @m1 "static")
+ (#match? @m1 "final")
+ (#match? @m2 "static")
+ (#match? @m2 "final"))
+'''
+note = "[Item 30] a run of `static final int` constants — an enum gives them a type, a namespace, and a compiler that catches the wrong one"
+
+# ------------------------------------------------------------ [Item 43] null vs. empty
+
+[[rule]]
+name = "no-null-collection-return"
+lang = "java"
+query = '''
+[
+ (method_declaration
+   type: (generic_type)
+   body: (block (return_statement (null_literal))))
+ (method_declaration
+   type: (array_type)
+   body: (block (return_statement (null_literal))))
+] @m
+'''
+warn = "[Item 43] return an empty collection or array, not null — every caller now needs a null check that isn't otherwise part of the contract"
+
+# ------------------------------------------------------------ [Item 46] iteration
+
+[[rule]]
+name = "prefer-for-each"
+lang = "java"
+kind = "for_statement"
+note = "[Item 46] an indexed loop over a collection — for-each removes the index bookkeeping and the off-by-one it invites"
+
+# ------------------------------------------------------------ [Item 49] primitives
+
+[[rule]]
+name = "prefer-primitives"
+lang = "java"
+uses = "{Integer,Long,Double,Boolean}"
+note = "[Item 49] a boxed type where a primitive would do — costs an allocation, an unboxing, and a null this code probably didn't mean to allow"
+
+# ------------------------------------------------------------ [Item 68] concurrency
+
+[[rule]]
+name = "prefer-executors"
+lang = "java"
+uses = "Thread"
+note = "[Item 68] a raw Thread — an Executor separates task submission from thread management and gives you a shutdown path"
+
+# ------------------------------------------------------------ [Item 74] serialization
+
+[[rule]]
+name = "serializable-judiciously"
+lang = "java"
+query = '''
+((class_declaration interfaces: (super_interfaces (type_list (type_identifier) @i))) @c
+ (#eq? @i "Serializable"))
+'''
+note = "[Item 74] implements Serializable — it is a public API that outlives refactoring; commit to it deliberately"
