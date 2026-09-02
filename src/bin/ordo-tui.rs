@@ -1120,6 +1120,10 @@ struct Item {
     /// and only those char spans changed; `None` means it renders whole. Empty
     /// when the file has no grammar or the hunk was too large to refine.
     refined: ordo::refine::Refined,
+    /// this hunk's 1-based position in `out.clusters` (P12.3's independent
+    /// change parts) — `None` when the whole review is one cluster, so
+    /// `:quickfix` has no cluster worth naming.
+    cluster: Option<usize>,
 }
 
 /// One `dep` line's rendered label plus the target hunk's resolved position in
@@ -1688,7 +1692,7 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::Help => (Category::Help, "show this keybinding help"),
         Action::CommandOpen => (
             Category::General,
-            "open the command bar (:only-comments, :all, :filter, :keys, :strategy, :goto, :help, :q)",
+            "open the command bar (:only-comments, :all, :filter, :keys, :strategy, :goto, :quickfix, :help, :q)",
         ),
         Action::CommandGoto => (Category::General, "open the command bar pre-filled with `goto `"),
     }
@@ -2554,6 +2558,12 @@ struct App {
     /// the reviewer's own rules, carried so a re-order or an `:e` reload keeps
     /// applying them
     rules: Vec<ordo::model::Rule>,
+    /// the ordering strategy the current `items`/`view` were built with
+    /// (`"comprehension"`, `"defs-first"`, `"file"`) — set by `:strategy`,
+    /// otherwise the engine's own default; carried into `:quickfix`'s
+    /// exported `context.strategy` so a `:cnext` session in the editor knows
+    /// what order it's walking.
+    strategy: String,
 }
 
 /// Bound on the position stack `JumpToEdge`/`JumpBack` maintain — generous
@@ -2611,6 +2621,18 @@ fn build_items(out: &Output) -> Vec<Item> {
         .enumerate()
         .map(|(i, o)| (o.hunk.as_str(), i))
         .collect();
+    // hunk id -> 1-based cluster number, only when there's more than one
+    // cluster to distinguish — a single cluster covering everything isn't
+    // worth tagging every item with.
+    let cluster_of: HashMap<&str, usize> = if out.clusters.len() > 1 {
+        out.clusters
+            .iter()
+            .enumerate()
+            .flat_map(|(i, ids)| ids.iter().map(move |id| (id.as_str(), i + 1)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
     out.order
         .iter()
         .filter_map(|o| {
@@ -2659,6 +2681,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 group: h.group.clone(),
                 rules: h.rules.clone(),
                 refined: ordo::refine::Refined::default(),
+                cluster: cluster_of.get(h.id.as_str()).copied(),
             })
         })
         .collect()
@@ -4731,13 +4754,28 @@ fn edit_target(app: &App) -> (String, usize, bool) {
 
 // --------------------------------------------------------------------- tui loop
 
+/// Leaves the alternate screen, restores the terminal, runs `program args`
+/// with inherited stdio, then re-enters and forces a full redraw — the shared
+/// body behind `ge`'s editor handoff and `:quickfix`'s vim handoff, so there
+/// is exactly one terminal save/restore path.
+fn run_suspended(
+    terminal: &mut ratatui::DefaultTerminal,
+    program: &str,
+    args: &[String],
+) -> std::io::Result<std::process::ExitStatus> {
+    ratatui::restore();
+    let outcome = Command::new(program).args(args).status();
+    *terminal = ratatui::init();
+    let _ = terminal.clear(); // the screen underneath may have changed; force a full redraw
+    outcome
+}
+
 /// `ge` / `C-o` — hand the terminal to `$VISUAL`/`$EDITOR` for the selected
-/// hunk's file and line, then take it back. Leaves the alternate screen
-/// before spawning and re-enters it afterward regardless of outcome — a
-/// missing or misbehaving editor must never leave the terminal broken, so
-/// failures are reported in the existing popup instead of propagated. The
-/// popup also carries the exact/approximate line note from `edit_target`, so
-/// the user is never silently sent to a line that may not be right.
+/// hunk's file and line, then take it back. A missing or misbehaving editor
+/// must never leave the terminal broken, so failures are reported in the
+/// existing popup instead of propagated. The popup also carries the
+/// exact/approximate line note from `edit_target`, so the user is never
+/// silently sent to a line that may not be right.
 fn open_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal) {
     let (path, line, approx) = edit_target(app);
     let spec = resolve_editor();
@@ -4748,10 +4786,7 @@ fn open_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal) {
         ));
         return;
     };
-    ratatui::restore();
-    let outcome = Command::new(&program).args(&args).status();
-    *terminal = ratatui::init();
-    let _ = terminal.clear(); // the screen underneath may have changed; force a full redraw
+    let outcome = run_suspended(terminal, &program, &args);
 
     let note = if approx {
         " (approximate — this file has changed since the reviewed revision)"
@@ -4764,6 +4799,167 @@ fn open_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal) {
         Err(e) => format!("failed to launch '{program}': {e}"),
     };
     app.popup = Some(Popup::new("edit", vec![prose(msg)]));
+}
+
+// ------------------------------------------------------------------ quickfix
+
+/// One `setqflist()` item — the pure-data slice of an `Item`/its reviewed
+/// flag that `quickfix_script` renders. Filled in from the reading-order
+/// pane's current `view` order, so exporting is exactly "what the user sees".
+struct QfHunk {
+    filename: String,
+    lnum: usize,
+    /// `Some('W')`/`Some('I')` for the sign column; `None` renders as `''`
+    /// (no sign) — see `qf_kind`.
+    kind: Option<char>,
+    /// the hunk's cluster label (`"cluster N"`), prefixed onto the item's
+    /// text. NOT emitted as vim's `module` key: vim renders `module` *instead
+    /// of* the filename in the quickfix window, which would cost a reviewer
+    /// the one column they navigate by.
+    cluster: Option<String>,
+    text: String,
+}
+
+/// `:quickfix`'s per-hunk `type`: `'W'` when the hunk carries a warn-level
+/// rule hit or an advisory (warn wins when both apply), `'I'` when it's
+/// marked reviewed, otherwise no sign at all.
+fn qf_kind(warn: bool, reviewed: bool) -> Option<char> {
+    if warn {
+        Some('W')
+    } else if reviewed {
+        Some('I')
+    } else {
+        None
+    }
+}
+
+/// Vim single-quoted string literal escaping: doubles every embedded `'` (the
+/// only escape a single-quoted vim string recognises) and folds out any
+/// literal newline, which would otherwise split the `-S` script mid-statement
+/// — vim's `\n` escape only exists inside double-quoted strings.
+fn vim_single_quote(s: &str) -> String {
+    s.replace('\'', "''").replace(['\n', '\r'], " ")
+}
+
+/// Builds the one `setqflist()` call `:quickfix` writes to `quickfix.vim` —
+/// a pure function of the already-filtered, already-ordered hunk list, so
+/// it's cheap to test directly without touching git or a real editor.
+/// `'nr': '$'` pushes a new list onto vim's quickfix stack instead of
+/// clobbering whatever the user already had open (`:colder` gets it back).
+fn quickfix_script(rev: &str, strategy: &str, hunks: &[QfHunk]) -> String {
+    let mut clusters: Vec<&str> = hunks.iter().filter_map(|h| h.cluster.as_deref()).collect();
+    clusters.sort_unstable();
+    clusters.dedup();
+    let n_clusters = clusters.len().max(1);
+    let title = format!(
+        "ordo: {rev} — {} hunk{}, {n_clusters} cluster{}",
+        hunks.len(),
+        plural(hunks.len()),
+        plural(n_clusters),
+    );
+    let mut out = String::new();
+    out.push_str("call setqflist([], ' ', {\n");
+    out.push_str("  \\ 'nr': '$',\n");
+    let _ = writeln!(out, "  \\ 'title': '{}',", vim_single_quote(&title));
+    let _ = writeln!(
+        out,
+        "  \\ 'context': {{'rev': '{}', 'strategy': '{}'}},",
+        vim_single_quote(rev),
+        vim_single_quote(strategy),
+    );
+    out.push_str("  \\ 'items': [\n");
+    for h in hunks {
+        let mut fields = vec![
+            format!("'filename': '{}'", vim_single_quote(&h.filename)),
+            format!("'lnum': {}", h.lnum),
+            "'col': 1".to_string(),
+            format!("'type': '{}'", h.kind.map(String::from).unwrap_or_default()),
+        ];
+        let text = match &h.cluster {
+            Some(c) => format!("[{c}] {}", h.text),
+            None => h.text.clone(),
+        };
+        fields.push(format!("'text': '{}'", vim_single_quote(&text)));
+        let _ = writeln!(out, "  \\   {{{}}},", fields.join(", "));
+    }
+    out.push_str("  \\ ]})\n");
+    out
+}
+
+/// Whether `spec` (as returned by `resolve_editor`) is vim, neovim, or a
+/// close variant thereof — the ones `:quickfix`'s `-S <script> -c copen -c
+/// "silent! cfirst"` invocation works with. Judged by argv[0]'s basename, so
+/// `/usr/bin/nvim` matches just as `nvim` does; an unrelated editor (`code`,
+/// `emacs`) does not.
+fn is_vim_family(spec: &[String]) -> bool {
+    let Some(program) = spec.first() else {
+        return false;
+    };
+    let basename = Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program.as_str());
+    matches!(basename, "vim" | "nvim" | "vi" | "gvim" | "mvim")
+}
+
+/// `:quickfix`'s vim-family invocation: `-S` *sources* the generated script
+/// (`-q` would instead parse it as an errorfile through 'errorformat', which
+/// can't run vim commands), `copen` shows the resulting list, and `silent!
+/// cfirst` selects its first entry — `silent!` because an empty export makes
+/// bare `cfirst` raise `E42: No Errors` and strand the user at a
+/// press-enter prompt.
+fn quickfix_command(spec: &[String], path: &Path) -> Option<(String, Vec<String>)> {
+    let (program, extra) = spec.split_first()?;
+    let mut args = extra.to_vec();
+    args.push("-S".to_string());
+    args.push(path.display().to_string());
+    args.push("-c".to_string());
+    args.push("copen".to_string());
+    args.push("-c".to_string());
+    args.push("silent! cfirst".to_string());
+    Some((program.clone(), args))
+}
+
+/// Resolves and writes `<git-dir>/ordo/quickfix.vim`, creating the `ordo/`
+/// directory first. Inside the git dir so the file is never tracked and
+/// needs no gitignore entry. `Err` names whichever step failed — git dir
+/// resolution, directory creation, or the write — for `:quickfix`'s error
+/// popup; never a panic and never a silent no-op.
+fn write_quickfix_script(script: &str) -> Result<PathBuf, String> {
+    let git_dir = git(&["rev-parse", "--git-dir"]);
+    let git_dir = git_dir.trim();
+    if git_dir.is_empty() {
+        return Err(
+            "could not resolve the git directory (`git rev-parse --git-dir` failed)".to_string(),
+        );
+    }
+    let dir = PathBuf::from(git_dir).join("ordo");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let path = dir.join("quickfix.vim");
+    std::fs::write(&path, script)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// `:quickfix`'s vim-family handoff — same suspend/run/redraw path as `ge`,
+/// reporting a failed launch in the same popup idiom rather than a panic or a
+/// silent no-op.
+fn open_quickfix_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal, path: &Path) {
+    let spec = resolve_editor();
+    let Some((program, args)) = quickfix_command(&spec, path) else {
+        app.popup = Some(Popup::new(
+            "quickfix",
+            vec![prose("no editor command to run ($VISUAL/$EDITOR)")],
+        ));
+        return;
+    };
+    let msg = match run_suspended(terminal, &program, &args) {
+        Ok(status) if status.success() => format!("opened {} in {program}", path.display()),
+        Ok(status) => format!("{program} exited with {status}"),
+        Err(e) => format!("failed to launch '{program}': {e}"),
+    };
+    app.popup = Some(Popup::new("quickfix", vec![prose(msg)]));
 }
 
 /// While loading: just a status line under the pane border, same idiom as
@@ -4906,6 +5102,7 @@ fn run(
                         collapsed: HashSet::new(),
                         ledger,
                         rules: rules.clone(),
+                        strategy: "comprehension".to_string(),
                     }));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -4973,6 +5170,9 @@ fn run(
                         match handle_command_key(app, k.code, k.modifiers) {
                             CommandOutcome::Quit => break 'outer Ok(()),
                             CommandOutcome::None => {}
+                            CommandOutcome::OpenQuickfix(path) => {
+                                open_quickfix_editor(app, &mut terminal, &path);
+                            }
                             CommandOutcome::Reload(target, new_rev) => {
                                 // `:e`: everything indexing the *old* review —
                                 // selection, cursor, scroll, search, the jump
@@ -5892,6 +6092,22 @@ const COMMANDS: &[Cmd] = &[
         help: "account for every hunk and file not on screen, and why",
     },
     Cmd {
+        name: "quickfix",
+        args: "",
+        help:
+            "export the reading order to a vim quickfix list and open it (aliases: :qf, :vim-qfl)",
+    },
+    Cmd {
+        name: "qf",
+        args: "",
+        help: "alias for :quickfix",
+    },
+    Cmd {
+        name: "vim-qfl",
+        args: "",
+        help: "alias for :quickfix",
+    },
+    Cmd {
         name: "q",
         args: "",
         help: "quit",
@@ -6174,13 +6390,19 @@ enum CommandOutcome {
     Quit,
     /// `:e <rev>` resolved: the resolved target and the rev string as typed
     Reload(Target, String),
+    /// `:quickfix`/`:qf`/`:vim-qfl` wrote the script and the resolved editor
+    /// is vim-family: hand the terminal to it (needs `&mut
+    /// ratatui::DefaultTerminal`, which `execute_command` never sees)
+    OpenQuickfix(PathBuf),
 }
 
 /// `Enter` on the command bar: with a candidate highlighted, splice it into
 /// the line (doesn't run anything yet — a second `Enter` does); with nothing
 /// highlighted, run the line and close the bar.
 fn accept_command(app: &mut App) -> CommandOutcome {
-    let Some(bar) = app.command.as_ref() else { return CommandOutcome::None };
+    let Some(bar) = app.command.as_ref() else {
+        return CommandOutcome::None;
+    };
     if let Some(i) = bar.selected {
         let candidate = bar.candidates[i].clone();
         let new_text = apply_completion(&bar.text, &candidate);
@@ -6306,6 +6528,7 @@ fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
     app.jumps.clear();
     app.popup = None;
     app.search = None;
+    app.strategy = name.to_string();
     select(app, app.view[0]);
     Ok(())
 }
@@ -6461,6 +6684,38 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         "goto" => {
             run_goto(app, arg.trim())?;
             Ok(CommandOutcome::None)
+        }
+        "quickfix" | "qf" | "vim-qfl" => {
+            let hunks: Vec<QfHunk> = app
+                .view
+                .iter()
+                .map(|&i| {
+                    let it = &app.items[i];
+                    let warn =
+                        it.rules.iter().any(|r| r.level == "warn") || !it.advisories.is_empty();
+                    QfHunk {
+                        filename: it.path.clone(),
+                        lnum: it.new_range[0],
+                        kind: qf_kind(warn, app.reviewed[i]),
+                        cluster: it.cluster.map(|n| format!("c{n}")),
+                        text: it.rationale.clone(),
+                    }
+                })
+                .collect();
+            let script = quickfix_script(&app.rev, &app.strategy, &hunks);
+            let path = write_quickfix_script(&script)?;
+            if is_vim_family(&resolve_editor()) {
+                Ok(CommandOutcome::OpenQuickfix(path))
+            } else {
+                app.popup = Some(Popup::new(
+                    "quickfix",
+                    vec![
+                        prose(format!("wrote {}", path.display())),
+                        prose(format!(":source {}", path.display())),
+                    ],
+                ));
+                Ok(CommandOutcome::None)
+            }
         }
         "e" => {
             let rev_arg = arg.trim();
@@ -7088,11 +7343,142 @@ mod tests {
         }
     }
 
+    // ---- :quickfix ----
+
+    fn qf_hunk(
+        filename: &str,
+        lnum: usize,
+        kind: Option<char>,
+        cluster: Option<&str>,
+        text: &str,
+    ) -> QfHunk {
+        QfHunk {
+            filename: filename.to_string(),
+            lnum,
+            kind,
+            cluster: cluster.map(str::to_string),
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn quickfix_script_has_one_item_line_per_hunk_in_order() {
+        let hunks = vec![
+            qf_hunk("a.rs", 10, None, None, "first"),
+            qf_hunk("b.rs", 20, Some('W'), Some("cluster 1"), "second"),
+        ];
+        let script = quickfix_script("HEAD", "comprehension", &hunks);
+        assert!(script.contains("'nr': '$',"));
+        let first = script.find("'filename': 'a.rs'").unwrap();
+        let second = script.find("'filename': 'b.rs'").unwrap();
+        assert!(first < second, "items must appear in the given order");
+        assert!(script.contains("'lnum': 10"));
+        assert!(script.contains("'lnum': 20"));
+    }
+
+    #[test]
+    fn quickfix_script_doubles_apostrophes_and_keeps_unicode_verbatim() {
+        let hunks = vec![qf_hunk("a.rs", 1, None, None, "don't lose → this ⚠")];
+        let script = quickfix_script("HEAD", "comprehension", &hunks);
+        assert!(script.contains("don''t lose → this ⚠"));
+    }
+
+    #[test]
+    fn quickfix_script_never_sets_vims_module_key() {
+        // vim renders `module` instead of the filename in the quickfix window,
+        // so setting it would hide the path a reviewer navigates by
+        let script = quickfix_script(
+            "HEAD",
+            "comprehension",
+            &[
+                qf_hunk("src/lib.rs", 12, None, Some("c2"), "wires it through"),
+                qf_hunk("src/lang.rs", 75, None, None, "adds xonsh"),
+            ],
+        );
+        assert!(!script.contains("'module'"), "{script}");
+        assert!(script.contains("'filename': 'src/lib.rs'"), "{script}");
+    }
+
+    #[test]
+    fn quickfix_script_prefixes_the_cluster_onto_the_text() {
+        let script = quickfix_script(
+            "HEAD",
+            "comprehension",
+            &[qf_hunk(
+                "src/lib.rs",
+                12,
+                None,
+                Some("c2"),
+                "wires it through",
+            )],
+        );
+        assert!(
+            script.contains("'text': '[c2] wires it through'"),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn quickfix_script_leaves_an_unclustered_text_alone() {
+        let hunks = vec![qf_hunk("a.rs", 1, None, None, "plain")];
+        let script = quickfix_script("HEAD", "comprehension", &hunks);
+        assert!(script.contains("'text': 'plain'"), "{script}");
+    }
+
+    #[test]
+    fn quickfix_script_titles_by_distinct_cluster_count() {
+        let hunks = vec![
+            qf_hunk("a.rs", 1, None, Some("c1"), "one"),
+            qf_hunk("b.rs", 2, None, Some("c2"), "two"),
+            qf_hunk("c.rs", 3, None, Some("c2"), "three"),
+        ];
+        let script = quickfix_script("HEAD", "comprehension", &hunks);
+        assert!(script.contains("3 hunks, 2 clusters"), "{script}");
+    }
+
+    #[test]
+    fn quickfix_script_on_an_empty_export_still_produces_a_valid_call() {
+        let script = quickfix_script("HEAD", "comprehension", &[]);
+        assert!(script.contains("'nr': '$',"));
+        assert!(script.contains("'items': ["));
+        assert!(script.trim_end().ends_with("]})"));
+        // no item line was emitted
+        assert!(!script.contains("'filename'"));
+    }
+
+    #[test]
+    fn qf_kind_warn_beats_reviewed_and_neither_is_empty() {
+        assert_eq!(qf_kind(true, false), Some('W'));
+        assert_eq!(qf_kind(false, true), Some('I'));
+        assert_eq!(qf_kind(true, true), Some('W'));
+        assert_eq!(qf_kind(false, false), None);
+    }
+
+    #[test]
+    fn is_vim_family_matches_vim_and_neovim_by_basename_only() {
+        for prog in ["vim", "nvim", "/usr/bin/nvim", "vi", "gvim", "mvim"] {
+            assert!(
+                is_vim_family(&[prog.to_string()]),
+                "{prog} should be vim-family"
+            );
+        }
+        for prog in ["code", "emacs", "hx", "subl"] {
+            assert!(
+                !is_vim_family(&[prog.to_string()]),
+                "{prog} should not be vim-family"
+            );
+        }
+        assert!(!is_vim_family(&[]));
+    }
+
     // ---- command mode: line parsing ----
 
     #[test]
     fn parse_command_line_splits_name_and_argument() {
-        assert_eq!(parse_command_line("strategy defs-first"), ("strategy", "defs-first"));
+        assert_eq!(
+            parse_command_line("strategy defs-first"),
+            ("strategy", "defs-first")
+        );
         assert_eq!(parse_command_line("filter   src/*   "), ("filter", "src/*"));
         assert_eq!(parse_command_line("q"), ("q", ""));
         assert_eq!(parse_command_line("  q  "), ("q", ""));
@@ -7377,11 +7763,15 @@ mod tests {
             group: String::new(),
             rules: vec![],
             refined: ordo::refine::Refined::default(),
+            cluster: None,
         }
     }
 
     fn edge(label: &str, target: Option<usize>) -> EdgeRef {
-        EdgeRef { label: label.to_string(), target }
+        EdgeRef {
+            label: label.to_string(),
+            target,
+        }
     }
 
     #[test]
@@ -7677,6 +8067,7 @@ mod tests {
             collapsed: HashSet::new(),
             ledger: Ledger::default(),
             rules: vec![],
+            strategy: "comprehension".to_string(),
         }
     }
 
