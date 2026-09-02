@@ -330,7 +330,11 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         // …) must collapse into one entry — otherwise the same name/use-list
         // gets reported multiple times, ballooning the rationale.
         let mut bindings: Vec<BindingUse> = vec![];
-        for (row, name) in c.local_binds.iter().filter(|(row, _)| r0 <= *row && *row <= r1) {
+        for (row, name) in c
+            .local_binds
+            .iter()
+            .filter(|(row, _)| r0 <= *row && *row <= r1)
+        {
             if name == "_" || decl_at_row.contains(&(*row, name.as_str())) {
                 continue;
             }
@@ -482,7 +486,12 @@ fn test_block_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
     if !matches!(first.kind(), "string" | "template_string") {
         return None;
     }
-    let name = first.utf8_text(src).ok()?.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name = first
+        .utf8_text(src)
+        .ok()?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if name.chars().filter(|c| c.is_alphanumeric()).count() == 0 {
         return None; // an empty or punctuation-only name names nothing
     }
@@ -539,7 +548,8 @@ fn collect_injected_uses(node: Node, src: &[u8], offset: usize, c: &mut Collecte
     if lang::is_ident(node.kind()) {
         if let Ok(t) = node.utf8_text(src).map(str::trim) {
             if !t.is_empty() {
-                c.uses.push((node.start_position().row + offset, t.to_string()));
+                c.uses
+                    .push((node.start_position().row + offset, t.to_string()));
             }
         }
     }
@@ -692,7 +702,12 @@ fn region_label(
     spec: &LangSpec,
     top_level: bool,
 ) -> Option<(String, ContainerKind)> {
-    let text_of = |n: Node| n.utf8_text(src).ok().map(tidy_ident).filter(|t| !t.is_empty());
+    let text_of = |n: Node| {
+        n.utf8_text(src)
+            .ok()
+            .map(tidy_ident)
+            .filter(|t| !t.is_empty())
+    };
     match node.kind() {
         // `#ifdef X` and `#ifndef X` share a node kind; the directive token
         // itself says which, and a reviewer reads them very differently
@@ -946,7 +961,11 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         if !delegates {
             // scope excludes a duplicate trailing entry (the wrapper's own
             // push for this same symbol, not a genuine enclosing scope)
-            let scope_stack = if dup { &stack[..stack.len() - 1] } else { &stack[..] };
+            let scope_stack = if dup {
+                &stack[..stack.len() - 1]
+            } else {
+                &stack[..]
+            };
             let scope = (!scope_stack.is_empty()).then(|| scope_stack.join(lang::scope_sep(spec)));
             c.sym_decls.push((sr, own.clone(), kind.to_string(), scope));
         }
@@ -1099,9 +1118,15 @@ fn declarator_ident(node: Node) -> Option<Node> {
 fn lua_binding_idents(node: Node) -> Vec<Node> {
     let mut out = vec![];
     let mut cur = node.walk();
-    for stmt in node.named_children(&mut cur).filter(|c| c.kind() == "assignment_statement") {
+    for stmt in node
+        .named_children(&mut cur)
+        .filter(|c| c.kind() == "assignment_statement")
+    {
         let mut c2 = stmt.walk();
-        for list in stmt.named_children(&mut c2).filter(|c| c.kind() == "variable_list") {
+        for list in stmt
+            .named_children(&mut c2)
+            .filter(|c| c.kind() == "variable_list")
+        {
             let mut c3 = list.walk();
             out.extend(list.children_by_field_name("name", &mut c3));
         }
@@ -1199,7 +1224,10 @@ fn callee_text(call: Node, src: &[u8]) -> Option<String> {
         return f.utf8_text(src).ok().map(tidy_ident);
     }
     let name = call.child_by_field_name("name")?.utf8_text(src).ok()?;
-    match call.child_by_field_name("object").and_then(|o| o.utf8_text(src).ok()) {
+    match call
+        .child_by_field_name("object")
+        .and_then(|o| o.utf8_text(src).ok())
+    {
         Some(obj) => Some(format!("{}.{}", tidy_ident(obj), tidy_ident(name))),
         None => Some(tidy_ident(name)),
     }
@@ -1330,7 +1358,10 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         // (e.g. an HTML comment or a stray paragraph at the top of a file).
         // Naming it after that raw content reads badly, so it stays
         // anonymous rather than borrowing the wrong node's text.
-        return node.named_child(0).filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading")).and_then(|h| heading_name(h, src));
+        return node
+            .named_child(0)
+            .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
+            .and_then(|h| heading_name(h, src));
     }
     // 1. own name (function foo, class Foo, local function foo, impl Foo, …)
     if let Some(n) = node.child_by_field_name("name") {
@@ -1415,7 +1446,10 @@ fn bound_name(node: Node, src: &[u8]) -> Option<String> {
         // or a value returned/nested inside a function body must not borrow
         // the name of whatever the call result or outer function is bound
         // to. Stop the climb rather than crossing into that unrelated scope.
-        if matches!(k, "arguments" | "statement_block" | "class_body" | "program" | "block") {
+        if matches!(
+            k,
+            "arguments" | "statement_block" | "class_body" | "program" | "block"
+        ) {
             return None;
         }
         let binds = k.contains("assignment")
@@ -1518,7 +1552,13 @@ pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
     };
     let mut c = Collected::default();
     let mut stack: Vec<String> = vec![];
-    walk(tree.root_node(), content.as_bytes(), spec, &mut stack, &mut c);
+    walk(
+        tree.root_node(),
+        content.as_bytes(),
+        spec,
+        &mut stack,
+        &mut c,
+    );
     c.local_binds.into_iter().map(|(_, n)| n).collect()
 }
 
@@ -1546,7 +1586,13 @@ pub fn member_rows(spec: &LangSpec, content: &str) -> Vec<MemberRow> {
     };
     let mut c = Collected::default();
     let mut stack: Vec<String> = vec![];
-    walk(tree.root_node(), content.as_bytes(), spec, &mut stack, &mut c);
+    walk(
+        tree.root_node(),
+        content.as_bytes(),
+        spec,
+        &mut stack,
+        &mut c,
+    );
     c.member_rows
 }
 

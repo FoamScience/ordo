@@ -211,7 +211,13 @@ pub fn order_all(
         for (li, s) in hs.iter().enumerate() {
             coord.push((fi, li));
             sem.push(s);
-            comment.push(comment_only.get(fi).and_then(|v| v.get(li)).copied().unwrap_or(false));
+            comment.push(
+                comment_only
+                    .get(fi)
+                    .and_then(|v| v.get(li))
+                    .copied()
+                    .unwrap_or(false),
+            );
             switched_off.push(switched.get(fi).and_then(|v| v.get(li)).copied().flatten());
         }
     }
@@ -341,7 +347,9 @@ pub fn order_all(
     let mut def_group: HashMap<(usize, String), usize> = HashMap::new();
     for i in 0..n {
         if let Some(nm) = &sem[i].enclosing {
-            def_group.entry((coord[i].0, nm.clone())).or_insert(group_idx[i]);
+            def_group
+                .entry((coord[i].0, nm.clone()))
+                .or_insert(group_idx[i]);
         }
     }
     let mut seen_contain: HashSet<(usize, usize)> = HashSet::new();
@@ -978,7 +986,10 @@ fn used_frag(items: &[(&str, &[usize])], prefix: &str, alt: bool) -> String {
         .iter()
         .map(|(name, uses)| {
             let lines: Vec<String> = uses.iter().map(|l| format!("L{l}")).collect();
-            format!("{name} ({})", name_list(&lines.iter().map(String::as_str).collect::<Vec<_>>()))
+            format!(
+                "{name} ({})",
+                name_list(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+            )
         })
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
@@ -1060,9 +1071,7 @@ fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String
         _ => {
             let mut each: Vec<String> = no_uses_scoped
                 .iter()
-                .flat_map(|(scope, names)| {
-                    names.iter().map(move |n| format!("{n} (in {scope})"))
-                })
+                .flat_map(|(scope, names)| names.iter().map(move |n| format!("{n} (in {scope})")))
                 .collect();
             each.sort();
             let refs: Vec<&str> = each.iter().map(String::as_str).collect();

@@ -19,7 +19,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
-use tree_sitter::{Node, Parser, Point, Tree};
+use tree_sitter::{Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -236,7 +236,8 @@ impl Filter {
             .iter()
             .any(|p| self.globs.include.as_ref().is_none_or(|g| g.is_match(p)));
         let any_survives = paths.iter().any(|p| self.globs.is_match(p));
-        self.negatives_emptied.set(any_positive && !any_survives && !paths.is_empty());
+        self.negatives_emptied
+            .set(any_positive && !any_survives && !paths.is_empty());
         let mut tally = self.tally.get();
         tally.files_seen += paths.len();
         let mut kept: Vec<String> = vec![];
@@ -323,8 +324,14 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
             any_inc = true;
         }
     }
-    let include = any_inc.then(|| inc.build()).transpose().map_err(|e| e.to_string())?;
-    let exclude = any_exc.then(|| exc.build()).transpose().map_err(|e| e.to_string())?;
+    let include = any_inc
+        .then(|| inc.build())
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let exclude = any_exc
+        .then(|| exc.build())
+        .transpose()
+        .map_err(|e| e.to_string())?;
     Ok(PathGlobs { include, exclude })
 }
 
@@ -559,7 +566,10 @@ struct LoadResult {
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
 fn group_reasons(out: &Output) -> HashMap<String, String> {
-    out.groups.iter().map(|g| (g.id.clone(), g.reason.clone())).collect()
+    out.groups
+        .iter()
+        .map(|g| (g.id.clone(), g.reason.clone()))
+        .collect()
 }
 
 /// Everything `gather`/`highlight_file`/`ordo::run` need, run off the draw
@@ -645,7 +655,10 @@ fn load(
     let view = compute_view(&items, only_comments, true, None);
     if view.is_empty() {
         let msg = if only_comments {
-            format!("ordo-tui: nothing to review in {rev} — no comment changes{}", filter.note())
+            format!(
+                "ordo-tui: nothing to review in {rev} — no comment changes{}",
+                filter.note()
+            )
         } else {
             format!("ordo-tui: nothing to review in {rev}{}", filter.note())
         };
@@ -667,7 +680,9 @@ fn load(
     // memory (see `marks_file_path`/`load_marks`)
     let repo_root = git(&["rev-parse", "--show-toplevel"]);
     let repo_root = repo_root.trim();
-    let marks_path = (!repo_root.is_empty()).then(|| marks_file_path(repo_root)).flatten();
+    let marks_path = (!repo_root.is_empty())
+        .then(|| marks_file_path(repo_root))
+        .flatten();
     let mut marks = marks_path.as_deref().map(load_marks).unwrap_or_default();
     prune_marks(&mut marks, now_unix());
     let reviewed: Vec<bool> = items
@@ -799,8 +814,7 @@ fn branches(ws: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> 
 /// branch of a stack means. Takes precedence over git's reading of the same
 /// name, where a branch is only its tip commit.
 fn branch_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
-    let b = branches(ws)
-        .find(|b| field(b, "cliId") == arg || field(b, "name") == arg)?;
+    let b = branches(ws).find(|b| field(b, "cliId") == arg || field(b, "name") == arg)?;
     let commits = b.get("commits")?.as_array()?;
     fn commit_id(c: &serde_json::Value) -> Option<&str> {
         Some(field(c, "commitId")).filter(|s| !s.is_empty())
@@ -1171,7 +1185,14 @@ fn symbol_identity_key(item: &Item) -> String {
         let mut syms = item.symbols.clone();
         syms.sort();
         syms.iter()
-            .map(|s| format!("{}\u{1f}{}\u{1f}{}", s.name, s.kind, s.scope.as_deref().unwrap_or("")))
+            .map(|s| {
+                format!(
+                    "{}\u{1f}{}\u{1f}{}",
+                    s.name,
+                    s.kind,
+                    s.scope.as_deref().unwrap_or("")
+                )
+            })
             .collect::<Vec<_>>()
             .join("\u{1e}")
     } else {
@@ -1219,7 +1240,10 @@ fn mark_key(rev: &str, item: &Item, sources: &Sources) -> Option<u64> {
 const MARK_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 
 fn now_unix() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn cache_home() -> Option<PathBuf> {
@@ -1275,12 +1299,14 @@ fn save_marks(path: &Path, marks: &HashMap<u64, u64>) {
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
-    let body: HashMap<String, u64> = marks.iter().map(|(k, v)| (format!("{k:016x}"), *v)).collect();
+    let body: HashMap<String, u64> = marks
+        .iter()
+        .map(|(k, v)| (format!("{k:016x}"), *v))
+        .collect();
     if let Ok(text) = serde_json::to_string(&body) {
         let _ = std::fs::write(path, text);
     }
 }
-
 
 // ----------------------------------------------------------------------- keys
 
@@ -2353,10 +2379,17 @@ fn build_help(keys: &Keymap) -> Vec<String> {
     for &(prefix, key, action) in &keys.binds {
         let (category, desc) = action_help(action);
         let label = chord_label(prefix, key);
-        match rows.iter_mut().find(|r| r.category == category && r.desc == desc) {
+        match rows
+            .iter_mut()
+            .find(|r| r.category == category && r.desc == desc)
+        {
             Some(r) if !r.keys.contains(&label) => r.keys.push(label),
             Some(_) => {}
-            None => rows.push(Row { category, desc, keys: vec![label] }),
+            None => rows.push(Row {
+                category,
+                desc,
+                keys: vec![label],
+            }),
         }
     }
     let order = [
@@ -2656,7 +2689,10 @@ fn build_items(out: &Output) -> Vec<Item> {
                     } else {
                         (format!("← {}   {}", loc(&e.from), e.why), e.from.as_str())
                     };
-                    EdgeRef { label, target: item_index.get(target_id).copied() }
+                    EdgeRef {
+                        label,
+                        target: item_index.get(target_id).copied(),
+                    }
                 })
                 .collect();
             Some(Item {
@@ -2693,7 +2729,9 @@ fn build_items(out: &Output) -> Vec<Item> {
 fn refine_items(items: &mut [Item], sources: &Sources) {
     let mut by_path: HashMap<String, Option<ordo::refine::Refiner>> = HashMap::new();
     for it in items.iter_mut() {
-        let Some((ol, nl)) = sources.get(&it.path) else { continue };
+        let Some((ol, nl)) = sources.get(&it.path) else {
+            continue;
+        };
         let refiner = by_path
             .entry(it.path.clone())
             .or_insert_with(|| ordo::refine::Refiner::new(&it.path, ol, nl));
@@ -2958,7 +2996,10 @@ fn move_line(c: Cursor, lines: &[String], delta: isize) -> Cursor {
 }
 
 fn line_start(c: Cursor, _lines: &[String]) -> Cursor {
-    Cursor { line: c.line, col: 0 }
+    Cursor {
+        line: c.line,
+        col: 0,
+    }
 }
 
 fn line_end(c: Cursor, lines: &[String]) -> Cursor {
@@ -3973,7 +4014,11 @@ fn slice_range(spans: Vec<Span<'static>>, start: usize, width: usize) -> Vec<Spa
         let local_start = start.saturating_sub(seg_start).min(len);
         let local_end = end.saturating_sub(seg_start).min(len);
         if local_end > local_start {
-            let mid: String = text.chars().skip(local_start).take(local_end - local_start).collect();
+            let mid: String = text
+                .chars()
+                .skip(local_start)
+                .take(local_end - local_start)
+                .collect();
             out.push(Span::styled(mid, sp.style));
         }
     }
@@ -3994,7 +4039,9 @@ fn overlay_cursor(spans: Vec<Span<'static>>, target: usize) -> Vec<Span<'static>
         ));
         return out;
     }
-    overlay_range(spans, target, target + 1, |s| s.add_modifier(Modifier::REVERSED))
+    overlay_range(spans, target, target + 1, |s| {
+        s.add_modifier(Modifier::REVERSED)
+    })
 }
 
 // The whole new file with the changed hunk highlighted in place: removed lines
@@ -4039,7 +4086,10 @@ fn code_view(
     // fill the rest of the row so the background tint spans the full width
     let pad = |spans: &mut Vec<Span<'static>>, used: usize, bg: Color| {
         if width > used {
-            spans.push(Span::styled(" ".repeat(width - used), Style::default().bg(bg)));
+            spans.push(Span::styled(
+                " ".repeat(width - used),
+                Style::default().bg(bg),
+            ));
         }
     };
     // slice `content` (the code portion only — never the gutter built ahead
@@ -4082,7 +4132,11 @@ fn code_view(
             ];
             spans.extend(visible);
             pad(&mut spans, GUTTER_W + shown, theme.del_bg);
-            spans = emphasize(spans, it.refined.removed.get(k).and_then(|s| s.as_ref()), theme.del_strong_bg);
+            spans = emphasize(
+                spans,
+                it.refined.removed.get(k).and_then(|s| s.as_ref()),
+                theme.del_strong_bg,
+            );
             out.push(Line::from(spans));
         }
     };
@@ -4117,7 +4171,11 @@ fn code_view(
         if added {
             pad(&mut spans, GUTTER_W + shown, bg);
             let k = ln - n0;
-            spans = emphasize(spans, it.refined.added.get(k).and_then(|s| s.as_ref()), theme.add_strong_bg);
+            spans = emphasize(
+                spans,
+                it.refined.added.get(k).and_then(|s| s.as_ref()),
+                theme.add_strong_bg,
+            );
         }
         for (mi, &(ml, s, e)) in matches.iter().enumerate() {
             // only a match that intersects the visible horizontal window can
@@ -4127,10 +4185,16 @@ fn code_view(
                 continue;
             }
             let (ls, le) = (s.saturating_sub(hscroll), (e - hscroll).min(avail));
-            let mbg = if Some(mi) == cur_match { theme.match_cur_bg } else { theme.match_bg };
+            let mbg = if Some(mi) == cur_match {
+                theme.match_cur_bg
+            } else {
+                theme.match_bg
+            };
             spans = overlay_range(spans, GUTTER_W + ls, GUTTER_W + le, |st| st.bg(mbg));
         }
-        if let Some(c) = cursor.filter(|c| c.line == i && c.col >= hscroll && c.col < hscroll + avail) {
+        if let Some(c) =
+            cursor.filter(|c| c.line == i && c.col >= hscroll && c.col < hscroll + avail)
+        {
             spans = overlay_cursor(spans, GUTTER_W + (c.col - hscroll));
         }
         out.push(Line::from(spans));
@@ -4144,12 +4208,17 @@ fn code_view(
 // ---------------------------------------------------------------------- hover
 
 fn node_text(n: Node, src: &str) -> String {
-    src.get(n.start_byte()..n.end_byte()).unwrap_or("").to_string()
+    src.get(n.start_byte()..n.end_byte())
+        .unwrap_or("")
+        .to_string()
 }
 
 // byte offset of a char column within one line — tree-sitter Points are byte-indexed
 fn char_byte(line: &str, col: usize) -> usize {
-    line.char_indices().nth(col).map(|(b, _)| b).unwrap_or(line.len())
+    line.char_indices()
+        .nth(col)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len())
 }
 
 // node kinds counted as a "definition" worth showing, by file extension —
@@ -4168,9 +4237,11 @@ fn def_kinds(path: &str) -> &'static [&'static str] {
             "static_item",
             "type_item",
         ],
-        "js" | "jsx" | "mjs" | "cjs" => {
-            &["function_declaration", "class_declaration", "method_definition"]
-        }
+        "js" | "jsx" | "mjs" | "cjs" => &[
+            "function_declaration",
+            "class_declaration",
+            "method_definition",
+        ],
         "ts" | "tsx" | "mts" | "cts" => &[
             "function_declaration",
             "class_declaration",
@@ -4178,12 +4249,20 @@ fn def_kinds(path: &str) -> &'static [&'static str] {
             "interface_declaration",
             "type_alias_declaration",
         ],
-        "go" => &["function_declaration", "method_declaration", "type_declaration"],
+        "go" => &[
+            "function_declaration",
+            "method_declaration",
+            "type_declaration",
+        ],
         "c" | "h" => &["function_definition", "struct_specifier", "enum_specifier"],
         "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => {
             &["function_definition", "class_specifier", "struct_specifier"]
         }
-        "java" => &["method_declaration", "class_declaration", "interface_declaration"],
+        "java" => &[
+            "method_declaration",
+            "class_declaration",
+            "interface_declaration",
+        ],
         _ => &[],
     }
 }
@@ -4230,7 +4309,10 @@ fn signature(n: Node, src: &str) -> String {
         .child_by_field_name("body")
         .map(|b| b.start_byte())
         .unwrap_or(n.end_byte());
-    src.get(n.start_byte()..end).unwrap_or("").trim_end().to_string()
+    src.get(n.start_byte()..end)
+        .unwrap_or("")
+        .trim_end()
+        .to_string()
 }
 
 fn python_docstring(n: Node, src: &str) -> Option<String> {
@@ -4425,7 +4507,11 @@ fn hover(app: &mut App) {
             lines.push(String::new());
             lines.extend(doc.lines().map(str::to_string));
         }
-        let id = (def.kind().to_string(), def.start_position().row, parsed.src.clone());
+        let id = (
+            def.kind().to_string(),
+            def.start_position().row,
+            parsed.src.clone(),
+        );
         (lines, Some(id))
     } else if let Some(owner) = parameter_owner(node, kinds, &parsed.src) {
         // a parameter has no definition to find, and saying so as "not defined
@@ -4511,7 +4597,13 @@ fn bound_later(mut shas: Vec<String>, window: usize) -> Vec<String> {
 /// `content`. Runs the engine as though the whole file were freshly added, so
 /// every definition in it — not just ones inside a hunk that happens to be
 /// selected — shows up in some hunk's `symbols`, keyed to its own row.
-fn symbol_identity(path: &str, content: &str, name: &str, kind: &str, row: usize) -> Option<Symbol> {
+fn symbol_identity(
+    path: &str,
+    content: &str,
+    name: &str,
+    kind: &str,
+    row: usize,
+) -> Option<Symbol> {
     let out = ordo::run(Input {
         changes: vec![Change {
             path: path.to_string(),
@@ -4641,7 +4733,12 @@ fn history_lines(
     let Some(target) = symbol_identity(path, content, name, kind, row) else {
         return vec!["history: could not resolve this symbol's identity".to_string()];
     };
-    let key = (path.to_string(), target.name.clone(), target.kind.clone(), target.scope.clone());
+    let key = (
+        path.to_string(),
+        target.name.clone(),
+        target.kind.clone(),
+        target.scope.clone(),
+    );
     if let Some(cached) = app.history_cache.get(&key) {
         return cached.clone();
     }
@@ -4654,7 +4751,9 @@ fn history_lines(
 
 // inverse of `char_byte`: the char index a byte offset falls at within one line
 fn byte_to_char_col(line: &str, byte_col: usize) -> usize {
-    line.char_indices().take_while(|(b, _)| *b < byte_col).count()
+    line.char_indices()
+        .take_while(|(b, _)| *b < byte_col)
+        .count()
 }
 
 /// Every identifier node in the tree whose text equals `name`, as document-order
@@ -4662,7 +4761,12 @@ fn byte_to_char_col(line: &str, byte_col: usize) -> usize {
 /// occurs as a substring of a longer identifier (`may_refine` inside
 /// `may_refine_camber_span`) is never counted, because node text equality is
 /// exact, not a substring test.
-fn symbol_matches(root: Node, name: &str, src: &str, lines: &[String]) -> Vec<(usize, usize, usize)> {
+fn symbol_matches(
+    root: Node,
+    name: &str,
+    src: &str,
+    lines: &[String],
+) -> Vec<(usize, usize, usize)> {
     let mut out = vec![];
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -4706,7 +4810,11 @@ fn text_matches(lines: &[String], pattern: &str) -> Vec<(usize, usize, usize)> {
 
 // first match at/after (inclusive) or strictly after (!inclusive) `cursor`,
 // wrapping to the first match when nothing qualifies
-fn seek_forward(matches: &[(usize, usize, usize)], cursor: Cursor, inclusive: bool) -> Option<usize> {
+fn seek_forward(
+    matches: &[(usize, usize, usize)],
+    cursor: Cursor,
+    inclusive: bool,
+) -> Option<usize> {
     let after = |l: usize, s: usize| {
         if inclusive {
             (l, s) >= (cursor.line, cursor.col)
@@ -4721,7 +4829,11 @@ fn seek_forward(matches: &[(usize, usize, usize)], cursor: Cursor, inclusive: bo
 }
 
 // mirror of `seek_forward`, wrapping to the last match when nothing qualifies
-fn seek_backward(matches: &[(usize, usize, usize)], cursor: Cursor, inclusive: bool) -> Option<usize> {
+fn seek_backward(
+    matches: &[(usize, usize, usize)],
+    cursor: Cursor,
+    inclusive: bool,
+) -> Option<usize> {
     let before = |l: usize, s: usize| {
         if inclusive {
             (l, s) <= (cursor.line, cursor.col)
@@ -4847,7 +4959,11 @@ fn resolve_editor() -> Vec<String> {
     let raw = std::env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .unwrap_or_else(|| "vi".to_string());
     split_command(&raw)
 }
@@ -5238,7 +5354,9 @@ fn run(
                         why_height: 10,
                         code_width: 10,
                         focus: Pane::List,
-                        keys: keys.take().expect("keys is set again before every reload back into Loading"),
+                        keys: keys
+                            .take()
+                            .expect("keys is set again before every reload back into Loading"),
                         pending: None,
                         sources,
                         highlights,
@@ -5268,8 +5386,7 @@ fn run(
                     // the worker dropped its sender without a Done/Empty —
                     // only possible if it panicked; abort rather than spin
                     if matches!(state, State::Loading(_)) {
-                        post_msg =
-                            Some("ordo-tui: loading failed unexpectedly".to_string());
+                        post_msg = Some("ordo-tui: loading failed unexpectedly".to_string());
                         break 'outer Ok(());
                     }
                     break;
@@ -5293,8 +5410,10 @@ fn run(
             Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match &mut state {
                 State::Loading(_) => {
                     let key = norm(k.code, k.modifiers);
-                    if let Resolve::Act(Action::Quit) =
-                        keys.as_ref().expect("keys not yet taken while Loading").resolve(None, key)
+                    if let Resolve::Act(Action::Quit) = keys
+                        .as_ref()
+                        .expect("keys not yet taken while Loading")
+                        .resolve(None, key)
                     {
                         break 'outer Ok(());
                     }
@@ -5348,7 +5467,10 @@ fn run(
                                 // resets along with everything else.
                                 let (carried_keys, carried_theme) = carry_across_reload(app);
                                 review_sha = review_commit_sha(&target);
-                                uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
+                                uncommitted = matches!(
+                                    target,
+                                    Target::Uncommitted | Target::WorktreeRange(_)
+                                );
                                 rev = new_rev.clone();
                                 keys = Some(carried_keys);
                                 theme = carried_theme;
@@ -5553,7 +5675,9 @@ fn persist_mark(app: &mut App, i: usize) {
     } else {
         app.marks.remove(&key);
     }
-    let Some(path) = app.marks_path.clone() else { return };
+    let Some(path) = app.marks_path.clone() else {
+        return;
+    };
     prune_marks(&mut app.marks, now_unix());
     save_marks(&path, &app.marks);
 }
@@ -5567,7 +5691,12 @@ fn prose(s: impl Into<String>) -> Line<'static> {
 fn popup_width(lines: &[Line<'static>]) -> usize {
     lines
         .iter()
-        .map(|l| l.spans.iter().map(|s| s.content.chars().count()).sum::<usize>())
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
+        })
         .max()
         .unwrap_or(0)
 }
@@ -5666,9 +5795,9 @@ fn select(app: &mut App, to: usize) {
     app.why_sel = 0;
     app.cursor = cursor_for(&app.items[to], &app.sources);
     app.popup = None; // a new hunk invalidates whatever the popup was showing
-    // match positions are per-file line/col — a different hunk (possibly a
-    // different file entirely) invalidates them, so re-anchor by dropping the
-    // search rather than trying to remap it
+                      // match positions are per-file line/col — a different hunk (possibly a
+                      // different file entirely) invalidates them, so re-anchor by dropping the
+                      // search rather than trying to remap it
     app.search = None;
 }
 
@@ -5815,7 +5944,9 @@ fn excerpt(
 }
 
 fn preview_edge(app: &mut App) {
-    let Some(target) = edge_at_cursor(app) else { return };
+    let Some(target) = edge_at_cursor(app) else {
+        return;
+    };
     let Some(idx) = target else {
         app.popup = Some(Popup::new(
             "dep",
@@ -5857,7 +5988,9 @@ fn preview_edge(app: &mut App) {
 /// when `why_sel` isn't on a dep line, or its target isn't part of this
 /// review; `preview_edge` (`K`/`F12`) is what explains why in that case.
 fn jump_to_edge(app: &mut App) {
-    let Some(Some(idx)) = edge_at_cursor(app) else { return };
+    let Some(Some(idx)) = edge_at_cursor(app) else {
+        return;
+    };
     stack_push(&mut app.jumps, (app.sel, app.cursor));
     select(app, idx);
     app.focus = Pane::Code;
@@ -6094,8 +6227,8 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         let rect = popup_rect(rhs[0], popup.lines.len());
         f.render_widget(Clear, rect);
         let text: Vec<Line> = popup.lines.clone();
-        let clipped = popup_width(&popup.lines) > rect.width.saturating_sub(2) as usize
-            || popup.hscroll > 0;
+        let clipped =
+            popup_width(&popup.lines) > rect.width.saturating_sub(2) as usize || popup.hscroll > 0;
         let block = Block::bordered()
             .title(format!(
                 " {}{} ",
@@ -6293,7 +6426,10 @@ fn build_audit(
         "hidden in the view".to_string(),
     ];
     let row = |n: usize, what: &str| format!("  {n:>4}  {what}");
-    out.push(row(hidden.noise, "generated/formatting noise (:all shows them)"));
+    out.push(row(
+        hidden.noise,
+        "generated/formatting noise (:all shows them)",
+    ));
     out.push(row(
         ledger.hunks_import,
         "of which import hunks — noise, but shown by default where the diff put them",
@@ -6395,7 +6531,11 @@ fn complete(input: &str, candidates: &[String]) -> Vec<String> {
     if !prefix.is_empty() {
         return prefix;
     }
-    candidates.iter().filter(|c| c.to_lowercase().contains(&needle)).cloned().collect()
+    candidates
+        .iter()
+        .filter(|c| c.to_lowercase().contains(&needle))
+        .cloned()
+        .collect()
 }
 
 /// The argument candidates for one command name — empty for a command that
@@ -6471,7 +6611,11 @@ fn dir_prefix(path: &str) -> Option<&str> {
 }
 
 fn open_command_bar(app: &mut App, text: String) {
-    app.command = Some(CommandBar { text, candidates: vec![], selected: None });
+    app.command = Some(CommandBar {
+        text,
+        candidates: vec![],
+        selected: None,
+    });
     recompute_candidates(app);
 }
 
@@ -6482,7 +6626,12 @@ fn open_command_bar(app: &mut App, text: String) {
 fn rev_completions() -> Vec<String> {
     let mut v = vec!["zz".to_string(), "HEAD".to_string()];
     let out = git(&["for-each-ref", "--format=%(refname:short)"]);
-    v.extend(out.lines().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string));
+    v.extend(
+        out.lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    );
     v
 }
 
@@ -6510,7 +6659,9 @@ fn recompute_candidates(app: &mut App) {
 }
 
 fn cycle_candidate(app: &mut App, dir: isize) {
-    let Some(bar) = app.command.as_mut() else { return };
+    let Some(bar) = app.command.as_mut() else {
+        return;
+    };
     if bar.candidates.is_empty() {
         return;
     }
@@ -6634,7 +6785,12 @@ fn changes_from_sources(sources: &Sources) -> Vec<Change> {
         .into_iter()
         .map(|path| {
             let (old, new) = &sources[path];
-            Change { path: path.clone(), old: Some(old.join("\n")), new: Some(new.join("\n")), diff: None }
+            Change {
+                path: path.clone(),
+                old: Some(old.join("\n")),
+                new: Some(new.join("\n")),
+                diff: None,
+            }
         })
         .collect()
 }
@@ -6652,8 +6808,9 @@ fn changes_from_sources(sources: &Sources) -> Vec<Change> {
 /// filters) never leaves `app.sel`/`app.view` pointing past a shrunk
 /// `app.items`.
 fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
-    let strategy = parse_strategy(name)
-        .ok_or_else(|| format!("unknown strategy '{name}' (want: comprehension, defs-first, file)"))?;
+    let strategy = parse_strategy(name).ok_or_else(|| {
+        format!("unknown strategy '{name}' (want: comprehension, defs-first, file)")
+    })?;
     let input = Input {
         changes: changes_from_sources(&app.sources),
         options: Options {
@@ -6721,7 +6878,11 @@ fn run_goto(app: &mut App, path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("usage: :goto <path>".to_string());
     }
-    let target = app.view.iter().copied().find(|&i| app.items[i].path == path);
+    let target = app
+        .view
+        .iter()
+        .copied()
+        .find(|&i| app.items[i].path == path);
     let Some(idx) = target else {
         return Err(format!(
             "no visible hunk for path '{path}' (clear filters with :filter, :all, :only-comments)"
@@ -6771,11 +6932,21 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
             Ok(CommandOutcome::None)
         }
         "only-comments" => {
-            set_filters(app, !app.comments_only, app.show_all, app.path_filter.clone())?;
+            set_filters(
+                app,
+                !app.comments_only,
+                app.show_all,
+                app.path_filter.clone(),
+            )?;
             Ok(CommandOutcome::None)
         }
         "all" => {
-            set_filters(app, app.comments_only, !app.show_all, app.path_filter.clone())?;
+            set_filters(
+                app,
+                app.comments_only,
+                !app.show_all,
+                app.path_filter.clone(),
+            )?;
             Ok(CommandOutcome::None)
         }
         "filter" => {
@@ -6992,7 +7163,10 @@ mod tests {
         let c = Cursor { line: 0, col: 0 };
         assert_eq!(move_col(c, &ls, -1), Cursor { line: 0, col: 0 });
         assert_eq!(move_col(c, &ls, 1), Cursor { line: 0, col: 1 });
-        assert_eq!(move_col(Cursor { line: 0, col: 2 }, &ls, 5), Cursor { line: 0, col: 2 });
+        assert_eq!(
+            move_col(Cursor { line: 0, col: 2 }, &ls, 5),
+            Cursor { line: 0, col: 2 }
+        );
     }
 
     #[test]
@@ -7015,8 +7189,14 @@ mod tests {
     #[test]
     fn clamp_cursor_handles_shrunk_or_empty_files() {
         let ls = lines(&["ab"]);
-        assert_eq!(clamp_cursor(Cursor { line: 5, col: 5 }, &ls), Cursor { line: 0, col: 1 });
-        assert_eq!(clamp_cursor(Cursor { line: 0, col: 0 }, &[]), Cursor { line: 0, col: 0 });
+        assert_eq!(
+            clamp_cursor(Cursor { line: 5, col: 5 }, &ls),
+            Cursor { line: 0, col: 1 }
+        );
+        assert_eq!(
+            clamp_cursor(Cursor { line: 0, col: 0 }, &[]),
+            Cursor { line: 0, col: 0 }
+        );
     }
 
     // ---- word motion ----
@@ -7074,9 +7254,18 @@ mod tests {
     #[test]
     fn para_next_prev_find_blank_lines() {
         let ls = lines(&["a", "b", "", "c", "d"]);
-        assert_eq!(para_next(Cursor { line: 0, col: 0 }, &ls), Cursor { line: 2, col: 0 });
-        assert_eq!(para_prev(Cursor { line: 4, col: 0 }, &ls), Cursor { line: 2, col: 0 });
-        assert_eq!(para_prev(Cursor { line: 0, col: 0 }, &ls), Cursor { line: 0, col: 0 });
+        assert_eq!(
+            para_next(Cursor { line: 0, col: 0 }, &ls),
+            Cursor { line: 2, col: 0 }
+        );
+        assert_eq!(
+            para_prev(Cursor { line: 4, col: 0 }, &ls),
+            Cursor { line: 2, col: 0 }
+        );
+        assert_eq!(
+            para_prev(Cursor { line: 0, col: 0 }, &ls),
+            Cursor { line: 0, col: 0 }
+        );
     }
 
     // ---- scroll-follow clamping ----
@@ -7126,7 +7315,10 @@ mod tests {
         let def = find_definition(root, kinds, &name, src).unwrap();
         assert_eq!(def.kind(), "function_item");
         assert_eq!(signature(def, src), "fn add(a: i32, b: i32) -> i32");
-        assert_eq!(doc_for("f.rs", def, src).as_deref(), Some("/// adds two numbers"));
+        assert_eq!(
+            doc_for("f.rs", def, src).as_deref(),
+            Some("/// adds two numbers")
+        );
     }
 
     #[test]
@@ -7152,7 +7344,10 @@ mod tests {
         let def = find_definition(root, def_kinds("f.py"), "greet", src).unwrap();
         assert_eq!(def.kind(), "function_definition");
         assert_eq!(signature(def, src), "def greet(name):");
-        assert_eq!(doc_for("f.py", def, src).as_deref(), Some("\"\"\"Say hello.\"\"\""));
+        assert_eq!(
+            doc_for("f.py", def, src).as_deref(),
+            Some("\"\"\"Say hello.\"\"\"")
+        );
     }
 
     #[test]
@@ -7292,7 +7487,10 @@ mod tests {
 
     #[test]
     fn qualified_name_joins_scope_and_name() {
-        assert_eq!(qualified_name(&sym("run", "function_definition", None)), "run");
+        assert_eq!(
+            qualified_name(&sym("run", "function_definition", None)),
+            "run"
+        );
         assert_eq!(
             qualified_name(&sym("run", "function_definition", Some("A"))),
             "A.run"
@@ -7301,7 +7499,10 @@ mod tests {
 
     #[test]
     fn bound_earlier_drops_current_and_orders_oldest_of_window_first() {
-        let shas: Vec<String> = ["current", "a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let shas: Vec<String> = ["current", "a", "b", "c"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let got = bound_earlier(shas, "current", 2);
         assert_eq!(got, vec!["b".to_string(), "a".to_string()]); // nearest 2, oldest first
     }
@@ -7320,7 +7521,10 @@ mod tests {
         // rev-list's own order: HEAD first, nearest descendant of rev last
         let shas: Vec<String> = ["head", "b", "a"].iter().map(|s| s.to_string()).collect();
         let got = bound_later(shas, 10);
-        assert_eq!(got, vec!["a".to_string(), "b".to_string(), "head".to_string()]);
+        assert_eq!(
+            got,
+            vec!["a".to_string(), "b".to_string(), "head".to_string()]
+        );
 
         let many: Vec<String> = (0..20).map(|i| format!("c{i}")).collect(); // c19 nearest to rev
         let got = bound_later(many, 10);
@@ -7371,13 +7575,22 @@ mod tests {
     fn split_command_separates_program_and_flags() {
         assert_eq!(split_command("code --wait"), vec!["code", "--wait"]);
         assert_eq!(split_command("vim"), vec!["vim"]);
-        assert_eq!(split_command("emacsclient  -nw  -a ''"), vec!["emacsclient", "-nw", "-a", "''"]);
+        assert_eq!(
+            split_command("emacsclient  -nw  -a ''"),
+            vec!["emacsclient", "-nw", "-a", "''"]
+        );
     }
 
     #[test]
     fn editor_args_covers_each_line_argument_shape() {
-        assert_eq!(editor_args("vim", "path", 120), vec!["+120".to_string(), "path".to_string()]);
-        assert_eq!(editor_args("nvim", "path", 120), vec!["+120".to_string(), "path".to_string()]);
+        assert_eq!(
+            editor_args("vim", "path", 120),
+            vec!["+120".to_string(), "path".to_string()]
+        );
+        assert_eq!(
+            editor_args("nvim", "path", 120),
+            vec!["+120".to_string(), "path".to_string()]
+        );
         assert_eq!(editor_args("hx", "path", 120), vec!["path:120".to_string()]);
         assert_eq!(
             editor_args("code", "path", 120),
@@ -7393,7 +7606,14 @@ mod tests {
         let spec = split_command("code --wait");
         let (program, args) = build_command(&spec, "path", 120).unwrap();
         assert_eq!(program, "code");
-        assert_eq!(args, vec!["--wait".to_string(), "-g".to_string(), "path:120".to_string()]);
+        assert_eq!(
+            args,
+            vec![
+                "--wait".to_string(),
+                "-g".to_string(),
+                "path:120".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -7441,7 +7661,10 @@ mod tests {
         // that binding ever changes, this row (built from the table, not
         // hand-copied) changes with it, and this assertion breaks.
         let (_, desc) = action_help(Action::Hover);
-        let row = help.iter().find(|l| l.contains(desc)).expect("hover row present");
+        let row = help
+            .iter()
+            .find(|l| l.contains(desc))
+            .expect("hover row present");
         assert!(row.contains('K'), "expected the hover row to list K: {row}");
     }
 
@@ -7451,8 +7674,14 @@ mod tests {
         let help = build_help(&km);
         // `Next` is bound to both `j` and `Down` — one row, both keys.
         let (_, desc) = action_help(Action::Next);
-        let row = help.iter().find(|l| l.contains(desc)).expect("next row present");
-        assert!(row.contains('j') && row.contains("Down"), "expected both keys on one row: {row}");
+        let row = help
+            .iter()
+            .find(|l| l.contains(desc))
+            .expect("next row present");
+        assert!(
+            row.contains('j') && row.contains("Down"),
+            "expected both keys on one row: {row}"
+        );
     }
 
     #[test]
@@ -7470,13 +7699,20 @@ mod tests {
         // no grammar: falls back to raw text, still gutter-numbered
         let plainly = excerpt(&lines, None, 2, 3, &Theme::terminal("dark", false));
         assert_eq!(plainly.len(), 2);
-        let first: String = plainly[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let first: String = plainly[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert_eq!(first, "    2 let x = 1;");
 
         // with highlights: the segments are used, each carrying its own colour
         let hl: Vec<LineSpans> = vec![
             vec![],
-            vec![("let ".to_string(), Color::Magenta), ("x = 1;".to_string(), Color::Reset)],
+            vec![
+                ("let ".to_string(), Color::Magenta),
+                ("x = 1;".to_string(), Color::Reset),
+            ],
             vec![],
         ];
         let lit = excerpt(&lines, Some(&hl), 2, 2, &Theme::terminal("dark", false));
@@ -7722,7 +7958,10 @@ mod tests {
     fn complete_falls_back_to_substring_when_no_prefix_matches() {
         let candidates = lines(&["comprehension", "defs-first", "file"]);
         // "first" isn't a prefix of anything, but is a substring of "defs-first"
-        assert_eq!(complete("first", &candidates), vec!["defs-first".to_string()]);
+        assert_eq!(
+            complete("first", &candidates),
+            vec!["defs-first".to_string()]
+        );
     }
 
     #[test]
@@ -7760,21 +7999,37 @@ mod tests {
     #[test]
     fn command_completions_lists_strategy_names() {
         let got = command_completions("strategy ", &[], &[], &[]);
-        assert_eq!(got, vec!["comprehension".to_string(), "defs-first".to_string(), "file".to_string()]);
+        assert_eq!(
+            got,
+            vec![
+                "comprehension".to_string(),
+                "defs-first".to_string(),
+                "file".to_string()
+            ]
+        );
     }
 
     #[test]
     fn command_completions_lists_goto_paths_and_filter_dirs_from_their_own_pools() {
         let goto_paths = lines(&["src/a.rs", "src/b.rs"]);
         let filter_dirs = lines(&["src", "tests"]);
-        assert_eq!(command_completions("goto ", &goto_paths, &filter_dirs, &[]), goto_paths);
-        assert_eq!(command_completions("filter ", &goto_paths, &filter_dirs, &[]), filter_dirs);
+        assert_eq!(
+            command_completions("goto ", &goto_paths, &filter_dirs, &[]),
+            goto_paths
+        );
+        assert_eq!(
+            command_completions("filter ", &goto_paths, &filter_dirs, &[]),
+            filter_dirs
+        );
     }
 
     #[test]
     fn command_completions_narrows_the_argument_by_its_own_partial_word() {
         let goto_paths = lines(&["src/a.rs", "src/b.rs"]);
-        assert_eq!(command_completions("goto src/b", &goto_paths, &[], &[]), vec!["src/b.rs".to_string()]);
+        assert_eq!(
+            command_completions("goto src/b", &goto_paths, &[], &[]),
+            vec!["src/b.rs".to_string()]
+        );
     }
 
     #[test]
@@ -7786,7 +8041,10 @@ mod tests {
     #[test]
     fn apply_completion_replaces_the_word_being_completed_and_adds_a_trailing_space() {
         assert_eq!(apply_completion("str", "strategy"), "strategy ");
-        assert_eq!(apply_completion("strategy defs", "defs-first"), "strategy defs-first ");
+        assert_eq!(
+            apply_completion("strategy defs", "defs-first"),
+            "strategy defs-first "
+        );
     }
 
     #[test]
@@ -7805,8 +8063,14 @@ mod tests {
         // if `strategy`'s entry in `COMMANDS` ever changes, this row (built
         // from the table, not hand-copied) changes with it, and this breaks
         let strategy = COMMANDS.iter().find(|c| c.name == "strategy").unwrap();
-        let row = help.iter().find(|l| l.contains(strategy.help)).expect("strategy row present");
-        assert!(row.contains(":strategy"), "expected the command name in the row: {row}");
+        let row = help
+            .iter()
+            .find(|l| l.contains(strategy.help))
+            .expect("strategy row present");
+        assert!(
+            row.contains(":strategy"),
+            "expected the command name in the row: {row}"
+        );
     }
 
     #[test]
@@ -7831,7 +8095,15 @@ mod tests {
 
         let h = hidden_breakdown(&items, false, false, Some(&globs));
         // an item hidden twice is charged once, to the first reason
-        assert_eq!(h, Hidden { comment: 0, noise: 2, glob: 1, unaccounted: 0 });
+        assert_eq!(
+            h,
+            Hidden {
+                comment: 0,
+                noise: 2,
+                glob: 1,
+                unaccounted: 0
+            }
+        );
         assert_eq!(
             compute_view(&items, false, false, Some(&globs)).len() + h.noise + h.glob,
             items.len()
@@ -7847,7 +8119,15 @@ mod tests {
         let items = vec![a, b];
 
         let h = hidden_breakdown(&items, true, false, None);
-        assert_eq!(h, Hidden { comment: 1, noise: 0, glob: 0, unaccounted: 0 });
+        assert_eq!(
+            h,
+            Hidden {
+                comment: 1,
+                noise: 0,
+                glob: 0,
+                unaccounted: 0
+            }
+        );
     }
 
     #[test]
@@ -7862,15 +8142,31 @@ mod tests {
             hunks_import: 4,
             hunks_non_comment: 0,
         };
-        let clean = Hidden { comment: 0, noise: 1, glob: 0, unaccounted: 0 };
+        let clean = Hidden {
+            comment: 0,
+            noise: 1,
+            glob: 0,
+            unaccounted: 0,
+        };
         let text = build_audit(&items, 2, &clean, &ledger, None).join("\n");
         assert!(text.contains("2 of 3 hunks shown"), "{text}");
         assert!(text.contains("   4  of which import hunks"), "{text}");
         assert!(text.contains("files: 9 changed"), "{text}");
-        assert!(text.contains("never fetched: excluded by a launch-time glob"), "{text}");
-        assert!(text.contains("every hidden hunk is accounted for"), "{text}");
+        assert!(
+            text.contains("never fetched: excluded by a launch-time glob"),
+            "{text}"
+        );
+        assert!(
+            text.contains("every hidden hunk is accounted for"),
+            "{text}"
+        );
 
-        let leak = Hidden { comment: 0, noise: 0, glob: 0, unaccounted: 1 };
+        let leak = Hidden {
+            comment: 0,
+            noise: 0,
+            glob: 0,
+            unaccounted: 1,
+        };
         let text = build_audit(&items, 2, &leak, &ledger, Some("src/*")).join("\n");
         assert!(text.contains("1 hidden hunk unaccounted for"), "{text}");
         assert!(text.contains("outside the path filter 'src/*'"), "{text}");
@@ -7900,7 +8196,12 @@ mod tests {
         app.view = vec![0, 1, 2];
         app.reviewed = vec![false, false, false];
         app.sel = 1; // b.rs — about to be filtered out
-        app.popup = Some(Popup { title: "x".to_string(), lines: vec![], scroll: 0, hscroll: 0 });
+        app.popup = Some(Popup {
+            title: "x".to_string(),
+            lines: vec![],
+            scroll: 0,
+            hscroll: 0,
+        });
 
         let globs = build_globs(&["a.rs".to_string()]).unwrap();
         set_filters(&mut app, false, true, Some(("a.rs".to_string(), globs))).unwrap();
@@ -8073,7 +8374,17 @@ mod tests {
         );
 
         let theme = theme("dark").unwrap();
-        let (rows, _) = code_view(it, &sources, &HashMap::new(), 60, 0, None, &[], None, &theme);
+        let (rows, _) = code_view(
+            it,
+            &sources,
+            &HashMap::new(),
+            60,
+            0,
+            None,
+            &[],
+            None,
+            &theme,
+        );
         // the added row is the one carrying the add tint (the removed row
         // comes first, on the del tint)
         let added = rows.last().expect("an added row");
@@ -8097,18 +8408,33 @@ mod tests {
         let mut sources: Sources = HashMap::new();
         sources.insert(
             "f.rs".to_string(),
-            (vec!["use std::io;".to_string()], vec!["fn totally(different: X) {}".to_string()]),
+            (
+                vec!["use std::io;".to_string()],
+                vec!["fn totally(different: X) {}".to_string()],
+            ),
         );
         let mut items = vec![it];
         refine_items(&mut items, &sources);
         assert_eq!(items[0].refined.added[0], None);
 
         let theme = theme("dark").unwrap();
-        let (rows, _) =
-            code_view(&items[0], &sources, &HashMap::new(), 60, 0, None, &[], None, &theme);
+        let (rows, _) = code_view(
+            &items[0],
+            &sources,
+            &HashMap::new(),
+            60,
+            0,
+            None,
+            &[],
+            None,
+            &theme,
+        );
         let added = rows.last().unwrap();
         assert!(
-            added.spans.iter().all(|s| s.style.bg != Some(theme.add_strong_bg)),
+            added
+                .spans
+                .iter()
+                .all(|s| s.style.bg != Some(theme.add_strong_bg)),
             "an unpaired line must not be partially tinted"
         );
     }
@@ -8156,8 +8482,14 @@ mod tests {
         let out = Output {
             schema: 1,
             order: vec![
-                ordo::model::OrderItem { path: "a.rs".to_string(), hunk: "h1".to_string() },
-                ordo::model::OrderItem { path: "a.rs".to_string(), hunk: "h2".to_string() },
+                ordo::model::OrderItem {
+                    path: "a.rs".to_string(),
+                    hunk: "h1".to_string(),
+                },
+                ordo::model::OrderItem {
+                    path: "a.rs".to_string(),
+                    hunk: "h2".to_string(),
+                },
             ],
             files: vec![test_file_out("a.rs", vec![id_hunk("h1"), id_hunk("h2")])],
             groups: vec![],
@@ -8219,8 +8551,14 @@ mod tests {
     fn stack_pop_valid_skips_an_entry_whose_index_no_longer_resolves() {
         // "99" is stale (out of range for a 5-item review) and sits on top —
         // it must be skipped, not returned, and the stack must not panic.
-        let mut stack = vec![(0, Cursor { line: 1, col: 1 }), (99, Cursor { line: 0, col: 0 })];
-        assert_eq!(stack_pop_valid(&mut stack, 5), Some((0, Cursor { line: 1, col: 1 })));
+        let mut stack = vec![
+            (0, Cursor { line: 1, col: 1 }),
+            (99, Cursor { line: 0, col: 0 }),
+        ];
+        assert_eq!(
+            stack_pop_valid(&mut stack, 5),
+            Some((0, Cursor { line: 1, col: 1 }))
+        );
         assert!(stack.is_empty());
     }
 
@@ -8229,11 +8567,18 @@ mod tests {
     #[test]
     fn why_rows_marks_edge_lines_and_carries_their_target() {
         let mut it = test_item("a.rs");
-        it.edges = vec![edge("→ a.rs:L10   uses it", Some(3)), edge("→ b.rs:L1   calls it", None)];
+        it.edges = vec![
+            edge("→ a.rs:L10   uses it", Some(3)),
+            edge("→ b.rs:L1   calls it", None),
+        ];
         // target 3 must be in `view` to resolve — same as being part of the
         // review at all; a 4-item view (0..=3) covers it here
         let rows = why_rows(&it, &[0, 1, 2, 3], &Theme::terminal("dark", false));
-        let edges: Vec<&WhyKind> = rows.iter().map(|r| &r.kind).filter(|k| matches!(k, WhyKind::Edge(_))).collect();
+        let edges: Vec<&WhyKind> = rows
+            .iter()
+            .map(|r| &r.kind)
+            .filter(|k| matches!(k, WhyKind::Edge(_)))
+            .collect();
         assert!(matches!(edges[0], WhyKind::Edge(Some(3))));
         assert!(matches!(edges[1], WhyKind::Edge(None)));
     }
@@ -8244,7 +8589,11 @@ mod tests {
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
         // target 3 exists (it's a valid item index) but isn't in `view`
         let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false));
-        let edges: Vec<&WhyKind> = rows.iter().map(|r| &r.kind).filter(|k| matches!(k, WhyKind::Edge(_))).collect();
+        let edges: Vec<&WhyKind> = rows
+            .iter()
+            .map(|r| &r.kind)
+            .filter(|k| matches!(k, WhyKind::Edge(_)))
+            .collect();
         assert!(matches!(edges[0], WhyKind::Edge(None)));
     }
 
@@ -8318,7 +8667,13 @@ mod tests {
         assert_eq!(fnv1a(b"hello"), 0xa430d84680aabd0b);
     }
 
-    fn item_with(path: &str, old: [usize; 2], new: [usize; 2], symbols: Vec<Symbol>, enclosing: Option<&str>) -> Item {
+    fn item_with(
+        path: &str,
+        old: [usize; 2],
+        new: [usize; 2],
+        symbols: Vec<Symbol>,
+        enclosing: Option<&str>,
+    ) -> Item {
         let mut it = test_item(path);
         it.old_range = old;
         it.new_range = new;
@@ -8335,12 +8690,21 @@ mod tests {
 
     #[test]
     fn mark_key_changes_when_hunk_content_changes() {
-        let it_a = item_with("f.rs", [1, 1], [1, 1], vec![sym("run", "function_item", None)], None);
+        let it_a = item_with(
+            "f.rs",
+            [1, 1],
+            [1, 1],
+            vec![sym("run", "function_item", None)],
+            None,
+        );
         let src_a = sources_for("f.rs", &["fn run() {}"], &["fn run() { 1 }"]);
         let src_b = sources_for("f.rs", &["fn run() {}"], &["fn run() { 2 }"]);
         let ka = mark_key("HEAD", &it_a, &src_a).unwrap();
         let kb = mark_key("HEAD", &it_a, &src_b).unwrap();
-        assert_ne!(ka, kb, "a body edit must drop the mark, never carry it over silently");
+        assert_ne!(
+            ka, kb,
+            "a body edit must drop the mark, never carry it over silently"
+        );
     }
 
     #[test]
@@ -8358,8 +8722,14 @@ mod tests {
 
     #[test]
     fn mark_key_is_unchanged_by_reordering_symbols() {
-        let syms_a = vec![sym("a", "function_item", None), sym("b", "function_item", None)];
-        let syms_b = vec![sym("b", "function_item", None), sym("a", "function_item", None)];
+        let syms_a = vec![
+            sym("a", "function_item", None),
+            sym("b", "function_item", None),
+        ];
+        let syms_b = vec![
+            sym("b", "function_item", None),
+            sym("a", "function_item", None),
+        ];
         let it_a = item_with("f.rs", [1, 1], [1, 2], syms_a, None);
         let it_b = item_with("f.rs", [1, 1], [1, 2], syms_b, None);
         let src = sources_for("f.rs", &["old"], &["fn a() {}", "fn b() {}"]);
@@ -8386,17 +8756,32 @@ mod tests {
 
     #[test]
     fn mark_key_differs_across_rev_and_path() {
-        let it = item_with("f.rs", [1, 1], [1, 1], vec![sym("run", "function_item", None)], None);
+        let it = item_with(
+            "f.rs",
+            [1, 1],
+            [1, 1],
+            vec![sym("run", "function_item", None)],
+            None,
+        );
         let src = sources_for("f.rs", &["old"], &["new"]);
         let k1 = mark_key("HEAD", &it, &src).unwrap();
         let k2 = mark_key("abc123", &it, &src).unwrap();
         assert_ne!(k1, k2, "different revs must not collide");
 
-        let it2 = item_with("g.rs", [1, 1], [1, 1], vec![sym("run", "function_item", None)], None);
+        let it2 = item_with(
+            "g.rs",
+            [1, 1],
+            [1, 1],
+            vec![sym("run", "function_item", None)],
+            None,
+        );
         let mut src2 = src.clone();
         src2.insert("g.rs".to_string(), src2["f.rs"].clone());
         let k3 = mark_key("HEAD", &it2, &src2).unwrap();
-        assert_ne!(k1, k3, "different paths must not collide even with identical content/symbol");
+        assert_ne!(
+            k1, k3,
+            "different paths must not collide even with identical content/symbol"
+        );
     }
 
     #[test]
@@ -8430,7 +8815,8 @@ mod tests {
 
     #[test]
     fn save_marks_then_load_marks_round_trips() {
-        let dir = std::env::temp_dir().join(format!("ordo-tui-test-roundtrip-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ordo-tui-test-roundtrip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("marks.json");
         let mut marks: HashMap<u64, u64> = HashMap::new();
@@ -8447,7 +8833,10 @@ mod tests {
         let obj = value.as_object().unwrap();
         assert_eq!(obj.len(), 2);
         for (k, v) in obj {
-            assert!(u64::from_str_radix(k, 16).is_ok(), "key must be plain hex: {k}");
+            assert!(
+                u64::from_str_radix(k, 16).is_ok(),
+                "key must be plain hex: {k}"
+            );
             assert!(v.is_u64(), "value must be a plain timestamp: {v}");
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -8511,7 +8900,10 @@ mod tests {
         let f = filt(&["!src/*"]);
         let kept = f.apply(vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
         assert!(kept.is_empty());
-        assert_eq!(f.note(), " (every matching path was excluded by a negative glob)");
+        assert_eq!(
+            f.note(),
+            " (every matching path was excluded by a negative glob)"
+        );
 
         let f2 = filt(&["nomatch/*"]);
         let kept2 = f2.apply(vec!["src/a.rs".to_string()]);
@@ -8550,9 +8942,16 @@ mod tests {
         // a real, distinct palette — not a placeholder equal to dark, and not
         // literally 255-x of dark's channels either
         assert!(!colors_eq(dark.add_bg, light.add_bg));
-        let Color::Rgb(dr, dg, db) = dark.add_bg else { panic!("dark add_bg not Rgb") };
-        let Color::Rgb(lr, lg, lb) = light.add_bg else { panic!("light add_bg not Rgb") };
-        assert!(!(lr == 255 - dr && lg == 255 - dg && lb == 255 - db), "not a bitwise inversion");
+        let Color::Rgb(dr, dg, db) = dark.add_bg else {
+            panic!("dark add_bg not Rgb")
+        };
+        let Color::Rgb(lr, lg, lb) = light.add_bg else {
+            panic!("light add_bg not Rgb")
+        };
+        assert!(
+            !(lr == 255 - dr && lg == 255 - dg && lb == 255 - db),
+            "not a bitwise inversion"
+        );
     }
 
     fn colors_eq(a: Color, b: Color) -> bool {
@@ -8588,7 +8987,9 @@ mod tests {
             })
             .collect();
         assert_eq!(kinds, vec!["header", "item", "item", "header", "item"]);
-        let DisplayRow::Header(reason) = &rows[0] else { panic!("expected a header") };
+        let DisplayRow::Header(reason) = &rows[0] else {
+            panic!("expected a header")
+        };
         // the header carries its fold marker and how many hunks it covers
         assert_eq!(reason, "▾ same definition: run (2)");
     }
@@ -9230,7 +9631,10 @@ mod tests {
     fn arg_candidates_e_offers_the_given_rev_pool() {
         let revs = lines(&["zz", "HEAD", "main"]);
         assert_eq!(arg_candidates("e", &[], &[], &revs), revs);
-        assert_eq!(command_completions("e H", &[], &[], &revs), vec!["HEAD".to_string()]);
+        assert_eq!(
+            command_completions("e H", &[], &[], &revs),
+            vec!["HEAD".to_string()]
+        );
     }
 
     // ---- `<base>..zz` / `<base>...zz` parsing (relies on the test binary

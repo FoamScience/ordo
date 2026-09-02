@@ -12,7 +12,10 @@ fn one(path: &str, old: &str, new: &str) -> Output {
 }
 
 fn rationales(out: &Output) -> Vec<String> {
-    out.files.iter().flat_map(|f| f.hunks.iter().map(|h| h.rationale.clone())).collect()
+    out.files
+        .iter()
+        .flat_map(|f| f.hunks.iter().map(|h| h.rationale.clone()))
+        .collect()
 }
 
 #[test]
@@ -102,7 +105,10 @@ fn a_hunk_inside_a_test_is_attributed_to_that_test() {
     let h = &out.files[0].hunks[0];
     // `enclosing` carries the full path, joined with ` > ` rather than the
     // language's scope separator...
-    assert_eq!(h.enclosing.as_deref(), Some("describe \"cli\" > it \"parses flags\""));
+    assert_eq!(
+        h.enclosing.as_deref(),
+        Some("describe \"cli\" > it \"parses flags\"")
+    );
     // ...while the rationale names the innermost block, which is what
     // identifies the hunk without spending the whole line on its container
     assert_eq!(h.rationale, "edits it \"parses flags\"");
@@ -186,13 +192,23 @@ fn a_guarded_macro_does_not_swallow_the_line_after_it() {
         "#ifndef GUARD_H\n#define GUARD_H\nint a = 1;\n#endif\n",
         "#ifndef GUARD_H\n#define GUARD_H\nint a = 2;\n#endif\n",
     );
-    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("#ifndef GUARD_H"));
+    assert_eq!(
+        out.files[0].hunks[0].enclosing.as_deref(),
+        Some("#ifndef GUARD_H")
+    );
 }
 
 #[test]
 fn an_ifndef_reads_differently_from_an_ifdef() {
-    let out = one("k.c", "#ifndef W\nint w = 1;\n#endif\n", "#ifndef W\nint w = 2;\n#endif\n");
-    assert_eq!(out.files[0].hunks[0].enclosing.as_deref(), Some("#ifndef W"));
+    let out = one(
+        "k.c",
+        "#ifndef W\nint w = 1;\n#endif\n",
+        "#ifndef W\nint w = 2;\n#endif\n",
+    );
+    assert_eq!(
+        out.files[0].hunks[0].enclosing.as_deref(),
+        Some("#ifndef W")
+    );
 }
 
 #[test]
@@ -243,7 +259,10 @@ fn front_matter_is_named_as_such() {
     );
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("front matter"));
-    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::FrontMatter));
+    assert_eq!(
+        h.enclosing_kind,
+        Some(ordo::model::ContainerKind::FrontMatter)
+    );
     assert_eq!(h.rationale, "edits front matter");
 }
 
