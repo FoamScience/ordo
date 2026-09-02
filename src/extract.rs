@@ -1457,13 +1457,21 @@ fn param_names(params: Node, src: &[u8]) -> Vec<String> {
     out
 }
 
+/// Parameters of a definition. Most grammars put a `parameters` field on the
+/// definition itself; C and C++ hang it off the declarator chain
+/// (`declarator: (function_declarator parameters: …)`), so follow that.
 fn count_params(node: Node) -> usize {
-    node.child_by_field_name("parameters")
-        .map(|p| {
+    let mut n = node;
+    loop {
+        if let Some(p) = n.child_by_field_name("parameters") {
             let mut cur = p.walk();
-            p.named_children(&mut cur).count()
-        })
-        .unwrap_or(0)
+            return p.named_children(&mut cur).count();
+        }
+        match n.child_by_field_name("declarator") {
+            Some(d) => n = d,
+            None => return 0,
+        }
+    }
 }
 
 /// A code identifier with any internal whitespace removed. C++ (OpenFOAM's
