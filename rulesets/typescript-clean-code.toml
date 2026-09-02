@@ -1,0 +1,83 @@
+# labs42io/clean-code-typescript — https://github.com/labs42io/clean-code-typescript
+#
+# Use: `ordo-tui --rules rulesets/typescript-clean-code.toml`, or copy the
+# rules you want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's advisory catalog already fires on them with no
+# config: `eval`/`exec`, empty `catch`, `any` (opts out of the type system).
+# Not here either: `.tsx` — every rule below is `lang = "typescript"`, which
+# only matches `.ts`/`.mts`/`.cts`; `.tsx` parses with a separate grammar
+# (`lang = "tsx"`) and would need its own copy of each rule. Skipped rather
+# than duplicated, since this file ships with one `.ts` sample to check it
+# against — a `lang = "tsx"` rule the sample can never reach would fail the
+# checker's "did it ever fire" test for the wrong reason.
+# An eslint config (`eslint-plugin-@typescript-eslint`) already covers most of
+# the guide's principle-level advice (naming, single responsibility, DRY) —
+# nothing here duplicates a linter rule; ordo's value is the change-scoped
+# subset and the two limits eslint has no equivalent for (`max-lines` on a
+# class, `max-params` on a function).
+#
+# Every rule fires on what a hunk *introduces* — none of them flag the
+# pre-existing violations in a legacy tree.
+
+# ------------------------------------------------------------ limits
+
+[[rule]]
+name = "few-function-arguments"
+lang = "typescript"
+max-params = 2
+note = "more than 2 arguments — an options object reads better at the call site"
+
+[[rule]]
+name = "small-classes"
+lang = "typescript"
+kind = ["class_declaration", "abstract_class_declaration"]
+max-lines = 50
+note = "over 50 lines — a class this size is usually more than one responsibility (no specific number in the source; picked as a working default)"
+
+[[rule]]
+name = "flat-control-flow"
+lang = "typescript"
+max-nesting = 2
+warn = "more than 2 nested conditionals — return early, or extract a function"
+
+# ------------------------------------------------------------ functions
+
+[[rule]]
+name = "no-boolean-flag-param"
+lang = "typescript"
+kind = ["required_parameter", "optional_parameter"]
+text = ":\\s*boolean\\b"
+note = "a boolean parameter is a flag saying this function does more than one thing — split it, or take an enum"
+
+[[rule]]
+name = "throw-only-error"
+lang = "typescript"
+kind = "throw_statement"
+without = "new_expression"
+warn = "throw an Error (or a subclass) — a thrown string or object loses the stack trace"
+
+# ------------------------------------------------------------ types
+
+[[rule]]
+name = "no-typeof-check"
+lang = "typescript"
+kind = "unary_expression"
+text = "^typeof\\b"
+note = "avoid type checking — a discriminated union or a type guard function lets the compiler narrow this instead"
+
+[[rule]]
+name = "no-instanceof-check"
+lang = "typescript"
+kind = "binary_expression"
+text = "\\binstanceof\\b"
+note = "avoid type checking — a discriminated union or a type guard function lets the compiler narrow this instead"
+
+# ------------------------------------------------------------ classes
+
+[[rule]]
+name = "private-members"
+lang = "typescript"
+kind = "public_field_definition"
+without = "accessibility_modifier"
+note = "no `private`/`protected` — a field with no accessor is public by default; is that the intent?"
