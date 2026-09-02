@@ -537,5 +537,36 @@ fn a_bad_regex_is_reported_not_ignored() {
     let rules = serde_json::json!([{ "name": "broken", "when": { "kind": "x", "text": "(" }, "note": "n" }]);
     let out = one_with("a.py", "x = 1\n", "x = 2\n", rules);
     let problems = &out.problems;
-    assert!(problems.iter().any(|p| p.contains("broken") && p.contains("regex")), "{problems:?}");
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("broken") && p.contains("regex")),
+        "{problems:?}"
+    );
+}
+
+// ---------------------------------------------------------------- imports that are paths
+
+fn import_hit(path: &str, old: &str, new: &str, glob: &str) -> bool {
+    let rules = serde_json::json!([{ "name": "imp", "when": { "imports": glob }, "note": "n" }]);
+    !hits(&one_with(path, old, new, rules), path).is_empty()
+}
+
+#[test]
+fn a_cpp_include_binds_its_path_so_an_imports_glob_can_see_it() {
+    let (old, new) = ("#include <string>\n", "#include <string>\n#include <boost/algorithm/string.hpp>\n");
+    assert!(import_hit("a.cpp", old, new, "boost/**"));
+    assert!(!import_hit("a.cpp", old, new, "asio/**"));
+    assert!(import_hit("a.c", "int x;\n", "#include \"util.h\"\nint x;\n", "util.h"));
+    let out = one_with("a.cpp", old, new, serde_json::json!([]));
+    assert_eq!(out.files[0].hunks[0].rationale, "adds import boost/algorithm/string.hpp");
+}
+
+#[test]
+fn a_go_import_binds_the_package_name_code_uses() {
+    let (old, new) = ("package m\n", "package m\n\nimport (\n\t\"fmt\"\n\tz \"go.uber.org/zap\"\n\t_ \"embed\"\n)\n");
+    assert!(import_hit("a.go", old, new, "z"), "alias binds");
+    assert!(import_hit("a.go", old, new, "fmt"), "bare path binds its last segment");
+    assert!(!import_hit("a.go", old, new, "zap"), "an aliased import is known by its alias");
+    assert!(!import_hit("a.go", old, new, "embed"), "a blank import binds nothing");
 }

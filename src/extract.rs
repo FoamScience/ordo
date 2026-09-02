@@ -901,7 +901,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         // the whole statement's rows count as import — a hunk that lands
         // anywhere in a multi-line `from x import (\n  a,\n  b,\n)` (tail,
         // middle, or head) is still an import hunk, not a bare "change".
-        let er = node.end_position().row;
+        let er = end_row(node, spec);
         for r in sr..=er {
             c.import_rows.insert(r);
         }
@@ -1940,11 +1940,44 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
     // they are shaped nothing alike: python has `name:` children, js has an
     // `import_clause` and a `source`. Gate on the language rather than trust a
     // shared kind name.
+    let row = node.start_position().row;
+    let text = |n: Node| n.utf8_text(src).ok().map(|t| (row, t.to_string()));
+    // an include or a go import names a *path*, not an identifier, so the
+    // identifier fallback finds nothing and the hunk binds no name at all —
+    // `imports = "boost/**"` could never match. Bind the path text instead:
+    // the include as written, a go package by the name code refers to it by.
+    match (spec.name, node.kind()) {
+        ("c" | "cpp", "preproc_include") => {
+            let path = node.child_by_field_name("path")?.utf8_text(src).ok()?;
+            let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
+            return Some(vec![(row, path.to_string())]);
+        }
+        ("go", "import_spec") => return Some(go_import_name(node, src).into_iter().collect()),
+        ("go", "import_declaration") => {
+            let mut cur = node.walk();
+            let mut out = vec![];
+            for spec_node in node.named_children(&mut cur) {
+                match spec_node.kind() {
+                    "import_spec" => out.extend(go_import_name(spec_node, src)),
+                    "import_spec_list" => {
+                        let mut c2 = spec_node.walk();
+                        for sp in spec_node
+                            .named_children(&mut c2)
+                            .filter(|n| n.kind() == "import_spec")
+                        {
+                            out.extend(go_import_name(sp, src));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return Some(out);
+        }
+        _ => {}
+    }
     if !matches!(spec.name, "python" | "xonsh") {
         return None;
     }
-    let row = node.start_position().row;
-    let text = |n: Node| n.utf8_text(src).ok().map(|t| (row, t.to_string()));
     match node.kind() {
         // python: `import a.b` binds `a`; `from a.b import c, d as e` binds c, e
         "import_statement" | "import_from_statement" => {
@@ -1968,6 +2001,20 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
         }
         _ => None,
     }
+}
+
+/// `import "go.uber.org/zap"` binds `zap`; `import z "go.uber.org/zap"` binds
+/// `z`; a blank or dot import binds nothing a hunk could be said to use.
+/// Fields verified against tree-sitter-go-0.23's node-types.json.
+fn go_import_name(spec: Node, src: &[u8]) -> Option<(usize, String)> {
+    let row = spec.start_position().row;
+    if let Some(alias) = spec.child_by_field_name("name") {
+        let a = alias.utf8_text(src).ok()?;
+        return (a != "_" && a != ".").then(|| (row, a.to_string()));
+    }
+    let path = spec.child_by_field_name("path")?.utf8_text(src).ok()?;
+    let last = path.trim_matches('"').rsplit('/').next()?;
+    (!last.is_empty()).then(|| (row, last.to_string()))
 }
 
 fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
