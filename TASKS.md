@@ -169,3 +169,94 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 ## P16 — relocation / extraction detection  ✅
 - [x] `symbol_bodies` also returns each def's substantial body lines
 - [x] an added def whose body-lines overlap a still-present old def (≥3 shared, ≥50%) → "adds X, extracted from Y" (catches extractions where the body was also edited and the source name is reused — exact rename/move miss these). Tested (`p16_extraction_from_present_def`).
+
+## P17 — containers: every hunk belongs to something  ✅
+
+A hunk outside any definition used to carry the bare rationale `change`. 372 of
+them across the 10-repo corpus (47k hunks); the cause was singular — nothing in
+`defs` held them — so the fix was to widen what counts as a container without
+widening what counts as a *definition*. `enclosing_kind` (schema, optional) says
+which: a region name is never a symbol, never enters `defines`, never seeds an
+edge.
+
+- [x] **macros are definitions** — `preproc_def`/`preproc_function_def` (c/cpp);
+      a macro's `value` is its body, so a body edit stops reading as a signature
+      change (the same bug hit rust `const_item`/`static_item`)
+- [x] **test blocks** — `describe`/`it`/`test`/`context`/`suite`/`bench` in
+      js/ts/tsx and lua (busted), rust test macros (`rgtest!`); nested labels
+      join with ` > `, the rationale names the innermost
+- [x] **regions** — `#ifdef`/`#ifndef`/`#if`, markdown preamble and front matter
+- [x] **bindings** — a file-scope binding whose multi-line value holds the hunk,
+      with its literal's elements as detail-layer members
+- [x] **calls** — a file-scope call whose multi-line arguments hold the hunk
+- [x] **re-exports are bookkeeping** — `export * from`, `export {} `; NOT
+      `export default <value>`, which fills `value` rather than `declaration`
+- [x] **whitespace** — a blank-line-only hunk is formatting noise; an import
+      line that moved leaving a blank behind is too
+- [x] **switched-off code** — `comments out code` / `uncomments code` (exact
+      match after stripping markers), `replaces N lines with a comment` when it
+      is documentation arriving where code left
+- [x] **removed file-scope bindings** are named, not counted as lines
+- [x] language injection — a markdown fence is parsed with its own grammar, and
+      contributes *uses only*: a sample documents an API, it does not define it
+
+Result: 372 → 0 bare `change` across the corpus, with the invariants and the
+git line-coverage check holding.
+
+## P18 — reviewer polish  ✅
+- [x] intra-line refinement (`ordo::refine`) — leaf-level LCS, only the part of
+      a changed line that differs is tinted
+- [x] `:audit` — every hunk and file not on screen, charged to what removed it
+- [x] fold the reading order by group (`za`/`zo`/`zc`/`zR`/`zM`, `C-k` chords)
+- [x] `Esc` clears a search before it quits; `K` finds the line's symbol and
+      names the function a parameter belongs to
+- [x] configurable keybind presets (`~/.config/ordo/tui.toml`) — preset choice
+      plus per-key add/replace/remove, validated against the action table
+- [x] themes — 14 truecolor palettes (catppuccin, tokyonight, gruvbox, nord,
+      dracula, solarized) beside the two terminal-palette ones, `:theme` to swap
+      live, and every role overridable in `[theme]`. Rounded pane borders; the
+      whole palette lives in `Theme`, nothing hardcoded at a call site
+
+## P19 — reviewing rules  ✅
+
+The caller's own conventions, as data. No plugin runtime: a rule is globs plus a
+tree-sitter query, matched deterministically against facts the engine already
+computes, so ordering influence is safe to hand to a config file.
+
+- [x] **facts** — `path`, `lang`, `category`, `enclosing-kind`,
+      `defines`/`uses`/`imports`, `noise`, `comment`; ANDed, globs throughout
+- [x] **queries** — tree-sitter source (inline or `query-file`), matched only on
+      rows *inside the hunk*: a review signal, not a lint backlog
+- [x] **actions** — `note`, `warn`, `noise`, `priority`
+- [x] **ordering influence that cannot break P2** — priority replaces the
+      file-position tiebreaker among groups the graph has already freed
+- [x] **two scopes** — `~/.config/ordo/rules.toml` then `<repo>/.ordo/rules.toml`
+- [x] **engine reads nothing** — rules arrive in `Options.rules`; the client
+      collects the files
+- [x] **a rule that cannot work says so** — bad glob, bad query, a query that
+      compiles for no language in the change → `Output.problems`
+- [x] ordo's own rules in `.ordo/` — contract, purity, invariants, wording
+
+## P20 — an import is noise, not nothing  ✅
+
+Reported from a real review: an added `from ppump.diagnostics import degrade`
+was invisible, while the loguru import it replaced was reported as removed. One
+asymmetry, two symptoms — a *moved* import read as a deletion with no
+counterpart.
+
+- [x] a pure-import hunk is kept and marked `noise` instead of dropped; it never
+      seeds an edge, and no longer leads the reading order either (forty dimmed
+      rows ahead of the change is not a reading order — `priority` in a rule can
+      put them back on top for anyone who wants that)
+- [x] imports group together (`same scope: imports`) rather than joining the
+      top-level group, which had cost the `file` strategy its positional promise
+- [x] an import statement's *bound* names, not every identifier in it:
+      `from ppump.diagnostics import degrade` binds `degrade`, so add-vs-change
+      is decided on the right evidence (python; other grammars already bind one
+      name per statement)
+- [x] a name is attributed to every row of its statement, so a hunk touching the
+      tail of a multi-line import list still has names to report
+- [x] `moves import pg` when the same statement existed in the old file — a
+      reordered import block is not a pile of edits
+- [x] `DropReason::Import` is gone: `only_comments` is now the only thing that
+      drops a hunk

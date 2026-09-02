@@ -30,13 +30,12 @@
           ],
           "category": "import",
           "enclosing": null,
-          "defines": [
-            "os"
-          ],
+          "defines": [],
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "adds import os"
+          "rationale": "adds import os",
+          "noise": true
         },
         {
           "id": "h1",
@@ -59,7 +58,14 @@
           ],
           "group": "g1",
           "order_index": 1,
-          "rationale": "adds helper, used below"
+          "rationale": "adds helper, used below",
+          "symbols": [
+            {
+              "name": "helper",
+              "kind": "function_definition",
+              "scope": null
+            }
+          ]
         },
         {
           "id": "h2",
@@ -88,7 +94,7 @@
   "groups": [
     {
       "id": "g0",
-      "reason": "import",
+      "reason": "same scope: imports",
       "members": [
         "h0"
       ]
@@ -102,18 +108,13 @@
     },
     {
       "id": "g2",
-      "reason": "top-level change",
+      "reason": "same scope: top-level",
       "members": [
         "h2"
       ]
     }
   ],
   "edges": [
-    {
-      "from": "h0",
-      "to": "h1",
-      "why": "def→use: os"
-    },
     {
       "from": "h1",
       "to": "h2",
@@ -122,7 +123,9 @@
   ],
   "clusters": [
     [
-      "h0",
+      "h0"
+    ],
+    [
       "h1",
       "h2"
     ]

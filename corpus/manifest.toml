@@ -1,0 +1,118 @@
+# Real-world corpora for polishing ordo's rationale quality — one per supported
+# language, chosen for disciplined single-concern commits (so a rationale has a
+# right answer to judge against) and idiomatic code (so tree-sitter node kinds
+# get exercised naturally).
+#
+# These are NOT vendored. `scripts/corpus-fetch.sh` clones them into
+# $ORDO_CORPUS (default ~/.cache/ordo-corpus); `tests/corpus.rs` skips entirely
+# when that directory is absent, so the normal test run stays hermetic, offline
+# and fast.
+#
+# `rev` is pinned on purpose: an unpinned upstream would drift the recorded
+# baseline for reasons that have nothing to do with ordo. Bump it deliberately,
+# then re-record with UPDATE_CORPUS_BASELINE=1.
+#
+# `max_commits` is lower for the big repos so a full sweep stays minutes rather
+# than tens of minutes. It must not exceed the clone depth: a commit whose parent
+# is beyond the shallow boundary is SKIPPED (diffing it against the empty tree
+# would sweep the whole file as one synthetic "everything added" hunk and skew
+# every metric), so an over-large cap silently sweeps fewer commits than it says.
+# `scripts/corpus-fetch.sh` clones deep enough for these values.
+
+[[repo]]
+name = "click"
+lang = "python"
+url = "https://github.com/pallets/click.git"
+rev = "36baa15ff831b939a22bc527cd76ce653ef6f66d"
+max_commits = 350
+# decorator-heavy (@click.command) — exercises decorated_definition naming
+
+[[repo]]
+name = "ripgrep"
+lang = "rust"
+url = "https://github.com/BurntSushi/ripgrep.git"
+rev = "3fce3b5bb0236da2df6d99672afb8a719642eca7"
+max_commits = 350
+# const/static and generic `impl` blocks; unusually explanatory commit messages
+
+[[repo]]
+name = "curl"
+lang = "c"
+url = "https://github.com/curl/curl.git"
+rev = "f8992b6a177a2ccfb5dc04137088534bad68681c"
+max_commits = 250
+# the reference for C commit discipline; also ~900 .md files, so it exercises
+# the markdown path harder than any other entry
+
+[[repo]]
+name = "openfoam"
+lang = "cpp"
+url = "https://github.com/OpenFOAM/OpenFOAM-dev.git"
+rev = "09951d6e6b9e0fb45834507abf5bc5fea718330d"
+max_commits = 200
+# 9.4k C++ files in the `.C`/`.H` house style gcc treats as C++ — the reason
+# those extensions are mapped at all. Strict `Component: what changed` commit
+# messages and a median of 4 files per commit, though a sweeping refactor can
+# touch 300+, so this one is the slowest entry (~450ms/commit).
+
+[[repo]]
+name = "cobra"
+lang = "go"
+url = "https://github.com/spf13/cobra.git"
+rev = "adbc8813901bba65827259daa8e22ff94ec1f30e"
+max_commits = 350
+# idiomatic struct/interface Go
+
+[[repo]]
+name = "junit5"
+lang = "java"
+url = "https://github.com/junit-team/junit-framework.git"
+rev = "9cd9a3cfb6cd98aec355bd49fc8d801058762441"
+max_commits = 250
+# field_declaration / enum_constant heavy — the shapes the java naming fix touched
+
+[[repo]]
+name = "execa"
+lang = "javascript"
+url = "https://github.com/sindresorhus/execa.git"
+rev = "8017b279e19347efaf2587711c2d57dbd4330740"
+max_commits = 350
+# small, meticulous, one-concern commits
+
+[[repo]]
+name = "vue"
+lang = "typescript"
+url = "https://github.com/vuejs/core.git"
+rev = "d63616ca17de965ed32dcb449a4c5cd9982f15d2"
+max_commits = 250
+# strong conventional-commit adherence; heavy TS interface/enum use
+
+[[repo]]
+name = "excalidraw"
+lang = "tsx"
+url = "https://github.com/excalidraw/excalidraw.git"
+rev = "e1bb9ff8f8931e783c11d104abb8967ac6605c9a"
+max_commits = 300
+# the only repo that exercises the tsx grammar in bulk (1110 .tsx files changed
+# in this window against vue's 4): JSX inside typed components, forwardRef and
+# hook-heavy call sites. Median 3 files per commit, ~98% conventional messages.
+
+[[repo]]
+name = "lazy"
+lang = "lua"
+url = "https://github.com/folke/lazy.nvim.git"
+rev = "306a05526ada86a7b30af95c5cc81ffba93fef97"
+max_commits = 350
+# the realistic Lua corpus — ordo's least-exercised grammar
+
+[[repo]]
+name = "buildtheworld"
+lang = "xonsh"
+url = "https://github.com/tacaswell/build_the_world.git"
+rev = "a33a9b4e283f4ebe16f23cbcf97e34ccd089b43c"
+max_commits = 350
+# the xonsh ecosystem is small — 103 repos carry the language at all, and xonsh
+# itself is written in python. This is the densest real one: 96% xonsh, 142 of
+# its 343 commits touch a .xsh file. Build scripts, so the shapes are the ones
+# xonsh exists for: bare command lines at file scope, $ENV bindings, and
+# `with with_pushd(...)` blocks holding the actual work.

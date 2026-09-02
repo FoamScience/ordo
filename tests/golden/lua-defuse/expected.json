@@ -32,7 +32,14 @@
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "adds helper, used below"
+          "rationale": "adds helper, used below",
+          "symbols": [
+            {
+              "name": "helper",
+              "kind": "function_declaration",
+              "scope": null
+            }
+          ]
         },
         {
           "id": "h1",
@@ -68,7 +75,7 @@
     },
     {
       "id": "g1",
-      "reason": "top-level change",
+      "reason": "same scope: top-level",
       "members": [
         "h1"
       ]

@@ -1,0 +1,112 @@
+{
+  "buildtheworld": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 82,
+    "longest_rationale": 233,
+    "unsupported_files": 0,
+    "with_details": 14,
+    "with_symbols": 13
+  },
+  "click": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 4272,
+    "longest_rationale": 231,
+    "unsupported_files": 0,
+    "with_details": 491,
+    "with_symbols": 954
+  },
+  "cobra": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 1848,
+    "longest_rationale": 201,
+    "unsupported_files": 0,
+    "with_details": 154,
+    "with_symbols": 241
+  },
+  "curl": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 3316,
+    "longest_rationale": 226,
+    "unsupported_files": 0,
+    "with_details": 154,
+    "with_symbols": 483
+  },
+  "excalidraw": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 8751,
+    "longest_rationale": 239,
+    "unsupported_files": 0,
+    "with_details": 1972,
+    "with_symbols": 720
+  },
+  "execa": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 14171,
+    "longest_rationale": 239,
+    "unsupported_files": 0,
+    "with_details": 2595,
+    "with_symbols": 2676
+  },
+  "junit5": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 562,
+    "longest_rationale": 222,
+    "unsupported_files": 0,
+    "with_details": 4,
+    "with_symbols": 129
+  },
+  "lazy": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 3461,
+    "longest_rationale": 206,
+    "unsupported_files": 0,
+    "with_details": 2194,
+    "with_symbols": 195
+  },
+  "openfoam": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 11990,
+    "longest_rationale": 239,
+    "unsupported_files": 0,
+    "with_details": 683,
+    "with_symbols": 1126
+  },
+  "ripgrep": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 1155,
+    "longest_rationale": 237,
+    "unsupported_files": 0,
+    "with_details": 49,
+    "with_symbols": 156
+  },
+  "vue": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 885,
+    "longest_rationale": 229,
+    "unsupported_files": 0,
+    "with_details": 76,
+    "with_symbols": 163
+  }
+}

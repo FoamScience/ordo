@@ -1,9 +1,9 @@
 {
   "name": "@ordo/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Comprehension-optimized ordering of code-change hunks — thin wrapper over the ordo binary",
   "license": "MIT",
-  "repository": "elwardi/ordo",
+  "repository": "FoamScience/ordo",
   "main": "index.js",
   "bin": { "ordo": "bin/ordo.js" },
   "scripts": { "postinstall": "node install.js" },

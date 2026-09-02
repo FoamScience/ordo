@@ -29,6 +29,17 @@ pub struct Options {
     /// modified file can be reconstructed for full semantics. Off by default.
     #[serde(default)]
     pub full_context: bool,
+    /// Drop every non-comment/docstring hunk before grouping, so `order`,
+    /// `groups`, `edges` and `clusters` cover only comment-only hunks. Off by
+    /// default.
+    #[serde(default)]
+    pub only_comments: bool,
+    /// Reviewing rules: the caller's own conventions, evaluated against the
+    /// facts the engine already computes. Empty by default — the engine has no
+    /// rules of its own, and reads no config (a client collects them; see
+    /// `Rule`).
+    #[serde(default)]
+    pub rules: Vec<Rule>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -36,6 +47,8 @@ impl Default for Options {
             strategy: Strategy::Comprehension,
             cross_file: true,
             full_context: false,
+            only_comments: false,
+            rules: vec![],
         }
     }
 }
@@ -43,25 +56,40 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Strategy {
+    #[default]
     Comprehension,
     DefsFirst,
     File,
 }
-impl Default for Strategy {
-    fn default() -> Self {
-        Strategy::Comprehension
-    }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
     Import,
     Definition,
     Other,
+}
+
+/// Why the engine removed a hunk before ordering — a selection the caller
+/// *asked* for, so the difference between the hunks a file had and the hunks it
+/// can see is always accountable. An import is no longer among these: it is
+/// kept and marked `noise`, because dropping it hid new dependencies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DropReason {
+    NonComment,
+}
+
+/// A hunk that never reached the reading order, with the range it covered — so
+/// a caller can tell a hunk that was dropped from one that was never found.
+#[derive(Debug, Clone, Serialize)]
+pub struct DroppedHunk {
+    pub reason: DropReason,
+    pub old_range: [usize; 2],
+    pub new_range: [usize; 2],
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +102,11 @@ pub struct Output {
     /// P12.3: independent parts of the change (hunk ids per cluster). One
     /// cluster ⇒ atomic; multiple ⇒ candidate PR split.
     pub clusters: Vec<Vec<String>>,
+    /// what the engine could not make sense of in the caller's own input — a
+    /// rule whose glob or query does not compile, reported rather than silently
+    /// never matching. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +123,15 @@ pub struct FileOut {
     /// full context and no old/new to reconstruct from). Omitted when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub degraded: bool,
+    /// true when the file's extension has no tree-sitter grammar, so hunks
+    /// carry no structural analysis at all. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unsupported: bool,
+    /// hunks this file had that were dropped before ordering, with the reason.
+    /// `hunks.len() + dropped.len()` is what the diff actually produced, so a
+    /// consumer can prove nothing went missing silently. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<DroppedHunk>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -107,6 +149,122 @@ pub struct Advisory {
     pub verdict: bool,
 }
 
+/// One reviewing rule: what to match, and what to say or do about it.
+///
+/// A rule is *data*, evaluated deterministically against a hunk's own facts —
+/// there is no rule runtime, nothing is executed, and the same input always
+/// produces the same output. The engine never reads a rule from disk: a client
+/// collects them (per-user, per-repo) and passes them in `Options.rules`, which
+/// keeps `ordo order` a function of its arguments.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Rule {
+    /// how the rule identifies itself in `hunks[].rules` — a short slug
+    pub name: String,
+    #[serde(default)]
+    pub when: When,
+    /// something worth knowing about this hunk
+    #[serde(default)]
+    pub note: Option<String>,
+    /// something worth stopping at — reported at `warn` level
+    #[serde(default)]
+    pub warn: Option<String>,
+    /// treat a matching hunk as skippable (the caller's own noise policy, on
+    /// top of the engine's formatting/generated detection)
+    #[serde(default)]
+    pub noise: bool,
+    /// Ordering influence. Higher sorts earlier, but **only among hunks the
+    /// dependency graph has already freed**: priority replaces the file-position
+    /// tiebreaker, it never reorders a definition after its use. A preference
+    /// cannot break P2.
+    #[serde(default)]
+    pub priority: i64,
+}
+
+/// A rule's conditions. Every field given must hold (they are ANDed); a rule
+/// with no conditions matches every hunk, which is occasionally what you want
+/// (a whole-changeset note) and otherwise a mistake the rule's own name makes
+/// obvious.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct When {
+    /// glob against the file path, e.g. `src/security/**`
+    #[serde(default)]
+    pub path: Option<String>,
+    /// language name as `src/lang.rs` knows it (`python`, `cpp`, `markdown`, …)
+    #[serde(default)]
+    pub lang: Option<String>,
+    #[serde(default)]
+    pub category: Option<Category>,
+    /// what holds the hunk; `definition` matches a plain definition
+    #[serde(default)]
+    pub enclosing_kind: Option<String>,
+    /// glob against any name the hunk defines / uses / imports
+    #[serde(default)]
+    pub defines: Option<String>,
+    #[serde(default)]
+    pub uses: Option<String>,
+    #[serde(default)]
+    pub imports: Option<String>,
+    /// require (or forbid) the engine's own noise / comment classification
+    #[serde(default)]
+    pub noise: Option<bool>,
+    #[serde(default)]
+    pub comment: Option<bool>,
+    /// a tree-sitter query over the hunk's own lines — the pattern half of a
+    /// rule, for conventions that are about code shape rather than about paths
+    /// and names (see `docs/rules.md`). The query source itself, not a path:
+    /// the engine reads no files.
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+/// A rule that matched, on the hunk it matched.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleHit {
+    pub rule: String,
+    pub message: String,
+    /// `note` | `warn`
+    pub level: &'static str,
+}
+
+/// What kind of thing an `enclosing` name refers to. Only `Definition` is a
+/// declaration a reviewer can navigate to; the rest are *regions* — real
+/// containers that hold a hunk and are worth naming, but declare nothing. The
+/// distinction matters to a consumer: a region name must never be looked up as
+/// a symbol, and must never seed a def→use edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerKind {
+    /// a function, class, macro, … — `enclosing` names a real symbol
+    Definition,
+    /// `describe("…", …)` and friends: a named block, not a declaration
+    Test,
+    /// a conditional-compilation region, e.g. `#ifdef CURL_DISABLE_HTTP`
+    Region,
+    /// prose before a document's first heading
+    Preamble,
+    /// a document's `---` metadata block
+    FrontMatter,
+    /// a top-level binding whose multi-line value holds the hunk
+    Binding,
+    /// a top-level call whose multi-line arguments hold the hunk
+    Call,
+}
+
+/// A defined symbol's identity: name + tree-sitter node kind + enclosing
+/// scope. Lets a consumer tell apart same-named symbols across commits (e.g.
+/// a method `run` on class `A` vs a module-level function `run`), per the
+/// requirement "tree sitter type + scope for the symbol must match, otherwise
+/// it's a different symbol".
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Symbol {
+    pub name: String,
+    /// raw tree-sitter node kind of the defining node, e.g. `function_definition`
+    pub kind: String,
+    /// qualified enclosing-definition name at the point of definition, or null
+    /// at top level (not always the same as the hunk's `enclosing`)
+    pub scope: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct HunkOut {
     pub id: String,
@@ -114,6 +272,11 @@ pub struct HunkOut {
     pub new_range: [usize; 2],
     pub category: Category,
     pub enclosing: Option<String>,
+    /// what `enclosing` names, when it is not a plain definition — a region
+    /// that holds the hunk but declares nothing (see `ContainerKind`).
+    /// Omitted for a definition, and when there is no enclosing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enclosing_kind: Option<ContainerKind>,
     pub defines: Vec<String>,
     pub uses: Vec<String>,
     pub group: String,
@@ -122,12 +285,28 @@ pub struct HunkOut {
     /// formatting-only or generated-file hunk — skippable for review (P12.2)
     #[serde(default, skip_serializing_if = "is_false")]
     pub noise: bool,
+    /// every changed line is a comment or docstring — drives `--only-comments`
+    /// filtering. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub comment: bool,
+    /// P15: what the hunk did to the members of its enclosing container —
+    /// "adds Serve, Watch to Cli". Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<String>,
     /// structural smells for a def introduced here (P13.1); omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// advanced-construct advisories in this hunk (P14); omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisories: Vec<Advisory>,
+    /// symbol identity (name + tree-sitter kind + enclosing scope) for each
+    /// definition this hunk introduces; omitted when empty
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<Symbol>,
+    /// reviewing rules (`Options.rules`) that matched this hunk; omitted when
+    /// none did
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RuleHit>,
 }
 
 #[derive(Debug, Serialize)]

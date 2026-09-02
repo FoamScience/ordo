@@ -10,7 +10,7 @@ use tree_sitter::Node;
 pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize, Advisory)> {
     let mut out = vec![];
     let walker: Rule = match spec.name {
-        "python" => walk_python,
+        "python" | "xonsh" => walk_python,
         "rust" => walk_rust,
         "javascript" | "typescript" | "tsx" => walk_js,
         "go" => walk_go,
@@ -259,7 +259,9 @@ fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
                 }
                 _ => {}
             }
-            if fname.is_some_and(|f| f.starts_with("subprocess.")) && py_shell_true(node, src) {
+            if fname.is_some_and(|f| f.starts_with("subprocess."))
+                && py_kw_is(node, "shell", "True", src)
+            {
                 push(out, node, "shell-injection", SHELL_PY, true);
             }
             if fname.is_some_and(py_sql_sink) && py_dynamic_sql(node, src) {
@@ -305,6 +307,12 @@ fn py_http_callee(f: &str) -> bool {
             f.rsplit('.').next(),
             Some("get" | "post" | "put" | "delete" | "patch" | "head" | "request")
         )
+}
+
+// a catch clause with an empty body
+fn empty_catch(node: Node) -> bool {
+    node.child_by_field_name("body")
+        .is_some_and(|b| named(b).is_empty())
 }
 
 // call has a keyword argument `name` whose value renders exactly as `val`
@@ -425,21 +433,6 @@ fn has_descendant(node: Node, kind: &str) -> bool {
         }
     }
     false
-}
-
-// a subprocess call carrying `shell=True`
-fn py_shell_true(call: Node, src: &[u8]) -> bool {
-    call.child_by_field_name("arguments").is_some_and(|args| {
-        named(args).iter().any(|a| {
-            a.kind() == "keyword_argument"
-                && a.child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(src).ok())
-                    == Some("shell")
-                && a.child_by_field_name("value")
-                    .and_then(|v| v.utf8_text(src).ok())
-                    == Some("True")
-        })
-    })
 }
 
 fn only_pass(block: Node) -> bool {
@@ -581,11 +574,7 @@ fn walk_js(node: Node, src: &[u8], _path: &str, out: &mut Out) {
         "call_expression" if callee_text(node, "function", src) == Some("eval") => {
             push(out, node, "eval", EVAL_JS, false);
         }
-        "catch_clause"
-            if node
-                .child_by_field_name("body")
-                .is_some_and(|b| named(b).is_empty()) =>
-        {
+        "catch_clause" if empty_catch(node) => {
             push(out, node, "empty-catch", EMPTY_CATCH, true);
         }
         _ => {}
@@ -937,11 +926,7 @@ reflection (setAccessible/forName) — breaks encapsulation and compile-time saf
 
 fn walk_java(node: Node, src: &[u8], _path: &str, out: &mut Out) {
     match node.kind() {
-        "catch_clause"
-            if node
-                .child_by_field_name("body")
-                .is_some_and(|b| named(b).is_empty()) =>
-        {
+        "catch_clause" if empty_catch(node) => {
             push(out, node, "empty-catch", EMPTY_CATCH, true);
         }
         "method_invocation" if callee_text(node, "name", src) == Some("setAccessible") => {

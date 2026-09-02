@@ -1,6 +1,6 @@
 //! Pipeline + invariant tests. Python change: an import, a helper definition,
-//! and a top-level call that uses it — comprehension order must put import
-//! first and the definition before its use.
+//! and a top-level call that uses it — import hunks are skipped entirely, and
+//! comprehension order must put the definition before its use.
 use ordo::model::{Category, Input};
 
 const OLD: &str = "# a\n# b\n# c\n# d\n# e\n";
@@ -19,7 +19,8 @@ fn input(strategy: &str) -> Input {
 fn permutation_nothing_lost() {
     let out = ordo::run(input("comprehension"));
     let total: usize = out.files.iter().map(|f| f.hunks.len()).sum();
-    assert!(total >= 3, "expected >=3 hunks, got {total}");
+    // the import hunk is skipped; the helper def + its use remain
+    assert!(total >= 2, "expected >=2 non-import hunks, got {total}");
     assert_eq!(
         out.order.len(),
         total,
@@ -36,15 +37,16 @@ fn permutation_nothing_lost() {
 }
 
 #[test]
-fn import_first_and_def_before_use() {
+fn imports_are_noise_and_defs_come_before_uses() {
     let out = ordo::run(input("comprehension"));
     let hunks = &out.files[0].hunks;
 
-    let import_oi = hunks
-        .iter()
-        .find(|h| h.category == Category::Import)
-        .expect("import")
-        .order_index;
+    // an import hunk is visible but skippable: it follows from the real change
+    // rather than being it. Dropping it outright hid new dependencies and made
+    // a moved import read as a deletion with no counterpart.
+    for h in hunks.iter().filter(|h| h.category == Category::Import) {
+        assert!(h.noise, "an import hunk is noise");
+    }
     let def_oi = hunks
         .iter()
         .find(|h| h.category == Category::Definition)
@@ -56,7 +58,6 @@ fn import_first_and_def_before_use() {
         .expect("use of helper")
         .order_index;
 
-    assert_eq!(import_oi, 0, "import must lead");
     assert!(
         def_oi < use_oi,
         "helper definition (oi={def_oi}) must precede its use (oi={use_oi})"

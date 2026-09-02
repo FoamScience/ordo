@@ -24,6 +24,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
+name = "bstr"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+dependencies = [
+ "memchr",
+ "serde_core",
+]
+
+[[package]]
 name = "cassowary"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -113,7 +123,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -124,7 +134,7 @@ checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
 dependencies = [
  "darling_core",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -175,6 +185,19 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "globset"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
 
 [[package]]
 name = "hashbrown"
@@ -237,7 +260,7 @@ dependencies = [
  "indoc",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -311,9 +334,10 @@ dependencies = [
 
 [[package]]
 name = "ordo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "diffy",
+ "globset",
  "ratatui",
  "serde",
  "serde_json",
@@ -322,12 +346,16 @@ dependencies = [
  "tree-sitter-c",
  "tree-sitter-cpp",
  "tree-sitter-go",
+ "tree-sitter-highlight",
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-lua",
+ "tree-sitter-md",
  "tree-sitter-python",
  "tree-sitter-rust",
+ "tree-sitter-toml-ng",
  "tree-sitter-typescript",
+ "tree-sitter-xonsh",
 ]
 
 [[package]]
@@ -494,7 +522,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -597,7 +625,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -609,6 +637,37 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -656,6 +715,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-highlight"
+version = "0.25.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adc5f880ad8d8f94e88cb81c3557024cf1a8b75e3b504c50481ed4f5a6006ff3"
+dependencies = [
+ "regex",
+ "streaming-iterator",
+ "thiserror",
+ "tree-sitter",
+]
+
+[[package]]
 name = "tree-sitter-java"
 version = "0.23.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -692,6 +763,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-md"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2efd398be546456c814598ee56c0f51769a77241511b4a58077815d120afa882"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-python"
 version = "0.23.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -712,10 +793,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-toml-ng"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9adc2c898ae49730e857d75be403da3f92bb81d8e37a2f918a08dd10de5ebb1"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-typescript"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-xonsh"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34f367b314d8b5f0afcc090562b3d7e40360501afd63c88fbcc3329e33bb4077"
 dependencies = [
  "cc",
  "tree-sitter-language",

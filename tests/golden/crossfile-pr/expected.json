@@ -58,7 +58,14 @@
           "uses": [],
           "group": "g1",
           "order_index": 0,
-          "rationale": "adds helper, used in main.py"
+          "rationale": "adds helper, used in main.py",
+          "symbols": [
+            {
+              "name": "helper",
+              "kind": "function_definition",
+              "scope": null
+            }
+          ]
         }
       ]
     }
@@ -66,7 +73,7 @@
   "groups": [
     {
       "id": "g0",
-      "reason": "top-level change",
+      "reason": "same scope: top-level",
       "members": [
         "h0"
       ]

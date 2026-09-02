@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/elwardi/ordo/schema/v1.json",
+  "$id": "https://github.com/FoamScience/ordo/schema/v1.json",
   "title": "ordo v1",
   "description": "Frozen contract for the ordo change-ordering engine. Input and output for `ordo order --json`.",
   "$defs": {
@@ -30,6 +30,55 @@
               "type": "boolean",
               "default": false,
               "description": "assert each change's `diff` is a complete (full-context) patch so a modified file can be reconstructed for full semantics; else a diff-only modification is positional"
+            },
+            "only_comments": {
+              "type": "boolean",
+              "default": false,
+              "description": "drop every non-comment/docstring hunk before ordering, so order/files/groups/edges/clusters cover only comment-only hunks"
+            },
+            "rules": {
+              "type": "array",
+              "description": "reviewing rules: the caller's own conventions, matched against the facts the engine computes. The engine reads no rule files — a client collects them (per-user, per-repo) and passes them here, so `ordo order` stays a function of its arguments",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "when": {
+                    "type": "object",
+                    "description": "conditions, ANDed; an empty `when` matches every hunk",
+                    "properties": {
+                      "path": { "type": "string", "description": "glob against the file path" },
+                      "lang": { "type": "string" },
+                      "category": { "enum": ["import", "definition", "other"] },
+                      "rules": {
+                      "type": "array",
+                      "description": "reviewing rules that matched this hunk; omitted when none did",
+                      "items": {
+                        "type": "object",
+                        "required": ["rule", "message", "level"],
+                        "properties": {
+                          "rule": { "type": "string" },
+                          "message": { "type": "string" },
+                          "level": { "enum": ["note", "warn"] }
+                        }
+                      }
+                    },
+                    "enclosing_kind": { "enum": ["definition", "test", "region", "preamble", "front-matter", "binding", "call"] },
+                      "defines": { "type": "string", "description": "glob against any name the hunk defines" },
+                      "uses": { "type": "string" },
+                      "imports": { "type": "string" },
+                      "noise": { "type": "boolean" },
+                      "comment": { "type": "boolean" },
+                      "query": { "type": "string", "description": "tree-sitter query source; only rows inside the hunk count, so a rule fires on what the change introduces rather than on everything the file already contained" }
+                    }
+                  },
+                  "note": { "type": "string" },
+                  "warn": { "type": "string" },
+                  "noise": { "type": "boolean", "description": "treat a matching hunk as skippable" },
+                  "priority": { "type": "integer", "description": "ordering influence: higher sorts earlier, but only among hunks the dependency graph has already freed — a preference can never reorder a definition after its use" }
+                }
+              }
             }
           }
         }
@@ -59,6 +108,23 @@
                 "type": "boolean",
                 "description": "true when the file could only be ordered positionally (a diff without full context); omitted when false"
               },
+              "unsupported": {
+                "type": "boolean",
+                "description": "true when the file's extension has no tree-sitter grammar, so hunks carry no structural analysis; omitted when false"
+              },
+              "dropped": {
+                "type": "array",
+                "description": "hunks removed before ordering (only `only_comments` removes any: an import hunk is kept and marked noise); hunks + dropped is what the diff produced, so a consumer can prove nothing went missing silently; omitted when empty",
+                "items": {
+                  "type": "object",
+                  "required": ["reason", "old_range", "new_range"],
+                  "properties": {
+                    "reason": { "enum": ["non_comment"] },
+                    "old_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                    "new_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
+                  }
+                }
+              },
               "hunks": {
                 "type": "array",
                 "items": {
@@ -70,6 +136,10 @@
                     "new_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
                     "category": { "enum": ["import", "definition", "other"] },
                     "enclosing": { "type": ["string", "null"] },
+                    "enclosing_kind": {
+                      "enum": ["test", "region", "preamble", "front-matter", "binding", "call"],
+                      "description": "what `enclosing` names when it is not a plain definition: a named block (a test suite) or a region that holds the hunk but declares nothing (a conditional-compilation block, a document preamble or its front matter, a top-level binding or call whose multi-line value or arguments hold the hunk). A region name is never a symbol and never seeds a def\u2192use edge; omitted for a definition"
+                    },
                     "defines": { "type": "array", "items": { "type": "string" } },
                     "uses": { "type": "array", "items": { "type": "string" } },
                     "group": { "type": "string" },
@@ -78,6 +148,15 @@
                     "noise": {
                       "type": "boolean",
                       "description": "formatting-only or generated-file hunk, skippable for review; omitted when false"
+                    },
+                    "comment": {
+                      "type": "boolean",
+                      "description": "every changed line is a comment or docstring; drives `only_comments` filtering; omitted when false"
+                    },
+                    "details": {
+                      "type": "array",
+                      "description": "what the hunk did to the members of its enclosing container, e.g. \"adds Serve, Watch to Cli\"; omitted when empty",
+                      "items": { "type": "string" }
                     },
                     "notes": {
                       "type": "array",
@@ -94,6 +173,19 @@
                           "construct": { "type": "string" },
                           "message": { "type": "string", "description": "escalation-ladder guidance" },
                           "verdict": { "type": "boolean", "description": "true when a concrete downgrade is suggested; omitted when false" }
+                        }
+                      }
+                    },
+                    "symbols": {
+                      "type": "array",
+                      "description": "symbol identity (name + tree-sitter node kind + enclosing scope) for each definition this hunk introduces, e.g. distinguishing a method `run` on class `A` from a module-level function `run`; matches `defines` minus imports; omitted when empty",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "kind", "scope"],
+                        "properties": {
+                          "name": { "type": "string" },
+                          "kind": { "type": "string", "description": "raw tree-sitter node kind of the defining node, e.g. function_definition" },
+                          "scope": { "type": ["string", "null"], "description": "qualified enclosing-definition name at the point of definition, or null at top level" }
                         }
                       }
                     }
@@ -127,7 +219,12 @@
             }
           }
         },
-        "clusters": {
+        "problems": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "what the engine could not make sense of in the caller's own input — a rule whose glob or query does not compile. Reported rather than silently never matching; omitted when empty"
+      },
+      "clusters": {
           "type": "array",
           "description": "independent parts of the change (connected components of the group def→use graph); each is an array of hunk ids. One cluster = atomic; multiple = candidate PR split.",
           "items": { "type": "array", "items": { "type": "string" } }

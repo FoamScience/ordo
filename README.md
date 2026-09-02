@@ -1,24 +1,70 @@
-# ordo
+<p align="center">
+  <img src="assets/readme/hero.svg" width="100%" alt="ordo — a code change, read in the order a human should read it. Right: a reviewer pane from a real ordo run listing five hunks in comprehension order, the changed definition first, with the rationale “changes signature of edit_files”.">
+</p>
 
-A standalone, language-agnostic engine that reorders the **hunks** of a code
-change into a **comprehension-optimized** reading order, with per-hunk semantic
-metadata and a human rationale. One core, many consumers (editors, CLIs, CI,
-review bots) — all speaking one JSON contract.
+<p align="center">
+  <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
+  <img src="https://img.shields.io/badge/languages-10-5fd4c0" alt="10 supported languages">
+</p>
 
-Grounded in Baum et al. (ICSME 2017): **P1** keep related changes together,
-**P2** definitions before their uses, **P3** grouping is the dominant win.
+**Diffs arrive in file order. Nobody reads them that way.**
 
-Ordering is a comprehension *aid*, not a correctness fix — treat it as such.
+`ordo` is a standalone, language-agnostic engine that reorders the **hunks** of
+a code change into a **comprehension-optimized** reading order, with per-hunk
+semantic metadata and a human-readable rationale. One core, many consumers —
+editors, CLIs, CI, review bots — all speaking one frozen JSON contract.
 
-## What it does
+Grounded in Baum, Schneider & Bacchelli (ICSME 2017): **P1** keep related
+changes together, **P2** definitions before their uses, **P3** grouping is the
+dominant win. Ordering is a comprehension *aid*, not a correctness fix — treat
+it as such.
 
-Per file, it parses both sides (of the diff) with tree-sitter and, for each hunk: classifies
-it (`import` / `definition` / `other`), finds its enclosing definition, and
-extracts the symbols it **defines** and **uses**. Then it groups hunks by
-enclosing definition (P1), derives **def→use** edges between groups (P2, across
-files when enabled), and topologically sorts them — ties and cycles broken by
-file position, so output is deterministic and a strict permutation of the input
-(nothing is dropped).
+## What you get
+
+- **A reading order**, not a file listing — a deterministic permutation of the
+  change's hunks, definitions ahead of their uses.
+- **A rationale per hunk** — one plain sentence saying why it is where it is
+  and what it did: `adds parse_cfg, used in main.py`, `changes signature of
+  parse`, `renames foo → bar`, `removes 31 lines`.
+- **A detail layer** — what the hunk did to its container's members: which enum
+  variant, struct field, object property or call keyword actually moved.
+- **Clusters** — the change's independent parts. One cluster means the change
+  is atomic; several is a candidate PR split.
+- **Advisories** — curated, deterministic guidance on advanced constructs
+  (metaclasses, `unsafe`, raw `new`/`delete`, shell injection), with an
+  escalation ladder and a verdict only when the pattern is concretely wrong.
+- **Noise flags** — generated, lock and pure-formatting hunks marked so a
+  client can dim or drop them.
+- **Full accounting** — every hunk the diff produced is either in the reading
+  order or recorded in `dropped` with the reason, so a consumer can prove
+  nothing went missing silently.
+- **Your own rules** — conventions as data (path/name facts plus tree-sitter
+  queries) that annotate, flag, or move a hunk earlier in the reading order,
+  without ever overriding definitions-before-uses.
+- **Intra-line refinement** — when a removed and an added line are the same line
+  edited, only the part that changed is highlighted, over grammar leaves rather
+  than characters: adding a parameter reads as adding that parameter.
+- **A reviewer TUI** — `ordo-tui`, a first-party client that shells to git and
+  renders the whole thing in the terminal.
+
+## Why the order is principled
+
+<p align="center">
+  <img src="assets/readme/defuse.svg" width="100%" alt="Real ordo output on a two-file change: main.py uses helper(), util.py defines it. Diffed order lists main.py first; ordo's comprehension order puts util.py's definition first, linked to its use by a def-to-use edge.">
+</p>
+
+Per file, `ordo` parses both sides of the diff with tree-sitter and, for each
+hunk: classifies it (`import` / `definition` / `other`), finds its enclosing
+definition, and extracts the symbols it **defines** and **uses** (imported
+names and local bindings are neither, so they can't seed spurious edges). Pure
+import hunks are marked `noise` and grouped together, the rest are grouped by
+enclosing definition (**P1**),
+linked by **def→use** edges between groups (**P2**, across files when
+`cross_file` is on), and topologically sorted — ties and cycles broken by file
+position, so output is deterministic and a permutation of the non-import
+hunks.
+
 
 ## Install
 
@@ -38,7 +84,8 @@ build.
 ordo order --json < input.json > output.json
 ordo pack  --json < input.json                 # compact LLM-ready review context
 ordo review path/to.patch                      # or: git diff | ordo review
-git diff -U100000 | ordo review --full-context # modified files get full semantics
+git diff -U100000 | ordo review --full-context  # modified files get full semantics
+ordo order --only-comments --json < input.json  # only comment/docstring hunks
 ```
 
 Input / output are frozen as **schema v1** (`schema/v1.json`):
@@ -49,19 +96,319 @@ Input / output are frozen as **schema v1** (`schema/v1.json`):
   "options": { "strategy": "comprehension", "cross_file": true } }
 ```
 
-`strategy` is `comprehension` (default) | `defs-first` | `file`.
-A change may instead carry a `diff` (unified/git). See the ceiling below.
+`strategy` is `comprehension` (default) | `defs-first` | `file`. A change may
+instead carry a `diff` (unified/git) — see [Ceilings](#ceilings-by-design).
 
 Output carries the global `order`, per-file `hunks` (with `category`,
-`enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, and
-`noise` for skippable formatting/generated hunks), the `groups`, the def→use
-`edges`, and `clusters` — the change's independent parts (one ⇒ atomic, many ⇒
-a candidate PR split). `ordo pack` renders all of it as compact review context.
+`enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, `details`,
+`symbols`, `noise` for skippable formatting/generated hunks, and `comment` for
+comment/docstring-only hunks), the `groups`, the def→use `edges`, and the
+`clusters` shown above. `ordo pack` renders all of it as compact review
+context.
 
-## Rationale
+`options.only_comments` (`--only-comments` on `ordo order`/`ordo pack`) drops
+every non-comment hunk before ordering, so `order`/`groups`/`edges`/`clusters`
+cover only comment/docstring changes — a lightweight pass over documentation
+edits without the noise of the surrounding code.
 
-Each hunk gets a one-line `rationale` explaining *why* it's where it is, from
-comparing both sides of the change:
+Each file entry also carries `dropped`: the hunks removed before ordering
+(pure imports, and non-comment hunks under `only_comments`) with the range each
+covered. `hunks` + `dropped` is exactly what the diff produced, so "did ordo
+miss one?" is a subtraction rather than a guess. The corpus suite checks the
+stronger property against git itself: every line `git diff -U0` calls changed
+must fall inside some hunk, kept or dropped.
+
+Not every hunk sits in a definition, and the ones that don't used to say only
+`change`. A hunk is now attributed to whatever really holds it, and
+`enclosing_kind` says what that is when it isn't a plain definition:
+
+| `enclosing_kind` | what holds the hunk | example `enclosing` |
+| --- | --- | --- |
+| *(omitted)* | a definition — a function, class, macro, … | `parse_cfg` |
+| `test` | a named block: `describe`/`it`/`test`, or a rust test macro | `describe "cli" > it "parses flags"` |
+| `region` | conditional compilation | `#ifdef CURL_DISABLE_HTTP` |
+| `binding` | a file-scope binding whose multi-line value holds the hunk | `ALLOWED_IMPORTS` |
+| `call` | a file-scope call whose multi-line arguments hold it | `execa('unicorns')` |
+| `preamble` | prose before a document's first heading | `preamble` |
+| `front-matter` | a document's `---` metadata block | `front matter` |
+
+Only a definition is a symbol: a region name is never looked up, never enters
+`defines` or `symbols`, and never seeds a def→use edge. `#ifdef CURL_DISABLE_HTTP`
+*tests* that macro rather than defining it.
+
+`symbols` gives each definition a name + tree-sitter node `kind` + enclosing
+`scope`, so a consumer can tell whether the same name across two commits is the
+*same* symbol — a method `run` on class `A` and a module-level function `run`
+share a name but differ in kind and/or scope, so they're different symbols.
+
+## Reviewing rules
+
+Your own conventions, applied to the change in front of you — the things a
+reviewer has to *remember* and a linter cannot know.
+
+```toml
+# <repo>/.ordo/rules.toml, or ~/.config/ordo/rules.toml — both apply
+[[rule]]
+name = "frozen-contract"
+path = "schema/v1.json"
+note = "schema v1 is frozen: additive OPTIONAL fields only"
+priority = 100                    # and put it first
+
+[[rule]]
+name = "prefer-pathlib"
+lang = "python"
+query-file = "rules/prefer-pathlib.scm"   # a tree-sitter query
+warn = "prefer pathlib.Path over os.path.*"
+```
+
+A rule matches on facts the engine already computes — `path`, `lang`,
+`category`, `enclosing-kind`, `defines`/`uses`/`imports` — and/or a tree-sitter
+query for conventions about code *shape*. It can `note`, `warn`, mark a hunk
+`noise`, or give it a `priority`.
+
+Three properties make this safe to hand to a config file:
+
+- **A rule is data.** Globs and a query, matched deterministically. Nothing is
+  executed, so the same input still produces the same output.
+- **`priority` cannot break P2.** It replaces the file-position tiebreaker among
+  groups the dependency graph has *already freed* — a preference can never pull
+  a use ahead of its definition. There is a test named after that.
+- **The engine reads no rule files.** They arrive in `Options.rules`; a client
+  collects them. `ordo order --json` stays a function of its arguments.
+
+And the reason a query rule isn't a linter: it fires on rows **inside the
+hunk**, so it reports what *this change introduces*, not the 400 pre-existing
+occurrences a whole-file lint would list. Full reference:
+[`docs/rules.md`](docs/rules.md); ordo's own rules are in
+[`.ordo/rules.toml`](.ordo/rules.toml).
+
+## Reviewer TUI (`ordo-tui`)
+
+An interactive terminal reviewer — a first-party *client* of the engine, kept
+out of the pure default build behind the `tui` feature:
+
+```sh
+cargo run --features tui --bin ordo-tui -- <rev> [<glob>...]   # rev defaults to HEAD
+```
+
+It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
+the change **in comprehension order**: a reading-order list (advisories `⚠`,
+noise dimmed, reviewed `✓`) beside a detail pane with tree-sitter
+syntax-highlighted, Neovim-style diff rendering, over the rationale, notes,
+def→use edges and advisory ladders. The engine never learns what git is.
+
+Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
+removed line is paired with the added line it became, and only the differing
+part carries the strong tint —
+
+```diff
+- fn content_matches(info: &AgentInfo, node: &AgentNode) -> bool {
++ fn content_matches(info: &AgentInfo, node: &AgentNode, label: Option<&str>) -> bool {
+                                                       └── only this is highlighted
+```
+
+The unit of comparison is the tree-sitter **leaf node**, never a character or a
+whitespace-split word, so `AgentNode` → `AgentNodeRef` reads as one identifier
+replaced rather than a three-character suffix appended. Lines with too little in
+common are left unrefined and render whole, so a rewrite is never dressed up as
+a small edit. The algorithm is `ordo::refine`, a public library module — a
+leaf-level LCS, deliberately not a full tree alignment (difftastic's
+Dijkstra-over-graphs, or `syndiff`): those buy accuracy on moved and
+restructured code at a cost this does not need to pay to say "an argument was
+added".
+
+<details>
+<summary><b>Revision syntax, path filters, GitButler support</b></summary>
+
+`<rev>` is any git commit-ish, a commit range (`main..branch`, or
+`main...branch` to diff from the merge base — an omitted side means `HEAD`), or
+`zz` for the uncommitted area. `<base>..zz` (or `<base>...zz` for the merge
+base of `<base>` and `HEAD`) reviews everything done on a branch including
+what's not yet committed. `zz` on the left (`zz..main`) is meaningless and
+rejected.
+
+On a **GitButler**-managed repo `<rev>` also takes the CLI IDs `but status`
+prints — the workspace is read once from `but --json status`, and the repo is
+otherwise driven by plain git:
+
+| `<rev>` | reviews |
+| --- | --- |
+| a branch ID (`at`) or name (`feat/multi-session`) | that branch's own commits, as a range |
+| a commit ID (`lzm`), or a change-ID / commit-ID prefix | that commit |
+| `zz` | the uncommitted area, including changes assigned to a stack |
+
+A branch label wins over git's reading of the same name, where a branch is
+only its tip commit — reviewing a branch means reviewing its commits.
+
+Generated and lock files (`Cargo.lock`, `package-lock.json`, `vendor/`,
+`node_modules/`, `.min.js`, …) are dropped before their blobs are read, and so
+is anything the repo's own `.gitattributes` declares — `linguist-generated` or
+an explicit `-diff`. `--all` keeps everything (the engine still flags known
+paths `noise`, so they render dimmed).
+
+```sh
+ordo-tui main...feature 'src/*' '*.rs'          # the branch, Rust sources only
+ordo-tui zz --all                               # everything uncommitted, lock files included
+ordo-tui HEAD 'src/*' '!src/generated/*'        # src/, minus a generated subtree
+ordo-tui HEAD '!tests/*'                        # everything except tests/
+```
+
+A glob prefixed `!` is negative and excludes a path that matches it; with only
+negative globs given, everything except those is kept. `\!literal` escapes a
+leading bang. Matching is order-independent, deliberately unlike `.gitignore`.
+
+</details>
+
+<details>
+<summary><b>Keybindings (<code>--keys vim|vscode</code>) and command bar</b></summary>
+
+Its three panes — reading order, code, why — take focus one at a time (the
+focused one is bordered in cyan); motion keys act on the focused pane, paging
+always drives the code pane.
+
+| | `vim` (default) | `vscode` |
+| --- | --- | --- |
+| move | `j`/`k` | `↑`/`↓` |
+| change pane | `C-w C-w`, `C-w h`/`j`/`k`/`l` | `F6` / `shift-F6`, `C-1`/`C-2`/`C-3` |
+| page / half page | `space`,`f`,`C-f` / `b`,`C-b` · `C-d`/`C-u` | `PageDown` / `PageUp` |
+| first / last | `gg` / `G` | `Home` / `End` |
+| mark reviewed (`n/N` count) | `x` | `space`, `enter` |
+| code cursor | `h`/`l`/`w`/`b`/`e`/`0`/`$`/`{`/`}`, `zh`/`zl` hscroll | `←`/`→`/`C-←`/`C-→`/`Home`/`End`, `S-←`/`S-→` hscroll |
+| symbol/dep hover, jump | `K`, `gd`/`Enter`, `C-o` back | `F12`, `C-Enter`, `Alt-←` back |
+| fold a group (`:group`) | `za`/`zo`/`zc` · `zR`/`zM` all | `C-k C-l` · `C-k C-j`/`C-k C-0` all |
+| search / symbol occurrence | `/`, `*`/`#`, `n`/`N` | `C-f`, `C-F12`/`shift-C-F12`, `F3`/`shift-F3` |
+| open in `$VISUAL`/`$EDITOR` | `ge` | `C-o` |
+| command bar | `:` | `C-Shift-P` (`C-P` pre-fills `goto `) |
+| help popup | `?` | `F1` |
+| quit | `q`, `Esc` | `C-q`, `Esc` |
+
+The command bar (`:` in vim, `Ctrl+Shift+P` in vscode) turns launch-time
+choices into live controls, with tab-completion over command names and each
+command's own arguments:
+
+| command | does |
+| --- | --- |
+| `:only-comments` | toggle showing only comment/docstring hunks |
+| `:all` | toggle showing generated/formatting-noise hunks |
+| `:filter <glob>` | narrow the review to paths matching `<glob>` (empty clears it) |
+| `:keys <preset>` | swap the keymap live (`vim`, `vscode`) |
+| `:strategy <name>` | re-order the review in place (`comprehension`, `defs-first`, `file`) |
+| `:group` | toggle group-reason headers — a fold tree, see the fold keys above |
+| `:audit` | account for every hunk and file not on screen, and why |
+| `:goto <path>` | select the first hunk of `<path>`, focus the code pane |
+| `:e <rev>` | review a different revision, without restarting |
+| `:q` | quit |
+| `:help` | list these commands |
+
+Reviewed hunks persist to
+`${XDG_CACHE_HOME:-$HOME/.cache}/ordo/reviewed/<repo>.json`, keyed by
+revision + hunk identity + hunk content — a mark drops itself the moment the
+hunk's content changes underneath it. Marks older than 90 days are pruned
+automatically. The file records only opaque hashes, never a path, symbol name
+or source text.
+
+### Themes
+
+`--theme <name>` (also `$ORDO_TUI_THEME`, default `dark`); `:theme` lists them
+and swaps live.
+
+| | |
+| --- | --- |
+| `dark`, `light` | keep the **terminal's own** foreground palette and only tint the diff backgrounds — the default, because it matches the rest of your setup for free |
+| `catppuccin-`{`mocha`,`macchiato`,`frappe`,`latte`} | |
+| `tokyonight-`{`night`,`storm`,`moon`,`day`} | |
+| `gruvbox-`{`dark`,`light`}, `nord`, `dracula`, `solarized-`{`dark`,`light`} | truecolor: every colour named by the theme, so the reviewer matches your editor rather than your shell |
+
+No theme paints a window background, so terminal transparency and blur survive.
+What a theme *does* assume is a terminal background of matching lightness —
+which is why the choice is an explicit flag rather than a detection (OSC 11
+background queries aren't reliably supported).
+
+Every role is overridable, on top of any theme:
+
+```toml
+[theme]
+name = "catppuccin-mocha"
+border-focus = "#f5c2e7"    # the focused pane's border
+syntax-keyword = "#f38ba8"
+add-bg = "#1e3a24"          # the quiet tint on an added line
+```
+
+Roles: `fg`, `dim`, `border`, `border-focus`, `accent`, `category`, `mark`,
+`reviewed`, `warn`, `add-fg`, `del-fg`, `add-bg`, `del-bg`, `add-strong-bg`,
+`del-strong-bg`, `select-bg`, `match-bg`, `match-current-bg`, and
+`syntax-`{`comment`, `keyword`, `string`, `number`, `function`, `type`,
+`property`, `operator`, `variable`, `builtin`, `parameter`, `attribute`}.
+
+A theme colours twelve *syntax roles* rather than the twenty-six tree-sitter
+capture names mapped onto them, so a new grammar's captures never mean touching
+every theme.
+
+`ordo-tui --init-config` writes a starting config to
+`${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml` (`--force` to overwrite): every
+binding and every colour of the current preset and theme, at its real value,
+commented out. It is generated from the same tables the program reads, so it
+can't drift from what ordo accepts — a test uncomments the whole file and
+checks it parses cleanly and changes nothing.
+
+Keys are configurable in the same file, on top of whichever preset is in use:
+
+```toml
+preset = "vim"            # the preset to start from (--keys still wins)
+
+[binds]
+"C-n" = "next"            # add or replace a binding
+"g d" = "jump-to-edge"    # a chord: prefix, space, key
+"x" = "none"              # remove a binding
+```
+
+Action names are the ones `?`/`F1` lists. A line that names a key or an action
+that doesn't exist is reported with its line number and skipped, so a typo costs
+one binding rather than the session.
+
+</details>
+
+## Detail layer, rationale patterns & advisories
+
+<details>
+<summary><b>Detail layer</b> — what a hunk did to its container's members</summary>
+
+Where the rationale names the *container* a hunk touched, `details` says what
+it did to that container's members — an enum variant, a struct field, an
+object property.
+Members on both sides are compared by their own text, not just their name, so
+a member that merely shares a line with the real change is not reported as
+changed. A container the hunk introduces wholesale stays silent — the
+rationale already says `adds type Fresh`. Lists cap at three names plus a
+count.
+
+```
+rationale: edits main
+details:
+  - adds help to ap.add_argument("--sample")
+  - removes required from ap.add_argument("--sample")
+  - adds default, help, and nargs to ap.add_argument("--samples")
+```
+
+Two `add_argument(...)` calls in the same function are attributed separately,
+never conflated under the enclosing `main`.
+
+| language | member node kinds |
+| --- | --- |
+| rust | `enum_variant`, `field_declaration`, `const_item` |
+| go | `field_declaration`, `const_spec`, `var_spec`, `type_spec` |
+| java | `enum_constant` |
+| c / cpp | `field_declaration`, `enumerator` |
+| typescript / tsx | `enum_assignment`, `property_signature`, `public_field_definition`, `method_signature`, `pair` |
+| javascript | `pair`, `field_definition`, `method_definition` |
+| python | `pair`, `keyword_argument` |
+| lua | `field` |
+| markdown | `section` (a nested subsection is a member of its parent) |
+
+</details>
+
+<details>
+<summary><b>Rationale patterns</b> — one line per hunk, from comparing both sides</summary>
 
 | Pattern | Example |
 |---|---|
@@ -69,14 +416,22 @@ comparing both sides of the change:
 | within-file order | `uses helper, defined above` · `adds helper, used by run below` |
 | add vs edit | `adds helper` (new) · `edits run` (body of an existing def) |
 | signature / type | `changes signature of parse` · `changes type Config` · `adds type Config` |
-| imports | `adds import os` · `removes import sys` |
 | test ↔ code | `tests parse_cfg (config.py)` |
-| rename / delete | `renames foo → bar` · `removes old_helper` |
+| rename / delete | `renames foo → bar` · `removes old_helper` · `removes import sys` |
+| body deletion | `removes 31 lines` (a deletion inside a def, no symbol removed) |
 | move / extract | `moves foo from a.py` · `adds read_input, extracted from order` |
+| container | `edits it "parses flags"` · `edits #ifdef CURL_DISABLE_HTTP` · `edits ALLOWED_IMPORTS` |
+| switched off | `comments out code in run` · `uncomments code in run` |
+| import | `adds import degrade` · `changes import c, d, e` · `moves import pg` · `removes import logger` |
 
-Cross-file lines (`defined in …`, `tests … (…)`) only appear when the changeset
-is sent as one call with `cross_file: true` — a definer and its user must be
-visible together.
+An import hunk is **noise, not nothing**: it never leads the reading order and
+never seeds an edge, but it stays visible (dimmed) where the diff put it, and
+says which import arrived, changed or moved. Dropping it outright made a new
+dependency invisible, and made a *moved* import read as a deletion with no
+counterpart.
+
+Cross-file lines only appear when the changeset is sent as one call with
+`cross_file: true`.
 
 Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
 **advisories** — advanced-construct guidance with an escalation ladder, and a
@@ -92,9 +447,13 @@ registry.py:L2  metaclass ⚠
   ⚠ this metaclass overrides only __init__ — __init_subclass__ likely suffices.
 ```
 
-Advisories are a curated catalog (`src/advisories.rs`), not a style linter —
-detection is deterministic tree-sitter, verdicts fire only when the pattern is
-concretely wrong. Current catalog:
+</details>
+
+<details>
+<summary><b>Advisory catalog</b> — a curated list, not a style linter</summary>
+
+Detection is deterministic tree-sitter, verdicts fire only when the pattern is
+concretely wrong (`src/advisories.rs`):
 
 | lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
 |---|---|---|
@@ -108,21 +467,7 @@ concretely wrong. Current catalog:
 
 `assert`/`panic` fire only outside test files.
 
-## Reviewer TUI (`ordo-tui`)
-
-An interactive terminal reviewer — a first-party *client* of the engine, kept
-out of the pure default build behind the `tui` feature:
-
-```sh
-cargo run --features tui --bin ordo-tui -- <rev>   # defaults to HEAD
-```
-
-It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders the
-change **in comprehension order**: a reading-order list (advisories `⚠`, noise
-dimmed, reviewed `✓`) beside a detail pane showing the hunk diff, rationale,
-notes, def→use edges and advisory ladders. `j`/`k` move, `x` mark-reviewed (with
-an `n/N` progress count), `g`/`G` ends, `q` quits. The engine never learns what
-git is.
+</details>
 
 ## Library API
 
@@ -138,21 +483,55 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 
 ## Supported languages
 
-python, javascript, typescript, tsx, go, c, cpp, java, lua. Adding one is a
-single registry entry in `src/lang.rs` plus its grammar crate — no algorithm
-changes.
+python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
+Adding one is usually a single registry entry in `src/lang.rs` plus its
+grammar crate — no algorithm changes. Markdown is the one exception: a heading has no
+identifier to name a def by, so a def is a *section* (heading + content,
+nested by heading level) instead — `adds section Usage`, `edits section
+Install`. This is a rationale-quality improvement, not an ordering one:
+markdown has no `uses` (link targets aren't parsed), so markdown hunks fall
+back to file order.
 
 ## Ceilings (by design)
 
-- **Symbol resolution is approximate** — name match with an optional cross-file
-  union, no full scope/type analysis. `cross_file` is a toggle.
+`ordo` states its own limits rather than guessing past them:
+
+- **Symbol resolution is approximate** — name match with an optional
+  cross-file union, no full scope/type analysis. `cross_file` is a toggle.
 - **`diff` input** reaches full semantics whenever full new content is
   derivable: `new` given, `old`+`diff` (applied), an added file, or a
-  caller-asserted full-context patch (`full_context` / `--full-context`,
-  e.g. `git diff -U100000`). A bare context-limited diff of a *modified* file
-  stays positional and is flagged `degraded: true` (no silent guessing — a
-  partial diff can't be reconstructed without truncating the file). See
-  `docs/diff-input-design.md`.
+  caller-asserted full-context patch (`full_context` / `--full-context`, e.g.
+  `git diff -U100000`). A bare context-limited diff of a *modified* file stays
+  positional and is flagged `degraded: true` (no silent guessing — a partial
+  diff can't be reconstructed without truncating the file). See
+  [`docs/diff-input-design.md`](docs/diff-input-design.md).
+- **Unsupported languages** — a file whose extension has no tree-sitter
+  grammar (`.gif`, `.ttf`, `.astro`, `.css`, …) gets no structural analysis at
+  all and is flagged `unsupported: true` on its file entry. Distinct from
+  `degraded`: `degraded` means a grammar exists but only a context-limited
+  diff was available; `unsupported` means there is no grammar to begin with.
+  Either, both, or neither can be true for a given file.
+- **The engine has no filtering policy of its own** — it orders exactly the
+  changes it is handed and has no opinion about which files belong in a
+  review. *Path* filtering (globs, skipping generated/lock files) is entirely
+  client-side: `ordo-tui` has it, `ordo order`/`ordo review` deliberately do
+  not. A caller sends the set it wants ordered.
+
+  One deliberate exception: `options.only_comments` (`--only-comments`) *is*
+  honoured by the engine, dropping non-comment hunks **before** grouping, the
+  the one thing the engine drops — filtering the finished `Output`
+  would leave `order`/`groups`/`edges`/`clusters` referring to hunks no longer
+  in `files`. So the engine applies a selection the caller *states*; it never
+  invents one.
+
+  Note `ordo-tui`'s `--only-comments` does NOT use the engine flag: it asks
+  for every hunk and filters the view, so `:only-comments` can toggle back off
+  with something to reveal.
+
+  Because the client filters and the engine does not, `:audit` is what ties the
+  two together: it charges every hunk not on screen to the thing that removed
+  it — view filter, engine drop, or a file never sent at all — and says so
+  outright when a hidden hunk matches no known reason.
 - **Rationale heuristics** — rename detection is 1:1 per file (a file that
   renames *and* adds/removes other defs falls back to `adds`/`removes`);
   removals attach by old-line overlap (precise for isolated deletions).
@@ -164,5 +543,5 @@ cargo test                     # unit + property + golden + cross-file
 UPDATE_GOLDEN=1 cargo test     # regenerate tests/golden/*/expected.json
 ```
 
-Design: [`docs/`](docs) / the ordering-engine design outline. Roadmap and status
-in [`TASKS.md`](TASKS.md).
+License: MIT. Design notes in [`docs/`](docs). Roadmap and status in
+[`TASKS.md`](TASKS.md).

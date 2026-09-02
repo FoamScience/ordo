@@ -30,14 +30,12 @@
           ],
           "category": "import",
           "enclosing": null,
-          "defines": [
-            "fmt",
-            "std"
-          ],
+          "defines": [],
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "adds import fmt, std"
+          "rationale": "adds import fmt, std",
+          "noise": true
         },
         {
           "id": "h1",
@@ -57,7 +55,14 @@
           "uses": [],
           "group": "g1",
           "order_index": 1,
-          "rationale": "adds make, used by run below"
+          "rationale": "adds make, used by run below",
+          "symbols": [
+            {
+              "name": "make",
+              "kind": "function_item",
+              "scope": null
+            }
+          ]
         },
         {
           "id": "h2",
@@ -79,7 +84,14 @@
           ],
           "group": "g2",
           "order_index": 2,
-          "rationale": "adds run"
+          "rationale": "adds run",
+          "symbols": [
+            {
+              "name": "run",
+              "kind": "function_item",
+              "scope": null
+            }
+          ]
         }
       ]
     }
@@ -87,7 +99,7 @@
   "groups": [
     {
       "id": "g0",
-      "reason": "import",
+      "reason": "same scope: imports",
       "members": [
         "h0"
       ]
