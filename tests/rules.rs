@@ -554,19 +554,100 @@ fn import_hit(path: &str, old: &str, new: &str, glob: &str) -> bool {
 
 #[test]
 fn a_cpp_include_binds_its_path_so_an_imports_glob_can_see_it() {
-    let (old, new) = ("#include <string>\n", "#include <string>\n#include <boost/algorithm/string.hpp>\n");
+    let (old, new) = (
+        "#include <string>\n",
+        "#include <string>\n#include <boost/algorithm/string.hpp>\n",
+    );
     assert!(import_hit("a.cpp", old, new, "boost/**"));
     assert!(!import_hit("a.cpp", old, new, "asio/**"));
-    assert!(import_hit("a.c", "int x;\n", "#include \"util.h\"\nint x;\n", "util.h"));
+    assert!(import_hit(
+        "a.c",
+        "int x;\n",
+        "#include \"util.h\"\nint x;\n",
+        "util.h"
+    ));
     let out = one_with("a.cpp", old, new, serde_json::json!([]));
-    assert_eq!(out.files[0].hunks[0].rationale, "adds import boost/algorithm/string.hpp");
+    assert_eq!(
+        out.files[0].hunks[0].rationale,
+        "adds import boost/algorithm/string.hpp"
+    );
 }
 
 #[test]
 fn a_go_import_binds_the_package_name_code_uses() {
-    let (old, new) = ("package m\n", "package m\n\nimport (\n\t\"fmt\"\n\tz \"go.uber.org/zap\"\n\t_ \"embed\"\n)\n");
+    let (old, new) = (
+        "package m\n",
+        "package m\n\nimport (\n\t\"fmt\"\n\tz \"go.uber.org/zap\"\n\t_ \"embed\"\n)\n",
+    );
     assert!(import_hit("a.go", old, new, "z"), "alias binds");
-    assert!(import_hit("a.go", old, new, "fmt"), "bare path binds its last segment");
-    assert!(!import_hit("a.go", old, new, "zap"), "an aliased import is known by its alias");
-    assert!(!import_hit("a.go", old, new, "embed"), "a blank import binds nothing");
+    assert!(
+        import_hit("a.go", old, new, "fmt"),
+        "bare path binds its last segment"
+    );
+    assert!(
+        !import_hit("a.go", old, new, "zap"),
+        "an aliased import is known by its alias"
+    );
+    assert!(
+        !import_hit("a.go", old, new, "embed"),
+        "a blank import binds nothing"
+    );
+}
+
+// ---------------------------------------------------------------- member initialization across the change
+
+fn uninit_rule() -> serde_json::Value {
+    serde_json::json!([{ "name": "init-members", "when": { "member_uninitialized": true }, "warn": "initialize" }])
+}
+
+#[test]
+fn a_member_no_file_in_the_change_initializes_is_flagged() {
+    let out = one_with(
+        "w.hpp",
+        "struct W {\n};\n",
+        "struct W {\n    int m_x;\n};\n",
+        uninit_rule(),
+    );
+    assert_eq!(hits(&out, "w.hpp"), vec!["warn:init-members"]);
+    assert!(
+        out.files[0].hunks[0]
+            .notes
+            .iter()
+            .any(|n| n == "uninitialized member m_x"),
+        "{:?}",
+        out.files[0].hunks[0].notes
+    );
+}
+
+#[test]
+fn an_initializer_list_in_the_cpp_covers_a_member_declared_in_the_header() {
+    let out = run(serde_json::json!({
+        "changes": [
+            { "path": "w.hpp", "old": "struct W {\n    W();\n};\n", "new": "struct W {\n    W();\n    int m_x;\n};\n" },
+            { "path": "w.cpp", "old": "W::W() {}\n", "new": "W::W() : m_x(0) {}\n" },
+        ],
+        "options": { "rules": uninit_rule() }
+    }));
+    assert!(hits(&out, "w.hpp").is_empty(), "{:?}", hits(&out, "w.hpp"));
+}
+
+#[test]
+fn in_class_initialization_and_member_functions_are_not_uninitialized_members() {
+    let out = one_with("w.hpp", "struct W {\n};\n", "struct W {\n    int m_x = 0;\n    int width() const;\n    int* p;\n};\n", uninit_rule());
+    // only the raw pointer has no initializer
+    assert_eq!(out.files[0].hunks[0].notes, vec!["uninitialized member p"]);
+}
+
+#[test]
+fn a_member_the_old_side_already_had_is_not_this_changes_problem() {
+    let out = one_with("w.hpp", "struct W {\n    int m_x;\n};\n", "struct W {\n    int m_x;\n    int m_y = 1;\n};\n", uninit_rule());
+    assert!(hits(&out, "w.hpp").is_empty());
+}
+
+#[test]
+fn java_counts_a_this_assignment_in_a_constructor() {
+    let bare = one_with("W.java", "class W {\n}\n", "class W {\n    int a;\n}\n", uninit_rule());
+    assert_eq!(hits(&bare, "W.java"), vec!["warn:init-members"]);
+    let assigned = one_with("W.java", "class W {\n}\n", "class W {\n    int a;\n    W(int x) { this.a = x; }\n}\n", uninit_rule());
+    assert!(hits(&assigned, "W.java").is_empty());
 }

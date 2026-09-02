@@ -176,6 +176,11 @@ struct Collected {
     /// deepest control-flow construct each row sits inside (0 = none)
     nest_rows: HashMap<usize, usize>,
     nest_depth: usize,
+    /// (row, name) of every data member declared without an initializer
+    uninit_fields: Vec<(usize, String)>,
+    /// every member name an initializer list (c++) or `this.x = …` (java)
+    /// in this file initializes
+    field_inits: HashSet<String>,
 }
 
 /// Node kinds that open a level of control flow, across the grammars ordo
@@ -382,6 +387,14 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                     .and_then(|(_, _, _, scope)| scope.clone())
             })
             .or_else(|| enclosing.clone());
+        // data members this hunk declares that nothing in this file
+        // initializes; `lib` widens the check to every file in the change
+        let uninit_members: Vec<String> = c
+            .uninit_fields
+            .iter()
+            .filter(|(row, n)| r0 <= *row && *row <= r1 && !c.field_inits.contains(n))
+            .map(|(_, n)| n.clone())
+            .collect();
         let container_members: Vec<String> = match &container {
             None => vec![],
             Some(cn) => {
@@ -494,7 +507,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             nesting,
             recursive,
             container_members,
-            uninit_members: vec![],
+            uninit_members,
         });
     }
     Some(out)
@@ -897,6 +910,12 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
 fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
     let kind = node.kind();
     let sr = node.start_position().row;
+    if let Some(n) = field_init_name(node, src, spec) {
+        c.field_inits.insert(n);
+    }
+    if let Some(name) = uninit_field(node, src, spec) {
+        c.uninit_fields.push((sr, name));
+    }
     if import_like(node, spec) {
         // the whole statement's rows count as import — a hunk that lands
         // anywhere in a multi-line `from x import (\n  a,\n  b,\n)` (tail,
@@ -2015,6 +2034,79 @@ fn go_import_name(spec: Node, src: &[u8]) -> Option<(usize, String)> {
     let path = spec.child_by_field_name("path")?.utf8_text(src).ok()?;
     let last = path.trim_matches('"').rsplit('/').next()?;
     (!last.is_empty()).then(|| (row, last.to_string()))
+}
+
+/// A data member declared without an initializer — `int a;`, `int* p;` in C++
+/// (a `field_identifier` under the declarator chain, no `default_value`),
+/// `int a;` in Java (a `variable_declarator` with no `value`). A member
+/// *function* is a `field_declaration` in C++ too and is not data. C structs
+/// have no constructors to initialize in, so C is left alone.
+/// Shapes verified against tree-sitter-cpp-0.23 / tree-sitter-java-0.23.
+fn uninit_field(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
+    if node.kind() != "field_declaration" {
+        return None;
+    }
+    let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+    match spec.name {
+        "cpp" => {
+            if node.child_by_field_name("default_value").is_some() {
+                return None;
+            }
+            let mut d = node.child_by_field_name("declarator")?;
+            while matches!(d.kind(), "pointer_declarator" | "reference_declarator" | "array_declarator") {
+                d = d.child_by_field_name("declarator")?;
+            }
+            (d.kind() == "field_identifier").then(|| text(d)).flatten()
+        }
+        "java" => {
+            let d = node.child_by_field_name("declarator")?;
+            if d.kind() != "variable_declarator" || d.child_by_field_name("value").is_some() {
+                return None;
+            }
+            text(d.child_by_field_name("name")?)
+        }
+        _ => None,
+    }
+}
+
+/// The member an initializer names: `: a(x)` in a C++ constructor's
+/// initializer list, `this.a = x` in a Java constructor body.
+fn field_init_name(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
+    let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+    match (spec.name, node.kind()) {
+        ("cpp", "field_initializer") => text(
+            node.named_child(0)
+                .filter(|n| n.kind() == "field_identifier")?,
+        ),
+        ("java", "assignment_expression") => {
+            let left = node.child_by_field_name("left")?;
+            if left.kind() != "field_access" || left.child_by_field_name("object")?.kind() != "this"
+            {
+                return None;
+            }
+            text(left.child_by_field_name("field")?)
+        }
+        _ => None,
+    }
+}
+
+/// Every member name the constructors in `content` initialize — the other
+/// half of "a member added in this change with no initializer", which may
+/// live in the `.cpp` while the member lives in the header.
+pub fn field_initializers(spec: &LangSpec, content: &str) -> HashSet<String> {
+    let Some(tree) = lang::parse(spec, content) else {
+        return HashSet::new();
+    };
+    let mut c = Collected::default();
+    let mut stack: Vec<String> = vec![];
+    walk(
+        tree.root_node(),
+        content.as_bytes(),
+        spec,
+        &mut stack,
+        &mut c,
+    );
+    c.field_inits
 }
 
 fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {

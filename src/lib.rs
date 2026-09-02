@@ -377,6 +377,45 @@ pub fn run(input: Input) -> Output {
     }
 
     // ---- reviewing rules (Options.rules) ----
+    // A data member added in this change is initialized in-class or in a
+    // constructor's initializer list — and if that constructor changed, its
+    // file is in the diff. So "no initializer anywhere in the change" is
+    // decidable from the change alone, header and `.cpp` together. A member
+    // the old side already had is not this change's to answer for.
+    let mut inits: HashSet<String> = HashSet::new();
+    for change in &input.changes {
+        if let (Some(spec), Some(new)) = (lang::for_path(&change.path), change.new.as_deref()) {
+            if matches!(spec.name, "cpp" | "java") {
+                inits.extend(extract::field_initializers(spec, new));
+            }
+        }
+    }
+    for (fi, change) in input.changes.iter().enumerate() {
+        let Some(spec) = lang::for_path(&change.path) else {
+            continue;
+        };
+        if !matches!(spec.name, "cpp" | "java") {
+            continue;
+        }
+        let old_names: HashSet<String> = change
+            .old
+            .as_deref()
+            .map(|o| {
+                extract::member_rows(spec, o)
+                    .into_iter()
+                    .map(|(_, n, _, _)| n)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for sem in &mut sems[fi] {
+            sem.uninit_members
+                .retain(|n| !inits.contains(n) && !old_names.contains(n));
+            for n in &sem.uninit_members {
+                sem.notes.push(format!("uninitialized member {n}"));
+            }
+        }
+    }
+
     // Evaluated after the semantics they match on, and before the ordering they
     // can influence. A rule's `noise` and `priority` reach the hunk itself; its
     // notes ride along to the output.
