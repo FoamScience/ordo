@@ -3144,9 +3144,17 @@ const HL: &[(&str, Role)] = &[
     ("punctuation", Role::Operator),
     ("punctuation.bracket", Role::Operator),
     ("punctuation.delimiter", Role::Operator),
+    ("punctuation.special", Role::Operator),
     ("string", Role::Str),
+    ("string.escape", Role::Number),
     ("string.special", Role::Str),
     ("tag", Role::Attribute),
+    ("text.emphasis", Role::Keyword),
+    ("text.literal", Role::Str),
+    ("text.reference", Role::Property),
+    ("text.strong", Role::Keyword),
+    ("text.title", Role::Function),
+    ("text.uri", Role::Property),
     ("type", Role::Type),
     ("type.builtin", Role::Type),
     ("variable", Role::Variable),
@@ -3222,19 +3230,169 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_toml_ng::LANGUAGE.into(),
             tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
         ),
+        "md" | "markdown" => (tree_sitter_md::LANGUAGE.into(), md_block_query()),
         _ => return None,
     })
 }
+
+// The block query's `[(link_title)(indented_code_block)(fenced_code_block)]
+// @text.literal` wraps a fenced code block's *entire* span, content included,
+// starting at the exact byte where the fence-language injection's own first
+// token also starts. `tree-sitter-highlight` breaks that starting-byte tie by
+// opening the *deeper* (injected) scope first, which — since scopes must
+// close in the order they opened — forces that first token to stay "open"
+// (and coloured) all the way to wherever `text.literal` closes, i.e. the rest
+// of the fence. Dropping `fenced_code_block` from that one alternation
+// (leaving `link_title`/`indented_code_block` untouched) removes the base
+// layer's competing scope, so the fence body carries no ambient colour and
+// the injected grammar alone colours it — which is also why `@none` on
+// `code_fence_content` (the block query's own attempt at this) is left out
+// of `HL` entirely rather than mapped to a role: giving it a colour of its
+// own would reproduce the exact same starting-byte tie against the
+// injection. Falls back to the query unmodified if upstream ever reformats
+// that line — a missed match just brings the wash back, it doesn't break.
+fn md_block_query() -> String {
+    tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.replace("\n  (fenced_code_block)\n", "\n")
+}
+
+// Fence info-string (```rust, ```py, …) → a representative extension, so a
+// fenced code block's language resolves through `highlight_spec` — the same
+// table a real file uses — instead of a second copy of the grammar list.
+// Mirrors `lang::for_lang_name`'s canonical names. A language ordo has no
+// grammar for (`console`, `json`, `diff`, …) returns None and stays plain.
+fn fence_ext(name: &str) -> Option<&'static str> {
+    let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();
+    Some(match word.to_ascii_lowercase().as_str() {
+        "py" | "python" | "python3" | "pyi" => "py",
+        "xsh" | "xonsh" => "xsh",
+        "js" | "javascript" | "node" | "mjs" | "cjs" | "jsx" => "js",
+        "ts" | "typescript" | "mts" | "cts" => "ts",
+        "tsx" => "tsx",
+        "rs" | "rust" => "rs",
+        "go" | "golang" => "go",
+        "c" => "c",
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" => "cpp",
+        "java" => "java",
+        "lua" => "lua",
+        "toml" => "toml",
+        _ => return None,
+    })
+}
+
+// Distinct fence languages (info-string text) named by fenced code blocks in
+// `src`, in first-seen order. Parsed with the block grammar directly, ahead
+// of highlighting, so the injected per-fence configs can be built before the
+// highlighter borrows them.
+fn md_fence_languages(src: &str) -> Vec<String> {
+    let language: tree_sitter::Language = tree_sitter_md::LANGUAGE.into();
+    let mut parser = Parser::new();
+    let Ok(()) = parser.set_language(&language) else {
+        return Vec::new();
+    };
+    let Some(tree) = parser.parse(src, None) else {
+        return Vec::new();
+    };
+    let Ok(query) = Query::new(
+        &language,
+        "(fenced_code_block (info_string (language) @lang))",
+    ) else {
+        return Vec::new();
+    };
+    let mut cursor = QueryCursor::new();
+    let mut names = Vec::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), src.as_bytes());
+    while let Some(m) = matches.next() {
+        for cap in m.captures {
+            if let Ok(text) = cap.node.utf8_text(src.as_bytes()) {
+                if !names.iter().any(|n| n == text) {
+                    names.push(text.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+// `tree_sitter_md::INJECTION_QUERY_BLOCK` looks like the obvious choice for
+// both injections below, but under `tree-sitter-highlight` neither rule works
+// as shipped, so this query is hand-written instead — don't "simplify" it
+// back to the crate's constant, that regresses markdown highlighting
+// silently:
+//
+// - `(inline) @injection.content (#set! injection.language
+//   "markdown_inline")` produces zero highlight events: the callback does
+//   get invoked for `markdown_inline`, but the layer it returns never emits
+//   anything unless the injection also carries `injection.include-children`.
+// - the fenced-code rule fires and *looks* right for a one-line body, but
+//   `code_fence_content` is not one opaque text node — tree-sitter-markdown's
+//   scanner splits it around a `block_continuation` per line *and* around
+//   stray punctuation like `(`, `{`, `=`, `;` that it tokenizes for its own
+//   purposes. Without `include-children`, those child ranges are excised
+//   from what the fence-language parser sees, so it's handed something like
+//   "fn add \n    let x  1\n\n" instead of the real source — which silently
+//   breaks the fence grammar's own parse (a `let` after that mangled prefix
+//   no longer parses as a keyword). `include-children` restores the full
+//   contiguous span.
+const MD_INJECTION_QUERY: &str = r#"
+((inline) @injection.content
+ (#set! injection.language "markdown_inline")
+ (#set! injection.include-children))
+
+(fenced_code_block
+  (info_string (language) @injection.language)
+  (code_fence_content) @injection.content
+  (#set! injection.include-children))
+"#;
 
 // Syntax-highlight `src` into per-line colored segments. None when the language
 // is unsupported or the grammar/query fails to build → caller renders plain.
 fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>> {
     let (language, query) = highlight_spec(path)?;
     let names: Vec<&str> = HL.iter().map(|(n, _)| *n).collect();
-    let mut cfg = HighlightConfiguration::new(language, path, &query, "", "").ok()?;
+    let is_markdown = matches!(path.rsplit('.').next(), Some("md" | "markdown"));
+    let injections = if is_markdown { MD_INJECTION_QUERY } else { "" };
+    let mut cfg = HighlightConfiguration::new(language, path, &query, injections, "").ok()?;
     cfg.configure(&names);
+
+    // Injected-layer configs: `markdown_inline` plus one per fenced-code
+    // language actually present. Built up front, before `highlight` runs, so
+    // they outlive the borrow the injection callback hands back (it must
+    // return `&'a HighlightConfiguration` for the same `'a` as `cfg`).
+    let mut injected: Vec<(String, HighlightConfiguration)> = Vec::new();
+    if is_markdown {
+        if let Ok(mut inline) = HighlightConfiguration::new(
+            tree_sitter_md::INLINE_LANGUAGE.into(),
+            path,
+            tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+            "",
+            "",
+        ) {
+            inline.configure(&names);
+            injected.push(("markdown_inline".to_string(), inline));
+        }
+        for lang_name in md_fence_languages(src) {
+            if injected.iter().any(|(n, _)| *n == lang_name) {
+                continue;
+            }
+            let Some(ext) = fence_ext(&lang_name) else {
+                continue;
+            };
+            let Some((l, q)) = highlight_spec(&format!("x.{ext}")) else {
+                continue;
+            };
+            if let Ok(mut c) = HighlightConfiguration::new(l, &lang_name, &q, "", "") {
+                c.configure(&names);
+                injected.push((lang_name, c));
+            }
+        }
+    }
+
     let mut hl = Highlighter::new();
-    let events = hl.highlight(&cfg, src.as_bytes(), None, |_| None).ok()?;
+    let events = hl
+        .highlight(&cfg, src.as_bytes(), None, |name| {
+            injected.iter().find(|(n, _)| n == name).map(|(_, c)| c)
+        })
+        .ok()?;
 
     let mut lines: Vec<LineSpans> = vec![vec![]];
     let mut stack: Vec<Color> = vec![];
@@ -6746,13 +6904,78 @@ mod tests {
         s.iter().map(|s| s.to_string()).collect()
     }
 
+    // ---- markdown highlighting ----
+
+    #[test]
+    fn markdown_block_structure_is_highlighted() {
+        let syn = Theme::terminal("dark", false).syn;
+        let src = "# Title\n\n- item\n\n```rust\nfn f() {}\n```\n";
+        let h = highlight_file("f.md", src, &syn).unwrap();
+        // heading marker, list marker and fence delimiters all get a
+        // non-default colour (the terminal theme's `Reset` is the default).
+        let heading_marker = h[0].iter().find(|(t, _)| t == "#").unwrap();
+        assert_ne!(heading_marker.1, Color::Reset);
+        let list_marker = h[2].iter().find(|(t, _)| t.starts_with('-')).unwrap();
+        assert_ne!(list_marker.1, Color::Reset);
+        let fence_open = h[4].iter().find(|(t, _)| t == "```").unwrap();
+        assert_ne!(fence_open.1, Color::Reset);
+    }
+
+    #[test]
+    fn markdown_inline_emphasis_is_highlighted() {
+        let syn = Theme::terminal("dark", false).syn;
+        let src = "plain and *emphasised* text\n";
+        let h = highlight_file("f.md", src, &syn).unwrap();
+        let word = h[0].iter().find(|(t, _)| t == "emphasised").unwrap();
+        assert_eq!(word.1, syn.keyword);
+    }
+
+    #[test]
+    fn markdown_fenced_rust_uses_rust_grammar() {
+        let syn = Theme::terminal("dark", false).syn;
+        let src = "```rust\nfn add() {\n    let x = 1;\n}\n```\n";
+        let h = highlight_file("f.md", src, &syn).unwrap();
+        let fn_kw = h[1].iter().find(|(t, _)| t == "fn").unwrap();
+        assert_eq!(fn_kw.1, syn.keyword);
+        let let_kw = h[2].iter().find(|(t, _)| t == "let").unwrap();
+        assert_eq!(let_kw.1, syn.keyword);
+    }
+
+    #[test]
+    fn markdown_fence_in_unsupported_language_does_not_panic() {
+        let syn = Theme::terminal("dark", false).syn;
+        let src = "```console\n$ echo hi\nhi\n```\n";
+        let h = highlight_file("f.md", src, &syn).unwrap();
+        assert_eq!(h.len(), src.lines().count() + 1);
+    }
+
+    #[test]
+    fn non_markdown_file_highlighting_is_unaffected() {
+        let syn = Theme::terminal("dark", false).syn;
+        let src = "fn add(a: i32) -> i32 {\n    a\n}\n";
+        let h = highlight_file("f.rs", src, &syn).unwrap();
+        let fn_kw = h[0].iter().find(|(t, _)| t == "fn").unwrap();
+        assert_eq!(fn_kw.1, syn.keyword);
+        let ty = h[0].iter().find(|(t, _)| t == "i32").unwrap();
+        assert_eq!(ty.1, syn.type_);
+    }
+
     // ---- background-load progress messages ----
 
     #[test]
     fn read_progress_is_one_based() {
-        assert_eq!(read_progress("src/foo.rs", 0, 30), "reading src/foo.rs (1/30)");
-        assert_eq!(read_progress("src/foo.rs", 11, 30), "reading src/foo.rs (12/30)");
-        assert_eq!(read_progress("src/foo.rs", 29, 30), "reading src/foo.rs (30/30)");
+        assert_eq!(
+            read_progress("src/foo.rs", 0, 30),
+            "reading src/foo.rs (1/30)"
+        );
+        assert_eq!(
+            read_progress("src/foo.rs", 11, 30),
+            "reading src/foo.rs (12/30)"
+        );
+        assert_eq!(
+            read_progress("src/foo.rs", 29, 30),
+            "reading src/foo.rs (30/30)"
+        );
     }
 
     #[test]
