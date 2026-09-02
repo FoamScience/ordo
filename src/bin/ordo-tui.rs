@@ -1470,6 +1470,12 @@ fn keymap(name: &str) -> Option<Keymap> {
                 (Some(ctrl('w')), ch('l'), Action::Focus(Pane::Code)),
                 (Some(ctrl('w')), ch('k'), Action::Focus(Pane::Code)),
                 (Some(ctrl('w')), ch('j'), Action::Focus(Pane::Why)),
+                // vim takes arrows wherever it takes hjkl, and a C-w chord is
+                // no exception
+                (Some(ctrl('w')), plain(KeyCode::Left), Action::Focus(Pane::List)),
+                (Some(ctrl('w')), plain(KeyCode::Right), Action::Focus(Pane::Code)),
+                (Some(ctrl('w')), plain(KeyCode::Up), Action::Focus(Pane::Code)),
+                (Some(ctrl('w')), plain(KeyCode::Down), Action::Focus(Pane::Why)),
                 // code-pane cursor motions — `b` (word-back) displaces the old
                 // bare-b page-up shortcut; C-b/PageUp still page.
                 (None, ch('h'), Action::CursorLeft),
@@ -7020,6 +7026,28 @@ mod tests {
             1
         );
         assert!(excerpt(&lines, None, 5, 9, &Theme::terminal("dark", false)).is_empty());
+    }
+
+    #[test]
+    fn vim_takes_arrows_after_a_window_chord() {
+        // vim accepts arrows wherever it accepts hjkl; a reviewer who reaches
+        // for C-w Right should land where C-w l lands
+        let km = keymap("vim").unwrap();
+        let w = Some(ctrl('w'));
+        for (key, want) in [
+            (plain(KeyCode::Left), Pane::List),
+            (plain(KeyCode::Right), Pane::Code),
+            (plain(KeyCode::Up), Pane::Code),
+            (plain(KeyCode::Down), Pane::Why),
+        ] {
+            assert!(
+                matches!(km.resolve(w, key), Resolve::Act(Action::Focus(p)) if p == want),
+                "{}",
+                chord_label(w, key)
+            );
+        }
+        // and the chord still has to be opened first
+        assert!(matches!(km.resolve(None, ctrl('w')), Resolve::Pending));
     }
 
     #[test]
