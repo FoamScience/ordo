@@ -2053,8 +2053,15 @@ fn uninit_field(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
                 return None;
             }
             let mut d = node.child_by_field_name("declarator")?;
-            while matches!(d.kind(), "pointer_declarator" | "reference_declarator" | "array_declarator") {
-                d = d.child_by_field_name("declarator")?;
+            // pointer/array declarators name their inner declarator as a
+            // field; a reference declarator holds it as a bare child
+            while matches!(
+                d.kind(),
+                "pointer_declarator" | "reference_declarator" | "array_declarator"
+            ) {
+                d = d
+                    .child_by_field_name("declarator")
+                    .or_else(|| d.named_child(0))?;
             }
             (d.kind() == "field_identifier").then(|| text(d)).flatten()
         }

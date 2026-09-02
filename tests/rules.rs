@@ -633,21 +633,53 @@ fn an_initializer_list_in_the_cpp_covers_a_member_declared_in_the_header() {
 
 #[test]
 fn in_class_initialization_and_member_functions_are_not_uninitialized_members() {
-    let out = one_with("w.hpp", "struct W {\n};\n", "struct W {\n    int m_x = 0;\n    int width() const;\n    int* p;\n};\n", uninit_rule());
+    let out = one_with(
+        "w.hpp",
+        "struct W {\n};\n",
+        "struct W {\n    int m_x = 0;\n    int width() const;\n    int* p;\n};\n",
+        uninit_rule(),
+    );
     // only the raw pointer has no initializer
     assert_eq!(out.files[0].hunks[0].notes, vec!["uninitialized member p"]);
+    // a reference member wraps its name differently from a pointer, and must
+    // be initialized in an initializer list
+    let refs = one_with(
+        "w.hpp",
+        "struct W {\n};\n",
+        "struct W {\n    int& r;\n    int arr[4];\n};\n",
+        uninit_rule(),
+    );
+    assert_eq!(
+        refs.files[0].hunks[0].notes,
+        vec!["uninitialized member r", "uninitialized member arr"]
+    );
 }
 
 #[test]
 fn a_member_the_old_side_already_had_is_not_this_changes_problem() {
-    let out = one_with("w.hpp", "struct W {\n    int m_x;\n};\n", "struct W {\n    int m_x;\n    int m_y = 1;\n};\n", uninit_rule());
+    let out = one_with(
+        "w.hpp",
+        "struct W {\n    int m_x;\n};\n",
+        "struct W {\n    int m_x;\n    int m_y = 1;\n};\n",
+        uninit_rule(),
+    );
     assert!(hits(&out, "w.hpp").is_empty());
 }
 
 #[test]
 fn java_counts_a_this_assignment_in_a_constructor() {
-    let bare = one_with("W.java", "class W {\n}\n", "class W {\n    int a;\n}\n", uninit_rule());
+    let bare = one_with(
+        "W.java",
+        "class W {\n}\n",
+        "class W {\n    int a;\n}\n",
+        uninit_rule(),
+    );
     assert_eq!(hits(&bare, "W.java"), vec!["warn:init-members"]);
-    let assigned = one_with("W.java", "class W {\n}\n", "class W {\n    int a;\n    W(int x) { this.a = x; }\n}\n", uninit_rule());
+    let assigned = one_with(
+        "W.java",
+        "class W {\n}\n",
+        "class W {\n    int a;\n    W(int x) { this.a = x; }\n}\n",
+        uninit_rule(),
+    );
     assert!(hits(&assigned, "W.java").is_empty());
 }
