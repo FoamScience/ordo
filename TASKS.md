@@ -260,3 +260,41 @@ counterpart.
       reordered import block is not a pile of edits
 - [x] `DropReason::Import` is gone: `only_comments` is now the only thing that
       drops a hunk
+
+## P21 — rules as a table, and published guidelines as rulesets  ✅
+
+Started from one C++ guideline set (janwilmans) and the question "what would it
+take to enforce this?". The answer was mostly *engine* work: nearly every
+guideline is "this hunk introduces shape X" or "…exceeds limit N", and both are
+facts the engine can state once, for every language, so a rule is a table entry
+rather than a tree-sitter query.
+
+- [x] **shapes** — `kind` / `with` / `without` / `text` / `text-not`: the node
+      kinds a hunk introduces, what their children must have or lack. A child is
+      a node kind, a *field name* (`default_value`) or a *keyword token*
+      (`virtual`) — the last is what a query anchor can never see, so absence is
+      a config field now instead of `(field_declaration declarator: (_) .)`
+- [x] **limits** — `max-params` / `max-lines` / `max-nesting` / `max-file-lines`,
+      on facts the engine already computed for its own notes (which were `const`
+      before); `max-file-lines` fires on the hunks of a file this *change*
+      pushed past the limit, not every edit to a file already over it
+- [x] `path-not` — third-party code, a framework carve-out
+- [x] `recursive` — a definition that names itself, from the def→use graph
+- [x] `container-with` / `container-without` — the members of the container a
+      hunk defines into (`equals` without `hashCode`)
+- [x] `member-uninitialized` — decided across the **whole change**: a member
+      added in the header is fine if the `.cpp` constructor's initializer list
+      names it, because if that constructor changed its file is in the diff
+- [x] a C/C++ `#include` and a go `import` bind a name — `imports = "boost/**"`
+      was dead for them, and the include line also claimed the row after it
+- [x] C/C++ parameter counting followed the wrong field; the `N params` note had
+      never fired for them
+- [x] `ordo-tui` reads rules as real TOML (arrays, multi-line queries) and
+      `--rules <file>` layers a set on top of your own
+- [x] **rulesets/** — ten published guideline sets as rules, each verified by a
+      harness that fails on any engine problem *and* on any rule that never
+      fires on its sample: C++ Default Guidelines, Uber Go, Google Python §2,
+      Rust API Guidelines, Power of Ten, Effective Java, clean-code TypeScript,
+      Airbnb JavaScript, Lua, markdown
+- [ ] parked: `:split` — propose clusters, let the reviewer merge them, emit
+      `but` commands; uncommitted work only, GitButler first
