@@ -46,6 +46,12 @@ occasionally what you want, otherwise a mistake its name should make obvious.
 | `defines` / `uses` / `imports` | glob against any name the hunk defines, uses or imports |
 | `noise-when` / `comment` | the engine's own classification |
 | `query` / `query-file` | a tree-sitter query (below) |
+| `kind` / `with` / `without` / `text` / `text-not` | a node shape the hunk introduces (below) |
+| `path-not` | glob the file path must *not* match — third-party code, a framework carve-out |
+| `max-params` / `max-lines` / `max-nesting` / `max-file-lines` | a limit something the hunk introduces exceeds (below) |
+| `recursive` | a definition starting in the hunk calls itself |
+| `container-with` / `container-without` | glob against the members of the container the hunk defines into (below) |
+| `member-uninitialized` | the hunk adds a data member nothing in the change initializes |
 
 ### Actions
 
@@ -84,9 +90,109 @@ priority = 1000     # util.py still comes first
 A preference cannot pull a use ahead of its definition. That is P2, and it is
 not negotiable by config — there is a test named after it.
 
+## Shape rules
+
+Most conventions are "this change introduces X" — a `typedef`, a `protected:`, a
+data member with no initializer. That is a table entry, not a query:
+
+```toml
+[[rule]]
+name = "no-typedef"
+lang = "cpp"
+kind = "type_definition"
+note = "prefer `using X = Y`"
+
+[[rule]]
+name = "uninitialized-member"
+lang = "cpp"
+kind = "field_declaration"
+without = "default_value"
+warn = "initialize at declaration"
+
+[[rule]]
+name = "virtual-destructor"
+lang = "cpp"
+kind = "declaration"
+with = "function_declarator"
+without = "virtual"
+text = "~"
+warn = "a destructor in a hierarchy is virtual"
+```
+
+- `kind` — the node kind(s) the hunk introduces; a string or a list.
+- `with` / `without` — what the node's direct children must include / must lack.
+  Each entry is a node kind (`init_declarator`), a **field name** (`default_value`)
+  or a **keyword token** (`virtual`, `static`, `override`). The last one matters:
+  keywords are anonymous in the syntax tree and a query anchor cannot see them.
+- `text` / `text-not` — a regex the node's own text must match / must not match.
+
+`without` is how you say *absence*. `(field_declaration declarator: (field_identifier) .)`
+expresses the same thing as a query, but nobody should have to know that.
+
+## Limits
+
+```toml
+[[rule]]
+name = "small-functions"
+max-lines = 42
+max-params = 3
+note = "split it, or pass a struct"
+
+[[rule]]
+name = "flat-control-flow"
+max-nesting = 2
+warn = "return early"
+
+[[rule]]
+name = "file-size"
+max-file-lines = 2000
+note = "this change pushed the file past 2000 lines"
+```
+
+`max-lines` and `max-params` measure a definition the hunk *starts*; `max-nesting` is
+the deepest `if`/`for`/`while`/`match`/`try` any row of the hunk sits inside.
+`max-file-lines` fires on the hunks of a file that *crossed* the limit in this change —
+not on every edit to a file that was already over it.
+
+## Relationships
+
+```toml
+[[rule]]
+name = "equals-needs-hashcode"
+lang = "java"
+defines = "equals"
+container-without = "hashCode"
+warn = "override hashCode with equals"
+
+[[rule]]
+name = "no-recursion"
+recursive = true
+warn = "no direct recursion (Power of Ten, rule 1)"
+```
+
+`container-with` / `container-without` look at the members — methods, fields,
+variants — of the container the hunk's definition lives in. `recursive` is a
+definition that names itself in its own body.
+
+```toml
+[[rule]]
+name = "initialize-members"
+member-uninitialized = true
+warn = "no constructor in this change initializes this member"
+```
+
+`member-uninitialized` is decided across the **whole change**, not one hunk: a member
+added in a C++ header is fine if a constructor's initializer list in the `.cpp` — or an
+in-class initializer, or a Java `this.x = …` — names it, and if that constructor was
+updated, its file is in the diff. A member the old side already had is not this
+change's to answer for. C++ and Java only; C structs have no constructors to
+initialize in. The engine also records each such member as a `notes` entry
+(`uninitialized member m_x`), rule or no rule.
+
 ## Query rules
 
-For a convention about code *shape* rather than about paths and names. The query
+For a convention about code *shape* rather than about paths and names, when a
+`kind` rule can't say it — a relationship *between* nodes. The query
 is tree-sitter's own syntax, and only rows **inside the hunk** count:
 
 ```toml
