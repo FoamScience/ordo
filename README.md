@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-21-5fd4c0" alt="21 supported languages">
+  <img src="https://img.shields.io/badge/languages-22-5fd4c0" alt="22 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -547,7 +547,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, nix, bash, jinja, erb, go-template.
+json, yaml, toml, ini, cmake, make, nix, bash, css, jinja, erb, go-template.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -673,6 +673,35 @@ Matched by `.sh`/`.bash` and by name for `.bashrc`, `.bash_profile`, `.profile`
 and `.env` — a dotenv file is assignments, which is exactly what this grammar
 reads, and `.env.local` resolves through the same variant strip as any other
 config override.
+
+### css
+
+A rule set is a definition named by its **whole selector list, sigils kept** —
+`.btn, .btn-primary`, `#nav a:hover`. That punctuation is the safety story, not
+decoration: no code grammar emits an identifier starting with `.`, `#` or `--`,
+so a css symbol is lexically incapable of colliding with a python function in
+the cross-file union. A declaration is a member of its rule, `@media` and
+`@supports` are regions (they are `#ifdef` in a different hat), and a selector
+list is a *name* — never a set of references, so a stylesheet seeds no bare
+`card` or `title` into the symbol table every other file is ordered against.
+
+A **custom property is css's yaml anchor**: `--brand: #0af` defines a name and
+`var(--brand)` uses it, which is the one thing that lets a css hunk be ordered
+rather than merely described.
+
+```
+t.css:L3  adds --brand, used by .btn below
+t.css:L8  uses --brand, defined above
+            details: changes color in .btn
+```
+
+Deliberately **not** done: a class name in HTML is not treated as a use of the
+selector that styles it. `class="btn tw-p-2 card"` is one un-tokenized string,
+and names like `card`, `title`, `active` and `root` collide with real code
+symbols — under a utility-class framework the false links would swamp the true
+ones and make the ordering worse, not better. `.scss` and `.less` are not read
+through this grammar either; they parse with errors, which is the same mistake
+as feeding `ssh_config` to the ini grammar.
 
 ### Templates
 

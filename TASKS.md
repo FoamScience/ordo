@@ -379,11 +379,19 @@ Not registry work. A CSS selector, an HTML element and a Vue single-file
 component each break an assumption the walk makes, so this round starts with a
 written design and only then touches code.
 
-- [ ] design pass first — what a def, a use and a member *are* in a document
-      language, and whether cross-file selector→class edges are honest given
-      that resolution is already approximate
-- [ ] **css** — a selector is a definition; a class name in HTML/JSX is a use of
-      it, which would be the first cross-file edge into a non-code language
+- [x] design pass first — `docs/document-languages-design.md`. Verdicts: css
+      builds; html and vue ship together as one entry (`tree-sitter-html`
+      parses a hostile `.vue` SFC with zero errors, so vue needs no grammar of
+      its own, and `tree-sitter-vue` pins tree-sitter 0.20 — the dockerfile
+      rejection again); svelte defers but needs `tree-sitter-svelte-ng`,
+      because html breaks on a bare `>` inside `{ }`. Selector→class edges
+      **refused** in both directions, argued from Tailwind/CSS-modules/BEM
+- [x] **css** — a rule set is a definition named by its whole selector list,
+      sigils kept; a declaration is a member; `@media`/`@supports` are regions;
+      a `--custom-property` and its `var()` are the one def→use pair. The
+      selector-list guard (`selectors` returns early) shipped in the same
+      commit as the grammar, with a test named after it — without it a
+      stylesheet leaks bare `card`/`title`/`root` into the union symbol table
 - [ ] **html** — ids and classes, and whether an element is ever a container
       worth naming
 - [ ] **vue / svelte** — one file, three languages; the markdown fence injection

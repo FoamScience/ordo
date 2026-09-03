@@ -65,6 +65,7 @@ tree-sitter-make = "1.1"
 tree-sitter-nix = "0.3"
 tree-sitter-bash = "0.25"
 tree-sitter-embedded-template = "0.25"
+tree-sitter-css = "0.25"
 
 [build-dependencies]
 # builds the in-tree go-template grammar (see grammars/ and build.rs)

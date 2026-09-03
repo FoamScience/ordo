@@ -120,6 +120,9 @@ fn nix() -> Language {
 fn bash() -> Language {
     tree_sitter_bash::LANGUAGE.into()
 }
+fn css() -> Language {
+    tree_sitter_css::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -583,6 +586,25 @@ static SPECS: &[LangSpec] = &[
         data: false,
         locals: &[],
     },
+    // css: a rule set is a definition named by its *whole* selector list,
+    // sigil included (`.btn, .btn-primary`, `#nav a:hover`). That punctuation
+    // is the safety story for the cross-file union symbol table: no code
+    // grammar emits an identifier starting with `.`, `#` or `--`, so a css
+    // symbol is lexically incapable of colliding with a python function.
+    // A `--custom-property` and its `var(--x)` are the one honest def→use pair
+    // a stylesheet has (see `extract::walk`), the way a yaml anchor is.
+    LangSpec {
+        name: "css",
+        language: css,
+        test_blocks: &[],
+        imports: &["import_statement"],
+        defs: &["rule_set", "keyframes_statement"],
+        members: &["declaration"],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
     // Go templates, and with them Helm. One pair of delimiters does both jobs
     // — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation —
     // so the two are told apart by node kind rather than by delimiter, which
@@ -788,6 +810,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "mk" | "mak" | "make" => "make",
         "nix" => "nix",
         "sh" | "bash" => "bash",
+        "css" => "css",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)

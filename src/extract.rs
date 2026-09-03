@@ -1018,6 +1018,22 @@ fn region_label(
             let n = docs.iter().position(|id| *id == node.id())? + 1;
             Some((format!("document {n}"), ContainerKind::Document))
         }
+        // `@media (min-width: 700px)` is `#ifdef` in a different hat: a real
+        // container worth naming that declares nothing.
+        "media_statement" | "supports_statement" => {
+            let head = node
+                .named_children(&mut node.walk())
+                .find(|c| !matches!(c.kind(), "block"))
+                .and_then(|c| c.utf8_text(src).ok())
+                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|t| !t.is_empty())?;
+            let at = if node.kind() == "media_statement" {
+                "@media"
+            } else {
+                "@supports"
+            };
+            Some((format!("{at} {head}"), ContainerKind::Region))
+        }
         "minus_metadata" | "plus_metadata" if spec.prose => {
             Some(("front matter".to_string(), ContainerKind::FrontMatter))
         }
@@ -1389,6 +1405,48 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         }
         return;
     }
+    // css: a selector list is a *name*, never a set of references. Its
+    // `class_name`/`id_name` wrap a plain `identifier`, which IDENT_KINDS
+    // matches — so without this a stylesheet emits bare uses of `btn`,
+    // `card`, `root` and `hover` into the union symbol table every other file
+    // is ordered against, and starts drawing edges to python functions.
+    if spec.name == "css" && kind == "selectors" {
+        return;
+    }
+    // css custom properties: `--brand: #0af` declares a name and `var(--brand)`
+    // uses it — the one def→use pair a stylesheet has, and so the only thing
+    // that lets a css hunk be ordered rather than merely described. Both are
+    // spelled as ordinary declarations and values, told apart by the `--`
+    // every custom property must start with.
+    if spec.name == "css" {
+        if kind == "declaration" {
+            let mut cur = node.walk();
+            let prop = node
+                .named_children(&mut cur)
+                .find(|c| c.kind() == "property_name")
+                .and_then(|c| c.utf8_text(src).ok())
+                .map(str::trim)
+                .filter(|t| t.starts_with("--"));
+            if let Some(name) = prop {
+                c.decls.push((sr, name.to_string()));
+                c.def_rows.insert(sr);
+                let scope = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
+                c.sym_decls
+                    .push((sr, name.to_string(), kind.to_string(), scope));
+            }
+            // fall through: the declaration is still a member, and its value
+            // can still hold a `var(--other)`
+        }
+        if kind == "plain_value" {
+            if let Ok(t) = node.utf8_text(src).map(str::trim) {
+                if t.starts_with("--") {
+                    c.uses.push((sr, t.to_string()));
+                    c.all_idents.push((sr, t.to_string(), node.id()));
+                    return;
+                }
+            }
+        }
+    }
     // yaml anchors: `&base` declares a name and `*base` uses it — the one real
     // def→use pair a config format has, and the only thing that lets a yaml
     // hunk be *ordered* rather than merely described. Both kinds are unique to
@@ -1551,7 +1609,9 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        if lang::is_ident(ch.kind()) {
+        // `property_name` is css's: a declaration names itself with one, and
+        // no other grammar here produces that kind
+        if lang::is_ident(ch.kind()) || ch.kind() == "property_name" {
             return ch.utf8_text(src).ok().map(str::to_string);
         }
     }
@@ -1785,7 +1845,10 @@ fn tidy_ident(s: &str) -> String {
 fn node_name(node: Node, src: &[u8]) -> Option<String> {
     // markdown headings are prose: their spacing is meaningful, so they are
     // named by `heading_name` and never passed through `tidy_ident`.
-    if node.kind() == "section" {
+    // a markdown heading and a css selector list are both punctuation-and-
+    // spacing, not identifiers: their own naming paths normalize them, and
+    // `tidy_ident` would glue `.btn, .btn-primary` into `.btn,.btn-primary`.
+    if matches!(node.kind(), "section" | "rule_set") {
         return node_name_inner(node, src);
     }
     node_name_inner(node, src)
@@ -1838,6 +1901,28 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         if let Some(name) = node_name(d, src) {
             return Some(name);
         }
+    }
+    // 1c-css. A rule set is named by its whole selector list — `.btn` and
+    // `#nav a:hover` as written, sigils kept, because the sigil is what makes
+    // a css symbol unable to collide with a code one. Runs of whitespace
+    // collapse to one space (a selector list is punctuation, not an
+    // identifier, so `node_name` leaves it out of `tidy_ident`).
+    if node.kind() == "rule_set" {
+        let mut cur = node.walk();
+        let sel = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "selectors")?;
+        let text = sel.utf8_text(src).ok()?;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        return (!text.is_empty()).then_some(text);
+    }
+    if node.kind() == "keyframes_statement" {
+        let mut cur = node.walk();
+        let n = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "keyframes_name")?;
+        let t = n.utf8_text(src).ok()?.trim();
+        return (!t.is_empty()).then(|| format!("@keyframes {t}"));
     }
     // 1c-make. A rule is named by its first target. A *special* target
     // (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so it
@@ -2282,7 +2367,21 @@ fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) 
             // a signature change because the header would be the whole node.
             let body = node
                 .child_by_field_name("body")
-                .or_else(|| node.child_by_field_name("value"));
+                .or_else(|| node.child_by_field_name("value"))
+                // css labels no field: a `rule_set`'s declarations are a
+                // `block` child. Without this the header is the whole rule, so
+                // every declaration edit reads as a change to the selector
+                // itself and a renamed selector never matches its old body.
+                // Gated to css so no shipped language moves — cmake's
+                // `function_def` has an unlabelled `body` child too.
+                .or_else(|| {
+                    if spec.name != "css" {
+                        return None;
+                    }
+                    let mut cur = node.walk();
+                    let found = node.named_children(&mut cur).find(|c| c.kind() == "block");
+                    found
+                });
             // header = everything before the body (the signature); body text drives
             // rename/relocation matching. Fall back to the whole node when unsplit.
             let header = match body {

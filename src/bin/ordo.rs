@@ -765,6 +765,83 @@ fn git_stdin(args: &[&str], input: &str) -> String {
         .unwrap_or_default()
 }
 
+// Fetches many `<rev>:<path>` blobs in one `git cat-file --batch` process
+// instead of one `git show` per spec — the same fork/exec is paid once for the
+// whole file list instead of once per file per side. Missing objects (a path
+// added or deleted on one side) come back absent from the map, same as `git`
+// returning empty on failure; look them up with `.unwrap_or_default()` to
+// match. Lossy UTF-8, same as `run_cmd`, so binary-ish content behaves the
+// same as the old per-file `git show` path. Stdin is written and dropped
+// (closing it) before stdout is read, to avoid deadlocking on a full pipe
+// buffer with a large spec list.
+fn git_cat_file_batch(specs: &[String]) -> HashMap<String, String> {
+    use std::io::{Read, Write};
+    let mut result = HashMap::with_capacity(specs.len());
+    if specs.is_empty() {
+        return result;
+    }
+    let mut child = match Command::new("git")
+        .args(["cat-file", "--batch"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return result,
+    };
+    {
+        let mut stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => return result,
+        };
+        for spec in specs {
+            if writeln!(stdin, "{spec}").is_err() {
+                break;
+            }
+        }
+        // `stdin` drops here, closing the pipe so the child's stdout can flush
+        // fully instead of the two of us deadlocking on a full pipe buffer.
+    }
+    let mut stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return result,
+    };
+    let mut buf = Vec::new();
+    if stdout.read_to_end(&mut buf).is_err() {
+        let _ = child.wait();
+        return result;
+    }
+    let _ = child.wait();
+
+    let mut i = 0;
+    for spec in specs {
+        let Some(nl) = buf[i..].iter().position(|&b| b == b'\n').map(|p| i + p) else {
+            break;
+        };
+        let header = String::from_utf8_lossy(&buf[i..nl]).into_owned();
+        i = nl + 1;
+        if header.ends_with("missing") {
+            continue;
+        }
+        // header: "<oid> <type> <size>" — take size by splitting from the
+        // right so an oid or type never gets mistaken for it.
+        let Some(size) = header
+            .rsplit(' ')
+            .next()
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            break;
+        };
+        let Some(content) = buf.get(i..i + size) else {
+            break;
+        };
+        result.insert(spec.clone(), String::from_utf8_lossy(content).into_owned());
+        i += size + 1; // skip the trailing newline after the content block
+    }
+    result
+}
+
 // GitButler CLI: empty string if `but` isn't installed or the call fails, so the
 // plain-git path is unaffected on non-GitButler repos.
 fn but(args: &[&str]) -> String {
@@ -979,14 +1056,21 @@ fn gather_range(base: &str, tip: &str, filter: &Filter, progress: &dyn Fn(String
         .collect();
     let paths = filter.apply(paths);
     let total = paths.len();
+    let specs: Vec<String> = paths
+        .iter()
+        .flat_map(|p| [format!("{base}:{p}"), format!("{tip}:{p}")])
+        .collect();
+    let mut blobs = git_cat_file_batch(&specs);
     let changes = paths
         .into_iter()
         .enumerate()
         .map(|(i, path)| {
             progress(read_progress(&path, i, total));
+            let old = blobs.remove(&format!("{base}:{path}")).unwrap_or_default();
+            let new = blobs.remove(&format!("{tip}:{path}")).unwrap_or_default();
             Change {
-                old: Some(git(&["show", &format!("{base}:{path}")])),
-                new: Some(git(&["show", &format!("{tip}:{path}")])),
+                old: Some(old),
+                new: Some(new),
                 diff: None,
                 path,
             }
@@ -1034,13 +1118,16 @@ fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
     paths.dedup();
     let paths = filter.apply(paths);
     let total = paths.len();
+    let specs: Vec<String> = paths.iter().map(|p| format!("HEAD:{p}")).collect();
+    let mut blobs = git_cat_file_batch(&specs);
     let changes = paths
         .into_iter()
         .enumerate()
         .map(|(i, path)| {
             progress(read_progress(&path, i, total));
+            let old = blobs.remove(&format!("HEAD:{path}")).unwrap_or_default();
             Change {
-                old: Some(git(&["show", &format!("HEAD:{path}")])),
+                old: Some(old),
                 new: Some(std::fs::read_to_string(&path).unwrap_or_default()),
                 diff: None,
                 path,
@@ -1086,6 +1173,8 @@ fn gather_worktree_range(base: &str, filter: &Filter, progress: &dyn Fn(String))
     paths.dedup();
     let paths = filter.apply(paths);
     let total = paths.len();
+    let specs: Vec<String> = paths.iter().map(|p| format!("{base}:{p}")).collect();
+    let mut blobs = git_cat_file_batch(&specs);
     let changes = paths
         .into_iter()
         .enumerate()
@@ -1099,8 +1188,9 @@ fn gather_worktree_range(base: &str, filter: &Filter, progress: &dyn Fn(String))
                     return None;
                 }
             };
+            let old = blobs.remove(&format!("{base}:{path}")).unwrap_or_default();
             Some(Change {
-                old: Some(git(&["show", &format!("{base}:{path}")])),
+                old: Some(old),
                 new: Some(new),
                 diff: None,
                 path,
@@ -3732,6 +3822,10 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
         "sh" | "bash" => owned(
             tree_sitter_bash::LANGUAGE.into(),
             tree_sitter_bash::HIGHLIGHT_QUERY,
+        ),
+        "css" => owned(
+            tree_sitter_css::LANGUAGE.into(),
+            tree_sitter_css::HIGHLIGHTS_QUERY,
         ),
         "nix" => owned(
             tree_sitter_nix::LANGUAGE.into(),
