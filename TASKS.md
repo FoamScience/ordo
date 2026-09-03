@@ -363,9 +363,13 @@ says is not literal text. Make that explicit, then point it at more grammars.
       are literal text and which are interpolations to leave in place, so jinja
       stops being hardcoded in `mask_template` / `template_uses`
 - [x] **ERB / EJS** — `tree-sitter-embedded-template` 0.25, the official grammar
-- [ ] **Go templates** — the Helm case, and the one that is not free: no
-      go-template grammar is published to crates.io. Decide whether to vendor
-      one (build.rs + `cc`), which is also the route to ssh_config and nginx
+- [x] **Go templates** — vendored (`grammars/tree-sitter-go-template`, MIT,
+      built by `build.rs` with `cc`). Two findings worth keeping: the exported
+      symbol is `tree_sitter_gotmpl`, not the `tree_sitter_go_template` that
+      upstream's own Rust binding still names; and **Helm carries no template
+      extension at all** — `templates/deployment.yaml` is yaml — so extension
+      stripping had to be split from "is this templated at all". The same
+      vendoring route now stands ready for ssh_config, nginx and dockerfile
 
 ### P22.4 — different-shape languages  (design first)
 

@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-20-5fd4c0" alt="20 supported languages">
+  <img src="https://img.shields.io/badge/languages-21-5fd4c0" alt="21 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -546,7 +546,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, nix, bash, jinja, erb.
+json, yaml, toml, ini, cmake, make, nix, bash, jinja, erb, go-template.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -715,6 +715,31 @@ identifiers, so an ERB template contributes no `uses` — and it cannot host a
 format that has no grammar of its own. `config.yml.erb` is yaml;
 `index.html.erb` stays `unsupported: true` rather than pretending to have been
 read. That falls out of one flag on the grammar's entry, not a special case.
+
+**Go templates, and with them Helm.** One pair of delimiters does both jobs
+here — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation — so
+the two are told apart by node kind rather than by delimiter, which is exactly
+what having a grammar buys over a scan. Helm is also the one exception to the
+extension convention: a chart's templates carry *no* template extension at all,
+so they are found by the directory Helm requires them to live in.
+
+```
+mychart/templates/deployment.yaml:L2  edits replicas
+  enclosing: spec.replicas
+mychart/templates/_helpers.tpl:L4     adds mychart.name
+```
+
+That directory rule is deliberately a loose heuristic: masking a file that
+turns out to hold no template syntax blanks nothing and changes nothing, so a
+`templates/` directory in a project that is not a chart costs exactly zero.
+`{{ define "x" }}` and `{{ block "x" }}` are named blocks, so a `_helpers.tpl`
+reads as structure rather than as text.
+
+This is the one grammar ordo vendors rather than depends on — no crate
+publishes a Go-template grammar for a current tree-sitter (the `gotmpl` /
+`gotpl` crates are template *renderers*, which evaluate a template rather than
+hand back a syntax tree). See
+[`grammars/tree-sitter-go-template/`](grammars/tree-sitter-go-template/).
 
 A template over a format that has *no* grammar (`nginx.conf.j2`,
 `deploy.sh.j2`, a bare `foo.j2`) is parsed as jinja itself: `{% block x %}` and

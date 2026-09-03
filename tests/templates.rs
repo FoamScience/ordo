@@ -169,3 +169,53 @@ fn a_bare_j2_still_hosts_itself() {
     .unwrap();
     assert!(!ordo::run(inp).files[0].unsupported);
 }
+
+#[test]
+fn a_helm_chart_template_is_yaml_with_go_actions() {
+    // Helm is the exception to the extension convention: the file is
+    // `templates/deployment.yaml`, with no template extension at all
+    let old = "spec:\n  replicas: 1\n{{- if .Values.tls }}\n  tls: on\n{{- end }}\n";
+    let new = "spec:\n  replicas: {{ .Values.replicaCount }}\n  strategy: rolling\n\
+               {{- if .Values.tls }}\n  tls: on\n{{- end }}\n";
+    let hs = one("mychart/templates/deployment.yaml", old, new);
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("spec.replicas")),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.defines.contains(&"strategy".to_string())),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn a_go_template_define_is_a_named_block() {
+    let old = "{{- define \"mychart.labels\" -}}\napp: old\n{{- end }}\n";
+    let new = "{{- define \"mychart.labels\" -}}\napp: new\n{{- end }}\n\
+               {{- define \"mychart.name\" -}}\nx\n{{- end }}\n";
+    let hs = one("mychart/templates/_helpers.tpl", old, new);
+    // named by its string literal, with the grammar's quotes stripped
+    assert!(
+        hs.iter()
+            .any(|h| h.defines.contains(&"mychart.name".to_string())),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("mychart.labels")),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn the_helm_heuristic_only_claims_yaml() {
+    // a `templates/` directory in a project that is not a chart costs nothing:
+    // html has no grammar, so this stays unsupported rather than being guessed
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "templates/index.html", "old": "<p>a</p>\n", "new": "<p>b</p>\n" }]
+    }))
+    .unwrap();
+    assert!(ordo::run(inp).files[0].unsupported);
+}

@@ -128,6 +128,17 @@ fn jinja() -> Language {
 fn erb() -> Language {
     tree_sitter_embedded_template::LANGUAGE.into()
 }
+// The one grammar this crate vendors rather than depends on — no crate
+// publishes a Go-template grammar for a current tree-sitter. Built by
+// `build.rs`; see grammars/tree-sitter-go-template/README.md.
+// the symbol `parser.c` actually exports — upstream's own Rust binding still
+// names `tree_sitter_go_template`, which the generated parser no longer defines
+extern "C" {
+    fn tree_sitter_gotmpl() -> Language;
+}
+fn gotmpl() -> Language {
+    unsafe { tree_sitter_gotmpl() }
+}
 
 static SPECS: &[LangSpec] = &[
     LangSpec {
@@ -572,6 +583,30 @@ static SPECS: &[LangSpec] = &[
         data: false,
         locals: &[],
     },
+    // Go templates, and with them Helm. One pair of delimiters does both jobs
+    // — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation —
+    // so the two are told apart by node kind rather than by delimiter, which
+    // is exactly what having a grammar buys. A control action *contains* the
+    // text it guards, the same shape jinja has, so the masking recursion is
+    // unchanged. Vendored: see grammars/tree-sitter-go-template/README.md.
+    LangSpec {
+        name: "gotmpl",
+        language: gotmpl,
+        template: Some(&Template {
+            literal: &["text"],
+            interpolation: &["template_action"],
+            standalone: true,
+        }),
+        test_blocks: &[],
+        imports: &[],
+        // `{{ define "mychart.labels" }}` in a Helm `_helpers.tpl` is a real
+        // named block, and `{{ template "x" }}` / `{{ include "x" }}` use it
+        defs: &["define_action", "block_action"],
+        members: &[],
+        prose: false,
+        data: false,
+        locals: &[],
+    },
     // ERB / EJS. The host format is everything outside the directives:
     // `<%= … %>` stays in place like a jinja interpolation, `<% … %>` and
     // `<%# … %>` are blanked. Its `code` is one opaque blob — ruby or
@@ -602,32 +637,54 @@ const TEMPLATE_EXTS: &[(&str, &str)] = &[
     ("j2", "jinja"),
     ("jinja", "jinja"),
     ("jinja2", "jinja"),
-    ("tmpl", "jinja"),
-    ("tpl", "jinja"),
     ("erb", "erb"),
     ("ejs", "erb"),
+    // `.tmpl` is Go's own spelling and `.tpl` is Helm's; neither was ever
+    // jinja, they were mapped there only because nothing else read them
+    ("tmpl", "gotmpl"),
+    ("tpl", "gotmpl"),
+    ("gotmpl", "gotmpl"),
 ];
 
-/// Is this a templated file? `values.yaml.j2`, `foo.j2` and `config.yml.erb`
-/// all are.
-pub fn is_template(path: &str) -> bool {
-    template_lang(path).is_some()
+/// Does the final extension itself mark a template, so that stripping it names
+/// the host format? True for `.j2`/`.erb`/`.tpl`; false for a Helm template,
+/// whose extension is the host format's own.
+fn has_template_ext(path: &str) -> bool {
+    path.rsplit('.')
+        .next()
+        .is_some_and(|e| TEMPLATE_EXTS.iter().any(|(x, _)| *x == e))
 }
 
-/// The templating grammar a path's final extension names — the grammar whose
-/// own syntax is masked out, not the host format underneath it.
+/// The templating grammar wrapping this file — the one whose own syntax is
+/// masked out, not the host format underneath it.
 pub fn template_lang(path: &str) -> Option<&'static LangSpec> {
-    let ext = path.rsplit('.').next()?;
-    let name = TEMPLATE_EXTS
-        .iter()
-        .find(|(e, _)| *e == ext)
-        .map(|(_, n)| *n)?;
-    SPECS.iter().find(|s| s.name == name)
+    if let Some(ext) = path.rsplit('.').next() {
+        if let Some((_, name)) = TEMPLATE_EXTS.iter().find(|(e, _)| *e == ext) {
+            return SPECS.iter().find(|s| s.name == *name);
+        }
+    }
+    // Helm is the exception to the whole extension convention: a chart's
+    // templates carry no template extension at all — `templates/deployment.yaml`
+    // is yaml with Go template actions written through it. Detected by the
+    // directory Helm requires them to live in, which is a heuristic and is
+    // meant to be a loose one: masking a file that turns out to hold no
+    // template syntax blanks nothing and changes nothing, so a false positive
+    // on some other project's `templates/` directory costs exactly zero.
+    if is_helm_template(path) {
+        return SPECS.iter().find(|s| s.name == "gotmpl");
+    }
+    None
+}
+
+fn is_helm_template(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("");
+    matches!(ext, "yaml" | "yml")
+        && (path.starts_with("templates/") || path.contains("/templates/"))
 }
 
 /// The spec a *template* is parsed with: the underlying format when it has a
 /// grammar (`values.yaml.j2` → yaml), jinja itself otherwise (`foo.j2`,
-/// `nginx.conf.j2`). Only ever called for a path `is_template` accepts.
+/// `nginx.conf.j2`). Only ever called for a path `has_template_ext` accepts.
 fn template_spec(path: &str) -> Option<&'static LangSpec> {
     let inner = path.rsplit_once('.').map(|(head, _)| head)?;
     // a second template extension (`a.j2.j2`) is not stripped again: one
@@ -645,7 +702,9 @@ fn template_spec(path: &str) -> Option<&'static LangSpec> {
 /// unsupported (caller then falls back to file order). A template extension
 /// (`.j2` and friends) resolves to the format underneath it.
 pub fn for_path(path: &str) -> Option<&'static LangSpec> {
-    if is_template(path) {
+    // only an extension that *marks* a template is stripped; a Helm template's
+    // extension is the host format's own and stays
+    if has_template_ext(path) {
         return template_spec(path);
     }
     for_path_plain(path)

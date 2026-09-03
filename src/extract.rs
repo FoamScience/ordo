@@ -1817,9 +1817,12 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         // heading finds nothing there either (that grammar has no `*_name`
         // child and no identifier kind) and stays anonymous, as before.
     }
-    // 1. own name (function foo, class Foo, local function foo, impl Foo, …)
+    // 1. own name (function foo, class Foo, local function foo, impl Foo, …).
+    // Unquoted: a few grammars name a construct with a string literal rather
+    // than an identifier — `{{ define "mychart.labels" }}` — and the quotes
+    // are the grammar's, not part of the name.
     if let Some(n) = node.child_by_field_name("name") {
-        return n.utf8_text(src).ok().map(|s| s.to_string());
+        return n.utf8_text(src).ok().map(|t| unquote(t.trim()).to_string());
     }
     // 1b. name nested one or more levels down a `declarator` field — java
     // `field_declaration` -> `variable_declarator`, c/cpp `declaration` ->
@@ -2114,7 +2117,10 @@ fn declarator_name(node: Node, src: &[u8]) -> Option<String> {
 
 // The first quoted string anywhere under `node`, unquoted.
 fn first_string_literal(node: Node, src: &[u8]) -> Option<String> {
-    if node.kind() == "string_literal" {
+    if matches!(
+        node.kind(),
+        "string_literal" | "interpreted_string_literal" | "raw_string_literal"
+    ) {
         let t = node.utf8_text(src).ok()?.trim_matches(['"', '\'']);
         return (!t.is_empty()).then(|| t.to_string());
     }

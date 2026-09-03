@@ -336,6 +336,7 @@ dependencies = [
 name = "ordo"
 version = "0.2.0"
 dependencies = [
+ "cc",
  "diffy",
  "globset",
  "ratatui",
