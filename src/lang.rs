@@ -6,6 +6,9 @@
 //! Tier-1: python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua,
 //! markdown. Config formats (json, yaml, toml) are a third shape alongside
 //! code and prose — see the `data` flag.
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use tree_sitter::{Language, Parser, Tree};
 
 /// A templating grammar: what it wraps, and how much of it to blank out so
@@ -1053,10 +1056,69 @@ pub fn is_type_kind(kind: &str) -> bool {
     )
 }
 
+/// Small memoized cache of the last few (language, content) -> Tree parses.
+/// `lib.rs` calls `parse` 13-16 times per changed file on the same two
+/// strings (old/new side); a handful of slots is enough since the access
+/// pattern is "same string, many times in a row, then move to the next
+/// file" — an LRU would be overkill. `Tree::clone` is a cheap refcount bump
+/// (`ts_tree_copy`), not a deep copy, so handing out clones from the cache
+/// is free.
+const TREE_CACHE_CAP: usize = 4;
+
+struct CacheEntry {
+    lang: &'static str,
+    hash: u64,
+    len: usize,
+    tree: Tree,
+}
+
+thread_local! {
+    static PARSER: RefCell<(Parser, &'static str)> = RefCell::new((Parser::new(), ""));
+    static TREE_CACHE: RefCell<Vec<CacheEntry>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Parse `content` with this spec's grammar. `None` when the grammar refuses
 /// to load or the parse fails — callers degrade rather than abort.
 pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
-    let mut parser = Parser::new();
-    parser.set_language(&(spec.language)()).ok()?;
-    parser.parse(content, None)
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    // Hash + length as the collision guard: a 64-bit hash match alone is
+    // already astronomically unlikely to be wrong, and pairing it with the
+    // length costs nothing extra to check.
+    let cached = TREE_CACHE.with(|c| {
+        c.borrow()
+            .iter()
+            .find(|e| e.lang == spec.name && e.hash == hash && e.len == content.len())
+            .map(|e| e.tree.clone())
+    });
+    if let Some(tree) = cached {
+        return Some(tree);
+    }
+
+    let tree = PARSER.with(|p| {
+        let mut p = p.borrow_mut();
+        let (parser, last_lang) = &mut *p;
+        if *last_lang != spec.name {
+            parser.set_language(&(spec.language)()).ok()?;
+            *last_lang = spec.name;
+        }
+        parser.parse(content, None)
+    })?;
+
+    TREE_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= TREE_CACHE_CAP {
+            c.clear();
+        }
+        c.push(CacheEntry {
+            lang: spec.name,
+            hash,
+            len: content.len(),
+            tree: tree.clone(),
+        });
+    });
+
+    Some(tree)
 }
