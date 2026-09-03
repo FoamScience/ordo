@@ -392,7 +392,12 @@ written design and only then touches code.
       selector-list guard (`selectors` returns early) shipped in the same
       commit as the grammar, with a test named after it — without it a
       stylesheet leaks bare `card`/`title`/`root` into the union symbol table
-- [ ] **html** — ids and classes, and whether an element is ever a container
-      worth naming
-- [ ] **vue / svelte** — one file, three languages; the markdown fence injection
-      machinery pointed at a harder target
+- [x] **html** — only an element with an `id` is a definition; everything else
+      is transparent. A class is *not* a use of the css that styles it
+- [x] **vue** — shipped with html, no grammar of its own needed: the html
+      grammar reads a hostile SFC with zero error nodes. Ceiling: a hunk in the
+      `<script>` block gets no structure, since that block is not yet injected
+      into js/ts. That injection is the natural next step
+- [~] **svelte** — deferred per the design. Needs `tree-sitter-svelte-ng` 1.0.2
+      (clean against 0.25, ~25 lines): html breaks on a bare `>` inside `{ }`,
+      so `{#if x > 1}` and `on:click={() => f()}` both error

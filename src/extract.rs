@@ -1902,6 +1902,36 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
             return Some(name);
         }
     }
+    // 1c-html. An element is named by its `id`, and only by that: an id is
+    // the one handle a stylesheet, a script or a fragment link addresses it
+    // by. Without one the element resolves to no name and is transparent, so
+    // a page of anonymous `<div>`s contributes no definitions at all.
+    if node.kind() == "element" {
+        let mut cur = node.walk();
+        let tag = node
+            .named_children(&mut cur)
+            .find(|c| matches!(c.kind(), "start_tag" | "self_closing_tag"))?;
+        let mut tc = tag.walk();
+        for attr in tag.named_children(&mut tc) {
+            if attr.kind() != "attribute" {
+                continue;
+            }
+            let mut ac = attr.walk();
+            let parts: Vec<Node> = attr.named_children(&mut ac).collect();
+            let is_id = parts
+                .first()
+                .filter(|n| n.kind() == "attribute_name")
+                .and_then(|n| n.utf8_text(src).ok())
+                .is_some_and(|t| t.eq_ignore_ascii_case("id"));
+            if !is_id {
+                continue;
+            }
+            let val = parts.get(1)?;
+            let text = unquote(val.utf8_text(src).ok()?.trim());
+            return (!text.is_empty()).then(|| format!("#{text}"));
+        }
+        return None;
+    }
     // 1c-css. A rule set is named by its whole selector list — `.btn` and
     // `#nav a:hover` as written, sigils kept, because the sigil is what makes
     // a css symbol unable to collide with a code one. Runs of whitespace

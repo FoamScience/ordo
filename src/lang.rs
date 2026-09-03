@@ -123,6 +123,9 @@ fn bash() -> Language {
 fn css() -> Language {
     tree_sitter_css::LANGUAGE.into()
 }
+fn html() -> Language {
+    tree_sitter_html::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -605,6 +608,30 @@ static SPECS: &[LangSpec] = &[
         template: None,
         locals: &[],
     },
+    // html, and with it vue. Only an element carrying an `id` is a
+    // definition — that is the one name a reviewer navigates to and other
+    // things reference; every other element resolves to no name and stays
+    // transparent, so a page of `<div>`s contributes nothing. A class is
+    // deliberately *not* a use of the css that styles it (see
+    // docs/document-languages-design.md).
+    //
+    // A `.vue` single-file component needs no grammar of its own: this one
+    // parses `<script setup lang="ts">`, `v-for`, `:key`, `@click`, `{{ }}`
+    // and `<style module lang="scss">` with no error nodes, keeping the
+    // script and style blocks as opaque `raw_text`. The published
+    // `tree-sitter-vue` pins tree-sitter 0.20 and could not be used anyway.
+    LangSpec {
+        name: "html",
+        language: html,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["element"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
     // Go templates, and with them Helm. One pair of delimiters does both jobs
     // — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation —
     // so the two are told apart by node kind rather than by delimiter, which
@@ -811,6 +838,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "nix" => "nix",
         "sh" | "bash" => "bash",
         "css" => "css",
+        "html" | "htm" | "vue" => "html",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)

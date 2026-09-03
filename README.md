@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-22-5fd4c0" alt="22 supported languages">
+  <img src="https://img.shields.io/badge/languages-23-5fd4c0" alt="23 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -547,7 +547,8 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, nix, bash, css, jinja, erb, go-template.
+json, yaml, toml, ini, cmake, make, nix, bash, css, html, jinja, erb,
+go-template.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -702,6 +703,29 @@ symbols — under a utility-class framework the false links would swamp the true
 ones and make the ordering worse, not better. `.scss` and `.less` are not read
 through this grammar either; they parse with errors, which is the same mistake
 as feeding `ssh_config` to the ini grammar.
+
+### html, and with it vue
+
+Only an element carrying an **`id`** is a definition — that is the one handle a
+stylesheet, a script or a fragment link addresses it by. Every other element
+resolves to no name and stays transparent, so a page of anonymous `<div>`s
+contributes nothing and a hunk inside one attributes to the nearest element
+that *is* named.
+
+```
+page.html:L6  adds #foot
+page.html:L3  edits #main
+```
+
+A **`.vue` single-file component needs no grammar of its own**: the html
+grammar parses `<script setup lang="ts">`, `v-for`, `:key`, `@click`, `{{ }}`
+and `<style module lang="scss">` with no error nodes, keeping the script and
+style blocks as opaque text. (The published `tree-sitter-vue` pins tree-sitter
+0.20 and could not be used regardless.) The consequence is a real ceiling: a
+hunk in an SFC's `<script>` block gets no structure, because that block is not
+yet injected into the js/ts grammar. Svelte is *not* covered — html breaks on a
+bare `>` inside `{ }`, so `{#if x > 1}` and `on:click={() => f()}` both produce
+errors, and it needs its own grammar.
 
 ### Templates
 

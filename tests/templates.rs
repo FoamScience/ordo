@@ -150,9 +150,12 @@ fn ejs_resolves_the_same_way() {
 #[test]
 fn erb_cannot_host_a_format_with_no_grammar() {
     // unlike jinja, ERB has no structure of its own to fall back on — its
-    // directives are opaque ruby, so this stays honestly unsupported
+    // directives are opaque ruby, so this stays honestly unsupported.
+    // The fixture is `.txt` rather than `.html` because html now *has* a
+    // grammar, which would make the wrapped format supported and stop this
+    // testing anything.
     let inp: Input = serde_json::from_value(serde_json::json!({
-        "changes": [{ "path": "index.html.erb", "old": "<p>a</p>\n", "new": "<p>b</p>\n" }]
+        "changes": [{ "path": "notes.txt.erb", "old": "a\n", "new": "b\n" }]
     }))
     .unwrap();
     assert!(ordo::run(inp).files[0].unsupported);
@@ -211,10 +214,11 @@ fn a_go_template_define_is_a_named_block() {
 
 #[test]
 fn the_helm_heuristic_only_claims_yaml() {
-    // a `templates/` directory in a project that is not a chart costs nothing:
-    // html has no grammar, so this stays unsupported rather than being guessed
+    // a `templates/` directory in a project that is not a chart costs nothing.
+    // `.txt` has no grammar and is not yaml, so the Helm rule must not claim
+    // it as a standalone go-template either — it stays unsupported.
     let inp: Input = serde_json::from_value(serde_json::json!({
-        "changes": [{ "path": "templates/index.html", "old": "<p>a</p>\n", "new": "<p>b</p>\n" }]
+        "changes": [{ "path": "templates/notes.txt", "old": "a\n", "new": "b\n" }]
     }))
     .unwrap();
     assert!(ordo::run(inp).files[0].unsupported);
