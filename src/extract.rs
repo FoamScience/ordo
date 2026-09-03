@@ -1263,6 +1263,26 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         inject_fence(node, src, c);
         // fall through: the fence's own prose structure is still walked
     }
+    // yaml anchors: `&base` declares a name and `*base` uses it — the one real
+    // def→use pair a config format has, and the only thing that lets a yaml
+    // hunk be *ordered* rather than merely described. Both kinds are unique to
+    // that grammar, so neither can shadow another language's identifiers.
+    if matches!(kind, "anchor_name" | "alias_name") {
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                if kind == "anchor_name" {
+                    c.decls.push((sr, t.to_string()));
+                    c.def_rows.insert(sr);
+                    c.sym_decls
+                        .push((sr, t.to_string(), kind.to_string(), None));
+                } else {
+                    c.uses.push((sr, t.to_string()));
+                    c.all_idents.push((sr, t.to_string(), node.id()));
+                }
+            }
+        }
+        return;
+    }
     if lang::is_ident(kind) {
         // A zero-width identifier node is a parse artifact (C++ template and
         // macro constructs produce them); an empty name would surface in the
@@ -1750,7 +1770,13 @@ fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
         .filter(|c| c.kind() == "text")
         .unwrap_or(key);
     let text = unquote(key.utf8_text(src).ok()?.trim());
-    (!text.is_empty()).then(|| text.to_string())
+    // yaml's merge key: `<<: *defaults` is not a key a reviewer navigates by,
+    // and "edits <<" says nothing. The pair stays anonymous, so the alias in
+    // its value is still read as a use of the anchor it merges in.
+    if text.is_empty() || text == "<<" {
+        return None;
+    }
+    Some(text.to_string())
 }
 
 // The bare name of a type node, unwrapping a generic application so

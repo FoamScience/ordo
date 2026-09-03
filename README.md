@@ -580,9 +580,19 @@ and a json array element carry no key, so they stay anonymous and their
 contents nest under the nearest named key (a list entry's position is not part
 of the path). Quoted and bare keys name the same thing (`"image"` == `image`).
 
-Both are rationale-quality improvements, not ordering ones: neither prose nor
-config has `uses` of its own (markdown link targets and yaml anchors/aliases
-aren't parsed), so their hunks fall back to file order.
+Markdown is a rationale-quality improvement, not an ordering one: it has no
+`uses` (link targets aren't parsed), so its hunks fall back to file order. So
+does most config — with one exception. A **yaml anchor is a definition and its
+alias is a use**, which is the one thing that lets a config hunk be *ordered*
+rather than merely described:
+
+```
+database.yml:L4   adds adapter, base, used by dev below
+database.yml:L11  edits dev
+```
+
+The merge key itself (`<<: *base`) is not a name anyone navigates by, so that
+pair stays anonymous and only the alias in its value is read.
 
 ### Jinja templates
 

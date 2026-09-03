@@ -137,3 +137,42 @@ fn ini_by_extension() {
         );
     }
 }
+
+#[test]
+fn a_yaml_anchor_is_defined_and_its_alias_uses_it() {
+    let old = "app:\n  name: x\n\nmiddle: 1\n\ndev:\n  db: dev\n";
+    let new = "app:\n  name: x\n\nbase: &base\n  adapter: pg\n\nmiddle: 1\n\ndev:\n  db: dev\n  <<: *base\n";
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "database.yml", "old": old, "new": new }]
+    }))
+    .unwrap();
+    let out = ordo::run(inp);
+    let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
+    assert!(
+        hs.iter().any(|h| h.defines.contains(&"base".to_string())),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter().any(|h| h.uses.contains(&"base".to_string())),
+        "{hs:?}"
+    );
+    // the only def→use edge a config format can produce
+    assert!(
+        out.edges.iter().any(|e| e.why.contains("base")),
+        "{:?}",
+        out.edges
+    );
+}
+
+#[test]
+fn the_yaml_merge_key_is_not_a_name() {
+    let hs = one(
+        "a.yml",
+        "dev:\n  db: dev\n",
+        "base: &base\n  a: 1\ndev:\n  db: dev\n  <<: *base\n",
+    );
+    assert!(
+        !hs.iter().any(|h| h.defines.contains(&"<<".to_string())),
+        "{hs:?}"
+    );
+}

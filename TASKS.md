@@ -298,3 +298,70 @@ rather than a tree-sitter query.
       Airbnb JavaScript, Lua, markdown
 - [ ] parked: `:split` — propose clusters, let the reviewer merge them, emit
       `but` commands; uncommitted work only, GitButler first
+
+## P22 — the config frontier, shell, and templating as a general mechanism
+
+Four rounds, in order. The first two are registry work the architecture already
+absorbs; the third generalizes machinery that exists; the fourth is the one
+that needs a design before any code, because none of these languages has a
+"definition" in the sense the walk assumes.
+
+### P22.1 — finish config
+
+Config formats currently produce rationale but no `uses`, so their hunks always
+fall back to file order. The first two items are what change that.
+
+- [x] **yaml anchors and aliases** — `&base` is a definition, `*base` a use, and
+      both are already in the tree as `anchor_name` / `alias_name`. This is the
+      only thing on the list that gives a config file real def→use edges rather
+      than better wording
+- [ ] **yaml document identity** — a multi-document file shares one namespace
+      today, so two objects' `spec` collapse onto `spec.replicas` with nothing
+      saying which. k8s manifests are the common case and are nearly always
+      multi-doc. Decide between a generic `document N` container and naming a
+      document by its own `kind`/`metadata.name`, which is domain knowledge the
+      engine otherwise does not carry
+- [ ] **cmake** — `tree-sitter-cmake` 0.7. `function`/`macro` definitions,
+      `set()` bindings, `include()`/`find_package()` as imports
+- [ ] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its
+      target, a variable assignment is a binding, `include` is an import; a
+      prerequisite is a *use* of another target, which is a genuine edge
+- [ ] **nix** — `tree-sitter-nix` 0.3. Attribute-set paths are the same shape as
+      the config formats; `import`/`inherit` bind names
+- [ ] **dockerfile** — `tree-sitter-dockerfile` 0.2. A stage (`FROM … AS build`)
+      is the container, `COPY --from=build` a use of it
+
+### P22.2 — bash
+
+- [ ] **bash** — `tree-sitter-bash` 0.25. `function_definition` is the def,
+      `variable_assignment` the local, `source`/`.` the import. Widest coverage
+      gain of any single entry, and `.env` files parse with it for free
+
+### P22.3 — templating as a general mechanism
+
+`extract::mask_template` is not jinja-specific: it blanks whatever a grammar
+says is not literal text. Make that explicit, then point it at more grammars.
+
+- [ ] generalize the masking pass — a template grammar declares which node kinds
+      are literal text and which are interpolations to leave in place, so jinja
+      stops being hardcoded in `mask_template` / `template_uses`
+- [ ] **ERB / EJS** — `tree-sitter-embedded-template` 0.25, the official grammar
+- [ ] **Go templates** — the Helm case, and the one that is not free: no
+      go-template grammar is published to crates.io. Decide whether to vendor
+      one (build.rs + `cc`), which is also the route to ssh_config and nginx
+
+### P22.4 — different-shape languages  (design first)
+
+Not registry work. A CSS selector, an HTML element and a Vue single-file
+component each break an assumption the walk makes, so this round starts with a
+written design and only then touches code.
+
+- [ ] design pass first — what a def, a use and a member *are* in a document
+      language, and whether cross-file selector→class edges are honest given
+      that resolution is already approximate
+- [ ] **css** — a selector is a definition; a class name in HTML/JSX is a use of
+      it, which would be the first cross-file edge into a non-code language
+- [ ] **html** — ids and classes, and whether an element is ever a container
+      worth naming
+- [ ] **vue / svelte** — one file, three languages; the markdown fence injection
+      machinery pointed at a harder target
