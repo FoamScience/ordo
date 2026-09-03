@@ -21,6 +21,12 @@ pub use patch::split_patch;
 pub const SCHEMA_VERSION: u32 = 1;
 
 pub fn run(input: Input) -> Output {
+    // Templates are rewritten before anything else looks at them: every later
+    // parse (semantics, symbol rows, bodies, advisories) then sees text the
+    // underlying grammar can read, at unchanged offsets. What the jinja
+    // statements *said* is harvested first, since blanking is what makes the
+    // rest work — see `extract::mask_template`.
+    let (input, templates) = mask_templates(input);
     // per-file hunks + semantics
     let mut raws: Vec<Vec<RawHunk>> = vec![];
     let mut sems: Vec<Vec<HunkSem>> = vec![];
@@ -28,8 +34,9 @@ pub fn run(input: Input) -> Output {
     let mut comment_only: Vec<Vec<bool>> = vec![];
     let mut switched: Vec<Vec<Option<SideShift>>> = vec![];
     let mut dropped: Vec<Vec<DroppedHunk>> = vec![];
-    for change in &input.changes {
-        let (raw, sem, deg, com, sw) = build_change(change, input.options.full_context);
+    for (fi, change) in input.changes.iter().enumerate() {
+        let (raw, mut sem, deg, com, sw) = build_change(change, input.options.full_context);
+        apply_template_facts(&templates[fi], &change.path, &raw, &mut sem);
         if deg {
             eprintln!(
                 "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
@@ -714,6 +721,87 @@ type ChangeParts = (
     Vec<bool>,
     Vec<Option<SideShift>>,
 );
+
+// Blank the jinja out of every templated file whose *underlying* format has a
+// grammar of its own, so `values.yaml.j2` is analyzed as the yaml it renders
+// to. A bare `.j2` (or one over a format with no grammar) is parsed as jinja
+// itself and is left alone. `old` is masked too: rename/move/removal matching
+// compares the two sides, and one masked side against one raw side would read
+// every statement line as a change.
+/// What a template's jinja said, once it has been blanked out of the text the
+/// grammars see: the variables it reads, and the rows that held the statements.
+#[derive(Default)]
+struct TemplateFacts {
+    uses: Vec<(usize, String)>,
+    /// 0-based new-side rows that were blanked
+    masked: HashSet<usize>,
+}
+
+fn mask_templates(mut input: Input) -> (Input, Vec<TemplateFacts>) {
+    let mut facts: Vec<TemplateFacts> = vec![];
+    for c in &mut input.changes {
+        if !lang::is_template(&c.path) {
+            facts.push(TemplateFacts::default());
+            continue;
+        }
+        // a bare `.j2` (or one over a format with no grammar of its own) is
+        // parsed as jinja itself — nothing to mask, and the ordinary walk
+        // already reads its variables, its macro names and its parameters
+        // properly. Harvesting them a second time here would re-add a macro's
+        // own name and parameters as uses of themselves.
+        if lang::for_path(&c.path).is_some_and(|s| s.name == "jinja") {
+            facts.push(TemplateFacts::default());
+            continue;
+        }
+        // read the jinja *before* blanking it, or the variables this exists
+        // to report would already be gone
+        let mut f = TemplateFacts {
+            uses: c
+                .new
+                .as_deref()
+                .map(extract::template_uses)
+                .unwrap_or_default(),
+            masked: HashSet::new(),
+        };
+        for (side, keep_rows) in [(&mut c.old, false), (&mut c.new, true)] {
+            if let Some((text, rows)) = side.as_deref().and_then(extract::mask_template) {
+                *side = Some(text);
+                if keep_rows {
+                    f.masked = rows;
+                }
+            }
+        }
+        facts.push(f);
+    }
+    (input, facts)
+}
+
+// A template's `{{ … }}` and `{% … %}` name variables the file consumes; a
+// hunk that touches those rows uses them. Uses only — a template defines
+// nothing, so `{{ db_host }}` can link to wherever `db_host` is actually set
+// without a second template ever claiming to define it.
+fn apply_template_facts(f: &TemplateFacts, path: &str, raw: &[RawHunk], sem: &mut [HunkSem]) {
+    if f.uses.is_empty() && f.masked.is_empty() {
+        return;
+    }
+    // a blanked row is whitespace to the underlying grammar, so a hunk that
+    // touches only jinja — a `{% if %}` guard put around a block, a loop
+    // rewritten — would otherwise read as "formatting only" and be dimmed as
+    // noise. It is the substance of a template, not its formatting.
+    let generated = lang::is_generated_path(path);
+    for (h, s) in raw.iter().zip(sem.iter_mut()) {
+        let Some(r0) = h.new_r0 else { continue };
+        let rows = r0..=h.new_r1;
+        for (row, name) in &f.uses {
+            if rows.contains(row) && !s.uses.contains(name) {
+                s.uses.push(name.clone());
+            }
+        }
+        if !generated && rows.clone().any(|r| f.masked.contains(&r)) {
+            s.noise = false;
+        }
+    }
+}
 
 fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let old = change.old.as_deref();

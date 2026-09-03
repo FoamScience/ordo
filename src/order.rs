@@ -582,6 +582,11 @@ impl RatCtx<'_> {
     fn is_prose(&self, file: usize) -> bool {
         crate::lang::for_path(&self.paths[file]).is_some_and(|s| s.prose)
     }
+    // config formats: a key has no signature, so the header-changed wording is
+    // "changes k", not "changes signature of k".
+    fn is_data(&self, file: usize) -> bool {
+        crate::lang::for_path(&self.paths[file]).is_some_and(|s| s.data)
+    }
     // #3/#4: verb for a definition hunk. New symbol → "adds"/"adds type"; a
     // pre-existing symbol whose header changed → "changes signature of"/"changes
     // type" (a def-category hunk means the declaration line itself moved).
@@ -797,7 +802,12 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             frags.push(format!("{verb} {label}"));
         }
         if !ch_sig.is_empty() {
-            frags.push(format!("changes signature of {}", name_list(&ch_sig)));
+            let verb = if ctx.is_data(my_file) {
+                "changes"
+            } else {
+                "changes signature of"
+            };
+            frags.push(format!("{verb} {}", name_list(&ch_sig)));
         }
         if !ch_ty.is_empty() {
             frags.push(format!("changes type {}", name_list(&ch_ty)));

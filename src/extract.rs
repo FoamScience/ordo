@@ -631,6 +631,99 @@ fn is_test_label(s: &str) -> bool {
         .is_some_and(|(head, rest)| rest.starts_with(['"', '\'', '`']) && !head.is_empty())
 }
 
+/// Jinja templating over another format: a `values.yaml.j2` is yaml everywhere
+/// except its `{% … %}` statements and `{# … #}` comments, which are not yaml
+/// at all — one `{% for %}` is enough to make the whole document a parse
+/// error. Blanking those regions (space for space, newlines kept) leaves text
+/// that parses as the underlying format at **identical byte, row and column
+/// offsets**, so every hunk range, every node position and every downstream
+/// parse lines up with the file the reviewer is looking at.
+///
+/// `{{ … }}` is deliberately *not* blanked: an interpolation sits where a
+/// scalar does and every format here already tolerates it, so `web:\n  image:
+/// {{ tag }}` keeps both its key and a name worth reporting.
+///
+/// Returns the rewritten text and the 0-based rows it blanked, so a hunk that
+/// touches nothing but jinja can still be told apart from one that touches
+/// nothing at all. `None` when the file holds no jinja to mask (the common case
+/// for a path that merely ends in `.j2`), so the caller keeps the original.
+pub fn mask_template(content: &str) -> Option<(String, HashSet<usize>)> {
+    let spec = lang::jinja_spec()?;
+    let tree = lang::parse(spec, content)?;
+    let mut keep: Vec<(usize, usize)> = vec![];
+    collect_template_text(tree.root_node(), &mut keep);
+    let mut out = content.as_bytes().to_vec();
+    let len = out.len();
+    let mut blank = vec![true; len];
+    for (a, b) in keep {
+        blank[a.min(len)..b.min(len)].fill(false);
+    }
+    let mut rows = HashSet::new();
+    let mut row = 0;
+    for (i, b) in blank.iter().enumerate() {
+        if out[i] == b'\n' {
+            row += 1;
+            continue;
+        }
+        if *b {
+            out[i] = b' ';
+            rows.insert(row);
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8(out).expect("blanking ASCII keeps UTF-8 valid");
+    Some((text, rows))
+}
+
+// Byte ranges that are *not* jinja syntax: literal template text, plus the
+// `{{ … }}` interpolations kept for the host grammar (see `mask_template`).
+fn collect_template_text(node: Node, out: &mut Vec<(usize, usize)>) {
+    if matches!(node.kind(), "content" | "render_expression") {
+        out.push((node.start_byte(), node.end_byte()));
+        return;
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_template_text(ch, out);
+    }
+}
+
+/// Every identifier a template's jinja reads — `{{ db_host }}`, `{% if tls %}`
+/// — as `(row, name)`. Recorded as **uses only**, like an injected code fence:
+/// a template consumes variables defined elsewhere (an inventory, a
+/// `group_vars` file) and defines none of them itself.
+pub fn template_uses(content: &str) -> Vec<(usize, String)> {
+    let Some(spec) = lang::jinja_spec() else {
+        return vec![];
+    };
+    let Some(tree) = lang::parse(spec, content) else {
+        return vec![];
+    };
+    let mut c = Collected::default();
+    collect_jinja_uses(tree.root_node(), content.as_bytes(), &mut c);
+    c.uses
+}
+
+fn collect_jinja_uses(node: Node, src: &[u8], c: &mut Collected) {
+    // literal template text is the *host* format's business, not jinja's
+    if node.kind() == "content" {
+        return;
+    }
+    if lang::is_ident(node.kind()) {
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                c.uses.push((node.start_position().row, t.to_string()));
+            }
+        }
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_jinja_uses(ch, src, c);
+    }
+}
+
 /// Language injection: a fenced code block in a prose file holds real code in
 /// another language, and tree-sitter's own injection story says to parse it
 /// with that language's grammar rather than as opaque text.
@@ -1068,24 +1161,30 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
                 c.bound.insert(name);
             }
         }
+        // a jinja macro hangs its parameters off the same `function_call` that
+        // carries its name — everything after that leading identifier
+        for name in jinja_macro_params(node, src) {
+            c.bound.insert(name);
+        }
         c.def_rows.insert(sr);
         if lang::is_type_kind(kind) {
             c.type_rows.insert(sr);
         }
         c.decls.push((sr, own.clone()));
-        // prose only: a def kind that is *also* a member kind (markdown's
-        // `section`) registers itself as a member of its enclosing container
-        // too, so a new subsection shows up in the P15 detail layer. Gated on
-        // `spec.prose` so this can't change member_rows for any code language
-        // (none of them has a kind that is both a def and reaches this branch
-        // as its own member — see lang.rs's java comment on that exact trap).
-        if spec.prose && spec.is_member(kind) {
+        // prose and config only: a def kind that is *also* a member kind
+        // (markdown's `section`, a config format's key) registers itself as a
+        // member of its enclosing container too, so a new subsection or key
+        // shows up in the P15 detail layer. Gated on the language shape rather
+        // than on the overlap alone, because javascript's `method_definition`
+        // *is* in both sets and must keep today's behavior — see lang.rs's
+        // java comment on that same trap.
+        if (spec.prose || spec.data) && spec.is_member(kind) {
             let text = node
                 .utf8_text(src)
                 .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
                 .unwrap_or_default();
-            // markdown has no calls: container is always the enclosing
-            // section (`stack`, not yet pushed with `own` at this point).
+            // neither prose nor config has calls: the container is always
+            // the enclosing def (`stack`, not yet pushed with `own` here).
             let container = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
             c.member_rows.push((sr, own.clone(), text, container));
         }
@@ -1287,7 +1386,7 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
     for field in ["name", "key"] {
         if let Some(n) = node.child_by_field_name(field) {
             if let Ok(t) = n.utf8_text(src) {
-                let name = tidy_ident(t.trim_matches(['"', '\'']));
+                let name = tidy_ident(unquote(t.trim()));
                 if !name.is_empty() {
                     return Some(name);
                 }
@@ -1457,6 +1556,27 @@ fn param_names(params: Node, src: &[u8]) -> Vec<String> {
     out
 }
 
+// `{% macro row(a, b) %}` parses as `macro_statement -> function_call`, whose
+// first identifier is the macro's own name and whose `arg`s are its
+// parameters. Empty for every other node kind.
+fn jinja_macro_params(node: Node, src: &[u8]) -> Vec<String> {
+    if node.kind() != "macro_block" {
+        return vec![];
+    }
+    let Some(call) = node
+        .named_child(0)
+        .and_then(|st| st.named_child(0))
+        .filter(|n| n.kind() == "function_call")
+    else {
+        return vec![];
+    };
+    let mut cur = call.walk();
+    call.named_children(&mut cur)
+        .filter(|n| n.kind() == "arg")
+        .filter_map(|n| first_ident_text(n, src))
+        .collect()
+}
+
 /// Parameters of a definition. Most grammars put a `parameters` field on the
 /// definition itself; C and C++ hang it off the declarator chain
 /// (`declarator: (function_declarator parameters: …)`), so follow that.
@@ -1510,10 +1630,17 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         // (e.g. an HTML comment or a stray paragraph at the top of a file).
         // Naming it after that raw content reads badly, so it stays
         // anonymous rather than borrowing the wrong node's text.
-        return node
+        if let Some(h) = node
             .named_child(0)
             .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
-            .and_then(|h| heading_name(h, src));
+        {
+            return heading_name(h, src);
+        }
+        // ini spells `[user]` as a `section` too — same kind name, a different
+        // grammar, told apart by the child that carries the name. It falls
+        // through to the config-key path below; a *markdown* section with no
+        // heading finds nothing there either (that grammar has no `*_name`
+        // child and no identifier kind) and stays anonymous, as before.
     }
     // 1. own name (function foo, class Foo, local function foo, impl Foo, …)
     if let Some(n) = node.child_by_field_name("name") {
@@ -1533,6 +1660,22 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         if let Some(name) = node_name(d, src) {
             return Some(name);
         }
+    }
+    // 1c-jinja. `{% block server %}` / `{% macro row(a) %}`: the name lives in
+    // the opening statement, and for a macro one level further down inside a
+    // `function_call` (jinja spells a parameter list the same way it spells a
+    // call). Both kinds are unique to this grammar, so the deep search for the
+    // first identifier can't reach into another language's shapes.
+    if matches!(node.kind(), "block_block" | "macro_block") {
+        return node.named_child(0).and_then(|st| first_ident_text(st, src));
+    }
+    // 1d. config formats: a key-value pair (and a toml `[table]` header) is
+    // named by its key. json and yaml label it with a `key` field; toml-ng
+    // labels no fields at all, so its key is the first `*_key` child. Reached
+    // only for kinds the config specs declare as defs — python's and js's own
+    // `pair` is a member, never a def, so it never enters `node_name`.
+    if let Some(name) = config_key_name(node, src) {
+        return Some(name);
     }
     // 2. anonymous expression → the binding it's assigned to
     //    (local x = function…, x = function…, t.x = function…, x: fn)
@@ -1566,6 +1709,48 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         }
     }
     None
+}
+
+// Strip one matched pair of surrounding quotes. Matched, not `trim_matches`:
+// a gitconfig subsection is `remote "origin"`, whose quotes are part of the
+// name and whose leading character is not one — trimming from both ends
+// independently would leave `remote "origin`.
+fn unquote(s: &str) -> &str {
+    let mut ch = s.chars();
+    match (ch.next(), ch.next_back()) {
+        (Some(a), Some(b)) if a == b && (a == '"' || a == '\'') => &s[a.len_utf8()..s.len() - a.len_utf8()],
+        _ => s,
+    }
+}
+
+// The key naming a config entry: a json/yaml pair (field `key`), a toml pair
+// or `[table]` header, or an ini `[section]` / `setting` — the last two
+// grammars label no fields, so their key is the first `*_key`/`*_name` child.
+// Quotes are stripped so `"image"` and `image` name the same key.
+fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
+    let key = node.child_by_field_name("key").or_else(|| {
+        let mut cur = node.walk();
+        let found = node
+            .named_children(&mut cur)
+            .find(|c| {
+                matches!(
+                    c.kind(),
+                    // toml
+                    "bare_key" | "quoted_key" | "dotted_key"
+                    // ini: `[user]` and `name = A B`
+                    | "section_name" | "setting_name"
+                )
+            });
+        found
+    })?;
+    // ini wraps the name in its delimiters — `section_name` spans `[user]\n`,
+    // with the bare name under a `text` child
+    let key = key
+        .named_child(0)
+        .filter(|c| c.kind() == "text")
+        .unwrap_or(key);
+    let text = unquote(key.utf8_text(src).ok()?.trim());
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 // The bare name of a type node, unwrapping a generic application so
@@ -1680,6 +1865,21 @@ fn declarator_name(node: Node, src: &[u8]) -> Option<String> {
         .utf8_text(src)
         .ok()
         .map(str::to_string)
+}
+
+// The first quoted string anywhere under `node`, unquoted.
+fn first_string_literal(node: Node, src: &[u8]) -> Option<String> {
+    if node.kind() == "string_literal" {
+        let t = node.utf8_text(src).ok()?.trim_matches(['"', '\'']);
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        if let Some(t) = first_string_literal(ch, src) {
+            return Some(t);
+        }
+    }
+    None
 }
 
 fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
@@ -1978,6 +2178,18 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let path = node.child_by_field_name("path")?.utf8_text(src).ok()?;
             let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
             return Some(vec![(row, path.to_string())]);
+        }
+        // a jinja `{% include 'tls.j2' %}` / `{% extends 'base.j2' %}` names a
+        // template path, same shape as a c include: bind the path as written
+        // so the hunk says which template arrived rather than bare "import".
+        // `{% from 'c.j2' import d %}` also binds `d`, which the identifier
+        // fallback below already picks up — so only the path is added here.
+        ("jinja", _) => {
+            let mut cur = node.walk();
+            let lit = node
+                .named_children(&mut cur)
+                .find_map(|n| first_string_literal(n, src))?;
+            return Some(vec![(row, lit)]);
         }
         ("go", "import_spec") => return Some(go_import_name(node, src).into_iter().collect()),
         ("go", "import_declaration") => {

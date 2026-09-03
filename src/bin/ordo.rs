@@ -3585,8 +3585,44 @@ type Highlights = HashMap<String, Vec<LineSpans>>;
 // kept here because highlighting is a TUI-only presentation concern). The query
 // is owned so cpp can inherit C's rules (Neovim `; inherits: c`, which
 // tree-sitter-highlight doesn't resolve) by prepending the C query.
+fn owned_query(l: tree_sitter::Language, q: &str) -> (tree_sitter::Language, String) {
+    (l, q.to_string())
+}
+
 fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
-    let ext = path.rsplit('.').next()?;
+    // a template highlights as the format underneath it (`values.yaml.j2` is
+    // yaml with jinja in it); the jinja itself is left plain, which is close
+    // enough to how most editors render one
+    let path = match path.rsplit_once('.') {
+        Some((head, "j2" | "jinja" | "jinja2" | "tmpl" | "tpl")) => head,
+        _ => path,
+    };
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let (path, name) = match name.rsplit_once('.') {
+        Some((head, "local")) if !head.is_empty() => {
+            (path.strip_suffix(".local").unwrap_or(path), head)
+        }
+        _ => (path, name),
+    };
+    let ini_by_name = matches!(
+        name,
+        ".gitconfig"
+            | ".gitmodules"
+            | ".editorconfig"
+            | ".npmrc"
+            | ".hgrc"
+            | ".flake8"
+            | ".pylintrc"
+            | ".coveragerc"
+    ) || path.ends_with(".git/config")
+        || path.ends_with(".dvc/config");
+    if ini_by_name {
+        return Some(owned_query(
+            tree_sitter_ini::LANGUAGE.into(),
+            tree_sitter_ini::HIGHLIGHTS_QUERY,
+        ));
+    }
+    let ext = name.rsplit('.').next()?;
     let owned = |l: tree_sitter::Language, q: &str| (l, q.to_string());
     Some(match ext {
         "py" | "pyi" => owned(
@@ -3640,11 +3676,21 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_lua::LANGUAGE.into(),
             tree_sitter_lua::HIGHLIGHTS_QUERY,
         ),
-        // the engine has no TOML grammar (nothing to order in a config file), but
-        // manifests show up in most diffs and read badly unhighlighted
         "toml" => owned(
             tree_sitter_toml_ng::LANGUAGE.into(),
             tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        ),
+        "json" => owned(
+            tree_sitter_json::LANGUAGE.into(),
+            tree_sitter_json::HIGHLIGHTS_QUERY,
+        ),
+        "yml" | "yaml" => owned(
+            tree_sitter_yaml::LANGUAGE.into(),
+            tree_sitter_yaml::HIGHLIGHTS_QUERY,
+        ),
+        "ini" | "cfg" => owned(
+            tree_sitter_ini::LANGUAGE.into(),
+            tree_sitter_ini::HIGHLIGHTS_QUERY,
         ),
         "md" | "markdown" => (tree_sitter_md::LANGUAGE.into(), md_block_query()),
         _ => return None,

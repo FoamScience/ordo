@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-10-5fd4c0" alt="10 supported languages">
+  <img src="https://img.shields.io/badge/languages-15-5fd4c0" alt="15 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -464,6 +464,7 @@ never conflated under the enclosing `main`.
 | python | `pair`, `keyword_argument` |
 | lua | `field` |
 | markdown | `section` (a nested subsection is a member of its parent) |
+| json / yaml / toml / ini | the key-value pair (a nested key is a member of the key above it) |
 
 </details>
 
@@ -543,14 +544,85 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 
 ## Supported languages
 
-python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
+python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
+json, yaml, toml, ini, jinja.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
-grammar crate — no algorithm changes. Markdown is the one exception: a heading has no
-identifier to name a def by, so a def is a *section* (heading + content,
-nested by heading level) instead — `adds section Usage`, `edits section
-Install`. This is a rationale-quality improvement, not an ordering one:
-markdown has no `uses` (link targets aren't parsed), so markdown hunks fall
-back to file order.
+grammar crate — no algorithm changes. Two shapes are exceptions:
+
+**Markdown** — a heading has no identifier to name a def by, so a def is a
+*section* (heading + content, nested by heading level) instead — `adds section
+Usage`, `edits section Install`.
+
+**Config formats** (json, yaml, toml) — a def is a key-value pair, named by its
+key and nested through a dotted path, and each key is also a *member* of the key
+above it, so the detail layer can say what changed inside a block:
+
+```
+docker-compose.yml:L3  edits image
+  enclosing: services.web.image
+  details: changes image in services.web
+```
+
+**ini** covers the config files shaped like it, matched by *filename* as well
+as extension — `.gitconfig`, `.gitmodules`, `.git/config`, `.dvc/config`,
+`.editorconfig`, `.npmrc`, `.hgrc`, `.flake8`, `.pylintrc`, `.coveragerc`, and
+`.ini` / `.cfg` (`setup.cfg`, `tox.ini`, `pytest.ini`). A `.local` override
+(`.dvc/config.local`) resolves as the file it overrides. A git subsection keeps
+its quotes, because they are part of the name git gives it:
+
+```
+.gitconfig:L4  changes url
+  enclosing: remote "origin".url
+```
+
+A toml `[table]` header is a container in its own right; a yaml sequence item
+and a json array element carry no key, so they stay anonymous and their
+contents nest under the nearest named key (a list entry's position is not part
+of the path). Quoted and bare keys name the same thing (`"image"` == `image`).
+
+Both are rationale-quality improvements, not ordering ones: neither prose nor
+config has `uses` of its own (markdown link targets and yaml anchors/aliases
+aren't parsed), so their hunks fall back to file order.
+
+### Jinja templates
+
+A `.j2` (also `.jinja`, `.jinja2`, `.tmpl`, `.tpl`) is reviewed as **the format
+underneath it**. `values.yaml.j2` is yaml, `cfg.toml.j2` is toml, `app.py.j2` is
+python — one `{% for %}` is enough to make a whole yaml document a parse error,
+so the `{% … %}` statements and `{# … #}` comments are blanked out (space for
+space, newlines kept) before the underlying grammar sees the file. Byte, row and
+column offsets are unchanged, so every hunk still lines up with the file the
+reviewer is looking at. `{{ … }}` is left in place — an interpolation sits where
+a scalar does, and every format here already tolerates it:
+
+```
+templates/app.yml.j2:L3  adds port
+  enclosing: services.{{s.name}}.port
+```
+
+The variables a template reads are recorded as **uses, never definitions** — a
+template consumes what an inventory or a `group_vars` file sets, and defines
+none of it. So the file that sets a variable sorts ahead of the template that
+renders it:
+
+```
+group_vars/all.yml:L2      adds db_port, used in templates/app.yml.j2
+templates/app.yml.j2:L3    adds port
+```
+
+Templating composes with the filename-matched formats above:
+`.dvc/config.j2`, `.dvc/config.local.j2`, `.gitconfig.j2` and `setup.cfg.j2`
+all resolve to ini. A hunk that touches *only* jinja is blank to the underlying
+grammar, so it would read as "formatting only" — it is exempted from that, and
+says what the statement reads instead (`uses prod` for an added `{% if prod %}`
+guard).
+
+A template over a format that has *no* grammar (`nginx.conf.j2`,
+`deploy.sh.j2`, a bare `foo.j2`) is parsed as jinja itself: `{% block x %}` and
+`{% macro x() %}` are defs, and `{% include %}` / `{% extends %}` / `{% import %}`
+are imports naming the template they pull in (`adds import tls.j2`). `{% for %}`
+and `{% if %}` carry no name, so they stay transparent rather than contributing
+an `<anonymous>` segment to a path.
 
 ## Ceilings (by design)
 
@@ -565,6 +637,21 @@ back to file order.
   positional and is flagged `degraded: true` (no silent guessing — a partial
   diff can't be reconstructed without truncating the file). See
   [`docs/diff-input-design.md`](docs/diff-input-design.md).
+- **A template's format comes from its own path, not its destination** — one
+  extension is stripped and what remains must name a format on its own.
+  `.dvc/config.j2` is ini; a template kept somewhere else under a name its
+  target never has (`templates/dvc-config.j2`) is jinja, because nothing in the
+  path says otherwise.
+- **A template is read as written, not as rendered** — a `.j2` is analyzed as
+  the one document its source text spells out. A `{% for %}` that emits a key
+  per host contributes that key once, under the literal `{{ … }}` it is named
+  by; a `{% if %}`-guarded block sits at whatever indentation the source gives
+  it, which in yaml is the branch's own nesting, not the enclosing key's.
+- **`ssh_config` is not ini** — `~/.ssh/config` is `Host` blocks and
+  space-separated directives, not sections and `key = value`, and no
+  tree-sitter grammar for it is published to crates.io. It stays unsupported
+  rather than being fed to the ini grammar, which reads the whole file as one
+  error.
 - **Unsupported languages** — a file whose extension has no tree-sitter
   grammar (`.gif`, `.ttf`, `.astro`, `.css`, …) gets no structural analysis at
   all and is flagged `unsupported: true` on its file entry. Distinct from
