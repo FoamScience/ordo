@@ -856,7 +856,15 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         let phrases: Vec<Vec<String>> = raw
             .iter()
             .enumerate()
-            .map(|(i, h)| detail_phrases(&sems[i], h, &old_members, spec.prose))
+            .map(|(i, h)| {
+                detail_phrases(
+                    &sems[i],
+                    h,
+                    &old_members,
+                    spec.prose,
+                    spec.prose || spec.data,
+                )
+            })
             .collect();
         for (i, d) in phrases.into_iter().enumerate() {
             sems[i].details = d;
@@ -1079,6 +1087,7 @@ fn detail_phrases(
     h: &RawHunk,
     old_members: &[extract::MemberRow],
     prose: bool,
+    nests: bool,
 ) -> Vec<String> {
     let [o0, o1] = h.old_range;
     // Anything the hunk introduces wholesale is already named by the rationale
@@ -1096,9 +1105,14 @@ fn detail_phrases(
     // enclosing definition) falls back to the hunk's enclosing definition,
     // same as before this member-level attribution existed. Placeholder
     // segments never reach the wording (as in the rationale itself).
+    //
+    // Not for a language where a definition is *also* a member of the one
+    // above it — a prose section, a config key. There `None` means top level,
+    // and the fallback reports a **sibling** as the parent: two keys side by
+    // side read as `adds two to one`.
     let clean =
         |c: String| (!c.split('.').any(|seg| seg == "<anonymous>" || seg == "_")).then_some(c);
-    let fallback = s.enclosing.clone();
+    let fallback = if nests { None } else { s.enclosing.clone() };
     let resolve = |c: &Option<String>| c.clone().or_else(|| fallback.clone()).and_then(clean);
 
     let mut old_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();

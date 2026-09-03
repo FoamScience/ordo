@@ -208,3 +208,39 @@ fn a_single_document_file_keeps_its_bare_paths() {
         "{hs:?}"
     );
 }
+
+#[test]
+fn a_sibling_key_is_not_reported_as_a_member_of_its_neighbour() {
+    // `two` sits beside `one`, not inside it — the detail layer must not
+    // borrow the hunk's enclosing key as a parent for a top-level member
+    for (path, old, new) in [
+        ("a.yml", "one: 1\n", "one: 2\ntwo: 9\n"),
+        (
+            "a.json",
+            "{\n  \"one\": 1\n}\n",
+            "{\n  \"one\": 2,\n  \"two\": 9\n}\n",
+        ),
+    ] {
+        let hs = one(path, old, new);
+        let d: Vec<&String> = hs.iter().flat_map(|h| h.details.iter()).collect();
+        assert!(!d.iter().any(|s| s.contains(" to one")), "{path}: {d:?}");
+        assert!(d.iter().any(|s| s.as_str() == "adds two"), "{path}: {d:?}");
+    }
+}
+
+#[test]
+fn a_nested_key_still_names_its_parent() {
+    // the counterpart to the sibling case: a key that really does sit inside
+    // another must keep naming it. (A pure insert stays silent by design —
+    // the rationale already says `adds port` — so this edits an existing key.)
+    let hs = one(
+        "a.yml",
+        "svc:\n  image: a\n  port: 80\n",
+        "svc:\n  image: b\n  port: 80\n",
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.details.contains(&"changes image in svc".to_string())),
+        "{hs:?}"
+    );
+}
