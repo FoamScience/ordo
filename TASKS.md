@@ -323,7 +323,7 @@ fall back to file order. The first two items are what change that.
       is unaffected. Naming a document by its own `kind`/`metadata.name` was
       rejected for now — it is k8s knowledge the engine otherwise does not
       carry, and it can be layered on this without changing the shape
-- [ ] **cmake** — `tree-sitter-cmake` 0.7. `function`/`macro` definitions,
+- [x] **cmake** — `tree-sitter-cmake` 0.7. `function`/`macro` definitions,
       `set()` bindings, `include()`/`find_package()` as imports
 - [ ] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its
       target, a variable assignment is a binding, `include` is an import; a

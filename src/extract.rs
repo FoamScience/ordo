@@ -538,7 +538,14 @@ fn is_bookkeeping_export(node: Node) -> bool {
 
 /// Import-like for classification: a real import, or an export that only moves
 /// names around (see `is_bookkeeping_export`).
-fn import_like(node: Node, spec: &LangSpec) -> bool {
+fn import_like(node: Node, src: &[u8], spec: &LangSpec) -> bool {
+    // cmake names its imports rather than spelling them as distinct node
+    // kinds: `include(Utils)` and `find_package(Boost)` are ordinary commands
+    if spec.name == "cmake" && node.kind() == "normal_command" {
+        return cmake_command(node, src).is_some_and(|c| {
+            matches!(c.as_str(), "include" | "find_package" | "add_subdirectory")
+        });
+    }
     spec.is_import(node.kind()) || is_bookkeeping_export(node)
 }
 
@@ -1029,7 +1036,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
     if let Some(name) = uninit_field(node, src, spec) {
         c.uninit_fields.push((sr, name));
     }
-    if import_like(node, spec) {
+    if import_like(node, src, spec) {
         // the whole statement's rows count as import — a hunk that lands
         // anywhere in a multi-line `from x import (\n  a,\n  b,\n)` (tail,
         // middle, or head) is still an import hunk, not a bare "change".
@@ -1200,6 +1207,12 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         // a jinja macro hangs its parameters off the same `function_call` that
         // carries its name — everything after that leading identifier
         for name in jinja_macro_params(node, src) {
+            c.bound.insert(name);
+        }
+        // cmake spells a parameter list as the command's remaining arguments:
+        // `function(my_helper arg)` binds `arg`, so `${arg}` in the body is not
+        // read as a use of whatever else happens to be called `arg`
+        for name in cmake_params(node, src) {
             c.bound.insert(name);
         }
         c.def_rows.insert(sr);
@@ -1633,6 +1646,30 @@ fn jinja_macro_params(node: Node, src: &[u8]) -> Vec<String> {
         .collect()
 }
 
+// `function(my_helper arg …)` / `macro(m a b)`: every argument after the first
+// is a parameter. Empty for every other node kind.
+fn cmake_params(node: Node, src: &[u8]) -> Vec<String> {
+    if !matches!(node.kind(), "function_def" | "macro_def") {
+        return vec![];
+    }
+    let Some(args) = node.named_child(0).and_then(|head| {
+        let mut cur = head.walk();
+        let found = head
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "argument_list");
+        found
+    }) else {
+        return vec![];
+    };
+    let mut cur = args.walk();
+    args.named_children(&mut cur)
+        .skip(1)
+        .filter_map(|a| a.utf8_text(src).ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 /// Parameters of a definition. Most grammars put a `parameters` field on the
 /// definition itself; C and C++ hang it off the declarator chain
 /// (`declarator: (function_declarator parameters: …)`), so follow that.
@@ -1717,6 +1754,21 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
             return Some(name);
         }
     }
+    // 1c-cmake. Every cmake construct is a command whose name is its first
+    // argument: `function(my_helper …)`, `set(SOURCES …)`. A command that
+    // introduces nothing resolves to no name and stays transparent, which is
+    // why `normal_command` can sit in `defs` without every `message()` call
+    // becoming a definition.
+    if matches!(node.kind(), "function_def" | "macro_def") {
+        return cmake_first_arg(node, src);
+    }
+    if node.kind() == "normal_command" {
+        let cmd = cmake_command(node, src)?;
+        if !matches!(cmd.as_str(), "set" | "option") {
+            return None;
+        }
+        return cmake_first_arg(node, src);
+    }
     // 1c-jinja. `{% block server %}` / `{% macro row(a) %}`: the name lives in
     // the opening statement, and for a macro one level further down inside a
     // `function_call` (jinja spells a parameter list the same way it spells a
@@ -1777,6 +1829,39 @@ fn unquote(s: &str) -> &str {
         (Some(a), Some(b)) if a == b && (a == '"' || a == '\'') => &s[a.len_utf8()..s.len() - a.len_utf8()],
         _ => s,
     }
+}
+
+/// cmake's command name — the identifier a `normal_command` leads with, or the
+/// keyword a `function_def`/`macro_def` opens with. Every cmake construct is a
+/// command, so this is what tells `set()` from `include()` from a call.
+fn cmake_command(node: Node, src: &[u8]) -> Option<String> {
+    let head = match node.kind() {
+        "normal_command" => node,
+        "function_def" | "macro_def" => node.named_child(0)?,
+        _ => return None,
+    };
+    let mut cur = head.walk();
+    let ident = head
+        .named_children(&mut cur)
+        .find(|c| c.kind() == "identifier")?;
+    ident.utf8_text(src).ok().map(|t| t.to_ascii_lowercase())
+}
+
+/// The first argument of a cmake command — the name a `function`, `macro`,
+/// `set` or `option` introduces, and the module an `include` pulls in.
+fn cmake_first_arg(node: Node, src: &[u8]) -> Option<String> {
+    let head = match node.kind() {
+        "normal_command" => node,
+        "function_def" | "macro_def" => node.named_child(0)?,
+        _ => return None,
+    };
+    let mut cur = head.walk();
+    let args = head
+        .named_children(&mut cur)
+        .find(|c| c.kind() == "argument_list")?;
+    let first = args.named_child(0)?;
+    let text = unquote(first.utf8_text(src).ok()?.trim());
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 // The key naming a config entry: a json/yaml pair (field `key`), a toml pair
@@ -2126,7 +2211,7 @@ fn collect_rows(
 ) {
     let kind = node.kind();
     let row = node.start_position().row + 1; // 1-based
-    if import_like(node, spec) {
+    if import_like(node, src, spec) {
         match import_bound_names(node, src, spec) {
             Some(names) => imports.extend(names.into_iter().map(|(_, n)| (n, row))),
             None => imports.extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
@@ -2175,7 +2260,7 @@ pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
     let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
-    each_import(tree.root_node(), spec, &mut |n| {
+    each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
         for r in n.start_position().row..=n.end_position().row {
             out.insert(r + 1);
         }
@@ -2184,14 +2269,14 @@ pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
 }
 
 /// Visits every import statement, without descending into one.
-fn each_import(node: Node, spec: &LangSpec, f: &mut impl FnMut(Node)) {
-    if import_like(node, spec) {
+fn each_import(node: Node, src: &[u8], spec: &LangSpec, f: &mut impl FnMut(Node)) {
+    if import_like(node, src, spec) {
         f(node);
         return;
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        each_import(ch, spec, f);
+        each_import(ch, src, spec, f);
     }
 }
 
@@ -2205,7 +2290,7 @@ pub fn import_statements(spec: &LangSpec, content: &str) -> HashSet<String> {
         return out;
     };
     let src = content.as_bytes();
-    each_import(tree.root_node(), spec, &mut |n| {
+    each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
         if let Ok(t) = n.utf8_text(src) {
             out.insert(t.split_whitespace().collect::<Vec<_>>().join(" "));
         }
@@ -2241,6 +2326,8 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
             return Some(vec![(row, path.to_string())]);
         }
+        // cmake: the module, package or subdirectory the command names
+        ("cmake", _) => return Some(vec![(row, cmake_first_arg(node, src)?)]),
         // a jinja `{% include 'tls.j2' %}` / `{% extends 'base.j2' %}` names a
         // template path, same shape as a c include: bind the path as written
         // so the hunk says which template arrived rather than bare "import".

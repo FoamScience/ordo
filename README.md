@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-15-5fd4c0" alt="15 supported languages">
+  <img src="https://img.shields.io/badge/languages-16-5fd4c0" alt="16 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -546,7 +546,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, jinja.
+json, yaml, toml, ini, cmake, jinja.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -601,6 +601,21 @@ k8s objects' top-level keys stay distinct — `document 1.spec.port` and
 is the one container kind that *scopes*; every other region names only itself,
 because `#ifdef X` is a fact about where a definition sits, not part of its
 name. A single-document file is unaffected and keeps its bare key paths.
+
+### cmake
+
+Every cmake construct is a command, so what a node *is* lives in its identifier
+rather than its node kind. `function` and `macro` define; `set` and `option`
+name a variable; `include`, `find_package` and `add_subdirectory` are imports
+naming what they pull in; every other command is transparent, so a `message()`
+contributes no definition. `${VAR}` is a use, and a function's parameters are
+bound so they can't be mistaken for one. `CMakeLists.txt` is matched by
+filename — its `.txt` extension says nothing about it.
+
+```
+cmake/x.cmake:L1  adds helper, used by caller below
+cmake/x.cmake:L6  uses helper, defined above
+```
 
 ### Jinja templates
 

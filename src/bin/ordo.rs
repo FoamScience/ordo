@@ -2972,6 +2972,9 @@ struct App {
     /// exported `context.strategy` so a `:cnext` session in the editor knows
     /// what order it's walking.
     strategy: String,
+    /// per-path longest-line cache, so `draw`'s `hscroll` clamp doesn't rescan
+    /// the whole file every frame — filled in lazily, keyed by `Item::path`
+    max_col: HashMap<String, usize>,
 }
 
 /// Bound on the position stack `JumpToEdge`/`JumpBack` maintain — generous
@@ -3197,6 +3200,10 @@ fn display_rows(
     if !show_groups {
         return view.iter().map(|&i| DisplayRow::Item(i)).collect();
     }
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for &i in view {
+        *counts.entry(items[i].group.as_str()).or_insert(0) += 1;
+    }
     let mut rows = Vec::with_capacity(view.len());
     let mut last: Option<&str> = None;
     for &i in view {
@@ -3204,7 +3211,7 @@ fn display_rows(
         let folded = collapsed.contains(gid);
         if last != Some(gid) {
             let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
-            let n = view.iter().filter(|&&j| items[j].group == gid).count();
+            let n = counts.get(gid).copied().unwrap_or(0);
             // a folded group still says how much it is hiding — otherwise the
             // list silently shrinks and a reviewer can lose track of what is left
             let marker = if folded { "▸" } else { "▾" };
@@ -3604,6 +3611,12 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
         }
         _ => (path, name),
     };
+    if name == "CMakeLists.txt" {
+        return Some(owned_query(
+            tree_sitter_cmake::LANGUAGE.into(),
+            tree_sitter_cmake::HIGHLIGHTS_QUERY,
+        ));
+    }
     let ini_by_name = matches!(
         name,
         ".gitconfig"
@@ -3687,6 +3700,10 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
         "yml" | "yaml" => owned(
             tree_sitter_yaml::LANGUAGE.into(),
             tree_sitter_yaml::HIGHLIGHTS_QUERY,
+        ),
+        "cmake" => owned(
+            tree_sitter_cmake::LANGUAGE.into(),
+            tree_sitter_cmake::HIGHLIGHTS_QUERY,
         ),
         "ini" | "cfg" => owned(
             tree_sitter_ini::LANGUAGE.into(),
@@ -5833,6 +5850,7 @@ fn run(
                         rules: rules.clone(),
                         strategy: "comprehension".to_string(),
                         rules_report: rules_report.clone(),
+                        max_col: HashMap::new(),
                     }));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -6588,12 +6606,15 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     app.code_height = rhs[0].height.saturating_sub(2);
     app.code_width = code_w.saturating_sub(GUTTER_W).min(u16::MAX as usize) as u16;
     // clamp to the selected file's longest line so hscroll can't run away
-    // past any content it could ever bring into view
-    let max_col = app
-        .sources
-        .get(&it.path)
-        .map(|(_, nl)| nl.iter().map(|l| l.chars().count()).max().unwrap_or(0))
-        .unwrap_or(0);
+    // past any content it could ever bring into view; cached per path since
+    // it only changes on a load/`:e`, not every frame
+    let sources = &app.sources;
+    let max_col = *app.max_col.entry(it.path.clone()).or_insert_with(|| {
+        sources
+            .get(&it.path)
+            .map(|(_, nl)| nl.iter().map(|l| l.chars().count()).max().unwrap_or(0))
+            .unwrap_or(0)
+    });
     app.hscroll = app.hscroll.min(max_col.min(u16::MAX as usize) as u16);
     let (search_matches, cur_match): (&[(usize, usize, usize)], Option<usize>) = match &app.search {
         Some(s) => (&s.matches, Some(s.index)),
@@ -9273,6 +9294,7 @@ mod tests {
             rules: vec![],
             strategy: "comprehension".to_string(),
             rules_report: vec![],
+            max_col: HashMap::new(),
         }
     }
 

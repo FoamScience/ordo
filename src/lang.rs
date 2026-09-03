@@ -91,6 +91,9 @@ fn toml() -> Language {
 fn ini() -> Language {
     tree_sitter_ini::LANGUAGE.into()
 }
+fn cmake() -> Language {
+    tree_sitter_cmake::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -427,6 +430,22 @@ static SPECS: &[LangSpec] = &[
         data: true,
         locals: &[],
     },
+    // cmake: one node kind (`normal_command`) covers every command, so which
+    // command a node *is* lives in its identifier, not its kind — see
+    // `extract::cmake_command`. `normal_command` is listed as a def so that
+    // `set()`/`option()` can be named; every other command resolves to no name
+    // and is transparent, exactly as an anonymous def already is.
+    LangSpec {
+        name: "cmake",
+        language: cmake,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["function_def", "macro_def", "normal_command"],
+        members: &[],
+        prose: false,
+        data: false,
+        locals: &[],
+    },
     // jinja: the host language of a template whose *underlying* format has no
     // grammar (`nginx.conf.j2`, `deploy.sh.j2`, a bare `foo.j2`). When the
     // underlying format does have one — `values.yaml.j2` — that format is the
@@ -497,6 +516,10 @@ const VARIANT_EXTS: &[&str] = &["local"];
 /// extension at all, and `.dvc/config` shares its basename with half the files
 /// on a disk, so that one is matched by the directory it sits in.
 fn for_filename(path: &str, name: &str) -> Option<&'static LangSpec> {
+    // cmake's entry point has a `.txt` extension that says nothing about it
+    if name == "CMakeLists.txt" {
+        return SPECS.iter().find(|s| s.name == "cmake");
+    }
     let is_ini = matches!(
         name,
         ".gitconfig"
@@ -547,6 +570,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "yml" | "yaml" => "yaml",
         "toml" => "toml",
         "ini" | "cfg" => "ini",
+        "cmake" => "cmake",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -577,6 +601,7 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "yml" | "yaml" => "yaml",
         "toml" => "toml",
         "ini" | "cfg" | "conf" | "dosini" => "ini",
+        "cmake" => "cmake",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == canonical)
@@ -607,6 +632,8 @@ pub const IDENT_KINDS: &[&str] = &[
     "shorthand_property_identifier",
     "shorthand_property_identifier_pattern",
     "constant",
+    // cmake `${SOURCES}` — the only grammar here with a bare `variable` kind
+    "variable",
 ];
 
 /// How a qualified enclosing name joins its parts. Code nests through a dot
