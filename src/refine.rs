@@ -41,12 +41,14 @@ const PAIR_THRESHOLD: f32 = 0.4;
 /// be noise anyway, so it renders whole rather than costing a frame.
 const MAX_PAIRS: usize = 4096;
 
-/// One grammar leaf, clipped to a single line.
+/// One grammar leaf, clipped to a single line. `id` is an interned form of the
+/// leaf's text, unique per distinct string across both sides of a `Refiner`,
+/// so the LCS inner loop compares `u32`s instead of `String`s.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Token {
     start: usize,
     end: usize,
-    text: String,
+    id: u32,
 }
 
 /// A file parsed once, refined per hunk — parsing per hunk would re-walk the
@@ -70,9 +72,13 @@ impl Refiner {
         };
         let (old_tree, old_src) = parse(old)?;
         let (new_tree, new_src) = parse(new)?;
+        // one interner shared by both sides: a token's id must mean the same
+        // text whichever side it came from, or cross-side comparisons in
+        // `lcs` are comparing unrelated numbers.
+        let mut interned: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         Some(Refiner {
-            old_tokens: tokens_by_row(&old_tree, &old_src, old),
-            new_tokens: tokens_by_row(&new_tree, &new_src, new),
+            old_tokens: tokens_by_row(&old_tree, &old_src, old, &mut interned),
+            new_tokens: tokens_by_row(&new_tree, &new_src, new, &mut interned),
         })
     }
 
@@ -108,7 +114,12 @@ impl Refiner {
 /// Every leaf of the tree, clipped to the row it sits on — a multi-row leaf (a
 /// block comment, a raw string) contributes one token per row it covers, so a
 /// row's tokens always describe that row alone.
-fn tokens_by_row(tree: &Tree, src: &str, lines: &[String]) -> Vec<Vec<Token>> {
+fn tokens_by_row(
+    tree: &Tree,
+    src: &str,
+    lines: &[String],
+    interned: &mut std::collections::HashMap<String, u32>,
+) -> Vec<Vec<Token>> {
     let rows = lines.len();
     let mut out: Vec<Vec<Token>> = vec![vec![]; rows];
     let mut cursor = tree.walk();
@@ -147,10 +158,18 @@ fn tokens_by_row(tree: &Tree, src: &str, lines: &[String]) -> Vec<Vec<Token>> {
                 (0, line.len())
             };
             if be > bs {
+                let id = match interned.get(line) {
+                    Some(&id) => id,
+                    None => {
+                        let id = interned.len() as u32;
+                        interned.insert(line.to_string(), id);
+                        id
+                    }
+                };
                 out[row].push(Token {
                     start: to_char(row, bs),
                     end: to_char(row, be),
-                    text: line.to_string(),
+                    id,
                 });
             }
         }
@@ -161,26 +180,35 @@ fn tokens_by_row(tree: &Tree, src: &str, lines: &[String]) -> Vec<Vec<Token>> {
     out
 }
 
-/// Longest common subsequence of two token runs, as index pairs.
-fn lcs(a: &[Token], b: &[Token]) -> Vec<(usize, usize)> {
+/// Fills the LCS DP table (flat, row-major, `(n+1) x (m+1)`) and returns it
+/// alongside `n`/`m`, for callers that need to backtrack it.
+fn lcs_table(a: &[Token], b: &[Token]) -> (Vec<u32>, usize, usize) {
     let (n, m) = (a.len(), b.len());
-    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    let w = m + 1;
+    let mut dp = vec![0u32; (n + 1) * w];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            dp[i][j] = if a[i].text == b[j].text {
-                dp[i + 1][j + 1] + 1
+            dp[i * w + j] = if a[i].id == b[j].id {
+                dp[(i + 1) * w + j + 1] + 1
             } else {
-                dp[i + 1][j].max(dp[i][j + 1])
+                dp[(i + 1) * w + j].max(dp[i * w + j + 1])
             };
         }
     }
+    (dp, n, m)
+}
+
+/// Longest common subsequence of two token runs, as index pairs.
+fn lcs(a: &[Token], b: &[Token]) -> Vec<(usize, usize)> {
+    let (dp, n, m) = lcs_table(a, b);
+    let w = m + 1;
     let (mut i, mut j, mut out) = (0, 0, vec![]);
     while i < n && j < m {
-        if a[i].text == b[j].text {
+        if a[i].id == b[j].id {
             out.push((i, j));
             i += 1;
             j += 1;
-        } else if dp[i + 1][j] >= dp[i][j + 1] {
+        } else if dp[(i + 1) * w + j] >= dp[i * w + j + 1] {
             i += 1;
         } else {
             j += 1;
@@ -189,12 +217,20 @@ fn lcs(a: &[Token], b: &[Token]) -> Vec<(usize, usize)> {
     out
 }
 
+/// Length of the LCS of two token runs, without backtracking a match out of
+/// the table — the fill is reverse (`i`/`j` count down to 0), so the full
+/// subsequence length ends up at `dp[0][0]`.
+fn lcs_len(a: &[Token], b: &[Token]) -> usize {
+    let (dp, _, _) = lcs_table(a, b);
+    dp[0] as usize
+}
+
 /// How much two lines have in common, 0.0–1.0, by matched leaves.
 fn similarity(a: &[Token], b: &[Token]) -> f32 {
     if a.is_empty() && b.is_empty() {
         return 1.0;
     }
-    let common = lcs(a, b).len() as f32;
+    let common = lcs_len(a, b) as f32;
     2.0 * common / (a.len() + b.len()) as f32
 }
 
@@ -241,9 +277,11 @@ fn pair_lines(old: &[Vec<Token>], new: &[Vec<Token>]) -> Vec<(usize, usize)> {
 fn line_spans(old: &[Token], new: &[Token]) -> (Vec<Span>, Vec<Span>) {
     let matched = lcs(old, new);
     let take = |toks: &[Token], keep: Vec<usize>| -> Vec<Span> {
+        // `keep` comes from `lcs`'s backtrack, which pushes matched indices in
+        // increasing order, so it's already sorted — binary search over it.
         let mut spans: Vec<Span> = vec![];
         for (k, t) in toks.iter().enumerate() {
-            if keep.contains(&k) {
+            if keep.binary_search(&k).is_ok() {
                 continue;
             }
             match spans.last_mut() {
