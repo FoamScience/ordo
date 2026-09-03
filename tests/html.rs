@@ -76,3 +76,23 @@ fn a_vue_component_needs_no_grammar_of_its_own() {
         "{hs:?}"
     );
 }
+
+#[test]
+fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
+    // `{#if n > 1}` and `on:click={() => pick()}` each hold a bare `>`, which
+    // the html grammar cannot read — so svelte gets its own. The element and
+    // attribute kinds are identical, so the id-naming path is unchanged.
+    let old = "<div id=\"root\">\n{#if n > 1}\n  <button on:click={() => pick()}>go</button>\n{/if}\n</div>\n";
+    let new = "<div id=\"root\">\n{#if n > 2}\n  <button on:click={() => pick()}>stop</button>\n{/if}\n</div>\n";
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "App.svelte", "old": old, "new": new }]
+    }))
+    .unwrap();
+    let out = ordo::run(inp);
+    assert!(!out.files[0].unsupported);
+    let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
+    assert!(
+        hs.iter().any(|h| h.enclosing.as_deref() == Some("#root")),
+        "{hs:?}"
+    );
+}

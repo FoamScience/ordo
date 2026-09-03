@@ -126,6 +126,9 @@ fn css() -> Language {
 fn html() -> Language {
     tree_sitter_html::LANGUAGE.into()
 }
+fn svelte() -> Language {
+    tree_sitter_svelte_ng::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -632,6 +635,26 @@ static SPECS: &[LangSpec] = &[
         template: None,
         locals: &[],
     },
+    // svelte: the same shape as html — `element`, `start_tag`, `attribute`
+    // are the same kinds, so the id-naming path is reused verbatim — but it
+    // needs its own grammar rather than riding on html's the way vue does.
+    // html breaks on a bare `>` inside braces, and both `{#if n > 1}` and
+    // `on:click={() => pick()}` contain one. Its own block forms (`{#if}`,
+    // `{#each}`) are left unnamed for now: they are containers worth naming,
+    // but `if_statement` is a kind three other grammars here also produce,
+    // so claiming it would need a language-gated branch.
+    LangSpec {
+        name: "svelte",
+        language: svelte,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["element"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
     // Go templates, and with them Helm. One pair of delimiters does both jobs
     // — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation —
     // so the two are told apart by node kind rather than by delimiter, which
@@ -839,6 +862,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "sh" | "bash" => "bash",
         "css" => "css",
         "html" | "htm" | "vue" => "html",
+        "svelte" => "svelte",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)

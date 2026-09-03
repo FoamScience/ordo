@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-23-5fd4c0" alt="23 supported languages">
+  <img src="https://img.shields.io/badge/languages-24-5fd4c0" alt="24 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -547,7 +547,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, nix, bash, css, html, jinja, erb,
+json, yaml, toml, ini, cmake, make, nix, bash, css, html, svelte, jinja, erb,
 go-template.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
@@ -723,9 +723,13 @@ and `<style module lang="scss">` with no error nodes, keeping the script and
 style blocks as opaque text. (The published `tree-sitter-vue` pins tree-sitter
 0.20 and could not be used regardless.) The consequence is a real ceiling: a
 hunk in an SFC's `<script>` block gets no structure, because that block is not
-yet injected into the js/ts grammar. Svelte is *not* covered — html breaks on a
-bare `>` inside `{ }`, so `{#if x > 1}` and `on:click={() => f()}` both produce
-errors, and it needs its own grammar.
+yet injected into the js/ts grammar. **Svelte** has the same shape — `element`, `start_tag` and `attribute` are the
+same kinds, so the id-naming path is reused verbatim — but it needs its own
+grammar rather than riding on html's the way vue does: html cannot read a bare
+`>` inside braces, and both `{#if n > 1}` and `on:click={() => pick()}` contain
+one. Its own block forms (`{#if}`, `{#each}`) are left unnamed for now; they
+are containers worth naming, but `if_statement` is a kind three other grammars
+here also produce, so claiming it needs a language-gated branch.
 
 ### Templates
 

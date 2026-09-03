@@ -3827,6 +3827,10 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_html::LANGUAGE.into(),
             tree_sitter_html::HIGHLIGHTS_QUERY,
         ),
+        "svelte" => owned(
+            tree_sitter_svelte_ng::LANGUAGE.into(),
+            tree_sitter_svelte_ng::HIGHLIGHTS_QUERY,
+        ),
         "css" => owned(
             tree_sitter_css::LANGUAGE.into(),
             tree_sitter_css::HIGHLIGHTS_QUERY,

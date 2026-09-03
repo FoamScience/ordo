@@ -398,6 +398,9 @@ written design and only then touches code.
       grammar reads a hostile SFC with zero error nodes. Ceiling: a hunk in the
       `<script>` block gets no structure, since that block is not yet injected
       into js/ts. That injection is the natural next step
-- [~] **svelte** — deferred per the design. Needs `tree-sitter-svelte-ng` 1.0.2
-      (clean against 0.25, ~25 lines): html breaks on a bare `>` inside `{ }`,
-      so `{#if x > 1}` and `on:click={() => f()}` both error
+- [x] **svelte** — the design deferred this until css and html/vue shipped;
+      both did, so it went in. `tree-sitter-svelte-ng` 1.0.2, clean against
+      0.25. Same kinds as html, so the id-naming path is reused unchanged; it
+      needs its own grammar only because html cannot read a bare `>` inside
+      braces. `{#if}`/`{#each}` left unnamed — `if_statement` is a kind three
+      other grammars produce, so claiming it needs a language-gated branch
