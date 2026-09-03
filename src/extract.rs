@@ -968,6 +968,26 @@ fn region_label(
             let label = subprocess_label(node, src)?;
             Some((label, ContainerKind::Call))
         }
+        // yaml: a stream can hold several `---` documents whose top-level keys
+        // collide — two k8s objects each own a `spec`, and `spec.replicas`
+        // alone does not say which. Name each document by its position, but
+        // only when there is more than one: a single-document file keeps the
+        // paths it has always had. A region, not a definition: an ordinal is
+        // where a thing sits, never a symbol anything can use or define.
+        "document" if node.parent().is_some_and(|p| p.kind() == "stream") => {
+            let parent = node.parent()?;
+            let mut cur = parent.walk();
+            let docs: Vec<usize> = parent
+                .named_children(&mut cur)
+                .filter(|c| c.kind() == "document")
+                .map(|c| c.id())
+                .collect();
+            if docs.len() < 2 {
+                return None;
+            }
+            let n = docs.iter().position(|id| *id == node.id())? + 1;
+            Some((format!("document {n}"), ContainerKind::Document))
+        }
         "minus_metadata" | "plus_metadata" if spec.prose => {
             Some(("front matter".to_string(), ContainerKind::FrontMatter))
         }
@@ -1073,10 +1093,23 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         // a use of that macro — which is exactly what it is.
         let er = end_row(node, spec);
         let depth = stack.len();
+        // A document is a namespace; every other region names only itself. An
+        // `#ifdef` must not prefix the defs inside it — the definition is what
+        // a reviewer navigates to, and the region is a fact about where it
+        // sits. A `---` document is the opposite: the two `spec` keys of two
+        // k8s objects are different keys, and the path has to say so.
+        let scopes = kind == ContainerKind::Document;
+        if scopes {
+            stack.push(label.clone());
+        }
         c.defs.push(DefRec {
             s: sr,
             e: er,
-            name: label,
+            name: if scopes {
+                stack.join(lang::scope_sep(spec))
+            } else {
+                label
+            },
             depth,
             params: 0,
             kind,
@@ -1084,6 +1117,9 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
             walk(ch, src, spec, stack, c);
+        }
+        if scopes {
+            stack.pop();
         }
         return;
     }

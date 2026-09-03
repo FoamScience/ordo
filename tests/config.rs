@@ -176,3 +176,35 @@ fn the_yaml_merge_key_is_not_a_name() {
         "{hs:?}"
     );
 }
+
+#[test]
+fn multi_document_yaml_scopes_each_document() {
+    let doc = |port: &str, replicas: &str| {
+        format!(
+            "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  port: {port}\n---\n\
+             apiVersion: v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: {replicas}\n"
+        )
+    };
+    let hs = one("k8s.yaml", &doc("80", "1"), &doc("8080", "3"));
+    // both objects own a `spec`; the path has to say which
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("document 1.spec.port")),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("document 2.spec.replicas")),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn a_single_document_file_keeps_its_bare_paths() {
+    let hs = one("one.yaml", "spec:\n  port: 80\n", "spec:\n  port: 8080\n");
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("spec.port")),
+        "{hs:?}"
+    );
+}

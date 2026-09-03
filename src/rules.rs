@@ -410,5 +410,6 @@ fn kind_name(k: Option<ContainerKind>) -> &'static str {
         Some(ContainerKind::FrontMatter) => "front-matter",
         Some(ContainerKind::Binding) => "binding",
         Some(ContainerKind::Call) => "call",
+        Some(ContainerKind::Document) => "document",
     }
 }

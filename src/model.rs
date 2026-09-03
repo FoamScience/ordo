@@ -305,6 +305,10 @@ pub enum ContainerKind {
     Preamble,
     /// a document's `---` metadata block
     FrontMatter,
+    /// one `---` document of a multi-document file. Unlike every other region
+    /// this one *scopes*: its name joins the path of what it contains, because
+    /// two documents' top-level keys are genuinely different things.
+    Document,
     /// a top-level binding whose multi-line value holds the hunk
     Binding,
     /// a top-level call whose multi-line arguments hold the hunk

@@ -315,12 +315,14 @@ fall back to file order. The first two items are what change that.
       both are already in the tree as `anchor_name` / `alias_name`. This is the
       only thing on the list that gives a config file real def→use edges rather
       than better wording
-- [ ] **yaml document identity** — a multi-document file shares one namespace
+- [x] **yaml document identity** — a multi-document file shares one namespace
       today, so two objects' `spec` collapse onto `spec.replicas` with nothing
       saying which. k8s manifests are the common case and are nearly always
-      multi-doc. Decide between a generic `document N` container and naming a
-      document by its own `kind`/`metadata.name`, which is domain knowledge the
-      engine otherwise does not carry
+      multi-doc. Took the generic `document N`, as a new `ContainerKind` that
+      *scopes* (every other region names only itself); a single-document file
+      is unaffected. Naming a document by its own `kind`/`metadata.name` was
+      rejected for now — it is k8s knowledge the engine otherwise does not
+      carry, and it can be layered on this without changing the shape
 - [ ] **cmake** — `tree-sitter-cmake` 0.7. `function`/`macro` definitions,
       `set()` bindings, `include()`/`find_package()` as imports
 - [ ] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its

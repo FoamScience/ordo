@@ -81,7 +81,7 @@ occasionally what you want, otherwise a mistake its name should make obvious.
 | `path` | glob against the file path |
 | `lang` | `python`, `cpp`, `markdown`, … as `src/lang.rs` names them |
 | `category` | `import` · `definition` · `other` |
-| `enclosing-kind` | `definition` · `test` · `region` · `binding` · `call` · `preamble` · `front-matter` |
+| `enclosing-kind` | `definition` · `test` · `region` · `binding` · `call` · `preamble` · `front-matter` · `document` |
 | `defines` / `uses` / `imports` | glob against any name the hunk defines, uses or imports |
 | `noise-when` / `comment` | the engine's own classification |
 | `query` / `query-file` | a tree-sitter query (below) |

@@ -131,6 +131,7 @@ Not every hunk sits in a definition, and the ones that don't used to say only
 | `call` | a file-scope call whose multi-line arguments hold it | `execa('unicorns')` |
 | `preamble` | prose before a document's first heading | `preamble` |
 | `front-matter` | a document's `---` metadata block | `front matter` |
+| `document` | one `---` document of a multi-document yaml file | `document 2` |
 
 Only a definition is a symbol: a region name is never looked up, never enters
 `defines` or `symbols`, and never seeds a def→use edge. `#ifdef CURL_DISABLE_HTTP`
@@ -593,6 +594,13 @@ database.yml:L11  edits dev
 
 The merge key itself (`<<: *base`) is not a name anyone navigates by, so that
 pair stays anonymous and only the alias in its value is read.
+
+A multi-document yaml file (`---`) scopes each document by position, so two
+k8s objects' top-level keys stay distinct — `document 1.spec.port` and
+`document 2.spec.replicas` rather than two colliding `spec` paths. `document`
+is the one container kind that *scopes*; every other region names only itself,
+because `#ifdef X` is a fact about where a definition sits, not part of its
+name. A single-document file is unaffected and keeps its bare key paths.
 
 ### Jinja templates
 
