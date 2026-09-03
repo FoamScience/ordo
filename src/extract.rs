@@ -541,6 +541,14 @@ fn is_bookkeeping_export(node: Node) -> bool {
 fn import_like(node: Node, src: &[u8], spec: &LangSpec) -> bool {
     // cmake names its imports rather than spelling them as distinct node
     // kinds: `include(Utils)` and `find_package(Boost)` are ordinary commands
+    // bash sources a file with a command, not a keyword: `source x.sh` and its
+    // POSIX spelling `. x.sh`
+    if spec.name == "bash" && node.kind() == "command" {
+        return node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(src).ok())
+            .is_some_and(|t| matches!(t.trim(), "source" | "."));
+    }
     // nix spells an import as an ordinary application of a function named
     // `import`, so the kind alone cannot tell one from any other call
     if spec.name == "nix" && node.kind() == "apply_expression" {
@@ -1343,6 +1351,19 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         }
         // fall through: the body still holds bindings and uses
     }
+    // bash: a command *is* a call, so `deploy main` uses the function `deploy`.
+    // The name is a bare `word` — a kind make also uses for its targets — so
+    // it is read here rather than through IDENT_KINDS. A builtin (`echo`,
+    // `set`) resolves to no definition and costs nothing.
+    if spec.name == "bash" && kind == "command_name" {
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                c.uses.push((sr, t.to_string()));
+                c.all_idents.push((sr, t.to_string(), node.id()));
+            }
+        }
+        return;
+    }
     // make: a prerequisite names another target, and `$(CC)` names a variable.
     // Both are bare `word` nodes — a kind too generic to put in IDENT_KINDS,
     // so they are read from the two parents that make one mean a reference.
@@ -1385,9 +1406,11 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
     if lang::is_ident(kind) {
         // A zero-width identifier node is a parse artifact (C++ template and
         // macro constructs produce them); an empty name would surface in the
-        // rationale as a stray comma.
+        // rationale as a stray comma. An all-digits one is a shell positional
+        // parameter (`$1`, `$2`) — no language has a numeric symbol, so it can
+        // never resolve to a definition and only clutters `uses`.
         if let Ok(t) = node.utf8_text(src).map(str::trim) {
-            if !t.is_empty() {
+            if !t.is_empty() && !t.chars().all(|c| c.is_ascii_digit()) {
                 c.uses.push((sr, t.to_string()));
                 c.all_idents.push((sr, t.to_string(), node.id()));
             }
@@ -1409,6 +1432,9 @@ fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
         // xonsh `$FOO = …`: `left` is an `env_variable` wrapping the plain
         // identifier, so the bound name matches a use of `$FOO` elsewhere
         "assignment" | "short_var_declaration" | "env_assignment" => "left",
+        // bash `APP_DIR=/srv/app`, and the same node inside a `local` /
+        // `readonly` / `declare` wrapper the walk descends through
+        "variable_assignment" => "name",
         "let_declaration" => "pattern",
         "var_spec" | "variable_declarator" => "name",
         // java local_variable_declaration / c/cpp declaration: one or more
@@ -2391,6 +2417,12 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let path = node.child_by_field_name("path")?.utf8_text(src).ok()?;
             let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
             return Some(vec![(row, path.to_string())]);
+        }
+        // bash: the script `source ./lib/common.sh` pulls in
+        ("bash", "command") => {
+            let arg = node.child_by_field_name("argument")?;
+            let text = unquote(arg.utf8_text(src).ok()?.trim());
+            return (!text.is_empty()).then(|| vec![(row, text.to_string())]);
         }
         // nix: the path `import ./overlays.nix` pulls in
         ("nix", "apply_expression") => {

@@ -3617,6 +3617,12 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_cmake::HIGHLIGHTS_QUERY,
         ));
     }
+    if matches!(name, ".bashrc" | ".bash_profile" | ".profile" | ".env") {
+        return Some(owned_query(
+            tree_sitter_bash::LANGUAGE.into(),
+            tree_sitter_bash::HIGHLIGHT_QUERY,
+        ));
+    }
     if matches!(
         name,
         "Makefile" | "makefile" | "GNUmakefile" | "Makefile.am" | "Makefile.in"
@@ -3717,6 +3723,10 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
         "mk" | "mak" | "make" => owned(
             tree_sitter_make::LANGUAGE.into(),
             tree_sitter_make::HIGHLIGHTS_QUERY,
+        ),
+        "sh" | "bash" => owned(
+            tree_sitter_bash::LANGUAGE.into(),
+            tree_sitter_bash::HIGHLIGHT_QUERY,
         ),
         "nix" => owned(
             tree_sitter_nix::LANGUAGE.into(),

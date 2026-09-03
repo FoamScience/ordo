@@ -100,6 +100,9 @@ fn make() -> Language {
 fn nix() -> Language {
     tree_sitter_nix::LANGUAGE.into()
 }
+fn bash() -> Language {
+    tree_sitter_bash::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -485,6 +488,25 @@ static SPECS: &[LangSpec] = &[
         data: true,
         locals: &[],
     },
+    // bash: `foo() { … }` and `function foo { … }` share one node kind, and a
+    // command is a call — so `deploy main` is a use of the function `deploy`.
+    // `source x.sh` / `. x.sh` are commands too, named rather than spelled as
+    // a distinct kind (see `extract::import_like`). A command name is a bare
+    // `word`, a kind make also uses, so it is read explicitly rather than
+    // through IDENT_KINDS.
+    LangSpec {
+        name: "bash",
+        language: bash,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["function_definition"],
+        members: &[],
+        prose: false,
+        data: false,
+        // `local x=1` / `readonly P=8080` wrap this in a `declaration_command`
+        // the walk descends through, so the one kind covers both
+        locals: &["variable_assignment"],
+    },
     // jinja: the host language of a template whose *underlying* format has no
     // grammar (`nginx.conf.j2`, `deploy.sh.j2`, a bare `foo.j2`). When the
     // underlying format does have one — `values.yaml.j2` — that format is the
@@ -559,6 +581,10 @@ fn for_filename(path: &str, name: &str) -> Option<&'static LangSpec> {
     if name == "CMakeLists.txt" {
         return SPECS.iter().find(|s| s.name == "cmake");
     }
+    // shell config and dotenv files carry no extension
+    if matches!(name, ".bashrc" | ".bash_profile" | ".profile" | ".env") {
+        return SPECS.iter().find(|s| s.name == "bash");
+    }
     // a makefile is named, not extended
     if matches!(
         name,
@@ -619,6 +645,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "cmake" => "cmake",
         "mk" | "mak" | "make" => "make",
         "nix" => "nix",
+        "sh" | "bash" => "bash",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -652,6 +679,9 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "cmake" => "cmake",
         "make" | "makefile" | "mk" => "make",
         "nix" => "nix",
+        // not `console`: that fence is a shell *session* (`$ cmd` and its
+        // output), not a script — see tests/injection.rs
+        "sh" | "bash" | "shell" | "zsh" => "bash",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == canonical)
@@ -684,6 +714,8 @@ pub const IDENT_KINDS: &[&str] = &[
     "constant",
     // cmake `${SOURCES}` — the only grammar here with a bare `variable` kind
     "variable",
+    // bash `$APP_DIR` and the left of an assignment
+    "variable_name",
 ];
 
 /// How a qualified enclosing name joins its parts. Code nests through a dot

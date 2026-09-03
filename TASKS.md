@@ -350,7 +350,7 @@ language entry, since it changes wording for languages already shipped.
 
 ### P22.2 — bash
 
-- [ ] **bash** — `tree-sitter-bash` 0.25. `function_definition` is the def,
+- [x] **bash** — `tree-sitter-bash` 0.25. `function_definition` is the def,
       `variable_assignment` the local, `source`/`.` the import. Widest coverage
       gain of any single entry, and `.env` files parse with it for free
 

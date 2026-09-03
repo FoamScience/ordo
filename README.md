@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-18-5fd4c0" alt="18 supported languages">
+  <img src="https://img.shields.io/badge/languages-19-5fd4c0" alt="19 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -546,7 +546,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, nix, jinja.
+json, yaml, toml, ini, cmake, make, nix, bash, jinja.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -651,6 +651,27 @@ so it is recognised by that name rather than by node kind. Because such an
 import is nearly always bound (`overlay = import ./x.nix;`) the binding's name
 leads the rationale — the import rows are still recorded, which is what an
 `imports` glob in a rule matches on.
+
+### bash
+
+A shell command *is* a call, so `deploy prod` is a use of the function
+`deploy` — which gives a script the same def→use ordering a code file gets.
+Both spellings (`deploy() { … }` and `function deploy { … }`) share one node
+kind. `source x.sh` and its POSIX form `. x.sh` are imports named by the script
+they pull in, recognised by command name rather than node kind. `local`,
+`readonly` and `declare` all wrap the same assignment node, so one entry covers
+them. A positional parameter (`$1`) is never treated as a symbol.
+
+```
+deploy.sh:L2  adds import ./lib/common.sh
+deploy.sh:L4  adds deploy, used by main below
+deploy.sh:L9  uses deploy, defined above
+```
+
+Matched by `.sh`/`.bash` and by name for `.bashrc`, `.bash_profile`, `.profile`
+and `.env` — a dotenv file is assignments, which is exactly what this grammar
+reads, and `.env.local` resolves through the same variant strip as any other
+config override.
 
 ### Jinja templates
 
