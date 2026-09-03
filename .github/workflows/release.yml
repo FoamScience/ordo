@@ -32,10 +32,8 @@ jobs:
         shell: bash
         run: |
           ext=""; [ "${{ matrix.os }}" = "windows-latest" ] && ext=".exe"
-          src="target/${{ matrix.target }}/release/ordo$ext"
-          out="ordo-${{ matrix.target }}$ext"
-          cp "$src" "$out"
-          tar -czf "ordo-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" "ordo$ext"
+          # both binaries: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI the wrappers shell to)
+          tar -czf "ordo-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" "ordo$ext" "ordo-engine$ext"
       - uses: softprops/action-gh-release@v2
         with:
           files: |

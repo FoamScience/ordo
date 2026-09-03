@@ -5,15 +5,17 @@ edition = "2021"
 description = "Comprehension-optimized ordering of code-change hunks"
 license = "MIT"
 
+# The engine CLI — the JSON API (`ordo-engine order --json`), what the npm and
+# pypi wrappers shell to. Pure: no git, no config.
 [[bin]]
-name = "ordo"
+name = "ordo-engine"
 path = "src/main.rs"
 
-# Reviewer TUI — a first-party consumer, kept OUT of the pure engine's default
-# build. Build/run with `--features tui`.
+# The reviewer — `ordo`. A first-party client of the engine that shells to git
+# and reads config; on by default, `--no-default-features` builds the engine alone.
 [[bin]]
-name = "ordo-tui"
-path = "src/bin/ordo-tui.rs"
+name = "ordo"
+path = "src/bin/ordo.rs"
 required-features = ["tui"]
 
 [lib]
@@ -21,6 +23,7 @@ name = "ordo"
 path = "src/lib.rs"
 
 [features]
+default = ["tui"]
 tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:tree-sitter-toml-ng", "dep:toml"]
 
 [dependencies]
@@ -47,7 +50,7 @@ diffy = "0.5.0"
 ratatui = { version = "0.29", optional = true }
 tree-sitter-highlight = { version = "0.25", optional = true }
 tree-sitter-toml-ng = { version = "0.7", optional = true }
-# rules-file parsing (ordo-tui only, see model::Rule)
+# rules-file parsing (the `ordo` reviewer only, see model::Rule)
 toml = { version = "0.8", optional = true }
 
 [dev-dependencies]

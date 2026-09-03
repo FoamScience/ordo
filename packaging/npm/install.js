@@ -27,7 +27,7 @@ if (!triple) {
 }
 
 const win = process.platform === "win32";
-const exe = win ? "ordo.exe" : "ordo";
+const exe = win ? "ordo-engine.exe" : "ordo-engine";
 const dest = path.join(__dirname, "vendor", exe);
 if (fs.existsSync(dest)) process.exit(0);
 

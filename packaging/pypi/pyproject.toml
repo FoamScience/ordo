@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ordo"
 version = "0.2.0"
-description = "Comprehension-optimized ordering of code-change hunks — thin wrapper over the ordo binary"
+description = "Comprehension-optimized ordering of code-change hunks — thin wrapper over the ordo-engine binary"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -14,7 +14,7 @@ license = { text = "MIT" }
 Homepage = "https://github.com/FoamScience/ordo"
 
 [project.scripts]
-ordo = "ordo.__main__:main"
+ordo-engine = "ordo.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ordo"]

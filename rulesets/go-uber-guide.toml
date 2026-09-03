@@ -1,7 +1,7 @@
 # Uber Go Style Guide — https://github.com/uber-go/guide (style.md)
 # Go Code Review Comments — https://go.dev/wiki/CodeReviewComments
 #
-# Use: `ordo-tui --rules rulesets/go-uber-guide.toml`, or copy the rules you
+# Use: `ordo --rules rulesets/go-uber-guide.toml`, or copy the rules you
 # want into <repo>/.ordo/rules.toml.
 #
 # Not here, because ordo's advisory catalog already fires on it with no

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a ruleset file against a sample through `ordo order --json`.
+"""Run a ruleset file against a sample through `ordo-engine order --json`.
 
 Usage: scripts/ruleset-check.py rulesets/<set>.toml rulesets/samples/<sample> [ordo-binary]
 
@@ -13,7 +13,7 @@ import json, os, subprocess, sys, tomllib
 if len(sys.argv) < 3:
     sys.exit(__doc__)
 rules_path, sample_path = sys.argv[1], sys.argv[2]
-ordo = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ORDO_BIN", "target/debug/ordo")
+ordo = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ORDO_BIN", "target/debug/ordo-engine")
 
 ACTIONS = ("name", "note", "warn", "noise", "priority")
 rules = []

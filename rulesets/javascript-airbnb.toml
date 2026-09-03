@@ -1,6 +1,6 @@
 # airbnb/javascript — https://github.com/airbnb/javascript
 #
-# Use: `ordo-tui --rules rulesets/javascript-airbnb.toml`, or copy the rules
+# Use: `ordo --rules rulesets/javascript-airbnb.toml`, or copy the rules
 # you want into <repo>/.ordo/rules.toml.
 #
 # Not here, because ordo's advisory catalog already fires on them with no

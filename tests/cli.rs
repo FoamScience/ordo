@@ -1,9 +1,9 @@
-//! End-to-end CLI: `ordo review [--full-context]` over a patch on stdin.
+//! End-to-end CLI: `ordo-engine review [--full-context]` over a patch on stdin.
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn review(args: &[&str], stdin: &str) -> String {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ordo"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ordo-engine"))
         .arg("review")
         .args(args)
         .stdin(Stdio::piped())

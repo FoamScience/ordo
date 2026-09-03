@@ -14,7 +14,7 @@
 //!     `UPDATE_GOLDEN=1` convention the golden tests already use
 //!
 //! The engine stays git-free; this test owns its own git plumbing, the same
-//! split `ordo-tui` keeps.
+//! split `ordo` keeps.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,4 +1,4 @@
-//! ordo-tui — a terminal reviewer that is a pure client of the ordo engine.
+//! ordo — a terminal reviewer that is a pure client of the ordo engine.
 //! It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
 //! the change in comprehension order: the full file with the changed hunk
 //! highlighted in context, plus rationale, advisories and def→use edges. The
@@ -26,13 +26,13 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PAGE: u16 = 15;
 
 const USAGE: &str = "\
-ordo-tui — interactive review of a commit, ordered for comprehension.
+ordo — interactive review of a commit, ordered for comprehension.
 
 usage:
-  ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
-  ordo-tui --init-config [--force]
-  ordo-tui --help
-  ordo-tui --version
+  ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
+  ordo --init-config [--force]
+  ordo --help
+  ordo --version
 
 <rev> is any git commit-ish (a sha, HEAD~2, a tag), a commit range (main..branch,
 or main...branch to diff from the merge base), or `zz` for the uncommitted area.
@@ -396,14 +396,14 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             }
             "-V" | "--version" | "version" => {
                 println!(
-                    "ordo-tui {} (ordo schema {})",
+                    "ordo {} (ordo schema {})",
                     env!("CARGO_PKG_VERSION"),
                     ordo::SCHEMA_VERSION
                 );
                 return Err(0);
             }
             s if s.starts_with('-') => {
-                eprintln!("ordo-tui: unknown flag '{s}'\n\n{USAGE}");
+                eprintln!("ordo: unknown flag '{s}'\n\n{USAGE}");
                 return Err(2);
             }
             s if rev.is_some() => globs.push(s.to_string()),
@@ -411,11 +411,11 @@ fn parse_args() -> Result<ParsedArgs, i32> {
         }
     }
     if want_preset {
-        eprintln!("ordo-tui: --keys needs a preset name\n\n{USAGE}");
+        eprintln!("ordo: --keys needs a preset name\n\n{USAGE}");
         return Err(2);
     }
     if want_theme {
-        eprintln!("ordo-tui: --theme needs a value\n\n{USAGE}");
+        eprintln!("ordo: --theme needs a value\n\n{USAGE}");
         return Err(2);
     }
     // the config's preset is a default; an explicit --keys still wins
@@ -427,13 +427,13 @@ fn parse_args() -> Result<ParsedArgs, i32> {
         _ => preset,
     };
     let Some(keys) = keymap(&preset) else {
-        eprintln!("ordo-tui: unknown key preset '{preset}' (want: vim, vscode)");
+        eprintln!("ordo: unknown key preset '{preset}' (want: vim, vscode)");
         return Err(2);
     };
     let keys = match &cfg {
         Some(c) => {
             for p in &c.problems {
-                eprintln!("ordo-tui: tui.toml: {p}");
+                eprintln!("ordo: tui.toml: {p}");
             }
             apply_key_config(keys, c)
         }
@@ -446,7 +446,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     };
     let Some(theme) = theme(&theme_name) else {
         eprintln!(
-            "ordo-tui: unknown theme '{theme_name}' (want: {})",
+            "ordo: unknown theme '{theme_name}' (want: {})",
             theme_names().join(", ")
         );
         return Err(2);
@@ -463,7 +463,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
         return Err(0);
     }
     let globs = build_globs(&globs).map_err(|e| {
-        eprintln!("ordo-tui: {e}");
+        eprintln!("ordo: {e}");
         2
     })?;
     let filter = Filter {
@@ -508,7 +508,7 @@ fn main() -> std::io::Result<()> {
     };
     let Some(target) = resolve(&rev) else {
         eprintln!(
-            "ordo-tui: '{rev}' is not a git revision, a commit range or a \
+            "ordo: '{rev}' is not a git revision, a commit range or a \
              GitButler CLI ID (see `but status`)"
         );
         std::process::exit(1);
@@ -521,7 +521,7 @@ fn main() -> std::io::Result<()> {
     let repo_root = git(&["rev-parse", "--show-toplevel"]);
     let report = load_rules_report(repo_root.trim(), &extra_rules);
     for p in &report.problems {
-        eprintln!("ordo-tui: {p}");
+        eprintln!("ordo: {p}");
     }
     let rules_report = report.lines();
     let rules = report.rules;
@@ -672,17 +672,17 @@ fn load(
     if view.is_empty() {
         let msg = if only_comments {
             format!(
-                "ordo-tui: nothing to review in {rev} — no comment changes{}",
+                "ordo: nothing to review in {rev} — no comment changes{}",
                 filter.note()
             )
         } else {
-            format!("ordo-tui: nothing to review in {rev}{}", filter.note())
+            format!("ordo: nothing to review in {rev}{}", filter.note())
         };
         let _ = tx.send(LoadMsg::Empty(msg));
         return;
     }
     let timing = format!(
-        "ordo-tui: read {files} file{} in {read_ms}ms · highlighted {hl_files} in {hl_ms}ms · \
+        "ordo: read {files} file{} in {read_ms}ms · highlighted {hl_files} in {hl_ms}ms · \
          ordered {} hunks into {} groups, {} cluster{} in {}ms",
         plural(files),
         items.len(),
@@ -1963,16 +1963,43 @@ theme_roles! {
 /// (or `--rules go-uber-guide`) needs no path. `rulesets/` is the source of
 /// truth; a test checks every file there is listed here.
 const PRESETS: &[(&str, &str)] = &[
-    ("c-power-of-ten", include_str!("../../rulesets/c-power-of-ten.toml")),
-    ("cpp-default-guidelines", include_str!("../../rulesets/cpp-default-guidelines.toml")),
-    ("go-uber-guide", include_str!("../../rulesets/go-uber-guide.toml")),
-    ("java-effective-java", include_str!("../../rulesets/java-effective-java.toml")),
-    ("javascript-airbnb", include_str!("../../rulesets/javascript-airbnb.toml")),
-    ("lua-style-guide", include_str!("../../rulesets/lua-style-guide.toml")),
+    (
+        "c-power-of-ten",
+        include_str!("../../rulesets/c-power-of-ten.toml"),
+    ),
+    (
+        "cpp-default-guidelines",
+        include_str!("../../rulesets/cpp-default-guidelines.toml"),
+    ),
+    (
+        "go-uber-guide",
+        include_str!("../../rulesets/go-uber-guide.toml"),
+    ),
+    (
+        "java-effective-java",
+        include_str!("../../rulesets/java-effective-java.toml"),
+    ),
+    (
+        "javascript-airbnb",
+        include_str!("../../rulesets/javascript-airbnb.toml"),
+    ),
+    (
+        "lua-style-guide",
+        include_str!("../../rulesets/lua-style-guide.toml"),
+    ),
     ("markdown", include_str!("../../rulesets/markdown.toml")),
-    ("python-google-style", include_str!("../../rulesets/python-google-style.toml")),
-    ("rust-api-guidelines", include_str!("../../rulesets/rust-api-guidelines.toml")),
-    ("typescript-clean-code", include_str!("../../rulesets/typescript-clean-code.toml")),
+    (
+        "python-google-style",
+        include_str!("../../rulesets/python-google-style.toml"),
+    ),
+    (
+        "rust-api-guidelines",
+        include_str!("../../rulesets/rust-api-guidelines.toml"),
+    ),
+    (
+        "typescript-clean-code",
+        include_str!("../../rulesets/typescript-clean-code.toml"),
+    ),
 ];
 
 fn preset(name: &str) -> Option<&'static str> {
@@ -2054,7 +2081,9 @@ fn layer_rules(
     problems: &mut Vec<String>,
 ) {
     if depth > 8 {
-        problems.push(format!("{origin}: include nesting deeper than 8 — a cycle?"));
+        problems.push(format!(
+            "{origin}: include nesting deeper than 8 — a cycle?"
+        ));
         return;
     }
     let doc = parse_rules_doc(text, base);
@@ -2063,14 +2092,32 @@ fn layer_rules(
     }
     for inc in &doc.include {
         if let Some(t) = preset(inc) {
-            layer_rules(t, inc, Path::new("."), depth + 1, layered, disables, replaced, problems);
+            layer_rules(
+                t,
+                inc,
+                Path::new("."),
+                depth + 1,
+                layered,
+                disables,
+                replaced,
+                problems,
+            );
         } else {
             let path = base.join(inc);
             match std::fs::read_to_string(&path) {
                 Ok(t) => {
                     let label = path.display().to_string();
                     let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    layer_rules(&t, &label, &parent, depth + 1, layered, disables, replaced, problems);
+                    layer_rules(
+                        &t,
+                        &label,
+                        &parent,
+                        depth + 1,
+                        layered,
+                        disables,
+                        replaced,
+                        problems,
+                    );
                 }
                 Err(e) => problems.push(format!("{origin}: include `{inc}`: {e}")),
             }
@@ -2103,12 +2150,25 @@ fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
     let mut replaced = vec![];
     let mut problems = vec![];
     let n_implicit = implicit.len();
-    for (i, src) in implicit.into_iter().chain(extra.iter().map(PathBuf::from)).enumerate() {
+    for (i, src) in implicit
+        .into_iter()
+        .chain(extra.iter().map(PathBuf::from))
+        .enumerate()
+    {
         let implicit = i < n_implicit;
         let name = src.to_string_lossy().into_owned();
         if !implicit && !src.exists() {
             if let Some(t) = preset(&name) {
-                layer_rules(t, &name, Path::new("."), 0, &mut layered, &mut disables, &mut replaced, &mut problems);
+                layer_rules(
+                    t,
+                    &name,
+                    Path::new("."),
+                    0,
+                    &mut layered,
+                    &mut disables,
+                    &mut replaced,
+                    &mut problems,
+                );
                 continue;
             }
         }
@@ -2121,7 +2181,16 @@ fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
             }
         };
         let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
-        layer_rules(&text, &name, &base, 0, &mut layered, &mut disables, &mut replaced, &mut problems);
+        layer_rules(
+            &text,
+            &name,
+            &base,
+            0,
+            &mut layered,
+            &mut disables,
+            &mut replaced,
+            &mut problems,
+        );
     }
     // disables win, whoever wrote them
     let mut set = globset::GlobSetBuilder::new();
@@ -2340,7 +2409,12 @@ fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         #[serde(default)]
         rule: Vec<toml::Value>,
     }
-    let empty = |problems| RulesDoc { rules: vec![], include: vec![], disable: vec![], problems };
+    let empty = |problems| RulesDoc {
+        rules: vec![],
+        include: vec![],
+        disable: vec![],
+        problems,
+    };
     let doc: RulesFile = match toml::from_str(text) {
         Ok(d) => d,
         Err(e) => return empty(vec![e.to_string()]),
@@ -2358,7 +2432,12 @@ fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
             rules.push(r);
         }
     }
-    RulesDoc { rules, include: doc.include, disable: doc.disable, problems }
+    RulesDoc {
+        rules,
+        include: doc.include,
+        disable: doc.disable,
+        problems,
+    }
 }
 
 #[cfg(test)]
@@ -2379,10 +2458,10 @@ fn init_config(preset: &str, theme_name: &str) -> String {
     let km = keymap(preset).unwrap_or_else(|| keymap("vim").expect("vim preset exists"));
     let t = theme(theme_name).unwrap_or_else(|| theme("dark").expect("dark theme exists"));
     for line in [
-        "# ordo-tui configuration — every line below is this build's own default,",
+        "# ordo configuration — every line below is this build's own default,",
         "# commented out. Uncomment and edit what you want to change.",
         "#",
-        "# Written by `ordo-tui --init-config`; the values are this build's, for",
+        "# Written by `ordo --init-config`; the values are this build's, for",
         &format!("# preset `{preset}` and theme `{theme_name}`."),
     ] {
         let _ = writeln!(out, "{line}");
@@ -2455,19 +2534,19 @@ fn init_config(preset: &str, theme_name: &str) -> String {
 /// use if the reviewer can't find it.
 fn write_init_config(preset: &str, theme_name: &str, force: bool) -> Result<(), i32> {
     let Some(path) = config_path() else {
-        eprintln!("ordo-tui: no config directory (set $XDG_CONFIG_HOME or $HOME)");
+        eprintln!("ordo: no config directory (set $XDG_CONFIG_HOME or $HOME)");
         return Err(2);
     };
     if path.exists() && !force {
         eprintln!(
-            "ordo-tui: {} already exists — pass --force to overwrite it",
+            "ordo: {} already exists — pass --force to overwrite it",
             path.display()
         );
         return Err(1);
     }
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("ordo-tui: {}: {e}", dir.display());
+            eprintln!("ordo: {}: {e}", dir.display());
             return Err(1);
         }
     }
@@ -2477,7 +2556,7 @@ fn write_init_config(preset: &str, theme_name: &str, force: bool) -> Result<(), 
             Err(0)
         }
         Err(e) => {
-            eprintln!("ordo-tui: {}: {e}", path.display());
+            eprintln!("ordo: {}: {e}", path.display());
             Err(1)
         }
     }
@@ -5684,7 +5763,7 @@ fn run(
                     // the worker dropped its sender without a Done/Empty —
                     // only possible if it panicked; abort rather than spin
                     if matches!(state, State::Loading(_)) {
-                        post_msg = Some("ordo-tui: loading failed unexpectedly".to_string());
+                        post_msg = Some("ordo: loading failed unexpectedly".to_string());
                         break 'outer Ok(());
                     }
                     break;
@@ -6589,12 +6668,25 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
 /// completed the row is `name <args>` padded to a common column, then the
 /// command's help sentence, cut to what fits; an alias or an argument
 /// candidate has no sentence and is shown as is.
-fn command_menu_row(candidate: &str, naming: bool, all: &[String], width: usize) -> (String, Option<String>) {
-    let cmd = naming.then(|| COMMANDS.iter().find(|c| c.name == candidate)).flatten();
+fn command_menu_row(
+    candidate: &str,
+    naming: bool,
+    all: &[String],
+    width: usize,
+) -> (String, Option<String>) {
+    let cmd = naming
+        .then(|| COMMANDS.iter().find(|c| c.name == candidate))
+        .flatten();
     let Some(cmd) = cmd else {
         return (candidate.to_string(), None);
     };
-    let label = |c: &Cmd| if c.args.is_empty() { c.name.to_string() } else { format!("{} {}", c.name, c.args) };
+    let label = |c: &Cmd| {
+        if c.args.is_empty() {
+            c.name.to_string()
+        } else {
+            format!("{} {}", c.name, c.args)
+        }
+    };
     let col = all
         .iter()
         .filter_map(|n| COMMANDS.iter().find(|c| c.name == n))
@@ -7252,7 +7344,11 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
             Ok(CommandOutcome::None)
         }
         "rules" => {
-            let lines: Vec<Line<'static>> = app.rules_report.iter().map(|l| Line::from(l.clone())).collect();
+            let lines: Vec<Line<'static>> = app
+                .rules_report
+                .iter()
+                .map(|l| Line::from(l.clone()))
+                .collect();
             app.popup = Some(Popup::new("rules", lines));
             Ok(CommandOutcome::None)
         }
@@ -8396,7 +8492,7 @@ mod tests {
 
     #[test]
     fn dir_prefix_and_distinct_sorted_derive_stable_glob_candidates() {
-        assert_eq!(dir_prefix("src/bin/ordo-tui.rs"), Some("src/bin"));
+        assert_eq!(dir_prefix("src/bin/ordo.rs"), Some("src/bin"));
         assert_eq!(dir_prefix("Cargo.toml"), None);
         let got = distinct_sorted(["src/b.rs", "src/a.rs", "src/a.rs"].into_iter());
         assert_eq!(got, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
@@ -8410,7 +8506,10 @@ mod tests {
         let (head, help) = command_menu_row("strategy", true, &names, 120);
         assert!(head.starts_with("strategy <"), "{head:?}");
         let strategy = COMMANDS.iter().find(|c| c.name == "strategy").unwrap();
-        assert_eq!(help.as_deref(), Some(format!("  — {}", strategy.help).as_str()));
+        assert_eq!(
+            help.as_deref(),
+            Some(format!("  — {}", strategy.help).as_str())
+        );
         // every name pads to the same column, so the sentences line up
         let (h1, _) = command_menu_row("q", true, &names, 120);
         assert_eq!(h1.chars().count(), head.chars().count());
@@ -8430,7 +8529,10 @@ mod tests {
     #[test]
     fn argument_candidates_carry_no_sentence() {
         let pool = vec!["vim".to_string(), "vscode".to_string()];
-        assert_eq!(command_menu_row("vim", false, &pool, 120), ("vim".to_string(), None));
+        assert_eq!(
+            command_menu_row("vim", false, &pool, 120),
+            ("vim".to_string(), None)
+        );
     }
 
     #[test]
@@ -9179,7 +9281,7 @@ mod tests {
 
     #[test]
     fn load_marks_degrades_to_empty_on_a_missing_or_corrupt_file() {
-        let dir = std::env::temp_dir().join(format!("ordo-tui-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ordo-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let missing = dir.join("missing.json");
         assert!(load_marks(&missing).is_empty());
@@ -9192,8 +9294,7 @@ mod tests {
 
     #[test]
     fn save_marks_then_load_marks_round_trips() {
-        let dir =
-            std::env::temp_dir().join(format!("ordo-tui-test-roundtrip-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ordo-test-roundtrip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("marks.json");
         let mut marks: HashMap<u64, u64> = HashMap::new();
@@ -9415,10 +9516,8 @@ mod tests {
         // parse, plus a problem per bad line. A typed table deserializes
         // atomically: an unknown key fails the whole rule, one problem,
         // nothing partially applied
-        let (rules, problems) = parse_rules(
-            "[[rule]]\nname = \"a\"\nnonsense = \"x\"\n",
-            Path::new("."),
-        );
+        let (rules, problems) =
+            parse_rules("[[rule]]\nname = \"a\"\nnonsense = \"x\"\n", Path::new("."));
         assert!(rules.is_empty(), "{rules:?}");
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("nonsense"), "{problems:?}");
@@ -9481,10 +9580,15 @@ mod tests {
 
     #[test]
     fn kind_as_a_bare_string_also_reads_as_a_one_entry_list() {
-        let (rules, problems) =
-            parse_rules("[[rule]]\nname = \"one-kind\"\nkind = \"for_statement\"\n", Path::new("."));
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"one-kind\"\nkind = \"for_statement\"\n",
+            Path::new("."),
+        );
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(rules[0].when.kind.as_deref(), Some(&["for_statement".to_string()][..]));
+        assert_eq!(
+            rules[0].when.kind.as_deref(),
+            Some(&["for_statement".to_string()][..])
+        );
     }
 
     #[test]
@@ -9506,7 +9610,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ordo-rules-flag-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let extra = dir.join("extra.toml");
-        std::fs::write(&extra, "[[rule]]\nname = \"from-flag\"\nkind = \"type_definition\"\nnote = \"n\"\n").unwrap();
+        std::fs::write(
+            &extra,
+            "[[rule]]\nname = \"from-flag\"\nkind = \"type_definition\"\nnote = \"n\"\n",
+        )
+        .unwrap();
         let (rules, problems) = load_rules("", &[extra.to_string_lossy().into_owned()]);
         assert!(problems.is_empty(), "{problems:?}");
         assert!(rules.iter().any(|r| r.name == "from-flag"));
@@ -9525,7 +9633,10 @@ mod tests {
             let p = entry.path();
             if p.extension().is_some_and(|x| x == "toml") {
                 let stem = p.file_stem().unwrap().to_str().unwrap();
-                assert!(preset(stem).is_some(), "rulesets/{stem}.toml is not in PRESETS");
+                assert!(
+                    preset(stem).is_some(),
+                    "rulesets/{stem}.toml is not in PRESETS"
+                );
             }
         }
         for (name, text) in PRESETS {
@@ -9552,13 +9663,25 @@ mod tests {
         )).unwrap();
         let r = report_from(vec![], &[mine.to_string_lossy().into_owned()]);
         assert!(r.problems.is_empty(), "{:?}", r.problems);
-        let preset_len = parse_rules_doc(preset("go-uber-guide").unwrap(), Path::new(".")).rules.len();
-        assert_eq!(r.rules.len(), preset_len + 1, "one replaced in place, one added");
+        let preset_len = parse_rules_doc(preset("go-uber-guide").unwrap(), Path::new("."))
+            .rules
+            .len();
+        assert_eq!(
+            r.rules.len(),
+            preset_len + 1,
+            "one replaced in place, one added"
+        );
         let np = r.rules.iter().find(|x| x.name == "no-panic").unwrap();
         assert_eq!(np.note.as_deref(), Some("ours: panic is fine in main"));
         assert_eq!(r.replaced.len(), 1);
         assert!(r.replaced[0].starts_with("no-panic"), "{:?}", r.replaced);
-        assert_eq!(r.origins.iter().find(|(o, _)| o == "go-uber-guide").map(|(_, n)| *n), Some(preset_len - 1));
+        assert_eq!(
+            r.origins
+                .iter()
+                .find(|(o, _)| o == "go-uber-guide")
+                .map(|(_, n)| *n),
+            Some(preset_len - 1)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -9569,10 +9692,20 @@ mod tests {
         let repo = dir.join("repo.toml");
         std::fs::write(&user, "disable = [\"no-init\", \"*-size\"]\n").unwrap();
         std::fs::write(&repo, "include = [\"go-uber-guide\"]\n").unwrap();
-        let r = report_from(vec![], &[user.to_string_lossy().into_owned(), repo.to_string_lossy().into_owned()]);
+        let r = report_from(
+            vec![],
+            &[
+                user.to_string_lossy().into_owned(),
+                repo.to_string_lossy().into_owned(),
+            ],
+        );
         assert!(r.problems.is_empty(), "{:?}", r.problems);
         assert!(r.rules.iter().all(|x| x.name != "no-init"));
-        assert!(r.disabled.iter().any(|d| d.starts_with("no-init")), "{:?}", r.disabled);
+        assert!(
+            r.disabled.iter().any(|d| d.starts_with("no-init")),
+            "{:?}",
+            r.disabled
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -9580,15 +9713,27 @@ mod tests {
     fn a_missing_include_and_a_duplicate_name_are_problems() {
         let dir = rules_dir("problems");
         let f = dir.join("rules.toml");
-        std::fs::write(&f, concat!(
-            "include = [\"./nope.toml\"]\n",
-            "[[rule]]\nname = \"twice\"\nnote = \"a\"\n",
-            "[[rule]]\nname = \"twice\"\nnote = \"b\"\n",
-        )).unwrap();
+        std::fs::write(
+            &f,
+            concat!(
+                "include = [\"./nope.toml\"]\n",
+                "[[rule]]\nname = \"twice\"\nnote = \"a\"\n",
+                "[[rule]]\nname = \"twice\"\nnote = \"b\"\n",
+            ),
+        )
+        .unwrap();
         let r = report_from(vec![], &[f.to_string_lossy().into_owned()]);
         assert_eq!(r.rules.len(), 1);
-        assert!(r.problems.iter().any(|p| p.contains("nope.toml")), "{:?}", r.problems);
-        assert!(r.problems.iter().any(|p| p.contains("defined twice")), "{:?}", r.problems);
+        assert!(
+            r.problems.iter().any(|p| p.contains("nope.toml")),
+            "{:?}",
+            r.problems
+        );
+        assert!(
+            r.problems.iter().any(|p| p.contains("defined twice")),
+            "{:?}",
+            r.problems
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -9598,7 +9743,11 @@ mod tests {
         let f = dir.join("rules.toml");
         std::fs::write(&f, "include = [\"./rules.toml\"]\n").unwrap();
         let r = report_from(vec![], &[f.to_string_lossy().into_owned()]);
-        assert!(r.problems.iter().any(|p| p.contains("cycle")), "{:?}", r.problems);
+        assert!(
+            r.problems.iter().any(|p| p.contains("cycle")),
+            "{:?}",
+            r.problems
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -9607,7 +9756,10 @@ mod tests {
         let r = report_from(vec![], &["c-power-of-ten".to_string()]);
         assert!(r.problems.is_empty(), "{:?}", r.problems);
         assert!(r.rules.iter().any(|x| x.name == "no-recursion"));
-        assert_eq!(r.origins, vec![("c-power-of-ten".to_string(), r.rules.len())]);
+        assert_eq!(
+            r.origins,
+            vec![("c-power-of-ten".to_string(), r.rules.len())]
+        );
         assert!(r.lines()[0].ends_with("rules active"));
     }
 

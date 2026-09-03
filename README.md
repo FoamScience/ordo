@@ -45,7 +45,7 @@ it as such.
 - **Intra-line refinement** — when a removed and an added line are the same line
   edited, only the part that changed is highlighted, over grammar leaves rather
   than characters: adding a parameter reads as adding that parameter.
-- **A reviewer TUI** — `ordo-tui`, a first-party client that shells to git and
+- **A reviewer TUI** — `ordo`, a first-party client that shells to git and
   renders the whole thing in the terminal.
 
 ## Why the order is principled
@@ -69,23 +69,23 @@ hunks.
 ## Install
 
 ```sh
-cargo install --path .          # from source (Rust)
+cargo install --path .          # from source: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI)
 npm  install -g @ordo/cli       # node wrapper (vendors a prebuilt binary)
 pip  install ordo               # python wrapper (vendors a prebuilt binary)
 ```
 
 The npm/pypi packages are thin wrappers around one prebuilt binary (the
-ruff/esbuild pattern). Set `ORDO_BIN=/path/to/ordo` to point them at a local
+ruff/esbuild pattern). Set `ORDO_BIN=/path/to/ordo-engine` to point them at a local
 build.
 
 ## CLI
 
 ```sh
-ordo order --json < input.json > output.json
-ordo pack  --json < input.json                 # compact LLM-ready review context
-ordo review path/to.patch                      # or: git diff | ordo review
-git diff -U100000 | ordo review --full-context  # modified files get full semantics
-ordo order --only-comments --json < input.json  # only comment/docstring hunks
+ordo-engine order --json < input.json > output.json
+ordo-engine pack  --json < input.json                 # compact LLM-ready review context
+ordo-engine review path/to.patch                      # or: git diff | ordo-engine review
+git diff -U100000 | ordo-engine review --full-context  # modified files get full semantics
+ordo-engine order --only-comments --json < input.json  # only comment/docstring hunks
 ```
 
 Input / output are frozen as **schema v1** (`schema/v1.json`):
@@ -103,10 +103,10 @@ Output carries the global `order`, per-file `hunks` (with `category`,
 `enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, `details`,
 `symbols`, `noise` for skippable formatting/generated hunks, and `comment` for
 comment/docstring-only hunks), the `groups`, the def→use `edges`, and the
-`clusters` shown above. `ordo pack` renders all of it as compact review
+`clusters` shown above. `ordo-engine pack` renders all of it as compact review
 context.
 
-`options.only_comments` (`--only-comments` on `ordo order`/`ordo pack`) drops
+`options.only_comments` (`--only-comments` on `ordo-engine order`/`ordo-engine pack`) drops
 every non-comment hunk before ordering, so `order`/`groups`/`edges`/`clusters`
 cover only comment/docstring changes — a lightweight pass over documentation
 edits without the noise of the surrounding code.
@@ -195,7 +195,7 @@ Three properties make this safe to hand to a config file:
   groups the dependency graph has *already freed* — a preference can never pull
   a use ahead of its definition. There is a test named after that.
 - **The engine reads no rule files.** They arrive in `Options.rules`; a client
-  collects them. `ordo order --json` stays a function of its arguments.
+  collects them. `ordo-engine order --json` stays a function of its arguments.
 
 And the reason a query rule isn't a linter: it fires on rows **inside the
 hunk**, so it reports what *this change introduces*, not the 400 pre-existing
@@ -219,7 +219,7 @@ verified against a sample in which every rule fires:
 | `typescript-clean-code.toml`, `javascript-airbnb.toml` | the subset an eslint config doesn't already own |
 | `lua-style-guide.toml`, `markdown.toml` | the few rules those guides have that are about structure |
 
-They are bundled into `ordo-tui` and **off by default**. Opt in by name, override
+They are bundled into `ordo` and **off by default**. Opt in by name, override
 by redefining, silence by name:
 
 ```toml
@@ -235,20 +235,20 @@ note = "more than 4 arguments"
 ```
 
 ```sh
-ordo-tui HEAD~3 --rules go-uber-guide     # one more layer, for this review only
+ordo HEAD~3 --rules go-uber-guide     # one more layer, for this review only
 ```
 
 `:rules` shows what is active, where it came from, and what was replaced or
 disabled. Each file's header says what it deliberately leaves out — style that
 belongs to a formatter, lints a linter already owns, and anything needing dataflow.
 
-## Reviewer TUI (`ordo-tui`)
+## Reviewer TUI (`ordo`)
 
 An interactive terminal reviewer — a first-party *client* of the engine, kept
 out of the pure default build behind the `tui` feature:
 
 ```sh
-cargo run --features tui --bin ordo-tui -- <rev> [<glob>...]   # rev defaults to HEAD
+cargo run --bin ordo -- <rev> [<glob>...]   # rev defaults to HEAD
 ```
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
@@ -307,10 +307,10 @@ an explicit `-diff`. `--all` keeps everything (the engine still flags known
 paths `noise`, so they render dimmed).
 
 ```sh
-ordo-tui main...feature 'src/*' '*.rs'          # the branch, Rust sources only
-ordo-tui zz --all                               # everything uncommitted, lock files included
-ordo-tui HEAD 'src/*' '!src/generated/*'        # src/, minus a generated subtree
-ordo-tui HEAD '!tests/*'                        # everything except tests/
+ordo main...feature 'src/*' '*.rs'          # the branch, Rust sources only
+ordo zz --all                               # everything uncommitted, lock files included
+ordo HEAD 'src/*' '!src/generated/*'        # src/, minus a generated subtree
+ordo HEAD '!tests/*'                        # everything except tests/
 ```
 
 A glob prefixed `!` is negative and excludes a path that matches it; with only
@@ -404,7 +404,7 @@ A theme colours twelve *syntax roles* rather than the twenty-six tree-sitter
 capture names mapped onto them, so a new grammar's captures never mean touching
 every theme.
 
-`ordo-tui --init-config` writes a starting config to
+`ordo --init-config` writes a starting config to
 `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml` (`--force` to overwrite): every
 binding and every colour of the current preset and theme, at its real value,
 commented out. It is generated from the same tables the program reads, so it
@@ -574,7 +574,7 @@ back to file order.
 - **The engine has no filtering policy of its own** — it orders exactly the
   changes it is handed and has no opinion about which files belong in a
   review. *Path* filtering (globs, skipping generated/lock files) is entirely
-  client-side: `ordo-tui` has it, `ordo order`/`ordo review` deliberately do
+  client-side: `ordo` has it, `ordo-engine order`/`ordo-engine review` deliberately do
   not. A caller sends the set it wants ordered.
 
   One deliberate exception: `options.only_comments` (`--only-comments`) *is*
@@ -584,7 +584,7 @@ back to file order.
   in `files`. So the engine applies a selection the caller *states*; it never
   invents one.
 
-  Note `ordo-tui`'s `--only-comments` does NOT use the engine flag: it asks
+  Note `ordo`'s `--only-comments` does NOT use the engine flag: it asks
   for every hunk and filters the view, so `:only-comments` can toggle back off
   with something to reveal.
 

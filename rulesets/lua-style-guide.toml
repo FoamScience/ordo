@@ -1,7 +1,7 @@
 # Lua style — Olivine Labs (https://github.com/Olivine-Labs/lua-style-guide)
 # and luarocks (https://github.com/luarocks/lua-style-guide)
 #
-# Use: `ordo-tui --rules rulesets/lua-style-guide.toml`, or copy the rules you
+# Use: `ordo --rules rulesets/lua-style-guide.toml`, or copy the rules you
 # want into <repo>/.ordo/rules.toml.
 #
 # Both guides are almost entirely formatting — indentation, quoting, line

@@ -28,8 +28,8 @@ Working name `ordo` — TBD. Rust core.
 - [x] Golden/property tests: permutation, def-before-use, determinism
 
 ## P3 — CLI + contract  ✅
-- [x] `ordo order --json` (stdin→stdout)
-- [x] `ordo review [patch]` subcommand (arg or stdin → JSON)
+- [x] `ordo-engine order --json` (stdin→stdout)
+- [x] `ordo-engine review [patch]` subcommand (arg or stdin → JSON)
 - [x] Emit versioned output (`schema` field = 1)
 - [x] Unified-diff input parsing (`change.diff`) — `src/patch.rs`; full semantics for additions, positional for modified files (ceiling documented)
 - [x] Golden-file snapshot harness (`tests/golden/`, `UPDATE_GOLDEN=1` to regen) — py/rust/crossfile cases
@@ -53,7 +53,7 @@ Working name `ordo` — TBD. Rust core.
 - [x] Test: corrupted/fuzzy diff (context mismatch) → graceful positional fallback, no panic
 
 ### P9.2 — L2: `{path, diff}` full-context → reconstruct both sides (OPT-IN — auto-detect is unsafe, see design)
-- [x] `model.rs Options`: add `full_context: bool` (default false); `main.rs`: `ordo review --full-context` flag
+- [x] `model.rs Options`: add `full_context: bool` (default false); `main.rs`: `ordo-engine review --full-context` flag
 - [x] `patch.rs parse_file_diff(diff, full_context)`: when `full_context` AND single hunk starting at old line 1 → reconstruct `old` (ctx+removed) **and** `new` (ctx+added); else old/new = None
 - [x] `ParsedFile`: carry optional `old`; `build_change`/`from_diff` use `compute_hunks(old,new)` when both present
 - [x] Preserve trailing-newline / no-normalization in reconstruction
@@ -67,9 +67,9 @@ Working name `ordo` — TBD. Rust core.
 - [x] Test: partial diff → positional order + `degraded == true` + warning on stderr
 
 ### P9.4 — CLI, contract, docs
-- [x] Verify `ordo review` picks all of this up (full-context patch → full semantics; else warns) — add a `review` test
+- [x] Verify `ordo-engine review` picks all of this up (full-context patch → full semantics; else warns) — add a `review` test
 - [x] `schema/v1.json`: document `{old, diff}` input combo + optional output `files[].degraded` (no `schema` bump — additive)
-- [x] README: "`git diff -U100000 | ordo review` for full semantics" + note the old/new API is always full
+- [x] README: "`git diff -U100000 | ordo-engine review` for full semantics" + note the old/new API is always full
 - [x] Promote the dogfood wrapper to `scripts/ordo-commit` (repo-read stays OUT of the binary)
 
 ### P9.5 — wrap
@@ -147,7 +147,7 @@ Change-shape signals as `notes`, not judgments. Language-agnostic thresholds.
 
 - [x] **P13.1 per-hunk def smells** — a def introduced in a hunk that is large (≥60 lines), deeply nested (≥4 ancestors), or param-heavy (≥6 params) → `hunks[].notes[]` (`large definition (120 lines)`, `deeply nested (depth 4)`, `7 params`). Data: DefRec span/depth + params node count.
 - [ ] **P13.2 changeset notes** — `Output.notes[]`: `code changed but no test touched` (code file changed, no test file in changeset), `path: N hunks (high churn)` (≥10 hunks). Needs `is_test_path` shared (move to lang.rs).
-- [x] **P13.3 surface** — fold notes into `ordo pack`; document `hunks[].notes` + `notes` in schema/v1.json + README.
+- [x] **P13.3 surface** — fold notes into `ordo-engine pack`; document `hunks[].notes` + `notes` in schema/v1.json + README.
 
 ## P14 — advanced-construct advisor (curated catalog, not a linter)
 
@@ -155,12 +155,12 @@ Detect powerful/overusable constructs, attach an escalation-ladder advisory, and
 a downgrade **verdict** only where a body-inspection signal backs it.
 `src/advisories.rs` — deterministic tree-sitter detection; `hunks[].advisories`.
 
-- [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo pack`, schema, README.
+- [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo-engine pack`, schema, README.
 - [x] **catalog expansion (batch 1)** — py mutable-default-arg + bare-except (verdicts) + eval/exec; rust unsafe + transmute; js/ts eval + with (verdict); go unsafe + reflect. Tested (`p14_catalog`).
 - [x] **catalog expansion (batch 2)** — path-aware advisor; +c/cpp/java coverage. py assert-validation/dynamic-type/empty-except; rust static-mut; js/ts any/empty-catch; go panic; c/cpp goto + reinterpret_cast; java empty-catch + reflection. Tested (`p14_batch2`).
 
-## P15 — ordo-tui reviewer (feature-gated bin, engine stays pure)  ✅
-- [x] `[[bin]] ordo-tui` behind `tui` feature (ratatui optional; default build unaffected)
+## P15 — ordo reviewer (feature-gated bin, engine stays pure)  ✅
+- [x] `[[bin]] ordo` behind `tui` feature (ratatui optional; default build unaffected)
 - [x] git layer (shell) → `ordo::run` → ratatui review in comprehension order
 - [x] reading-order list (⚠ advisories, dimmed noise) + detail pane (rationale, notes, def→use edges, advisory ladders); j/k/g/G/q nav
 - [x] diff-body view (colored old→new, capped) + mark-reviewed (x, ✓, n/N progress)
@@ -289,7 +289,7 @@ rather than a tree-sitter query.
       was dead for them, and the include line also claimed the row after it
 - [x] C/C++ parameter counting followed the wrong field; the `N params` note had
       never fired for them
-- [x] `ordo-tui` reads rules as real TOML (arrays, multi-line queries) and
+- [x] `ordo` reads rules as real TOML (arrays, multi-line queries) and
       `--rules <file>` layers a set on top of your own
 - [x] **rulesets/** — ten published guideline sets as rules, each verified by a
       harness that fails on any engine problem *and* on any rule that never

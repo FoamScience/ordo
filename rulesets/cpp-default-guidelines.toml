@@ -1,6 +1,6 @@
 # Jan Wilmans' C++ Default Guidelines — https://github.com/janwilmans/guidelines
 #
-# Use: `ordo-tui --rules rulesets/cpp-default-guidelines.toml`, or copy the
+# Use: `ordo --rules rulesets/cpp-default-guidelines.toml`, or copy the
 # rules you want into <repo>/.ordo/rules.toml. Add `path-not = "third_party/**"`
 # to a rule to keep it off vendored code, as the guidelines themselves ask.
 #

@@ -6,7 +6,7 @@ use ordo::model::{Input, Output, Rule, When};
 use std::path::Path;
 
 /// The rules files are kebab-case and flat; the engine's `Rule` nests its
-/// conditions under `when` in snake_case. Same conversion `ordo-tui` does.
+/// conditions under `when` in snake_case. Same conversion the `ordo` reviewer does.
 fn load(path: &Path) -> Vec<Rule> {
     let text = std::fs::read_to_string(path).unwrap();
     let doc: toml::Value =

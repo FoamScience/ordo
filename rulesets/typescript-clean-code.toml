@@ -1,6 +1,6 @@
 # labs42io/clean-code-typescript — https://github.com/labs42io/clean-code-typescript
 #
-# Use: `ordo-tui --rules rulesets/typescript-clean-code.toml`, or copy the
+# Use: `ordo --rules rulesets/typescript-clean-code.toml`, or copy the
 # rules you want into <repo>/.ordo/rules.toml.
 #
 # Not here, because ordo's advisory catalog already fires on them with no

@@ -19,13 +19,13 @@ match the project's rule reads last. A repo file being checked in also means CI
 and a reviewer see the same rules.
 
 The **engine reads neither**. `ordo::run` takes rules in `Options.rules`; a
-client (`ordo-tui`) collects the files and passes them in. That keeps
-`ordo order --json` a function of its arguments.
+client (`ordo`) collects the files and passes them in. That keeps
+`ordo-engine order --json` a function of its arguments.
 
 ## Presets: opting in, overriding, disabling
 
 Nothing is on by default. The rulesets under `rulesets/` are bundled into
-`ordo-tui`, and a file opts in by name:
+`ordo`, and a file opts in by name:
 
 ```toml
 # <repo>/.ordo/rules.toml
@@ -289,5 +289,5 @@ warn = "os.path.join imported directly — prefer pathlib.Path"
 ## When a rule can't work
 
 A glob or query that doesn't compile is reported in `Output.problems` (and
-printed by `ordo-tui`), never silently dropped: a rule that never fires looks
+printed by `ordo`), never silently dropped: a rule that never fires looks
 exactly like a convention nobody breaks.

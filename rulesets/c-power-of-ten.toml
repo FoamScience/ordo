@@ -1,7 +1,7 @@
 # NASA/JPL "The Power of 10: Rules for Developing Safety-Critical Code"
 # (Holzmann, 2006) — https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code
 #
-# Use: `ordo-tui --rules rulesets/c-power-of-ten.toml`, or copy the rules you
+# Use: `ordo --rules rulesets/c-power-of-ten.toml`, or copy the rules you
 # want into <repo>/.ordo/rules.toml.
 #
 # Not here, because ordo's advisory catalog already fires on them with no
