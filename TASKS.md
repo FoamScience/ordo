@@ -328,7 +328,7 @@ fall back to file order. The first two items are what change that.
 - [x] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its
       target, a variable assignment is a binding, `include` is an import; a
       prerequisite is a *use* of another target, which is a genuine edge
-- [ ] **nix** — `tree-sitter-nix` 0.3. Attribute-set paths are the same shape as
+- [x] **nix** — `tree-sitter-nix` 0.3. Attribute-set paths are the same shape as
       the config formats; `import`/`inherit` bind names
 - [ ] **dockerfile** — `tree-sitter-dockerfile` 0.2. A stage (`FROM … AS build`)
       is the container, `COPY --from=build` a use of it

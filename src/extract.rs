@@ -541,6 +541,15 @@ fn is_bookkeeping_export(node: Node) -> bool {
 fn import_like(node: Node, src: &[u8], spec: &LangSpec) -> bool {
     // cmake names its imports rather than spelling them as distinct node
     // kinds: `include(Utils)` and `find_package(Boost)` are ordinary commands
+    // nix spells an import as an ordinary application of a function named
+    // `import`, so the kind alone cannot tell one from any other call
+    if spec.name == "nix" && node.kind() == "apply_expression" {
+        return node
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "variable_expression")
+            .and_then(|f| f.utf8_text(src).ok())
+            .is_some_and(|t| t.trim() == "import");
+    }
     if spec.name == "cmake" && node.kind() == "normal_command" {
         return cmake_command(node, src).is_some_and(|c| {
             matches!(c.as_str(), "include" | "find_package" | "add_subdirectory")
@@ -1312,6 +1321,28 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         inject_fence(node, src, c);
         // fall through: the fence's own prose structure is still walked
     }
+    // nix: an `attrpath` is a name being bound (`meta.description = …`) or
+    // selected (`pkgs.gcc`) — never a free reference to something defined
+    // elsewhere, so its identifiers are not uses. The binding's own name is
+    // already filtered out of `uses` per hunk, but a dotted path is not.
+    if spec.name == "nix" && kind == "attrpath" {
+        return;
+    }
+    // a nix lambda binds its parameters: `{ pkgs, lib, ... }:` and `x: …`.
+    // Not a definition, so the def branch's parameter handling never sees it.
+    if kind == "function_expression" {
+        if let Some(f) = node.child_by_field_name("formals") {
+            for name in param_names(f, src) {
+                c.bound.insert(name);
+            }
+        }
+        if let Some(u) = node.child_by_field_name("universal") {
+            if let Ok(t) = u.utf8_text(src) {
+                c.bound.insert(t.to_string());
+            }
+        }
+        // fall through: the body still holds bindings and uses
+    }
     // make: a prerequisite names another target, and `$(CC)` names a variable.
     // Both are bare `word` nodes — a kind too generic to put in IDENT_KINDS,
     // so they are read from the two parents that make one mean a reference.
@@ -1913,6 +1944,8 @@ fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
                     "bare_key" | "quoted_key" | "dotted_key"
                     // ini: `[user]` and `name = A B`
                     | "section_name" | "setting_name"
+                    // nix: `meta.description = …` — the whole dotted path
+                    | "attrpath"
                 )
             });
         found
@@ -2358,6 +2391,12 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let path = node.child_by_field_name("path")?.utf8_text(src).ok()?;
             let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
             return Some(vec![(row, path.to_string())]);
+        }
+        // nix: the path `import ./overlays.nix` pulls in
+        ("nix", "apply_expression") => {
+            let arg = node.child_by_field_name("argument")?;
+            let text = arg.utf8_text(src).ok()?.trim();
+            return (!text.is_empty()).then(|| vec![(row, text.to_string())]);
         }
         // make: `include common.mk` names the makefiles it pulls in
         ("make", "include_directive") => {

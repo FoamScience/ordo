@@ -62,6 +62,7 @@ tree-sitter-jinja = "0.13"
 tree-sitter-ini = "1.4"
 tree-sitter-cmake = "0.7"
 tree-sitter-make = "1.1"
+tree-sitter-nix = "0.3"
 
 [dev-dependencies]
 toml = "0.8"

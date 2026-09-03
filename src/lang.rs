@@ -97,6 +97,9 @@ fn cmake() -> Language {
 fn make() -> Language {
     tree_sitter_make::LANGUAGE.into()
 }
+fn nix() -> Language {
+    tree_sitter_nix::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -465,6 +468,23 @@ static SPECS: &[LangSpec] = &[
         data: false,
         locals: &[],
     },
+    // nix: an attribute set is the language's main structure, so a `binding`
+    // is both a definition and a member of the set above it — the same shape
+    // as the config formats, which is why `data` is set. A function is not a
+    // separate declaration here (it is a lambda bound to an attribute), so
+    // `binding` covers both. `import ./x.nix` is an ordinary application
+    // whose function happens to be named `import`; see `extract::import_like`.
+    LangSpec {
+        name: "nix",
+        language: nix,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["binding"],
+        members: &["binding"],
+        prose: false,
+        data: true,
+        locals: &[],
+    },
     // jinja: the host language of a template whose *underlying* format has no
     // grammar (`nginx.conf.j2`, `deploy.sh.j2`, a bare `foo.j2`). When the
     // underlying format does have one — `values.yaml.j2` — that format is the
@@ -598,6 +618,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "ini" | "cfg" => "ini",
         "cmake" => "cmake",
         "mk" | "mak" | "make" => "make",
+        "nix" => "nix",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -630,6 +651,7 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "ini" | "cfg" | "conf" | "dosini" => "ini",
         "cmake" => "cmake",
         "make" | "makefile" | "mk" => "make",
+        "nix" => "nix",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == canonical)

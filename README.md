@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-17-5fd4c0" alt="17 supported languages">
+  <img src="https://img.shields.io/badge/languages-18-5fd4c0" alt="18 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -546,7 +546,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, jinja.
+json, yaml, toml, ini, cmake, make, nix, jinja.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -635,6 +635,22 @@ it stays anonymous — but the targets it lists are still read as uses of the re
 rules, which is what a `.PHONY` line is. `include` names the makefiles it pulls
 in. Matched by name (`Makefile`, `GNUmakefile`, `Makefile.am`) as well as by
 `.mk`.
+
+### nix
+
+An attribute set is the language's main structure, so a `binding` is both a
+definition and a member of the set above it — the same shape as the config
+formats. A function is not a separate declaration (it is a lambda bound to an
+attribute), so one node kind covers both. A dotted `meta.description = …` is
+one name, a lambda's formals (`{ pkgs, lib, ... }:`) are bound rather than read
+as references, and an `attrpath` never counts as a use — it is a name being
+bound or selected, not a reference to something defined elsewhere.
+
+nix spells an import as an ordinary application of a function named `import`,
+so it is recognised by that name rather than by node kind. Because such an
+import is nearly always bound (`overlay = import ./x.nix;`) the binding's name
+leads the rationale — the import rows are still recorded, which is what an
+`imports` glob in a rule matches on.
 
 ### Jinja templates
 

@@ -3718,6 +3718,10 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_make::LANGUAGE.into(),
             tree_sitter_make::HIGHLIGHTS_QUERY,
         ),
+        "nix" => owned(
+            tree_sitter_nix::LANGUAGE.into(),
+            tree_sitter_nix::HIGHLIGHTS_QUERY,
+        ),
         "ini" | "cfg" => owned(
             tree_sitter_ini::LANGUAGE.into(),
             tree_sitter_ini::HIGHLIGHTS_QUERY,
