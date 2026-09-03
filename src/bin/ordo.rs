@@ -3957,6 +3957,41 @@ const MD_INJECTION_QUERY: &str = r#"
   (#set! injection.include-children))
 "#;
 
+thread_local! {
+    // Compiling a `HighlightConfiguration` (parsing its query into a
+    // capture-index table) is the expensive part of highlighting, and it only
+    // depends on the (language, query, injection-query) triple — not on which
+    // file it's for. Cache by the query text, which is a fixed string per
+    // grammar (see `highlight_spec`/`md_block_query`), so a run touching many
+    // files of one language compiles that language's query once. Lives on the
+    // loader worker thread that calls `highlight_file`, so a plain
+    // `thread_local!` needs no locking.
+    static HL_CFG_CACHE: std::cell::RefCell<HashMap<String, HighlightConfiguration>> = std::cell::RefCell::new(HashMap::new());
+}
+
+// Ensures `cache[key]` holds a `HighlightConfiguration` for `language`/`query`,
+// configured with `names` exactly once. Returns whether it's present after the
+// call (false only if construction failed).
+fn ensure_hl_cfg(
+    cache: &std::cell::RefCell<HashMap<String, HighlightConfiguration>>,
+    key: &str,
+    language: tree_sitter::Language,
+    name: &str,
+    query: &str,
+    injections: &str,
+    names: &[&str],
+) -> bool {
+    if cache.borrow().contains_key(key) {
+        return true;
+    }
+    let Ok(mut cfg) = HighlightConfiguration::new(language, name, query, injections, "") else {
+        return false;
+    };
+    cfg.configure(names);
+    cache.borrow_mut().insert(key.to_string(), cfg);
+    true
+}
+
 // Syntax-highlight `src` into per-line colored segments. None when the language
 // is unsupported or the grammar/query fails to build → caller renders plain.
 fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>> {
@@ -3964,75 +3999,86 @@ fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>>
     let names: Vec<&str> = HL.iter().map(|(n, _)| *n).collect();
     let is_markdown = matches!(path.rsplit('.').next(), Some("md" | "markdown"));
     let injections = if is_markdown { MD_INJECTION_QUERY } else { "" };
-    let mut cfg = HighlightConfiguration::new(language, path, &query, injections, "").ok()?;
-    cfg.configure(&names);
 
-    // Injected-layer configs: `markdown_inline` plus one per fenced-code
-    // language actually present. Built up front, before `highlight` runs, so
-    // they outlive the borrow the injection callback hands back (it must
-    // return `&'a HighlightConfiguration` for the same `'a` as `cfg`).
-    let mut injected: Vec<(String, HighlightConfiguration)> = Vec::new();
-    if is_markdown {
-        if let Ok(mut inline) = HighlightConfiguration::new(
-            tree_sitter_md::INLINE_LANGUAGE.into(),
-            path,
-            tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
-            "",
-            "",
-        ) {
-            inline.configure(&names);
-            injected.push(("markdown_inline".to_string(), inline));
+    HL_CFG_CACHE.with(|cache| {
+        if !ensure_hl_cfg(cache, &query, language, path, &query, injections, &names) {
+            return None;
         }
-        for lang_name in md_fence_languages(src) {
-            if injected.iter().any(|(n, _)| *n == lang_name) {
-                continue;
+
+        // Injected-layer configs: `markdown_inline` plus one per fenced-code
+        // language actually present. Keyed into the same cache, by query text,
+        // so they're built at most once per grammar too.
+        let mut injected_keys: Vec<(String, String)> = Vec::new();
+        if is_markdown {
+            let inline_query = tree_sitter_md::HIGHLIGHT_QUERY_INLINE;
+            if ensure_hl_cfg(
+                cache,
+                inline_query,
+                tree_sitter_md::INLINE_LANGUAGE.into(),
+                path,
+                inline_query,
+                "",
+                &names,
+            ) {
+                injected_keys.push(("markdown_inline".to_string(), inline_query.to_string()));
             }
-            let Some(ext) = fence_ext(&lang_name) else {
-                continue;
-            };
-            let Some((l, q)) = highlight_spec(&format!("x.{ext}")) else {
-                continue;
-            };
-            if let Ok(mut c) = HighlightConfiguration::new(l, &lang_name, &q, "", "") {
-                c.configure(&names);
-                injected.push((lang_name, c));
+            for lang_name in md_fence_languages(src) {
+                if injected_keys.iter().any(|(n, _)| *n == lang_name) {
+                    continue;
+                }
+                let Some(ext) = fence_ext(&lang_name) else {
+                    continue;
+                };
+                let Some((l, q)) = highlight_spec(&format!("x.{ext}")) else {
+                    continue;
+                };
+                if ensure_hl_cfg(cache, &q, l, &lang_name, &q, "", &names) {
+                    injected_keys.push((lang_name, q));
+                }
             }
         }
-    }
 
-    let mut hl = Highlighter::new();
-    let events = hl
-        .highlight(&cfg, src.as_bytes(), None, |name| {
-            injected.iter().find(|(n, _)| n == name).map(|(_, c)| c)
-        })
-        .ok()?;
+        let cache_ref = cache.borrow();
+        let cfg = cache_ref.get(&query)?;
+        let injected: Vec<(String, &HighlightConfiguration)> = injected_keys
+            .iter()
+            .filter_map(|(n, k)| cache_ref.get(k).map(|c| (n.clone(), c)))
+            .collect();
 
-    let mut lines: Vec<LineSpans> = vec![vec![]];
-    let mut stack: Vec<Color> = vec![];
-    for ev in events {
-        match ev.ok()? {
-            HighlightEvent::HighlightStart(h) => {
-                stack.push(HL.get(h.0).map(|(_, r)| syn.of(*r)).unwrap_or(syn.variable));
-            }
-            HighlightEvent::HighlightEnd => {
-                stack.pop();
-            }
-            HighlightEvent::Source { start, end } => {
-                let color = stack.last().copied().unwrap_or(syn.variable);
-                let mut first = true;
-                for piece in src.get(start..end).unwrap_or("").split('\n') {
-                    if !first {
-                        lines.push(vec![]);
-                    }
-                    first = false;
-                    if !piece.is_empty() {
-                        lines.last_mut().unwrap().push((piece.to_string(), color));
+        let mut hl = Highlighter::new();
+        let events = hl
+            .highlight(cfg, src.as_bytes(), None, |name| {
+                injected.iter().find(|(n, _)| n == name).map(|(_, c)| *c)
+            })
+            .ok()?;
+
+        let mut lines: Vec<LineSpans> = vec![vec![]];
+        let mut stack: Vec<Color> = vec![];
+        for ev in events {
+            match ev.ok()? {
+                HighlightEvent::HighlightStart(h) => {
+                    stack.push(HL.get(h.0).map(|(_, r)| syn.of(*r)).unwrap_or(syn.variable));
+                }
+                HighlightEvent::HighlightEnd => {
+                    stack.pop();
+                }
+                HighlightEvent::Source { start, end } => {
+                    let color = stack.last().copied().unwrap_or(syn.variable);
+                    let mut first = true;
+                    for piece in src.get(start..end).unwrap_or("").split('\n') {
+                        if !first {
+                            lines.push(vec![]);
+                        }
+                        first = false;
+                        if !piece.is_empty() {
+                            lines.last_mut().unwrap().push((piece.to_string(), color));
+                        }
                     }
                 }
             }
         }
-    }
-    Some(lines)
+        Some(lines)
+    })
 }
 
 // ------------------------------------------------------------------- code view
