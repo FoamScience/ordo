@@ -918,6 +918,42 @@ pub fn is_generated_path(p: &str) -> bool {
         || p.contains("/node_modules/")
 }
 
+/// Does a definition of this kind *have* a signature — is it callable, with a
+/// parameter list a change can alter? `changes signature of X` is the wording
+/// for those; everything else that already existed and was touched on its own
+/// declaration line simply `changes`. A cmake `set()`, a make variable, a yaml
+/// key and a rust `const` are all values, not calls, and a value has no
+/// signature to change.
+///
+/// A positive list rather than an exclusion: a kind this does not name gets
+/// the weaker, always-true wording, so a language added later reads acceptably
+/// before anyone thinks about it.
+pub fn has_signature(kind: &str) -> bool {
+    matches!(
+        kind,
+        // python, c, cpp, lua, bash all spell it this way; nix has no such kind
+        "function_definition"
+            | "function_declaration"
+            | "generator_function_declaration"
+            | "function_expression"
+            | "generator_function"
+            | "arrow_function"
+            | "method_definition"
+            | "method_signature"
+            | "method_declaration"
+            | "constructor_declaration"
+            | "function_item"
+            | "macro_definition"
+            | "preproc_function_def"
+            // cmake `function(f a b)` / `macro(m a)`; its `normal_command`
+            // (a `set()`) is deliberately absent
+            | "function_def"
+            | "macro_def"
+            // a jinja macro takes parameters; a `{% block %}` does not
+            | "macro_block"
+    )
+}
+
 /// Is this def node a *type* (class/struct/enum/interface/…) rather than a
 /// function? Node kinds are distinctive enough to judge language-agnostically.
 /// Used to word signature vs type changes (#4).

@@ -244,3 +244,37 @@ fn a_nested_key_still_names_its_parent() {
         "{hs:?}"
     );
 }
+
+#[test]
+fn a_value_has_no_signature_to_change() {
+    // the wording rule is the *kind*, not the language: a cmake `set()` and a
+    // make variable are values too, and neither is a `data` format
+    for (path, old, new, want) in [
+        ("x.cmake", "set(S a)\n", "set(S a b)\n", "changes S"),
+        (
+            "Makefile",
+            "build: a.c\n\techo x\n",
+            "build: a.c b.c\n\techo x\n",
+            "changes build",
+        ),
+    ] {
+        let hs = one(path, old, new);
+        assert!(
+            hs.iter().any(|h| h.rationale == want),
+            "{path}: want {want:?}, got {hs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_callable_still_changes_its_signature() {
+    let hs = one(
+        "a.py",
+        "def f(x):\n    return x\n",
+        "def f(x, y):\n    return x\n",
+    );
+    assert!(
+        hs.iter().any(|h| h.rationale == "changes signature of f"),
+        "{hs:?}"
+    );
+}

@@ -478,6 +478,7 @@ never conflated under the enclosing `main`.
 | within-file order | `uses helper, defined above` · `adds helper, used by run below` |
 | add vs edit | `adds helper` (new) · `edits run` (body of an existing def) |
 | signature / type | `changes signature of parse` · `changes type Config` · `adds type Config` |
+| value changed | `changes SOURCES` — a cmake `set()`, a make variable, a yaml key: a value has no signature |
 | test ↔ code | `tests parse_cfg (config.py)` |
 | rename / delete | `renames foo → bar` · `removes old_helper` · `removes import sys` |
 | body deletion | `removes 31 lines` (a deletion inside a def, no symbol removed) |
@@ -626,8 +627,8 @@ rules nothing depends on, then the rules that depend on them.
 
 ```
 Makefile:L2   adds SRCS, used by build below
-Makefile:L9   changes signature of build, build used by all above
-Makefile:L6   changes signature of all, used above
+Makefile:L9   changes build, build used by all above
+Makefile:L6   changes all, used above
 ```
 
 A special target (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so

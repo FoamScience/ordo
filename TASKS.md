@@ -342,11 +342,13 @@ fall back to file order. The first two items are what change that.
       instructions after a `FROM` are its siblings, so its extent has to be
       read off the sibling chain in `end_row`
 
-Follow-up noticed while adding these two: `changes signature of X` is wrong
-wording for a def that has no signature — a cmake `set()`, a make variable, a
-rust `const_item`. The fix is a language-agnostic `has_signature(kind)` beside
-`is_type_kind`, not a per-language flag; parked rather than folded into a
-language entry, since it changes wording for languages already shipped.
+Follow-up noticed while adding these two, since **done**: `changes signature of
+X` was wrong wording for a def that has no signature — a cmake `set()`, a make
+variable, a rust `const_item`. Fixed with a language-agnostic
+`lang::has_signature(kind)` beside `is_type_kind`, a positive list of callable
+kinds, so a language added later reads acceptably before anyone thinks about
+it. It subsumed the `is_data` special case the config work had added, which is
+now gone: the rule is the *kind*, never the language.
 
 ### P22.2 — bash
 
