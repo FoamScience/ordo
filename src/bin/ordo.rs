@@ -4439,14 +4439,12 @@ fn code_view(
     matches: &[(usize, usize, usize)],
     cur_match: Option<usize>,
     theme: &Theme,
-) -> (Vec<Line<'static>>, bool) {
+    start: usize,
+    rows: usize,
+) -> (Vec<Line<'static>>, bool, usize) {
     let mut out = vec![];
-    // shared (not exclusively-borrowed) so both `window` and `emit_removed`
-    // below can set it without fighting over a unique borrow across the
-    // whole function body
-    let right_clip = std::cell::Cell::new(false);
     let Some((ol, nl)) = sources.get(&it.path) else {
-        return (out, right_clip.get());
+        return (out, false, 0);
     };
     let hl = highlights.get(&it.path);
     let [o0, o1] = it.old_range;
@@ -4458,6 +4456,20 @@ fn code_view(
     };
     let num = Style::default().fg(theme.dim);
     let avail = width.saturating_sub(GUTTER_W);
+    // Every row this view would hold, counted rather than built: the pane shows
+    // `rows` of them, so building the whole file to throw all but a screenful
+    // away costs ~20 allocations per line of a file that can run to thousands.
+    // The removed block lands at `n0` (or after the last line when the deletion
+    // sits at EOF); `n0 == 0` is a change before line 1, where it is not shown.
+    let total = nl.len() + if n0 >= 1 { removed.len() } else { 0 };
+    let start = start.min(last_line(total) as usize);
+    let end = start.saturating_add(rows);
+    // Clipping is a property of the whole view, not of the rows on screen: the
+    // `›` marker would otherwise blink on and off as the reviewer scrolls past
+    // a long line. Counted over every line — no allocation, and `any` stops at
+    // the first one wide enough.
+    let over = |l: &str| l.chars().count() > hscroll + avail;
+    let right_clip = nl.iter().any(|l| over(l)) || (n0 >= 1 && removed.iter().any(|r| over(r)));
     // fill the rest of the row so the background tint spans the full width
     let pad = |spans: &mut Vec<Span<'static>>, used: usize, bg: Color| {
         if width > used {
@@ -4493,14 +4505,18 @@ fn code_view(
         }
         spans
     };
-    let emit_removed = |out: &mut Vec<Line<'static>>| {
+    let emit_removed = |out: &mut Vec<Line<'static>>, row: &mut usize| {
         for (k, r) in removed.iter().enumerate() {
+            let here = *row;
+            *row += 1;
+            if here < start || here >= end {
+                continue;
+            }
             let content = vec![Span::styled(
                 (*r).clone(),
                 Style::default().fg(theme.del_fg).bg(theme.del_bg),
             )];
-            let (visible, shown, clipped) = window(content, r.chars().count());
-            right_clip.set(right_clip.get() | clipped);
+            let (visible, shown, _) = window(content, r.chars().count());
             let mut spans = vec![
                 Span::styled(BAR, Style::default().fg(theme.del_fg)),
                 Span::styled("     ".to_string(), num.bg(theme.del_bg)),
@@ -4515,10 +4531,19 @@ fn code_view(
             out.push(Line::from(spans));
         }
     };
+    let mut row = 0usize;
     for (i, line) in nl.iter().enumerate() {
         let ln = i + 1;
         if ln == n0 {
-            emit_removed(&mut out);
+            emit_removed(&mut out, &mut row);
+        }
+        let here = row;
+        row += 1;
+        if here < start {
+            continue;
+        }
+        if here >= end {
+            break;
         }
         let added = n0 <= ln && ln <= n1;
         let bg = if added { theme.add_bg } else { Color::Reset };
@@ -4540,8 +4565,7 @@ fn code_view(
                 Style::default().fg(theme.fg).bg(bg),
             )],
         };
-        let (visible, shown, clipped) = window(content, line.chars().count());
-        right_clip.set(right_clip.get() | clipped);
+        let (visible, shown, _) = window(content, line.chars().count());
         spans.extend(visible);
         if added {
             pad(&mut spans, GUTTER_W + shown, bg);
@@ -4575,9 +4599,9 @@ fn code_view(
         out.push(Line::from(spans));
     }
     if n0 > nl.len() {
-        emit_removed(&mut out); // deletion at/after EOF
+        emit_removed(&mut out, &mut row); // deletion at/after EOF
     }
-    (out, right_clip.get())
+    (out, right_clip, total)
 }
 
 // ---------------------------------------------------------------------- hover
@@ -6529,7 +6553,9 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         Some(s) => (&s.matches, Some(s.index)),
         None => (&[], None),
     };
-    let (code, right_clip) = code_view(
+    // only the rows the pane can show are built; `code_total` is what the view
+    // would have been, which is what the scroll clamps below still work against
+    let (code, right_clip, code_total) = code_view(
         it,
         &app.sources,
         &app.highlights,
@@ -6539,6 +6565,8 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         search_matches,
         cur_match,
         &app.theme,
+        app.scroll as usize,
+        app.code_height as usize,
     );
     // `‹`/`›` mark content clipped off the left/right of the horizontal
     // window — truncation must never be silent, so this is always shown
@@ -6571,7 +6599,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
 
     let why_content = why_rows(it, &app.view, &app.theme);
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
-    app.code_len = code.len();
+    app.code_len = code_total;
     app.why_len = why_content.len();
     app.why_height = rhs[1].height.saturating_sub(2);
     app.scroll = app.scroll.min(last_line(app.code_len));
@@ -6594,9 +6622,11 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         })
         .collect();
 
+    // `code` is already the slice starting at `app.scroll`, so the paragraph
+    // renders it from the top rather than scrolling within it
     let code_view = Paragraph::new(Text::from(code))
         .block(pane_block(code_title, app.focus == Pane::Code, &app.theme))
-        .scroll((app.scroll, 0));
+        .scroll((0, 0));
     f.render_widget(code_view, rhs[0]);
 
     let info = Paragraph::new(Text::from(why))
@@ -8799,7 +8829,7 @@ mod tests {
         sources.insert("f.rs".to_string(), (vec![], vec![line]));
         let highlights: Highlights = HashMap::new();
         // width = gutter (6) + 10 cols of code
-        let (unscrolled, right_clip_0) = code_view(
+        let (unscrolled, right_clip_0, _) = code_view(
             &it,
             &sources,
             &highlights,
@@ -8809,8 +8839,10 @@ mod tests {
             &[],
             None,
             &theme("dark").unwrap(),
+            0,
+            usize::MAX,
         );
-        let (scrolled, right_clip_5) = code_view(
+        let (scrolled, right_clip_5, _) = code_view(
             &it,
             &sources,
             &highlights,
@@ -8820,6 +8852,8 @@ mod tests {
             &[],
             None,
             &theme("dark").unwrap(),
+            0,
+            usize::MAX,
         );
         assert_eq!(unscrolled.len(), 1);
         assert_eq!(scrolled.len(), 1);
@@ -8865,7 +8899,7 @@ mod tests {
         );
 
         let theme = theme("dark").unwrap();
-        let (rows, _) = code_view(
+        let (rows, _, _) = code_view(
             it,
             &sources,
             &HashMap::new(),
@@ -8875,6 +8909,8 @@ mod tests {
             &[],
             None,
             &theme,
+            0,
+            usize::MAX,
         );
         // the added row is the one carrying the add tint (the removed row
         // comes first, on the del tint)
@@ -8909,7 +8945,7 @@ mod tests {
         assert_eq!(items[0].refined.added[0], None);
 
         let theme = theme("dark").unwrap();
-        let (rows, _) = code_view(
+        let (rows, _, _) = code_view(
             &items[0],
             &sources,
             &HashMap::new(),
@@ -8919,6 +8955,8 @@ mod tests {
             &[],
             None,
             &theme,
+            0,
+            usize::MAX,
         );
         let added = rows.last().unwrap();
         assert!(
@@ -8936,7 +8974,7 @@ mod tests {
         let mut sources: Sources = HashMap::new();
         sources.insert("f.rs".to_string(), (vec![], vec!["short".to_string()]));
         let highlights: Highlights = HashMap::new();
-        let (_, right_clip) = code_view(
+        let (_, right_clip, _) = code_view(
             &it,
             &sources,
             &highlights,
@@ -8946,8 +8984,65 @@ mod tests {
             &[],
             None,
             &theme("dark").unwrap(),
+            0,
+            usize::MAX,
         );
         assert!(!right_clip);
+    }
+
+    /// The viewport slice must be exactly the window it replaces: whatever
+    /// `code_view` builds for `(start, rows)` has to equal that range of the
+    /// full view, and `total` has to stay the full view's length whatever
+    /// window is asked for. The removed block shifts every row after it, so
+    /// this is checked with the deletion mid-file and again at EOF.
+    #[test]
+    fn code_view_window_matches_the_same_slice_of_the_whole_view() {
+        let theme = theme("dark").unwrap();
+        let old: Vec<String> = (1..=4).map(|i| format!("gone {i}")).collect();
+        let new: Vec<String> = (1..=30).map(|i| format!("fn line_{i}() {{}}")).collect();
+
+        for (label, new_range) in [("mid-file", [10, 12]), ("at EOF", [31, 33])] {
+            let mut it = test_item("f.rs");
+            it.old_range = [1, 4];
+            it.new_range = new_range;
+            let mut sources: Sources = HashMap::new();
+            sources.insert("f.rs".to_string(), (old.clone(), new.clone()));
+            let highlights: Highlights = HashMap::new();
+
+            let call = |start: usize, rows: usize| {
+                code_view(
+                    &it,
+                    &sources,
+                    &highlights,
+                    60,
+                    0,
+                    None,
+                    &[],
+                    None,
+                    &theme,
+                    start,
+                    rows,
+                )
+            };
+            let (full, clip_full, total) = call(0, usize::MAX);
+            assert_eq!(total, new.len() + old.len(), "{label}: total row count");
+            assert_eq!(full.len(), total, "{label}: unwindowed view is complete");
+
+            for start in 0..total {
+                let (win, clip, t) = call(start, 7);
+                assert_eq!(t, total, "{label}: total is window-independent");
+                assert_eq!(clip, clip_full, "{label}: clipping is window-independent");
+                let want = &full[start..(start + 7).min(total)];
+                assert_eq!(win.len(), want.len(), "{label}: window length at {start}");
+                for (a, b) in win.iter().zip(want) {
+                    assert_eq!(spans_of(a), spans_of(b), "{label}: row {start} content");
+                }
+            }
+        }
+    }
+
+    fn spans_of(l: &Line<'static>) -> Vec<String> {
+        l.spans.iter().map(|s| s.content.to_string()).collect()
     }
 
     // ---- def→use edges: target resolution ----
