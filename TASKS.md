@@ -325,13 +325,19 @@ fall back to file order. The first two items are what change that.
       carry, and it can be layered on this without changing the shape
 - [x] **cmake** — `tree-sitter-cmake` 0.7. `function`/`macro` definitions,
       `set()` bindings, `include()`/`find_package()` as imports
-- [ ] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its
+- [x] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its
       target, a variable assignment is a binding, `include` is an import; a
       prerequisite is a *use* of another target, which is a genuine edge
 - [ ] **nix** — `tree-sitter-nix` 0.3. Attribute-set paths are the same shape as
       the config formats; `import`/`inherit` bind names
 - [ ] **dockerfile** — `tree-sitter-dockerfile` 0.2. A stage (`FROM … AS build`)
       is the container, `COPY --from=build` a use of it
+
+Follow-up noticed while adding these two: `changes signature of X` is wrong
+wording for a def that has no signature — a cmake `set()`, a make variable, a
+rust `const_item`. The fix is a language-agnostic `has_signature(kind)` beside
+`is_type_kind`, not a per-language flag; parked rather than folded into a
+language entry, since it changes wording for languages already shipped.
 
 ### P22.2 — bash
 

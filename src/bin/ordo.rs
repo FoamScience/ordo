@@ -3617,6 +3617,15 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_cmake::HIGHLIGHTS_QUERY,
         ));
     }
+    if matches!(
+        name,
+        "Makefile" | "makefile" | "GNUmakefile" | "Makefile.am" | "Makefile.in"
+    ) {
+        return Some(owned_query(
+            tree_sitter_make::LANGUAGE.into(),
+            tree_sitter_make::HIGHLIGHTS_QUERY,
+        ));
+    }
     let ini_by_name = matches!(
         name,
         ".gitconfig"
@@ -3704,6 +3713,10 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
         "cmake" => owned(
             tree_sitter_cmake::LANGUAGE.into(),
             tree_sitter_cmake::HIGHLIGHTS_QUERY,
+        ),
+        "mk" | "mak" | "make" => owned(
+            tree_sitter_make::LANGUAGE.into(),
+            tree_sitter_make::HIGHLIGHTS_QUERY,
         ),
         "ini" | "cfg" => owned(
             tree_sitter_ini::LANGUAGE.into(),
@@ -6713,7 +6726,24 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     if let Some(popup) = &app.popup {
         let rect = popup_rect(rhs[0], popup.lines.len());
         f.render_widget(Clear, rect);
-        let text: Vec<Line> = popup.lines.clone();
+        // borrow each span's content instead of cloning the popup body every
+        // frame — Paragraph only needs `Into<Text>`, not an owned copy
+        let text: Vec<Line> = popup
+            .lines
+            .iter()
+            .map(|l| Line {
+                style: l.style,
+                alignment: l.alignment,
+                spans: l
+                    .spans
+                    .iter()
+                    .map(|s| Span {
+                        style: s.style,
+                        content: std::borrow::Cow::Borrowed(s.content.as_ref()),
+                    })
+                    .collect(),
+            })
+            .collect();
         let clipped =
             popup_width(&popup.lines) > rect.width.saturating_sub(2) as usize || popup.hscroll > 0;
         let block = Block::bordered()

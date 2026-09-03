@@ -1312,6 +1312,25 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         inject_fence(node, src, c);
         // fall through: the fence's own prose structure is still walked
     }
+    // make: a prerequisite names another target, and `$(CC)` names a variable.
+    // Both are bare `word` nodes — a kind too generic to put in IDENT_KINDS,
+    // so they are read from the two parents that make one mean a reference.
+    if matches!(kind, "prerequisites" | "variable_reference") {
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            if ch.kind() == "word" {
+                if let Ok(t) = ch.utf8_text(src).map(str::trim) {
+                    if !t.is_empty() {
+                        c.uses.push((sr, t.to_string()));
+                        c.all_idents.push((sr, t.to_string(), ch.id()));
+                    }
+                }
+            } else {
+                walk(ch, src, spec, stack, c);
+            }
+        }
+        return;
+    }
     // yaml anchors: `&base` declares a name and `*base` uses it — the one real
     // def→use pair a config format has, and the only thing that lets a yaml
     // hunk be *ordered* rather than merely described. Both kinds are unique to
@@ -1753,6 +1772,20 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         if let Some(name) = node_name(d, src) {
             return Some(name);
         }
+    }
+    // 1c-make. A rule is named by its first target. A *special* target
+    // (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so it
+    // stays anonymous — its prerequisites are still read as uses of the real
+    // targets it lists, which is exactly what a `.PHONY` line is.
+    if node.kind() == "rule" {
+        // `targets` is a node kind here, not a field (unlike `normal:` for
+        // prerequisites) — verified against tree-sitter-make-1.1.1
+        let mut cur = node.walk();
+        let targets = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "targets")?;
+        let text = targets.named_child(0)?.utf8_text(src).ok()?.trim();
+        return (!text.is_empty() && !text.starts_with('.')).then(|| text.to_string());
     }
     // 1c-cmake. Every cmake construct is a command whose name is its first
     // argument: `function(my_helper …)`, `set(SOURCES …)`. A command that
@@ -2325,6 +2358,18 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let path = node.child_by_field_name("path")?.utf8_text(src).ok()?;
             let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
             return Some(vec![(row, path.to_string())]);
+        }
+        // make: `include common.mk` names the makefiles it pulls in
+        ("make", "include_directive") => {
+            let list = node.child_by_field_name("filenames")?;
+            let mut cur = list.walk();
+            let out: Vec<(usize, String)> = list
+                .named_children(&mut cur)
+                .filter_map(|n| n.utf8_text(src).ok())
+                .map(|t| (row, t.trim().to_string()))
+                .filter(|(_, t)| !t.is_empty())
+                .collect();
+            return (!out.is_empty()).then_some(out);
         }
         // cmake: the module, package or subdirectory the command names
         ("cmake", _) => return Some(vec![(row, cmake_first_arg(node, src)?)]),

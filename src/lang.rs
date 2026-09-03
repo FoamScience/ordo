@@ -94,6 +94,9 @@ fn ini() -> Language {
 fn cmake() -> Language {
     tree_sitter_cmake::LANGUAGE.into()
 }
+fn make() -> Language {
+    tree_sitter_make::LANGUAGE.into()
+}
 // the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
 // constant); the grammar itself loads fine against tree-sitter 0.25.
 fn jinja() -> Language {
@@ -446,6 +449,22 @@ static SPECS: &[LangSpec] = &[
         data: false,
         locals: &[],
     },
+    // make: a rule is a definition named by its target, and a prerequisite is
+    // a *use* of another target — the dependency graph a makefile already is,
+    // read straight off the tree. Targets, prerequisites and variable names
+    // are all `word` nodes, a kind far too generic for IDENT_KINDS, so uses
+    // are collected from the two parents that mean one (see `extract::walk`).
+    LangSpec {
+        name: "make",
+        language: make,
+        test_blocks: &[],
+        imports: &["include_directive"],
+        defs: &["rule", "variable_assignment"],
+        members: &[],
+        prose: false,
+        data: false,
+        locals: &[],
+    },
     // jinja: the host language of a template whose *underlying* format has no
     // grammar (`nginx.conf.j2`, `deploy.sh.j2`, a bare `foo.j2`). When the
     // underlying format does have one — `values.yaml.j2` — that format is the
@@ -520,6 +539,13 @@ fn for_filename(path: &str, name: &str) -> Option<&'static LangSpec> {
     if name == "CMakeLists.txt" {
         return SPECS.iter().find(|s| s.name == "cmake");
     }
+    // a makefile is named, not extended
+    if matches!(
+        name,
+        "Makefile" | "makefile" | "GNUmakefile" | "Makefile.am" | "Makefile.in"
+    ) {
+        return SPECS.iter().find(|s| s.name == "make");
+    }
     let is_ini = matches!(
         name,
         ".gitconfig"
@@ -571,6 +597,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "toml" => "toml",
         "ini" | "cfg" => "ini",
         "cmake" => "cmake",
+        "mk" | "mak" | "make" => "make",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -602,6 +629,7 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "toml" => "toml",
         "ini" | "cfg" | "conf" | "dosini" => "ini",
         "cmake" => "cmake",
+        "make" | "makefile" | "mk" => "make",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == canonical)

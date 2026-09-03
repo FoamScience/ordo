@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-16-5fd4c0" alt="16 supported languages">
+  <img src="https://img.shields.io/badge/languages-17-5fd4c0" alt="17 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -546,7 +546,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, jinja.
+json, yaml, toml, ini, cmake, make, jinja.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -616,6 +616,25 @@ filename — its `.txt` extension says nothing about it.
 cmake/x.cmake:L1  adds helper, used by caller below
 cmake/x.cmake:L6  uses helper, defined above
 ```
+
+### make
+
+A makefile already *is* a dependency graph, so ordo reads it as one: a rule is a
+definition named by its target, and each prerequisite is a use of the target it
+names. The reading order that falls out is the build order — variables, then the
+rules nothing depends on, then the rules that depend on them.
+
+```
+Makefile:L2   adds SRCS, used by build below
+Makefile:L9   changes signature of build, build used by all above
+Makefile:L6   changes signature of all, used above
+```
+
+A special target (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so
+it stays anonymous — but the targets it lists are still read as uses of the real
+rules, which is what a `.PHONY` line is. `include` names the makefiles it pulls
+in. Matched by name (`Makefile`, `GNUmakefile`, `Makefile.am`) as well as by
+`.mk`.
 
 ### Jinja templates
 
