@@ -22,6 +22,45 @@ The **engine reads neither**. `ordo::run` takes rules in `Options.rules`; a
 client (`ordo-tui`) collects the files and passes them in. That keeps
 `ordo order --json` a function of its arguments.
 
+## Presets: opting in, overriding, disabling
+
+Nothing is on by default. The rulesets under `rulesets/` are bundled into
+`ordo-tui`, and a file opts in by name:
+
+```toml
+# <repo>/.ordo/rules.toml
+include = ["go-uber-guide", "./team.toml"]   # a bundled preset, or a path relative to this file
+disable = ["raw-loop", "*-size"]             # by name; globs allowed
+
+[[rule]]                    # same name as an included rule → replaces it, in place
+name = "three-arguments"
+lang = "go"
+max-params = 4
+note = "more than 4 arguments"
+
+[[rule]]                    # a new name → extends
+name = "no-cgo"
+lang = "go"
+imports = "C"
+warn = "cgo needs a design review"
+```
+
+Three things decide what runs:
+
+1. **Definitions layer in order** — each file's `include`s first, then its own
+   rules; your file, then the repo's, then `--rules`. A rule whose `name` already
+   exists replaces the earlier one, so "make it a note", "raise the limit",
+   "narrow it with `path-not`" are all the same move: define it again.
+2. **Disables win, whoever wrote them.** `disable` lists from every file are
+   applied after everything is layered, so you can silence a rule the repo
+   includes, and the repo can silence one you include.
+3. **A name defined twice in one file is a problem**, not a silent last-wins.
+
+`--rules <preset-or-file>` layers one more source last. `:rules` in the TUI shows
+where the active rules came from, what was replaced, what was disabled — a
+silenced rule looks exactly like a convention nobody breaks, so the silencing is
+never silent.
+
 ## A rule
 
 ```toml

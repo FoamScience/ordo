@@ -219,12 +219,28 @@ verified against a sample in which every rule fires:
 | `typescript-clean-code.toml`, `javascript-airbnb.toml` | the subset an eslint config doesn't already own |
 | `lua-style-guide.toml`, `markdown.toml` | the few rules those guides have that are about structure |
 
-```sh
-ordo-tui HEAD~3 --rules rulesets/go-uber-guide.toml     # on top of your own rules
+They are bundled into `ordo-tui` and **off by default**. Opt in by name, override
+by redefining, silence by name:
+
+```toml
+# <repo>/.ordo/rules.toml
+include = ["go-uber-guide"]
+disable = ["raw-loop"]
+
+[[rule]]
+name = "three-arguments"     # same name → replaces the preset's rule
+lang = "go"
+max-params = 4
+note = "more than 4 arguments"
 ```
 
-Each file's header says what it deliberately leaves out — style that belongs to a
-formatter, lints a linter already owns, and anything needing dataflow.
+```sh
+ordo-tui HEAD~3 --rules go-uber-guide     # one more layer, for this review only
+```
+
+`:rules` shows what is active, where it came from, and what was replaced or
+disabled. Each file's header says what it deliberately leaves out — style that
+belongs to a formatter, lints a linter already owns, and anything needing dataflow.
 
 ## Reviewer TUI (`ordo-tui`)
 
