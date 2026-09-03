@@ -519,10 +519,12 @@ fn main() -> std::io::Result<()> {
     let uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
     // rules are the client's to collect: this user's, then this repository's
     let repo_root = git(&["rev-parse", "--show-toplevel"]);
-    let (rules, problems) = load_rules(repo_root.trim(), &extra_rules);
-    for p in &problems {
+    let report = load_rules_report(repo_root.trim(), &extra_rules);
+    for p in &report.problems {
         eprintln!("ordo-tui: {p}");
     }
+    let rules_report = report.lines();
+    let rules = report.rules;
     run(
         rev,
         keys,
@@ -533,6 +535,7 @@ fn main() -> std::io::Result<()> {
         uncommitted,
         theme,
         rules,
+        rules_report,
     )
 }
 
@@ -1956,6 +1959,26 @@ theme_roles! {
 /// Rule *files* are the client's business: the engine reads nothing (see
 /// `ordo::model::Options::rules`), which is what keeps `ordo order --json` a
 /// function of its arguments and the corpus tests meaningful.
+/// The rulesets shipped with ordo, bundled so `include = ["go-uber-guide"]`
+/// (or `--rules go-uber-guide`) needs no path. `rulesets/` is the source of
+/// truth; a test checks every file there is listed here.
+const PRESETS: &[(&str, &str)] = &[
+    ("c-power-of-ten", include_str!("../../rulesets/c-power-of-ten.toml")),
+    ("cpp-default-guidelines", include_str!("../../rulesets/cpp-default-guidelines.toml")),
+    ("go-uber-guide", include_str!("../../rulesets/go-uber-guide.toml")),
+    ("java-effective-java", include_str!("../../rulesets/java-effective-java.toml")),
+    ("javascript-airbnb", include_str!("../../rulesets/javascript-airbnb.toml")),
+    ("lua-style-guide", include_str!("../../rulesets/lua-style-guide.toml")),
+    ("markdown", include_str!("../../rulesets/markdown.toml")),
+    ("python-google-style", include_str!("../../rulesets/python-google-style.toml")),
+    ("rust-api-guidelines", include_str!("../../rulesets/rust-api-guidelines.toml")),
+    ("typescript-clean-code", include_str!("../../rulesets/typescript-clean-code.toml")),
+];
+
+fn preset(name: &str) -> Option<&'static str> {
+    PRESETS.iter().find(|(n, _)| *n == name).map(|(_, t)| *t)
+}
+
 fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
     let mut out = vec![];
     if let Some(dir) = config_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
@@ -1967,34 +1990,178 @@ fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Read the rule files that exist, layering user rules then repo rules.
-/// A `query` may be given inline or as `query-file`, resolved relative to the
-/// rules file itself — a query is a block of tree-sitter, and keeping it in its
-/// own `.scm` is how anyone would want to write one.
-fn load_rules(repo_root: &str, extra: &[String]) -> (Vec<ordo::model::Rule>, Vec<String>) {
-    let mut rules = vec![];
+/// Everything `load_rules_report` learned: the rules to run, and the record a
+/// reviewer needs to trust them — where each came from, which definitions
+/// replaced an earlier one, which names were disabled. A silenced rule looks
+/// exactly like a convention nobody breaks, so the silencing is shown.
+struct RulesReport {
+    rules: Vec<ordo::model::Rule>,
+    problems: Vec<String>,
+    /// (origin, active rules from it), in load order
+    origins: Vec<(String, usize)>,
+    replaced: Vec<String>,
+    disabled: Vec<String>,
+}
+
+impl RulesReport {
+    /// The `:rules` popup, one line per fact.
+    fn lines(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "{} rule{} active",
+            self.rules.len(),
+            if self.rules.len() == 1 { "" } else { "s" }
+        )];
+        for (origin, n) in &self.origins {
+            out.push(format!("  {n:>3}  {origin}"));
+        }
+        if !self.replaced.is_empty() {
+            out.push(String::new());
+            out.push("replaced (a later definition with the same name):".to_string());
+            out.extend(self.replaced.iter().map(|r| format!("  {r}")));
+        }
+        if !self.disabled.is_empty() {
+            out.push(String::new());
+            out.push("disabled:".to_string());
+            out.extend(self.disabled.iter().map(|d| format!("  {d}")));
+        }
+        if !self.problems.is_empty() {
+            out.push(String::new());
+            out.push("problems:".to_string());
+            out.extend(self.problems.iter().map(|p| format!("  {p}")));
+        }
+        if self.rules.is_empty() && self.origins.is_empty() {
+            out.push(String::new());
+            out.push("no rules loaded — `include = [\"go-uber-guide\"]` in .ordo/rules.toml, or --rules <preset|file>".to_string());
+        }
+        out
+    }
+}
+
+/// Merge one parsed rules document into the layered list: its `include`s first
+/// (a bundled preset by name, or a path relative to the file), then its own
+/// rules, where a name already present is *replaced* in place. Disables are
+/// only collected here; they apply once everything is layered, so a user can
+/// silence a rule the repo includes and the repo one a user includes.
+#[allow(clippy::too_many_arguments)]
+fn layer_rules(
+    text: &str,
+    origin: &str,
+    base: &Path,
+    depth: usize,
+    layered: &mut Vec<(ordo::model::Rule, String)>,
+    disables: &mut Vec<String>,
+    replaced: &mut Vec<String>,
+    problems: &mut Vec<String>,
+) {
+    if depth > 8 {
+        problems.push(format!("{origin}: include nesting deeper than 8 — a cycle?"));
+        return;
+    }
+    let doc = parse_rules_doc(text, base);
+    for p in doc.problems {
+        problems.push(format!("{origin}: {p}"));
+    }
+    for inc in &doc.include {
+        if let Some(t) = preset(inc) {
+            layer_rules(t, inc, Path::new("."), depth + 1, layered, disables, replaced, problems);
+        } else {
+            let path = base.join(inc);
+            match std::fs::read_to_string(&path) {
+                Ok(t) => {
+                    let label = path.display().to_string();
+                    let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+                    layer_rules(&t, &label, &parent, depth + 1, layered, disables, replaced, problems);
+                }
+                Err(e) => problems.push(format!("{origin}: include `{inc}`: {e}")),
+            }
+        }
+    }
+    disables.extend(doc.disable);
+    for rule in doc.rules {
+        match layered.iter().position(|(r, _)| r.name == rule.name) {
+            Some(i) => {
+                replaced.push(format!("{}  ({} → {origin})", rule.name, layered[i].1));
+                layered[i] = (rule, origin.to_string());
+            }
+            None => layered.push((rule, origin.to_string())),
+        }
+    }
+}
+
+/// Read the rule files that exist — this user's, then this repository's, then
+/// any `--rules` file or preset — layer them, then apply every `disable`.
+fn load_rules_report(repo_root: &str, extra: &[String]) -> RulesReport {
+    report_from(rule_sources(repo_root), extra)
+}
+
+/// `implicit` sources (the user's and the repo's files) may be absent; every
+/// `extra` — a `--rules` argument — was asked for, so its absence is reported,
+/// unless it names a bundled preset.
+fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
+    let mut layered: Vec<(ordo::model::Rule, String)> = vec![];
+    let mut disables = vec![];
+    let mut replaced = vec![];
     let mut problems = vec![];
-    // the two implicit files may be absent; a `--rules` file was asked for
-    let implicit = rule_sources(repo_root).len();
-    for (i, path) in rule_sources(repo_root).into_iter().chain(extra.iter().map(PathBuf::from)).enumerate() {
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(e) if i < implicit => {
-                let _ = e;
+    let n_implicit = implicit.len();
+    for (i, src) in implicit.into_iter().chain(extra.iter().map(PathBuf::from)).enumerate() {
+        let implicit = i < n_implicit;
+        let name = src.to_string_lossy().into_owned();
+        if !implicit && !src.exists() {
+            if let Some(t) = preset(&name) {
+                layer_rules(t, &name, Path::new("."), 0, &mut layered, &mut disables, &mut replaced, &mut problems);
                 continue;
             }
+        }
+        let text = match std::fs::read_to_string(&src) {
+            Ok(t) => t,
+            Err(_) if implicit => continue,
             Err(e) => {
-                problems.push(format!("{}: {e}", path.display()));
+                problems.push(format!("{name}: {e}"));
                 continue;
             }
         };
-        let (mut got, probs) = parse_rules(&text, path.parent().unwrap_or(Path::new(".")));
-        for p in probs {
-            problems.push(format!("{}: {p}", path.display()));
-        }
-        rules.append(&mut got);
+        let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
+        layer_rules(&text, &name, &base, 0, &mut layered, &mut disables, &mut replaced, &mut problems);
     }
-    (rules, problems)
+    // disables win, whoever wrote them
+    let mut set = globset::GlobSetBuilder::new();
+    for d in &disables {
+        match globset::Glob::new(d) {
+            Ok(g) => {
+                set.add(g);
+            }
+            Err(e) => problems.push(format!("disable `{d}` is not a glob: {e}")),
+        }
+    }
+    let set = set.build().unwrap_or_else(|_| globset::GlobSet::empty());
+    let mut disabled = vec![];
+    layered.retain(|(r, origin)| {
+        let keep = !set.is_match(&r.name);
+        if !keep {
+            disabled.push(format!("{}  ({origin})", r.name));
+        }
+        keep
+    });
+    let mut origins: Vec<(String, usize)> = vec![];
+    for (_, origin) in &layered {
+        match origins.iter_mut().find(|(o, _)| o == origin) {
+            Some((_, n)) => *n += 1,
+            None => origins.push((origin.clone(), 1)),
+        }
+    }
+    RulesReport {
+        rules: layered.into_iter().map(|(r, _)| r).collect(),
+        problems,
+        origins,
+        replaced,
+        disabled,
+    }
+}
+
+#[cfg(test)]
+fn load_rules(repo_root: &str, extra: &[String]) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    let r = load_rules_report(repo_root, extra);
+    (r.rules, r.problems)
 }
 
 /// `kind = "x"` and `kind = ["x", "y"]` both read; a one-entry list is the
@@ -2154,25 +2321,50 @@ fn rule_from_toml(
 /// whole file (there is no document to salvage rules from); once the document
 /// itself parses, each rule converts independently so one bad rule can't sink
 /// the rest (see `rule_from_toml`).
-fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
+/// One rules file, read: its rules, what it includes, what it disables.
+struct RulesDoc {
+    rules: Vec<ordo::model::Rule>,
+    include: Vec<String>,
+    disable: Vec<String>,
+    problems: Vec<String>,
+}
+
+fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct RulesFile {
         #[serde(default)]
+        include: Vec<String>,
+        #[serde(default)]
+        disable: Vec<String>,
+        #[serde(default)]
         rule: Vec<toml::Value>,
     }
+    let empty = |problems| RulesDoc { rules: vec![], include: vec![], disable: vec![], problems };
     let doc: RulesFile = match toml::from_str(text) {
         Ok(d) => d,
-        Err(e) => return (vec![], vec![e.to_string()]),
+        Err(e) => return empty(vec![e.to_string()]),
     };
-    let mut rules = vec![];
+    let mut rules: Vec<ordo::model::Rule> = vec![];
     let mut problems = vec![];
     for (i, v) in doc.rule.into_iter().enumerate() {
         if let Some(r) = rule_from_toml(v, i, base, &mut problems) {
+            // the engine keys hits by name; two rules sharing one within a
+            // file would be indistinguishable, so it is a mistake to report
+            if rules.iter().any(|x| x.name == r.name) {
+                problems.push(format!("rule `{}` is defined twice in this file", r.name));
+                continue;
+            }
             rules.push(r);
         }
     }
-    (rules, problems)
+    RulesDoc { rules, include: doc.include, disable: doc.disable, problems }
+}
+
+#[cfg(test)]
+fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    let d = parse_rules_doc(text, base);
+    (d.rules, d.problems)
 }
 
 /// The config file ordo would write for the current preset and theme — every
@@ -2690,6 +2882,8 @@ struct App {
     collapsed: HashSet<String>,
     /// what the filters and the engine dropped on the way here — `:audit`
     ledger: Ledger,
+    /// what `:rules` shows: where the rules came from, what was replaced or disabled
+    rules_report: Vec<String>,
     /// the reviewer's own rules, carried so a re-order or an `:e` reload keeps
     /// applying them
     rules: Vec<ordo::model::Rule>,
@@ -5371,6 +5565,7 @@ fn run(
     uncommitted: bool,
     theme: Theme,
     rules: Vec<ordo::model::Rule>,
+    rules_report: Vec<String>,
 ) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -5481,6 +5676,7 @@ fn run(
                         ledger,
                         rules: rules.clone(),
                         strategy: "comprehension".to_string(),
+                        rules_report: rules_report.clone(),
                     }));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -6445,6 +6641,11 @@ const COMMANDS: &[Cmd] = &[
         help: "toggle showing generated/formatting-noise hunks",
     },
     Cmd {
+        name: "rules",
+        args: "",
+        help: "where the active rules came from, and what was replaced or disabled",
+    },
+    Cmd {
         name: "filter",
         args: "<glob>",
         help: "narrow the review to paths matching <glob>; no argument clears it",
@@ -7009,6 +7210,11 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 "commands",
                 build_command_help().into_iter().map(prose).collect(),
             ));
+            Ok(CommandOutcome::None)
+        }
+        "rules" => {
+            let lines: Vec<Line<'static>> = app.rules_report.iter().map(|l| Line::from(l.clone())).collect();
+            app.popup = Some(Popup::new("rules", lines));
             Ok(CommandOutcome::None)
         }
         "audit" => {
@@ -8742,6 +8948,7 @@ mod tests {
             ledger: Ledger::default(),
             rules: vec![],
             strategy: "comprehension".to_string(),
+            rules_report: vec![],
         }
     }
 
@@ -9241,6 +9448,99 @@ mod tests {
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("nope.toml"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_shipped_ruleset_is_a_bundled_preset() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rulesets");
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let p = entry.path();
+            if p.extension().is_some_and(|x| x == "toml") {
+                let stem = p.file_stem().unwrap().to_str().unwrap();
+                assert!(preset(stem).is_some(), "rulesets/{stem}.toml is not in PRESETS");
+            }
+        }
+        for (name, text) in PRESETS {
+            let d = parse_rules_doc(text, Path::new("."));
+            assert!(d.problems.is_empty(), "{name}: {:?}", d.problems);
+        }
+    }
+
+    fn rules_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ordo-rules-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_included_preset_layers_first_and_a_same_named_rule_replaces_its_entry() {
+        let dir = rules_dir("include");
+        let mine = dir.join("rules.toml");
+        std::fs::write(&mine, concat!(
+            "include = [\"go-uber-guide\"]\n",
+            "[[rule]]\nname = \"no-panic\"\nlang = \"go\"\nuses = \"panic\"\nnote = \"ours: panic is fine in main\"\n",
+            "[[rule]]\nname = \"no-cgo\"\nlang = \"go\"\nimports = \"C\"\nwarn = \"cgo\"\n",
+        )).unwrap();
+        let r = report_from(vec![], &[mine.to_string_lossy().into_owned()]);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        let preset_len = parse_rules_doc(preset("go-uber-guide").unwrap(), Path::new(".")).rules.len();
+        assert_eq!(r.rules.len(), preset_len + 1, "one replaced in place, one added");
+        let np = r.rules.iter().find(|x| x.name == "no-panic").unwrap();
+        assert_eq!(np.note.as_deref(), Some("ours: panic is fine in main"));
+        assert_eq!(r.replaced.len(), 1);
+        assert!(r.replaced[0].starts_with("no-panic"), "{:?}", r.replaced);
+        assert_eq!(r.origins.iter().find(|(o, _)| o == "go-uber-guide").map(|(_, n)| *n), Some(preset_len - 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disables_apply_after_every_layer_so_an_earlier_file_can_silence_a_later_include() {
+        let dir = rules_dir("disable");
+        let user = dir.join("user.toml");
+        let repo = dir.join("repo.toml");
+        std::fs::write(&user, "disable = [\"no-init\", \"*-size\"]\n").unwrap();
+        std::fs::write(&repo, "include = [\"go-uber-guide\"]\n").unwrap();
+        let r = report_from(vec![], &[user.to_string_lossy().into_owned(), repo.to_string_lossy().into_owned()]);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert!(r.rules.iter().all(|x| x.name != "no-init"));
+        assert!(r.disabled.iter().any(|d| d.starts_with("no-init")), "{:?}", r.disabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_include_and_a_duplicate_name_are_problems() {
+        let dir = rules_dir("problems");
+        let f = dir.join("rules.toml");
+        std::fs::write(&f, concat!(
+            "include = [\"./nope.toml\"]\n",
+            "[[rule]]\nname = \"twice\"\nnote = \"a\"\n",
+            "[[rule]]\nname = \"twice\"\nnote = \"b\"\n",
+        )).unwrap();
+        let r = report_from(vec![], &[f.to_string_lossy().into_owned()]);
+        assert_eq!(r.rules.len(), 1);
+        assert!(r.problems.iter().any(|p| p.contains("nope.toml")), "{:?}", r.problems);
+        assert!(r.problems.iter().any(|p| p.contains("defined twice")), "{:?}", r.problems);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_include_cycle_is_reported_not_looped() {
+        let dir = rules_dir("cycle");
+        let f = dir.join("rules.toml");
+        std::fs::write(&f, "include = [\"./rules.toml\"]\n").unwrap();
+        let r = report_from(vec![], &[f.to_string_lossy().into_owned()]);
+        assert!(r.problems.iter().any(|p| p.contains("cycle")), "{:?}", r.problems);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rules_flag_names_a_preset_or_a_file() {
+        let r = report_from(vec![], &["c-power-of-ten".to_string()]);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert!(r.rules.iter().any(|x| x.name == "no-recursion"));
+        assert_eq!(r.origins, vec![("c-power-of-ten".to_string(), r.rules.len())]);
+        assert!(r.lines()[0].ends_with("rules active"));
     }
 
     #[test]
