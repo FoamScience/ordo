@@ -1,4 +1,4 @@
-//! Wall-clock bench for `ordo::run` over the real corpora.
+//! CPU-time bench for `ordo::run` over the real corpora.
 //!
 //! Opt-in exactly like `tests/corpus.rs`: set `$ORDO_CORPUS` to a directory
 //! populated by `scripts/corpus-fetch.sh`, or this returns early.
@@ -17,11 +17,16 @@
 //! `wide` (many files, few hunks each) and `deep` (≤3 files carrying the whole
 //! change) are measured apart — a fix that helps one can leave the other flat.
 //!
-//! The baseline lands in `target/` and is never committed: these are wall-clock
-//! numbers, meaningful only against another run on the same machine.
+//! Timed with this process's own CPU time (user + system), not wall clock:
+//! wall time swings tens of percent when other processes compete for cores
+//! (this repo's own concurrent builds are enough to do it), which swamps the
+//! 5-20% wins this harness exists to detect. CPU time is immune to that.
+//!
+//! The baseline lands in `target/` and is never committed: the `ms` figure is
+//! CPU-milliseconds, meaningful only against another run on the same machine.
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ordo::model::{Change, Input, Options};
 
@@ -122,26 +127,61 @@ fn to_input(blobs: &Blobs) -> Input {
     }
 }
 
-/// Median wall time, plus the hunk count the run produced. Inputs are rebuilt
+/// This process's total CPU time (user + system) consumed so far.
+///
+/// Wall clock is at the mercy of whatever else is running on the machine;
+/// CPU time is not, which is the whole reason this bench uses it. On Linux,
+/// read it straight from `/proc/self/stat` rather than pull in a dependency
+/// for two integers. Anywhere else, fall back to wall-clock `Instant` — this
+/// is a bench, not something worth failing the build over.
+#[cfg(target_os = "linux")]
+fn cpu_time() -> Duration {
+    // Linux's clock tick rate (USER_HZ / sysconf(_SC_CLK_TCK)) is 100 on
+    // essentially every real configuration; hardcoding it avoids a libc
+    // dependency just to call sysconf.
+    const TICKS_PER_SEC: f64 = 100.0;
+
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    // Field 2 is `comm`, parenthesised and possibly containing spaces (or even
+    // ')'), so find the LAST ')' rather than splitting the whole line on
+    // whitespace. Everything after it is space-separated starting at field 3.
+    let rest = stat.rsplit_once(')').map_or("", |(_, r)| r);
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // fields[0] is field 3, so field N is at index N - 3: utime is field 14
+    // (index 11), stime is field 15 (index 12).
+    let utime: u64 = fields.get(11).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let stime: u64 = fields.get(12).and_then(|s| s.parse().ok()).unwrap_or(0);
+    Duration::from_secs_f64((utime + stime) as f64 / TICKS_PER_SEC)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cpu_time() -> Duration {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
+}
+
+/// Median CPU time, plus the hunk count the run produced. Inputs are rebuilt
 /// outside the clock so only `ordo::run` is measured.
 ///
-/// `reps` is a floor, not a count. A scenario that finishes in under a second
-/// swings several percent run to run — enough to swamp the kind of win this
-/// harness exists to detect — so a fast job keeps sampling until its samples
-/// cover `MIN_WALL`, which pulls the noise back under a percent or two.
+/// `reps` is a floor, not a count. `/proc/self/stat` only has 10ms
+/// resolution (100 ticks/sec), so a scenario that finishes in tens of
+/// milliseconds needs many reps or the quantisation itself is a large error
+/// — a fast job keeps sampling until its samples cover `MIN_CPU`, which at
+/// 2s keeps that error well under 1%.
 fn measure(job: &Job, reps: usize) -> (Duration, usize) {
-    const MIN_WALL: Duration = Duration::from_secs(2);
+    const MIN_CPU: Duration = Duration::from_secs(2);
     const MAX_REPS: usize = 25;
 
     let mut times: Vec<Duration> = Vec::with_capacity(reps);
     let mut hunks = 0;
-    while times.len() < reps
-        || (times.len() < MAX_REPS && times.iter().sum::<Duration>() < MIN_WALL)
+    while times.len() < reps || (times.len() < MAX_REPS && times.iter().sum::<Duration>() < MIN_CPU)
     {
         let inputs: Vec<Input> = job.commits.iter().map(to_input).collect();
-        let start = Instant::now();
+        let start = cpu_time();
         let outs: Vec<_> = inputs.into_iter().map(ordo::run).collect();
-        times.push(start.elapsed());
+        times.push(cpu_time() - start);
         hunks = outs
             .iter()
             .flat_map(|o| &o.files)
