@@ -655,7 +655,7 @@ fn is_test_label(s: &str) -> bool {
         .is_some_and(|(head, rest)| rest.starts_with(['"', '\'', '`']) && !head.is_empty())
 }
 
-/// Jinja templating over another format: a `values.yaml.j2` is yaml everywhere
+/// Templating over another format: a `values.yaml.j2` is yaml everywhere
 /// except its `{% … %}` statements and `{# … #}` comments, which are not yaml
 /// at all — one `{% for %}` is enough to make the whole document a parse
 /// error. Blanking those regions (space for space, newlines kept) leaves text
@@ -663,19 +663,21 @@ fn is_test_label(s: &str) -> bool {
 /// offsets**, so every hunk range, every node position and every downstream
 /// parse lines up with the file the reviewer is looking at.
 ///
-/// `{{ … }}` is deliberately *not* blanked: an interpolation sits where a
-/// scalar does and every format here already tolerates it, so `web:\n  image:
-/// {{ tag }}` keeps both its key and a name worth reporting.
+/// An interpolation (`{{ … }}`, `<%= … %>`) is deliberately *not* blanked: it
+/// sits where a scalar does and every format here already tolerates one, so
+/// `web:\n  image: {{ tag }}` keeps both its key and a name worth reporting.
+/// Which kinds are literal text and which are interpolations comes from the
+/// templating grammar's own `Template` entry, so the pass is not jinja's.
 ///
 /// Returns the rewritten text and the 0-based rows it blanked, so a hunk that
-/// touches nothing but jinja can still be told apart from one that touches
-/// nothing at all. `None` when the file holds no jinja to mask (the common case
-/// for a path that merely ends in `.j2`), so the caller keeps the original.
-pub fn mask_template(content: &str) -> Option<(String, HashSet<usize>)> {
-    let spec = lang::jinja_spec()?;
+/// touches nothing but template syntax can still be told apart from one that
+/// touches nothing at all. `None` when there was nothing to mask (the common
+/// case for a path that merely ends in `.j2`), so the caller keeps the original.
+pub fn mask_template(spec: &LangSpec, content: &str) -> Option<(String, HashSet<usize>)> {
+    let t = spec.template?;
     let tree = lang::parse(spec, content)?;
     let mut keep: Vec<(usize, usize)> = vec![];
-    collect_template_text(tree.root_node(), &mut keep);
+    collect_template_text(tree.root_node(), t, &mut keep);
     let mut out = content.as_bytes().to_vec();
     let len = out.len();
     let mut blank = vec![true; len];
@@ -701,38 +703,42 @@ pub fn mask_template(content: &str) -> Option<(String, HashSet<usize>)> {
     Some((text, rows))
 }
 
-// Byte ranges that are *not* jinja syntax: literal template text, plus the
-// `{{ … }}` interpolations kept for the host grammar (see `mask_template`).
-fn collect_template_text(node: Node, out: &mut Vec<(usize, usize)>) {
-    if matches!(node.kind(), "content" | "render_expression") {
+// Byte ranges that are *not* template syntax: the host format's own text,
+// plus the interpolations kept for its grammar (see `mask_template`).
+fn collect_template_text(node: Node, t: &lang::Template, out: &mut Vec<(usize, usize)>) {
+    if t.literal.contains(&node.kind()) || t.interpolation.contains(&node.kind()) {
         out.push((node.start_byte(), node.end_byte()));
         return;
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        collect_template_text(ch, out);
+        collect_template_text(ch, t, out);
     }
 }
 
-/// Every identifier a template's jinja reads — `{{ db_host }}`, `{% if tls %}`
-/// — as `(row, name)`. Recorded as **uses only**, like an injected code fence:
-/// a template consumes variables defined elsewhere (an inventory, a
-/// `group_vars` file) and defines none of them itself.
-pub fn template_uses(content: &str) -> Vec<(usize, String)> {
-    let Some(spec) = lang::jinja_spec() else {
+/// Every identifier a template's own syntax reads — `{{ db_host }}`,
+/// `{% if tls %}` — as `(row, name)`. Recorded as **uses only**, like an
+/// injected code fence: a template consumes variables defined elsewhere (an
+/// inventory, a `group_vars` file) and defines none of them itself.
+///
+/// Empty for a grammar whose directives are one opaque blob rather than parsed
+/// identifiers — ERB's ruby, say. That falls out rather than being special
+/// cased: there are no identifier nodes to find.
+pub fn template_uses(spec: &LangSpec, content: &str) -> Vec<(usize, String)> {
+    let Some(t) = spec.template else {
         return vec![];
     };
     let Some(tree) = lang::parse(spec, content) else {
         return vec![];
     };
     let mut c = Collected::default();
-    collect_jinja_uses(tree.root_node(), content.as_bytes(), &mut c);
+    collect_template_uses(tree.root_node(), content.as_bytes(), t, &mut c);
     c.uses
 }
 
-fn collect_jinja_uses(node: Node, src: &[u8], c: &mut Collected) {
-    // literal template text is the *host* format's business, not jinja's
-    if node.kind() == "content" {
+fn collect_template_uses(node: Node, src: &[u8], t: &lang::Template, c: &mut Collected) {
+    // literal text is the *host* format's business, not the template's
+    if t.literal.contains(&node.kind()) {
         return;
     }
     if lang::is_ident(node.kind()) {
@@ -744,7 +750,7 @@ fn collect_jinja_uses(node: Node, src: &[u8], c: &mut Collected) {
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        collect_jinja_uses(ch, src, c);
+        collect_template_uses(ch, src, t, c);
     }
 }
 

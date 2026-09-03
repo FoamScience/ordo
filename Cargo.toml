@@ -64,6 +64,7 @@ tree-sitter-cmake = "0.7"
 tree-sitter-make = "1.1"
 tree-sitter-nix = "0.3"
 tree-sitter-bash = "0.25"
+tree-sitter-embedded-template = "0.25"
 
 [dev-dependencies]
 toml = "0.8"

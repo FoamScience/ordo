@@ -119,3 +119,53 @@ fn a_jinja_only_hunk_is_not_formatting_noise() {
     assert!(h.is_some(), "{hs:?}");
     assert_ne!(h.unwrap().rationale, "formatting only", "{hs:?}");
 }
+
+#[test]
+fn erb_masks_its_directives_and_keeps_its_output_tags() {
+    // `<% … %>` would break the yaml; `<%= … %>` sits where a scalar does
+    let old = "development:\n<% hosts.each do |h| %>\n  port: 5432\n<% end %>\n";
+    let new =
+        "development:\n<% hosts.each do |h| %>\n  port: <%= h.port %>\n  pool: 5\n<% end %>\n";
+    let hs = one("database.yml.erb", old, new);
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("development.port")),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter().any(|h| h.defines.contains(&"pool".to_string())),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn ejs_resolves_the_same_way() {
+    let hs = one("cfg.json.ejs", "{\n  \"a\": 1\n}\n", "{\n  \"a\": 2\n}\n");
+    assert!(
+        hs.iter().any(|h| h.enclosing.as_deref() == Some("a")),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn erb_cannot_host_a_format_with_no_grammar() {
+    // unlike jinja, ERB has no structure of its own to fall back on — its
+    // directives are opaque ruby, so this stays honestly unsupported
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "index.html.erb", "old": "<p>a</p>\n", "new": "<p>b</p>\n" }]
+    }))
+    .unwrap();
+    assert!(ordo::run(inp).files[0].unsupported);
+}
+
+#[test]
+fn a_bare_j2_still_hosts_itself() {
+    // the jinja counterpart of the test above — `standalone: true`
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "nginx.conf.j2",
+                      "old": "{% block s %}\nlisten 80;\n{% endblock %}\n",
+                      "new": "{% block s %}\nlisten 443;\n{% endblock %}\n" }]
+    }))
+    .unwrap();
+    assert!(!ordo::run(inp).files[0].unsupported);
+}

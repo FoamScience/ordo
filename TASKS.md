@@ -359,10 +359,10 @@ language entry, since it changes wording for languages already shipped.
 `extract::mask_template` is not jinja-specific: it blanks whatever a grammar
 says is not literal text. Make that explicit, then point it at more grammars.
 
-- [ ] generalize the masking pass — a template grammar declares which node kinds
+- [x] generalize the masking pass — a template grammar declares which node kinds
       are literal text and which are interpolations to leave in place, so jinja
       stops being hardcoded in `mask_template` / `template_uses`
-- [ ] **ERB / EJS** — `tree-sitter-embedded-template` 0.25, the official grammar
+- [x] **ERB / EJS** — `tree-sitter-embedded-template` 0.25, the official grammar
 - [ ] **Go templates** — the Helm case, and the one that is not free: no
       go-template grammar is published to crates.io. Decide whether to vendor
       one (build.rs + `cc`), which is also the route to ssh_config and nginx

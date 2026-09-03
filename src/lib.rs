@@ -740,16 +740,16 @@ struct TemplateFacts {
 fn mask_templates(mut input: Input) -> (Input, Vec<TemplateFacts>) {
     let mut facts: Vec<TemplateFacts> = vec![];
     for c in &mut input.changes {
-        if !lang::is_template(&c.path) {
+        let Some(tspec) = lang::template_lang(&c.path) else {
             facts.push(TemplateFacts::default());
             continue;
-        }
+        };
         // a bare `.j2` (or one over a format with no grammar of its own) is
         // parsed as jinja itself — nothing to mask, and the ordinary walk
         // already reads its variables, its macro names and its parameters
         // properly. Harvesting them a second time here would re-add a macro's
         // own name and parameters as uses of themselves.
-        if lang::for_path(&c.path).is_some_and(|s| s.name == "jinja") {
+        if lang::for_path(&c.path).is_some_and(|s| std::ptr::eq(s, tspec)) {
             facts.push(TemplateFacts::default());
             continue;
         }
@@ -759,12 +759,15 @@ fn mask_templates(mut input: Input) -> (Input, Vec<TemplateFacts>) {
             uses: c
                 .new
                 .as_deref()
-                .map(extract::template_uses)
+                .map(|n| extract::template_uses(tspec, n))
                 .unwrap_or_default(),
             masked: HashSet::new(),
         };
         for (side, keep_rows) in [(&mut c.old, false), (&mut c.new, true)] {
-            if let Some((text, rows)) = side.as_deref().and_then(extract::mask_template) {
+            if let Some((text, rows)) = side
+                .as_deref()
+                .and_then(|t| extract::mask_template(tspec, t))
+            {
                 *side = Some(text);
                 if keep_rows {
                     f.masked = rows;

@@ -8,6 +8,21 @@
 //! code and prose — see the `data` flag.
 use tree_sitter::{Language, Parser, Tree};
 
+/// A templating grammar: what it wraps, and how much of it to blank out so
+/// the *host* format underneath can be parsed. See `extract::mask_template`.
+pub struct Template {
+    /// node kinds holding the host format's own bytes
+    pub literal: &'static [&'static str],
+    /// node kinds left in place when masking — an interpolation sits where a
+    /// scalar does, and every host format here already tolerates one
+    pub interpolation: &'static [&'static str],
+    /// Can this grammar stand alone as the host when the wrapped format has
+    /// no grammar of its own? jinja can: its blocks, macros and includes are
+    /// real structure. ERB cannot — its directives are opaque ruby text, so
+    /// `index.html.erb` has nothing to read and stays honestly unsupported.
+    pub standalone: bool,
+}
+
 pub struct LangSpec {
     pub name: &'static str,
     pub language: fn() -> Language,
@@ -35,6 +50,8 @@ pub struct LangSpec {
     /// edit inside a block can say which keys changed. No uses, no imports —
     /// like `prose`, this improves rationale, not ordering.
     pub data: bool,
+    /// set only for a templating grammar (jinja, ERB) — see `Template`
+    pub template: Option<&'static Template>,
     /// node types that bind a name without being a definition (local
     /// variable / assignment target) — drives the "adds local X, used at …"
     /// rationale wording. Verified against each grammar's node-types.json.
@@ -108,6 +125,9 @@ fn bash() -> Language {
 fn jinja() -> Language {
     tree_sitter_jinja::language()
 }
+fn erb() -> Language {
+    tree_sitter_embedded_template::LANGUAGE.into()
+}
 
 static SPECS: &[LangSpec] = &[
     LangSpec {
@@ -127,6 +147,7 @@ static SPECS: &[LangSpec] = &[
         members: &["pair", "keyword_argument"],
         prose: false,
         data: false,
+        template: None,
         locals: &["assignment"],
     },
     // a python superset: every node kind python's entry names exists in this
@@ -148,6 +169,7 @@ static SPECS: &[LangSpec] = &[
         members: &["pair", "keyword_argument"],
         prose: false,
         data: false,
+        template: None,
         // `env_assignment` is xonsh's own: `$FOO = …` binds a name no python
         // `assignment` node covers
         locals: &["assignment", "env_assignment"],
@@ -176,6 +198,7 @@ static SPECS: &[LangSpec] = &[
         members: &["pair", "field_definition", "method_definition"],
         prose: false,
         data: false,
+        template: None,
         locals: &["variable_declarator"],
     },
     LangSpec {
@@ -198,6 +221,7 @@ static SPECS: &[LangSpec] = &[
         members: &["enum_variant", "field_declaration"],
         prose: false,
         data: false,
+        template: None,
         locals: &["let_declaration"],
     },
     LangSpec {
@@ -229,6 +253,7 @@ static SPECS: &[LangSpec] = &[
         ],
         prose: false,
         data: false,
+        template: None,
         locals: &["variable_declarator"],
     },
     LangSpec {
@@ -258,6 +283,7 @@ static SPECS: &[LangSpec] = &[
         ],
         prose: false,
         data: false,
+        template: None,
         locals: &["variable_declarator"],
     },
     LangSpec {
@@ -273,6 +299,7 @@ static SPECS: &[LangSpec] = &[
         members: &["field_declaration", "const_spec", "var_spec", "type_spec"],
         prose: false,
         data: false,
+        template: None,
         locals: &["short_var_declaration", "var_spec"],
     },
     LangSpec {
@@ -295,6 +322,7 @@ static SPECS: &[LangSpec] = &[
         members: &["field_declaration", "enumerator"],
         prose: false,
         data: false,
+        template: None,
         locals: &["declaration"],
     },
     LangSpec {
@@ -319,6 +347,7 @@ static SPECS: &[LangSpec] = &[
         members: &["field_declaration", "enumerator"],
         prose: false,
         data: false,
+        template: None,
         locals: &["declaration"],
     },
     LangSpec {
@@ -344,6 +373,7 @@ static SPECS: &[LangSpec] = &[
         members: &["enum_constant"],
         prose: false,
         data: false,
+        template: None,
         locals: &["local_variable_declaration"],
     },
     LangSpec {
@@ -356,6 +386,7 @@ static SPECS: &[LangSpec] = &[
         members: &["field"],
         prose: false,
         data: false,
+        template: None,
         // `local x = …` parses as `variable_declaration` wrapping an
         // `assignment_statement`/`variable_list` — the name sits several
         // levels down (see extract.rs's lua-specific binding walk), not
@@ -376,6 +407,7 @@ static SPECS: &[LangSpec] = &[
         members: &["section"],
         prose: true,
         data: false,
+        template: None,
         locals: &[],
     },
     // The three config formats below share one shape: a key-value pair is
@@ -395,6 +427,7 @@ static SPECS: &[LangSpec] = &[
         members: &["pair"],
         prose: false,
         data: true,
+        template: None,
         locals: &[],
     },
     LangSpec {
@@ -408,6 +441,7 @@ static SPECS: &[LangSpec] = &[
         members: &["block_mapping_pair", "flow_pair"],
         prose: false,
         data: true,
+        template: None,
         locals: &[],
     },
     LangSpec {
@@ -421,6 +455,7 @@ static SPECS: &[LangSpec] = &[
         members: &["table", "table_array_element", "pair"],
         prose: false,
         data: true,
+        template: None,
         locals: &[],
     },
     // ini and the config files shaped like it — a `[section]` header and
@@ -437,6 +472,7 @@ static SPECS: &[LangSpec] = &[
         members: &["section", "setting"],
         prose: false,
         data: true,
+        template: None,
         locals: &[],
     },
     // cmake: one node kind (`normal_command`) covers every command, so which
@@ -453,6 +489,7 @@ static SPECS: &[LangSpec] = &[
         members: &[],
         prose: false,
         data: false,
+        template: None,
         locals: &[],
     },
     // make: a rule is a definition named by its target, and a prerequisite is
@@ -469,6 +506,7 @@ static SPECS: &[LangSpec] = &[
         members: &[],
         prose: false,
         data: false,
+        template: None,
         locals: &[],
     },
     // nix: an attribute set is the language's main structure, so a `binding`
@@ -486,6 +524,7 @@ static SPECS: &[LangSpec] = &[
         members: &["binding"],
         prose: false,
         data: true,
+        template: None,
         locals: &[],
     },
     // bash: `foo() { … }` and `function foo { … }` share one node kind, and a
@@ -503,6 +542,7 @@ static SPECS: &[LangSpec] = &[
         members: &[],
         prose: false,
         data: false,
+        template: None,
         // `local x=1` / `readonly P=8080` wrap this in a `declaration_command`
         // the walk descends through, so the one kind covers both
         locals: &["variable_assignment"],
@@ -515,6 +555,11 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "jinja",
         language: jinja,
+        template: Some(&Template {
+            literal: &["content"],
+            interpolation: &["render_expression"],
+            standalone: true,
+        }),
         test_blocks: &[],
         // a template's dependencies are other templates
         imports: &["include_statement", "import_statement", "extends_statement"],
@@ -527,24 +572,57 @@ static SPECS: &[LangSpec] = &[
         data: false,
         locals: &[],
     },
+    // ERB / EJS. The host format is everything outside the directives:
+    // `<%= … %>` stays in place like a jinja interpolation, `<% … %>` and
+    // `<%# … %>` are blanked. Its `code` is one opaque blob — ruby or
+    // javascript, neither of which this crate reads — so an ERB template
+    // contributes no uses, and cannot host a format with no grammar of its own.
+    LangSpec {
+        name: "erb",
+        language: erb,
+        template: Some(&Template {
+            literal: &["content"],
+            interpolation: &["output_directive"],
+            standalone: false,
+        }),
+        test_blocks: &[],
+        imports: &[],
+        defs: &[],
+        members: &[],
+        prose: false,
+        data: false,
+        locals: &[],
+    },
 ];
 
-/// Extensions that mark a file as a template *over* another format: strip one
-/// and what remains names the real language. Ordered longest-first is
-/// unnecessary — they are matched whole, as the final extension.
-const TEMPLATE_EXTS: &[&str] = &["j2", "jinja", "jinja2", "tmpl", "tpl"];
+/// Extensions that mark a file as a template *over* another format, and the
+/// templating grammar each one names. Strip the extension and what remains
+/// names the host language.
+const TEMPLATE_EXTS: &[(&str, &str)] = &[
+    ("j2", "jinja"),
+    ("jinja", "jinja"),
+    ("jinja2", "jinja"),
+    ("tmpl", "jinja"),
+    ("tpl", "jinja"),
+    ("erb", "erb"),
+    ("ejs", "erb"),
+];
 
-/// The jinja spec itself — the host of a bare `.j2`, and the grammar the
-/// masking pass in `extract` uses to find the statements it blanks out.
-pub(crate) fn jinja_spec() -> Option<&'static LangSpec> {
-    SPECS.iter().find(|s| s.name == "jinja")
+/// Is this a templated file? `values.yaml.j2`, `foo.j2` and `config.yml.erb`
+/// all are.
+pub fn is_template(path: &str) -> bool {
+    template_lang(path).is_some()
 }
 
-/// Is this a jinja-templated file? `values.yaml.j2` and `foo.j2` both are.
-pub fn is_template(path: &str) -> bool {
-    path.rsplit('.')
-        .next()
-        .is_some_and(|e| TEMPLATE_EXTS.contains(&e))
+/// The templating grammar a path's final extension names — the grammar whose
+/// own syntax is masked out, not the host format underneath it.
+pub fn template_lang(path: &str) -> Option<&'static LangSpec> {
+    let ext = path.rsplit('.').next()?;
+    let name = TEMPLATE_EXTS
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, n)| *n)?;
+    SPECS.iter().find(|s| s.name == name)
 }
 
 /// The spec a *template* is parsed with: the underlying format when it has a
@@ -555,7 +633,12 @@ fn template_spec(path: &str) -> Option<&'static LangSpec> {
     // a second template extension (`a.j2.j2`) is not stripped again: one
     // level is what the convention means, and looping invites a path that is
     // nothing but extensions.
-    for_path_plain(inner).or_else(jinja_spec)
+    if let Some(host) = for_path_plain(inner) {
+        return Some(host);
+    }
+    // nothing underneath: the templating grammar hosts the file if it can
+    // stand alone, otherwise the file is honestly unsupported
+    template_lang(path).filter(|t| t.template.is_some_and(|t| t.standalone))
 }
 
 /// Resolve a path to a language spec by file extension, or None when

@@ -3601,7 +3601,7 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
     // yaml with jinja in it); the jinja itself is left plain, which is close
     // enough to how most editors render one
     let path = match path.rsplit_once('.') {
-        Some((head, "j2" | "jinja" | "jinja2" | "tmpl" | "tpl")) => head,
+        Some((head, "j2" | "jinja" | "jinja2" | "tmpl" | "tpl" | "erb" | "ejs")) => head,
         _ => path,
     };
     let name = path.rsplit('/').next().unwrap_or(path);

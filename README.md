@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-19-5fd4c0" alt="19 supported languages">
+  <img src="https://img.shields.io/badge/languages-20-5fd4c0" alt="20 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -546,7 +546,7 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ## Supported languages
 
 python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
-json, yaml, toml, ini, cmake, make, nix, bash, jinja.
+json, yaml, toml, ini, cmake, make, nix, bash, jinja, erb.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
 grammar crate — no algorithm changes. Two shapes are exceptions:
 
@@ -673,16 +673,19 @@ and `.env` — a dotenv file is assignments, which is exactly what this grammar
 reads, and `.env.local` resolves through the same variant strip as any other
 config override.
 
-### Jinja templates
+### Templates
 
-A `.j2` (also `.jinja`, `.jinja2`, `.tmpl`, `.tpl`) is reviewed as **the format
-underneath it**. `values.yaml.j2` is yaml, `cfg.toml.j2` is toml, `app.py.j2` is
+A `.j2` (also `.jinja`, `.jinja2`, `.tmpl`, `.tpl`) or a `.erb` / `.ejs` is
+reviewed as **the format underneath it**. `values.yaml.j2` is yaml, `cfg.toml.j2` is toml, `app.py.j2` is
 python — one `{% for %}` is enough to make a whole yaml document a parse error,
 so the `{% … %}` statements and `{# … #}` comments are blanked out (space for
 space, newlines kept) before the underlying grammar sees the file. Byte, row and
 column offsets are unchanged, so every hunk still lines up with the file the
-reviewer is looking at. `{{ … }}` is left in place — an interpolation sits where
-a scalar does, and every format here already tolerates it:
+reviewer is looking at. An interpolation (`{{ … }}`, `<%= … %>`) is left in
+place — it sits where a scalar does, and every format here already tolerates
+one. Which node kinds are literal text and which are interpolations comes from
+each templating grammar's own registry entry, so the pass belongs to no one
+language:
 
 ```
 templates/app.yml.j2:L3  adds port
@@ -705,6 +708,13 @@ all resolve to ini. A hunk that touches *only* jinja is blank to the underlying
 grammar, so it would read as "formatting only" — it is exempted from that, and
 says what the statement reads instead (`uses prod` for an added `{% if prod %}`
 guard).
+
+**ERB / EJS** works the same way, with one honest difference: its `<% … %>`
+bodies are a single opaque blob of ruby or javascript rather than parsed
+identifiers, so an ERB template contributes no `uses` — and it cannot host a
+format that has no grammar of its own. `config.yml.erb` is yaml;
+`index.html.erb` stays `unsupported: true` rather than pretending to have been
+read. That falls out of one flag on the grammar's entry, not a special case.
 
 A template over a format that has *no* grammar (`nginx.conf.j2`,
 `deploy.sh.j2`, a bare `foo.j2`) is parsed as jinja itself: `{% block x %}` and
