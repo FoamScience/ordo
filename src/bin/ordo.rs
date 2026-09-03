@@ -2869,6 +2869,11 @@ struct CommandBar {
     text: String,
     candidates: Vec<String>,
     selected: Option<usize>,
+    /// `:e`'s ref pool (`rev_completions()`), fetched at most once per opened
+    /// bar and reused for every later keystroke in the same session — see
+    /// `recompute_candidates`. `None` until first needed; a fresh bar always
+    /// starts `None` so a branch created since the last session is picked up.
+    rev_cache: Option<Vec<String>>,
 }
 
 struct App {
@@ -7203,6 +7208,7 @@ fn open_command_bar(app: &mut App, text: String) {
         text,
         candidates: vec![],
         selected: None,
+        rev_cache: None,
     });
     recompute_candidates(app);
 }
@@ -7230,14 +7236,33 @@ fn recompute_candidates(app: &mut App) {
         Some(bar) => bar.text.clone(),
         None => return,
     };
-    // `:goto` only offers currently visible paths (jumping to a hidden one
-    // would strand `sel` outside `view`); `:filter` offers every loaded
+    // Only built for the command that actually consumes them — no point
+    // sorting every path/dir on every keystroke for a command that ignores
+    // them. `:goto` only offers currently visible paths (jumping to a hidden
+    // one would strand `sel` outside `view`); `:filter` offers every loaded
     // path's directory, since narrowing is the point of typing one.
-    let goto_paths = distinct_sorted(app.view.iter().map(|&i| app.items[i].path.as_str()));
-    let filter_dirs = distinct_sorted(app.items.iter().filter_map(|it| dir_prefix(&it.path)));
-    let rev_candidates = match text.find(char::is_whitespace) {
-        Some(pos) if &text[..pos] == "e" => rev_completions(),
-        _ => vec![],
+    let cmd_name = text.find(char::is_whitespace).map(|pos| &text[..pos]);
+    let goto_paths = if cmd_name == Some("goto") {
+        distinct_sorted(app.view.iter().map(|&i| app.items[i].path.as_str()))
+    } else {
+        vec![]
+    };
+    let filter_dirs = if cmd_name == Some("filter") {
+        distinct_sorted(app.items.iter().filter_map(|it| dir_prefix(&it.path)))
+    } else {
+        vec![]
+    };
+    // `:e`'s ref pool is fetched at most once per opened bar (see
+    // `CommandBar::rev_cache`) rather than shelling out to `git for-each-ref`
+    // on every keystroke.
+    let rev_candidates = if cmd_name == Some("e") {
+        let bar = app.command.as_mut().expect("checked above");
+        if bar.rev_cache.is_none() {
+            bar.rev_cache = Some(rev_completions());
+        }
+        bar.rev_cache.clone().expect("just set")
+    } else {
+        vec![]
     };
     let candidates = command_completions(&text, &goto_paths, &filter_dirs, &rev_candidates);
     if let Some(bar) = app.command.as_mut() {
