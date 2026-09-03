@@ -18,6 +18,10 @@ name = "ordo"
 path = "src/bin/ordo.rs"
 required-features = ["tui"]
 
+[[bench]]
+name = "corpus"
+harness = false
+
 [lib]
 name = "ordo"
 path = "src/lib.rs"
