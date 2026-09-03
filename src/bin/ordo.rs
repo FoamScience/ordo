@@ -5681,10 +5681,16 @@ fn run(
     let mut theme = theme;
     let mut timing: Option<String> = None;
     let mut post_msg: Option<String> = None;
+    // Nothing on screen changes on its own once the review is up, so a frame is
+    // only worth painting after something moved: a worker message, or an event.
+    // Without this the 50ms poll below doubles as a 20fps repaint of a review
+    // nobody is touching.
+    let mut dirty = true;
     let result: std::io::Result<()> = 'outer: loop {
         loop {
             match rx.try_recv() {
                 Ok(LoadMsg::Progress(s)) => {
+                    dirty = true;
                     if let State::Loading(status) = &mut state {
                         *status = s;
                     }
@@ -5694,6 +5700,7 @@ fn run(
                     break 'outer Ok(());
                 }
                 Ok(LoadMsg::Done(r)) => {
+                    dirty = true;
                     let LoadResult {
                         items,
                         view,
@@ -5771,11 +5778,14 @@ fn run(
             }
         }
 
-        if let Err(e) = terminal.draw(|f| match &mut state {
-            State::Loading(status) => draw_loading(f, &rev, status),
-            State::Ready(app) => draw(f, app, &rev),
-        }) {
-            break 'outer Err(e);
+        if dirty {
+            if let Err(e) = terminal.draw(|f| match &mut state {
+                State::Loading(status) => draw_loading(f, &rev, status),
+                State::Ready(app) => draw(f, app, &rev),
+            }) {
+                break 'outer Err(e);
+            }
+            dirty = false;
         }
 
         match event::poll(Duration::from_millis(50)) {
@@ -5783,6 +5793,9 @@ fn run(
             Ok(false) => continue,
             Err(e) => break 'outer Err(e),
         }
+        // Any event at all — a key, but also a resize the next frame has to
+        // relayout for — means the screen is stale.
+        dirty = true;
         match event::read() {
             Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match &mut state {
                 State::Loading(_) => {
