@@ -6557,6 +6557,11 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         if !bar.candidates.is_empty() {
             let menu_rect = command_menu_rect(bar_rect, area, bar.candidates.len());
             f.render_widget(Clear, menu_rect);
+            // completing the command itself: each row carries the command's
+            // help sentence, since there is no central help to look it up in.
+            // Completing an argument: just the candidates.
+            let naming = !bar.text.contains(char::is_whitespace);
+            let width = menu_rect.width.saturating_sub(2) as usize;
             let entries: Vec<ListItem> = bar
                 .candidates
                 .iter()
@@ -6567,12 +6572,46 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(Line::from(Span::styled(c.clone(), style)))
+                    let (head, help) = command_menu_row(c, naming, &bar.candidates, width);
+                    let mut spans = vec![Span::styled(head, style)];
+                    if let Some(h) = help {
+                        spans.push(Span::styled(h, style.fg(app.theme.dim)));
+                    }
+                    ListItem::new(Line::from(spans))
                 })
                 .collect();
             f.render_widget(List::new(entries).block(Block::bordered()), menu_rect);
         }
     }
+}
+
+/// One row of the completion menu. While the command *name* is being
+/// completed the row is `name <args>` padded to a common column, then the
+/// command's help sentence, cut to what fits; an alias or an argument
+/// candidate has no sentence and is shown as is.
+fn command_menu_row(candidate: &str, naming: bool, all: &[String], width: usize) -> (String, Option<String>) {
+    let cmd = naming.then(|| COMMANDS.iter().find(|c| c.name == candidate)).flatten();
+    let Some(cmd) = cmd else {
+        return (candidate.to_string(), None);
+    };
+    let label = |c: &Cmd| if c.args.is_empty() { c.name.to_string() } else { format!("{} {}", c.name, c.args) };
+    let col = all
+        .iter()
+        .filter_map(|n| COMMANDS.iter().find(|c| c.name == n))
+        .map(|c| label(c).chars().count())
+        .max()
+        .unwrap_or(0);
+    let head = format!("{:<col$}", label(cmd));
+    let room = width.saturating_sub(head.chars().count() + 4);
+    if room < 8 {
+        return (head, None);
+    }
+    let mut help: String = cmd.help.chars().take(room).collect();
+    if help.chars().count() < cmd.help.chars().count() {
+        help.pop();
+        help.push('…');
+    }
+    (head, Some(format!("  — {help}")))
 }
 
 // centered floating box over `area`, sized to the popup's content
@@ -8364,6 +8403,35 @@ mod tests {
     }
 
     // ---- command mode: `:help` generated from the command table ----
+
+    #[test]
+    fn completing_a_command_name_shows_its_help_sentence_beside_it() {
+        let names = command_names();
+        let (head, help) = command_menu_row("strategy", true, &names, 120);
+        assert!(head.starts_with("strategy <"), "{head:?}");
+        let strategy = COMMANDS.iter().find(|c| c.name == "strategy").unwrap();
+        assert_eq!(help.as_deref(), Some(format!("  — {}", strategy.help).as_str()));
+        // every name pads to the same column, so the sentences line up
+        let (h1, _) = command_menu_row("q", true, &names, 120);
+        assert_eq!(h1.chars().count(), head.chars().count());
+    }
+
+    #[test]
+    fn a_narrow_menu_cuts_the_sentence_and_a_very_narrow_one_drops_it() {
+        let names = command_names();
+        let (_, help) = command_menu_row("strategy", true, &names, 60);
+        let help = help.unwrap();
+        assert!(help.ends_with('…'), "{help:?}");
+        assert!(help.chars().count() <= 60);
+        let (_, none) = command_menu_row("strategy", true, &names, 20);
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn argument_candidates_carry_no_sentence() {
+        let pool = vec!["vim".to_string(), "vscode".to_string()];
+        assert_eq!(command_menu_row("vim", false, &pool, 120), ("vim".to_string(), None));
+    }
 
     #[test]
     fn command_help_is_generated_from_the_command_table() {
