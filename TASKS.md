@@ -330,8 +330,17 @@ fall back to file order. The first two items are what change that.
       prerequisite is a *use* of another target, which is a genuine edge
 - [x] **nix** — `tree-sitter-nix` 0.3. Attribute-set paths are the same shape as
       the config formats; `import`/`inherit` bind names
-- [ ] **dockerfile** — `tree-sitter-dockerfile` 0.2. A stage (`FROM … AS build`)
-      is the container, `COPY --from=build` a use of it
+- [~] **dockerfile** — parked, no trustworthy grammar. `tree-sitter-dockerfile`
+      0.2 pins tree-sitter **0.20**: its `Language` type is not ours and adding
+      it would pull a second tree-sitter into the tree. The only crate that
+      builds against 0.25 is `tree-sitter-dockerfile-updated`, a one-person
+      fork with no track record. The grammar itself is fine — it parses a
+      multi-stage file cleanly and gives `from_instruction` / `image_alias` /
+      `copy_instruction (param)` — so the work is ~40 lines whenever a
+      maintained crate exists, or via the vendoring route P22.3 already parks
+      for Go templates. Note a stage is *not* a container in the tree: the
+      instructions after a `FROM` are its siblings, so its extent has to be
+      read off the sibling chain in `end_row`
 
 Follow-up noticed while adding these two: `changes signature of X` is wrong
 wording for a def that has no signature — a cmake `set()`, a make variable, a
