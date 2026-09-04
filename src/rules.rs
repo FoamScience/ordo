@@ -70,6 +70,11 @@ pub struct Rules<'r> {
     /// parse under another, but one that parses under *none* of the languages
     /// in the change is broken, and saying so is the whole point of reporting.
     tried: HashMap<&'r str, (bool, String)>,
+    /// compiled queries, cached by (rule name, language name) — `query_rows`
+    /// runs once per file, so without this the same rule's `Query::new`
+    /// (an automaton build, not cheap) reran for every file sharing a
+    /// language. Same idea as the globs/regexes `Rules::new` compiles once.
+    query_cache: HashMap<(&'r str, &'static str), Result<Query, String>>,
 }
 
 fn regex(
@@ -139,6 +144,7 @@ impl<'r> Rules<'r> {
             compiled,
             problems,
             tried: HashMap::new(),
+            query_cache: HashMap::new(),
         }
     }
 
@@ -298,7 +304,12 @@ impl<'r> Rules<'r> {
             return out;
         }
         for (name, src, explicit) in queries {
-            let query = match Query::new(&language, src) {
+            let key = (name, spec.name);
+            let compiled = self
+                .query_cache
+                .entry(key)
+                .or_insert_with(|| Query::new(&language, src).map_err(|e| e.to_string()));
+            let query = match compiled {
                 Ok(q) => q,
                 Err(e) => {
                     if explicit {
@@ -307,7 +318,7 @@ impl<'r> Rules<'r> {
                             spec.name
                         ));
                     } else {
-                        self.tried.entry(name).or_insert((false, e.to_string()));
+                        self.tried.entry(name).or_insert((false, e.clone()));
                     }
                     continue;
                 }
@@ -317,7 +328,7 @@ impl<'r> Rules<'r> {
             }
             let mut cursor = QueryCursor::new();
             let mut rows = vec![];
-            let mut it = cursor.matches(&query, tree.root_node(), content.as_bytes());
+            let mut it = cursor.matches(query, tree.root_node(), content.as_bytes());
             while let Some(m) = it.next() {
                 for cap in m.captures {
                     rows.push(node_row(cap.node));

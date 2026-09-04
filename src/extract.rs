@@ -149,11 +149,14 @@ struct Collected {
     def_rows: HashSet<usize>,
     type_rows: HashSet<usize>,
     defs: Vec<DefRec>,
-    decls: Vec<(usize, String)>,
+    /// (start_row, end_row, name); a plain declaration has start == end, an
+    /// import spans its whole statement (see `import_like`) stored once
+    /// rather than once per row
+    decls: Vec<(usize, usize, String)>,
     /// (row, name, tree-sitter kind, enclosing scope) for each real definition
     /// — the raw material for `symbols` (name+kind+scope identity)
     sym_decls: Vec<(usize, String, String, Option<String>)>,
-    import_decls: Vec<(usize, String)>,
+    import_decls: Vec<(usize, usize, String)>,
     uses: Vec<(usize, String)>,
     /// parameter names (local bindings) seen anywhere in the file
     bound: HashSet<String>,
@@ -169,10 +172,12 @@ struct Collected {
     /// occurrences themselves), so the use-search below can exclude them
     /// without guessing from row/text alone
     bind_ids: HashSet<usize>,
-    /// every identifier node in the file as (row, text, node id) — the use
-    /// search's raw material, kept separate from `uses` (which already feeds
-    /// the def→use edge graph and must not gain binding-target entries)
-    all_idents: Vec<(usize, String, usize)>,
+    /// every identifier node in the file as (row, index into `uses`, node id)
+    /// — the use search's raw material, kept separate from `uses` (which
+    /// already feeds the def→use edge graph and must not gain binding-target
+    /// entries). Always pushed immediately after the matching `uses` entry,
+    /// so the index is `uses.len() - 1` at push time.
+    all_idents: Vec<(usize, usize, usize)>,
     /// deepest control-flow construct each row sits inside (0 = none)
     nest_rows: HashMap<usize, usize>,
     nest_depth: usize,
@@ -232,6 +237,13 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
     let adv = crate::advisories::advise(spec, tree.root_node(), src, path);
 
     let lines: Vec<&str> = new.lines().collect();
+    // loop-invariant: does not depend on the hunk, so it's built once here
+    // rather than on every iteration below.
+    let decl_at_row: HashSet<(usize, &str)> = c
+        .decls
+        .iter()
+        .flat_map(|(s, e, n)| (*s..=*e).map(move |r| (r, n.as_str())))
+        .collect();
     let mut out = Vec::with_capacity(hunks.len());
     for h in hunks {
         let (r0, r1) = match h.new_r0 {
@@ -296,8 +308,8 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         let mut defines: Vec<String> = c
             .decls
             .iter()
-            .filter(|(row, _)| r0 <= *row && *row <= r1)
-            .map(|(_, n)| n.clone())
+            .filter(|(s, e, _)| *s <= r1 && r0 <= *e)
+            .map(|(_, _, n)| n.clone())
             .collect();
         defines.sort();
         defines.dedup();
@@ -322,8 +334,8 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         let mut imports: Vec<String> = c
             .import_decls
             .iter()
-            .filter(|(row, _)| r0 <= *row && *row <= r1)
-            .map(|(_, n)| n.clone())
+            .filter(|(s, e, _)| *s <= r1 && r0 <= *e)
+            .map(|(_, _, n)| n.clone())
             .collect();
         imports.sort();
         imports.dedup();
@@ -366,7 +378,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             let declared = c
                 .decls
                 .iter()
-                .filter(|(row, n)| *row == d.s && *n == d.name)
+                .filter(|(s, e, n)| *s <= d.s && d.s <= *e && *n == d.name)
                 .count();
             let named = c
                 .uses
@@ -440,8 +452,6 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         // no navigational signal, same reasoning `rationale_for` already
         // applies to `defines` — drop them here too rather than passing a
         // dead entry through to the rationale layer.
-        let decl_at_row: HashSet<(usize, &str)> =
-            c.decls.iter().map(|(r, n)| (*r, n.as_str())).collect();
         // several `locals`-kind nodes reassigning the same name within one
         // hunk (a variable rebound across a loop body, tuple-unpacked twice,
         // …) must collapse into one entry — otherwise the same name/use-list
@@ -464,7 +474,9 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             let uses_here = c
                 .all_idents
                 .iter()
-                .filter(|(r, n, id)| n == name && *r >= lo && *r <= hi && !c.bind_ids.contains(id))
+                .filter(|(r, i, id)| {
+                    c.uses[*i].1 == *name && *r >= lo && *r <= hi && !c.bind_ids.contains(id)
+                })
                 .map(|(r, _, _)| r + 1);
             match bindings.iter_mut().find(|b| &b.name == name) {
                 Some(b) => b.uses.extend(uses_here),
@@ -1090,10 +1102,8 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         for (_, name) in
             import_bound_names(node, src, spec).unwrap_or_else(|| ident_text_rows(node, src))
         {
-            for r in sr..=er {
-                c.decls.push((r, name.clone()));
-                c.import_decls.push((r, name.clone()));
-            }
+            c.decls.push((sr, er, name.clone()));
+            c.import_decls.push((sr, er, name));
         }
         return; // don't descend: import identifiers are declarations, not uses
     }
@@ -1188,7 +1198,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         // name is not a symbol another file can reference, and must never seed
         // a def→use edge or key a persisted review mark.
         c.def_rows.insert(sr);
-        c.decls.push((sr, label.clone()));
+        c.decls.push((sr, sr, label.clone()));
         stack.push(label);
         c.defs.push(DefRec {
             s: sr,
@@ -1258,7 +1268,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         if lang::is_type_kind(kind) {
             c.type_rows.insert(sr);
         }
-        c.decls.push((sr, own.clone()));
+        c.decls.push((sr, sr, own.clone()));
         // prose and config only: a def kind that is *also* a member kind
         // (markdown's `section`, a config format's key) registers itself as a
         // member of its enclosing container too, so a new subsection or key
@@ -1381,7 +1391,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         if let Ok(t) = node.utf8_text(src).map(str::trim) {
             if !t.is_empty() {
                 c.uses.push((sr, t.to_string()));
-                c.all_idents.push((sr, t.to_string(), node.id()));
+                c.all_idents.push((sr, c.uses.len() - 1, node.id()));
             }
         }
         return;
@@ -1396,7 +1406,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
                 if let Ok(t) = ch.utf8_text(src).map(str::trim) {
                     if !t.is_empty() {
                         c.uses.push((sr, t.to_string()));
-                        c.all_idents.push((sr, t.to_string(), ch.id()));
+                        c.all_idents.push((sr, c.uses.len() - 1, ch.id()));
                     }
                 }
             } else {
@@ -1428,7 +1438,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
                 .map(str::trim)
                 .filter(|t| t.starts_with("--"));
             if let Some(name) = prop {
-                c.decls.push((sr, name.to_string()));
+                c.decls.push((sr, sr, name.to_string()));
                 c.def_rows.insert(sr);
                 let scope = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
                 c.sym_decls
@@ -1441,7 +1451,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             if let Ok(t) = node.utf8_text(src).map(str::trim) {
                 if t.starts_with("--") {
                     c.uses.push((sr, t.to_string()));
-                    c.all_idents.push((sr, t.to_string(), node.id()));
+                    c.all_idents.push((sr, c.uses.len() - 1, node.id()));
                     return;
                 }
             }
@@ -1455,13 +1465,13 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         if let Ok(t) = node.utf8_text(src).map(str::trim) {
             if !t.is_empty() {
                 if kind == "anchor_name" {
-                    c.decls.push((sr, t.to_string()));
+                    c.decls.push((sr, sr, t.to_string()));
                     c.def_rows.insert(sr);
                     c.sym_decls
                         .push((sr, t.to_string(), kind.to_string(), None));
                 } else {
                     c.uses.push((sr, t.to_string()));
-                    c.all_idents.push((sr, t.to_string(), node.id()));
+                    c.all_idents.push((sr, c.uses.len() - 1, node.id()));
                 }
             }
         }
@@ -1476,7 +1486,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         if let Ok(t) = node.utf8_text(src).map(str::trim) {
             if !t.is_empty() && !t.chars().all(|c| c.is_ascii_digit()) {
                 c.uses.push((sr, t.to_string()));
-                c.all_idents.push((sr, t.to_string(), node.id()));
+                c.all_idents.push((sr, c.uses.len() - 1, node.id()));
             }
         }
     }
