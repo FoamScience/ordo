@@ -697,6 +697,7 @@ fn build_ledger(
                         kind: Some(sym.kind.clone()),
                         scope: sym.scope.clone(),
                         path: f.path.clone(),
+                        at: h.id.clone(),
                         change,
                         from,
                         used_by,
@@ -741,6 +742,7 @@ fn build_ledger(
                     kind: None,
                     scope: None,
                     path: f.path.clone(),
+                    at: h.id.clone(),
                     change,
                     from: None,
                     used_by,
@@ -786,6 +788,7 @@ fn build_ledger(
                     kind: None,
                     scope: None,
                     path: f.path.clone(),
+                    at: at.id.clone(),
                     change: SymbolChange::Removed,
                     from: None,
                     used_by,
@@ -863,6 +866,27 @@ pub fn pack(out: &Output) -> String {
         let _ = writeln!(s, "\n## notes");
         for n in &out.notes {
             let _ = writeln!(s, "- {n}");
+        }
+    }
+    // the ledger is what the change *did*, one line per symbol; it is read
+    // before any hunk, so it sits between the changeset notes and the order
+    if !out.ledger.is_empty() {
+        let _ = writeln!(s, "\n## ledger — {} symbol(s)", out.ledger.len());
+        for e in &out.ledger {
+            let change = format!("{:?}", e.change).to_lowercase();
+            let from = match (&e.from, e.change) {
+                (Some(f), model::SymbolChange::Renamed) => format!(" from {f}"),
+                (Some(f), model::SymbolChange::Moved) => format!(" from {f}"),
+                (Some(f), model::SymbolChange::Extracted) => format!(" from {f}"),
+                _ => String::new(),
+            };
+            // fan-in is the number a reviewer acts on; the ids are in the JSON
+            let fan = match e.used_by.len() {
+                0 => String::new(),
+                1 => ", used by 1 hunk".to_string(),
+                n => format!(", used by {n} hunks"),
+            };
+            let _ = writeln!(s, "{} {} — {change}{from}{fan}", loc(&e.at), e.name);
         }
     }
     let _ = writeln!(s, "\n## reading order");

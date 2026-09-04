@@ -511,9 +511,20 @@ is opened:
 ```json
 "ledger": [
   { "name": "fetch", "kind": "function_definition", "path": "api.py",
-    "change": "signature", "used_by": ["h2", "h3"] }
+    "at": "h1", "change": "signature", "used_by": ["h2", "h3"] }
 ]
 ```
+
+`ordo-engine pack` leads with it, between the changeset notes and the reading
+order — the executive summary before the hunks. In the reviewer, **the ledger
+is the default view**: the list is a list of symbols, with the hunks that
+changed each one folded underneath. `:mode hunks` switches back to the flat
+reading order, `:mode` alone toggles. A hunk that changes nothing nameable — an
+import, a formatting fix — sits under `no symbol changed` rather than
+disappearing.
+
+Every entry carries `at`, the hunk it is anchored to, because a ledger line you
+cannot jump to is not actionable.
 
 Entries follow the reading order of the hunk that defines them, so the ledger
 and the hunk list tell the same story in the same sequence. Every field is a

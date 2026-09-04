@@ -99,6 +99,7 @@
       "name": "helper",
       "kind": "function_declaration",
       "path": "m.lua",
+      "at": "h0",
       "change": "added",
       "used_by": [
         "h1"

@@ -578,6 +578,9 @@ struct LoadResult {
     groups: HashMap<String, String>,
     /// what was dropped on the way here, for `:audit`
     ledger: Ledger,
+    /// the engine's change ledger (P23.1) — what the list defaults to being a
+    /// list of; distinct from `ledger`, which is the `:audit` one
+    symbol_ledger: Vec<ordo::model::LedgerEntry>,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -717,6 +720,7 @@ fn load(
         marks,
         groups,
         ledger,
+        symbol_ledger: out.ledger.clone(),
     })));
 }
 
@@ -1219,6 +1223,14 @@ struct Item {
     details: Vec<String>,
     notes: Vec<String>,
     edges: Vec<EdgeRef>,
+    /// the key the list groups and folds by — a ledger symbol or a group id,
+    /// depending on `App::mode`. Swapped in place by `set_mode`, so the two
+    /// display functions never need to know which mode is active.
+    bucket: String,
+    /// this hunk's entry in `Output::ledger`, when a symbol change is anchored
+    /// to it — `None` for an import, a region, or a hunk that changed nothing
+    /// nameable
+    ledger: Option<usize>,
     advisories: Vec<(String, String, bool)>,
     noise: bool,
     /// every changed line is a comment or docstring — drives `:only-comments`
@@ -1503,6 +1515,17 @@ enum Action {
     /// pane's horizontal window without moving the cursor
     ScrollLeft,
     ScrollRight,
+}
+
+/// What the reading-order list is a list *of*. The ledger is the default: a
+/// hunk is an artifact of `diff`, a symbol is what a reviewer reasons about.
+/// `:mode` switches. Both render through the same header/item machinery — the
+/// mode only decides which key `Item::bucket` carries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum ViewMode {
+    #[default]
+    Ledger,
+    Hunks,
 }
 
 /// Which way a fold key moves the group under the selection.
@@ -3048,9 +3071,17 @@ struct App {
     /// `:group` — show a non-selectable group-reason header before each run
     /// of the reading-order list that shares a group id
     show_groups: bool,
-    /// group id -> the engine's `Group::reason`, carried out of `load()`
-    /// alongside `items` so headers can show it without re-touching the engine
+    /// bucket key -> the header text for it. What the keys *are* depends on
+    /// `mode`: group ids in hunk mode, `L<n>` ledger keys in ledger mode.
     groups: HashMap<String, String>,
+    /// the engine's `Group::reason` map, kept unchanged so `:mode hunks` can
+    /// restore it without re-touching the engine
+    group_reasons: HashMap<String, String>,
+    /// what the reading-order list is a list of — ledger by default
+    mode: ViewMode,
+    /// the engine's change ledger, kept so `:mode` can rebuild the headers.
+    /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
+    symbol_ledger: Vec<ordo::model::LedgerEntry>,
     /// group ids whose hunks are folded away under their header (`za` and
     /// friends); empty means everything is expanded
     collapsed: HashSet<String>,
@@ -3100,7 +3131,30 @@ fn stack_pop_valid(stack: &mut Vec<(usize, Cursor)>, n_items: usize) -> Option<(
     None
 }
 
+/// The header a ledger entry shows in the list — the same sentence `pack`
+/// prints, minus the location the row already carries.
+fn ledger_label(e: &ordo::model::LedgerEntry) -> String {
+    let change = format!("{:?}", e.change).to_lowercase();
+    let from = match e.from.as_deref() {
+        Some(f) => format!(" from {f}"),
+        None => String::new(),
+    };
+    let fan = match e.used_by.len() {
+        0 => String::new(),
+        1 => ", used by 1 hunk".to_string(),
+        n => format!(", used by {n} hunks"),
+    };
+    format!("{} — {change}{from}{fan}", e.name)
+}
+
 fn build_items(out: &Output) -> Vec<Item> {
+    // hunk id -> the ledger entry anchored to it
+    let ledger_at: HashMap<&str, usize> = out
+        .ledger
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.at.as_str(), i))
+        .collect();
     let by_id: HashMap<&str, (&str, &ordo::model::HunkOut)> = out
         .files
         .iter()
@@ -3168,8 +3222,11 @@ fn build_items(out: &Output) -> Vec<Item> {
                     }
                 })
                 .collect();
+            let ledger = ledger_at.get(h.id.as_str()).copied();
             Some(Item {
                 path: path.to_string(),
+                bucket: bucket_key(ViewMode::Ledger, ledger, &h.group),
+                ledger,
                 old_range: h.old_range,
                 new_range: h.new_range,
                 mark: mark.to_string(),
@@ -3297,12 +3354,12 @@ fn display_rows(
     }
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for &i in view {
-        *counts.entry(items[i].group.as_str()).or_insert(0) += 1;
+        *counts.entry(items[i].bucket.as_str()).or_insert(0) += 1;
     }
     let mut rows = Vec::with_capacity(view.len());
     let mut last: Option<&str> = None;
     for &i in view {
-        let gid = items[i].group.as_str();
+        let gid = items[i].bucket.as_str();
         let folded = collapsed.contains(gid);
         if last != Some(gid) {
             let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
@@ -3332,13 +3389,47 @@ fn folded_view(app: &App) -> Vec<usize> {
         .view
         .iter()
         .copied()
-        .filter(|&i| !app.collapsed.contains(&app.items[i].group))
+        .filter(|&i| !app.collapsed.contains(&app.items[i].bucket))
         .collect();
     if visible.is_empty() {
         app.view.clone()
     } else {
         visible
     }
+}
+
+/// The key a hunk groups under in a given mode. In ledger mode a hunk with no
+/// symbol change anchored to it falls into one shared bucket rather than
+/// vanishing — an import or a formatting hunk is still part of the review.
+fn bucket_key(mode: ViewMode, ledger: Option<usize>, group: &str) -> String {
+    match (mode, ledger) {
+        (ViewMode::Hunks, _) => group.to_string(),
+        (ViewMode::Ledger, Some(i)) => format!("L{i}"),
+        (ViewMode::Ledger, None) => "L-".to_string(),
+    }
+}
+
+/// Switch what the list is a list of. Re-keys every item and rebuilds the
+/// header labels; headers are forced on in ledger mode, where they *are* the
+/// ledger. Fold state is dropped because its keys belonged to the old mode.
+fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo::model::LedgerEntry]) {
+    app.mode = mode;
+    for it in &mut app.items {
+        it.bucket = bucket_key(mode, it.ledger, &it.group);
+    }
+    if mode == ViewMode::Ledger {
+        let mut labels: HashMap<String, String> = ledger
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (format!("L{i}"), ledger_label(e)))
+            .collect();
+        labels.insert("L-".to_string(), "no symbol changed".to_string());
+        app.groups = labels;
+        app.show_groups = true;
+    } else {
+        app.groups = app.group_reasons.clone();
+    }
+    app.collapsed.clear();
 }
 
 /// Fold state change for the group holding the selected hunk (or every group).
@@ -3395,7 +3486,7 @@ fn display_row_of(
     let mut row: usize = 0;
     let mut last: Option<&str> = None;
     for (i, &vi) in view.iter().enumerate() {
-        let gid = items[vi].group.as_str();
+        let gid = items[vi].bucket.as_str();
         let mut header_row = None;
         if last != Some(gid) {
             header_row = Some(row);
@@ -5980,12 +6071,13 @@ fn run(
                         marks,
                         groups,
                         ledger,
+                        symbol_ledger,
                     } = *r;
                     let sel0 = view[0];
                     let scroll = auto_scroll(&items[sel0]);
                     let cursor = cursor_for(&items[sel0], &sources);
                     timing = Some(t);
-                    state = State::Ready(Box::new(App {
+                    let mut fresh = App {
                         reviewed,
                         items,
                         view,
@@ -6024,14 +6116,22 @@ fn run(
                         marks,
                         theme,
                         show_groups: false,
+                        group_reasons: groups.clone(),
                         groups,
+                        mode: ViewMode::default(),
+                        symbol_ledger,
                         collapsed: HashSet::new(),
                         ledger,
                         rules: rules.clone(),
                         strategy: "comprehension".to_string(),
                         rules_report: rules_report.clone(),
                         max_col: HashMap::new(),
-                    }));
+                    };
+                    // the list is a list of *symbols* by default; `:mode`
+                    // switches it back to hunks
+                    let led = fresh.symbol_ledger.clone();
+                    set_mode(&mut fresh, ViewMode::Ledger, &led);
+                    state = State::Ready(Box::new(fresh));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -7109,6 +7209,11 @@ const COMMANDS: &[Cmd] = &[
         help: "toggle group-reason headers in the reading-order list",
     },
     Cmd {
+        name: "mode",
+        args: "[ledger|hunks]",
+        help: "list by symbol (default) or by hunk; no argument toggles",
+    },
+    Cmd {
         name: "goto",
         args: "<path>",
         help: "select the first hunk of <path>, focus the code pane",
@@ -7778,6 +7883,20 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         }
         "group" => {
             app.show_groups = !app.show_groups;
+            Ok(CommandOutcome::None)
+        }
+        "mode" => {
+            let to = match arg.trim() {
+                "" => match app.mode {
+                    ViewMode::Ledger => ViewMode::Hunks,
+                    ViewMode::Hunks => ViewMode::Ledger,
+                },
+                "ledger" | "symbols" | "symbol" => ViewMode::Ledger,
+                "hunks" | "hunk" => ViewMode::Hunks,
+                other => return Err(format!("unknown mode: {other} (ledger, hunks)")),
+            };
+            let led = app.symbol_ledger.clone();
+            set_mode(app, to, &led);
             Ok(CommandOutcome::None)
         }
         "goto" => {
@@ -9075,6 +9194,8 @@ mod tests {
 
     fn test_item(path: &str) -> Item {
         Item {
+            bucket: "g0".to_string(),
+            ledger: None,
             path: path.to_string(),
             old_range: [0, 0],
             new_range: [0, 0],
@@ -9508,6 +9629,9 @@ mod tests {
             theme: theme("dark").unwrap(),
             show_groups: false,
             groups: HashMap::new(),
+            group_reasons: HashMap::new(),
+            mode: ViewMode::Hunks,
+            symbol_ledger: vec![],
             collapsed: HashSet::new(),
             ledger: Ledger::default(),
             rules: vec![],
@@ -9515,6 +9639,54 @@ mod tests {
             rules_report: vec![],
             max_col: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn the_list_defaults_to_symbols_and_mode_switches_it_back() {
+        let mut app = test_app(1);
+        app.items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
+        app.items[0].ledger = Some(0);
+        let led = vec![ordo::model::LedgerEntry {
+            name: "fetch".to_string(),
+            kind: Some("function_definition".to_string()),
+            scope: None,
+            path: "a.rs".to_string(),
+            at: "h0".to_string(),
+            change: ordo::model::SymbolChange::Signature,
+            from: None,
+            used_by: vec!["h1".to_string()],
+        }];
+
+        set_mode(&mut app, ViewMode::Ledger, &led);
+        // the symbol with a ledger entry buckets under it; the one without
+        // falls into the shared bucket rather than vanishing
+        assert_eq!(app.items[0].bucket, "L0");
+        assert_eq!(app.items[1].bucket, "L-");
+        // headers *are* the ledger in this mode, so they are forced on
+        assert!(app.show_groups);
+        assert_eq!(
+            app.groups.get("L0").map(String::as_str),
+            Some("fetch — signature, used by 1 hunk")
+        );
+        assert_eq!(
+            app.groups.get("L-").map(String::as_str),
+            Some("no symbol changed")
+        );
+
+        set_mode(&mut app, ViewMode::Hunks, &led);
+        assert_eq!(app.items[0].bucket, "g0");
+        assert_eq!(app.items[1].bucket, "g1");
+    }
+
+    #[test]
+    fn switching_mode_drops_fold_state_keyed_to_the_old_one() {
+        let mut app = test_app(1);
+        app.items = vec![grouped_item("a.rs", "g0")];
+        app.collapsed.insert("g0".to_string());
+        set_mode(&mut app, ViewMode::Ledger, &[]);
+        // "g0" means nothing in ledger mode; keeping it would fold a bucket
+        // that no longer exists
+        assert!(app.collapsed.is_empty());
     }
 
     #[test]
@@ -9836,6 +10008,8 @@ mod tests {
     fn grouped_item(path: &str, group: &str) -> Item {
         let mut it = test_item(path);
         it.group = group.to_string();
+        // hunk mode: the list buckets by group id
+        it.bucket = group.to_string();
         it
     }
 

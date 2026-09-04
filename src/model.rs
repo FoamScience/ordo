@@ -357,6 +357,10 @@ pub struct LedgerEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     pub path: String,
+    /// id of the hunk this entry is anchored to — the one that defines it, or
+    /// deletes it. A ledger line that cannot point at a hunk is not actionable,
+    /// so every entry has one.
+    pub at: String,
     pub change: SymbolChange,
     /// the old name, or the file/definition it came from — meaning depends on
     /// `change`, and it is absent for the kinds that have no source

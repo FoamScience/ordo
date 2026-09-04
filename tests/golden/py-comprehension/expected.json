@@ -135,6 +135,7 @@
       "name": "helper",
       "kind": "function_definition",
       "path": "m.py",
+      "at": "h1",
       "change": "added",
       "used_by": [
         "h2"

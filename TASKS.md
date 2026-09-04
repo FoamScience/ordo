@@ -464,13 +464,15 @@ the reviewer. Recorded so it is not re-proposed.
       change`. Every field is already computed — this is a second projection of
       `symbols`, `moved_in`, `rename`, `relocated` and the edge graph, not new
       analysis
-- [ ] `ordo-engine pack` leads with it, ahead of the reading order (changeset
+- [x] `ordo-engine pack` leads with it, ahead of the reading order (changeset
       `notes` already lead; the ledger sits between them and the hunks)
-- [ ] decide whether the TUI's default view becomes the ledger with hunks
-      *underneath* each symbol, rather than the flat reading order. This is the
-      P23 premise made concrete, and it is the one item here that changes an
-      interface people already use — so it ships behind a toggle first and the
-      default flips only on evidence
+- [x] the TUI's default view **is** the ledger, with the hunks that changed each
+      symbol folded underneath; `:mode hunks` returns the flat reading order and
+      `:mode` toggles. Shipped as the default rather than behind a toggle —
+      ordo has not shipped publicly, so the default is free to move. Both views
+      render through the same header/item machinery: the mode only decides
+      which key `Item::bucket` carries, so the two display functions that must
+      agree on header placement never learned about modes at all
 
 ### P23.2 — consistency the graph can prove
 

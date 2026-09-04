@@ -115,3 +115,34 @@ fn one_line_per_symbol_not_per_hunk() {
     let l = one("a.py", old, new);
     assert_eq!(l.iter().filter(|e| e.name == "f").count(), 1, "{l:?}");
 }
+
+#[test]
+fn every_entry_is_anchored_to_a_hunk() {
+    // a ledger line that cannot point at a hunk is not actionable
+    let out = run(serde_json::json!({"changes": [
+        {"path": "a.py",
+         "old": "def keep():\n    return 1\n\ndef gone():\n    return 2\n",
+         "new": "def keep():\n    return 1\n\ndef added():\n    return 3\n"}]}));
+    let ids: Vec<&str> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().map(|h| h.id.as_str()))
+        .collect();
+    assert!(!out.ledger.is_empty());
+    for e in &out.ledger {
+        assert!(ids.contains(&e.at.as_str()), "{e:?} not in {ids:?}");
+    }
+}
+
+#[test]
+fn the_pack_leads_with_the_ledger() {
+    let out = run(serde_json::json!({"changes": [
+        {"path": "a.py",
+         "old": "def f(x):\n    return x\n",
+         "new": "def f(x, y):\n    return x\n"}]}));
+    let p = ordo::pack(&out);
+    let (led, order) = (p.find("## ledger"), p.find("## reading order"));
+    assert!(led.is_some(), "{p}");
+    assert!(led < order, "the ledger is read before the hunks:\n{p}");
+    assert!(p.contains("f — signature"), "{p}");
+}

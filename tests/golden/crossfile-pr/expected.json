@@ -104,6 +104,7 @@
       "name": "helper",
       "kind": "function_definition",
       "path": "util.py",
+      "at": "h1",
       "change": "added",
       "used_by": [
         "h0"

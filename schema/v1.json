@@ -582,6 +582,7 @@
             "required": [
               "name",
               "path",
+              "at",
               "change",
               "used_by"
             ],
@@ -623,6 +624,10 @@
                   "type": "string"
                 },
                 "description": "ids of hunks in this change that use it — the fan-in; empty is itself a signal"
+              },
+              "at": {
+                "type": "string",
+                "description": "id of the hunk this entry is anchored to — the one that defines it, or deletes it"
               }
             }
           }
