@@ -457,7 +457,7 @@ the reviewer. Recorded so it is not re-proposed.
 
 ### P23.1 — the symbol ledger  (may become the default view)
 
-- [ ] one line per **symbol** across the whole change, not per hunk: added /
+- [x] one line per **symbol** across the whole change, not per hunk: added /
       removed / renamed / moved / signature-changed / body-only, with fan-in.
       A forty-hunk diff becomes a twelve-line table read *before* any hunk:
       `fetch  signature  used by 4 hunks` · `Config.ttl  added field  unused in

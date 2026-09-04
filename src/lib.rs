@@ -596,6 +596,7 @@ pub fn run(input: Input) -> Output {
         .collect();
 
     let notes = changeset_notes(&files);
+    let ledger = build_ledger(&files, &order, &facts, &new_defs_v, &old_rows);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -611,7 +612,189 @@ pub fn run(input: Input) -> Output {
             p
         },
         notes,
+        ledger,
     }
+}
+
+/// P23.1: what happened to each *symbol*, rather than to each hunk. Every field
+/// is already computed — this is a second projection of `symbols`, the status
+/// maps in `FileFacts` and the `uses` on every hunk, not new analysis.
+///
+/// Entries follow the reading order of the hunk that defines them, so the
+/// ledger and the hunk list tell the same story in the same sequence.
+fn build_ledger(
+    files: &[FileOut],
+    order: &[OrderItem],
+    facts: &order::FileFacts,
+    new_defs: &[HashSet<String>],
+    old_rows: &[extract::SymbolRows],
+) -> Vec<LedgerEntry> {
+    // global reading position of every hunk, so the ledger can be sorted the
+    // way the review is
+    let pos: HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, o)| (o.hunk.as_str(), i))
+        .collect();
+    // fan-in: which hunks use a given name, anywhere in the change
+    let mut users: HashMap<&str, Vec<&str>> = HashMap::new();
+    for f in files {
+        for h in &f.hunks {
+            for u in &h.uses {
+                users.entry(u.as_str()).or_default().push(h.id.as_str());
+            }
+        }
+    }
+
+    // a symbol that left file A and arrived in B is recorded on B's `moved_in`
+    // with A as its source; A must not also report it as a removal
+    let moved_away: HashSet<(&str, &str)> = (0..files.len())
+        .flat_map(|ti| {
+            facts.moved_in[ti]
+                .iter()
+                .map(|(name, src)| (src.as_str(), name.as_str()))
+        })
+        .collect();
+
+    let mut out: Vec<(usize, LedgerEntry)> = vec![];
+    let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
+    for (fi, f) in files.iter().enumerate() {
+        for h in &f.hunks {
+            for sym in &h.symbols {
+                let key = (f.path.clone(), sym.name.clone(), sym.scope.clone());
+                if !seen.insert(key) {
+                    continue; // one line per symbol, not per hunk that touches it
+                }
+                let n = sym.name.as_str();
+                let get = |m: &[HashMap<String, String>]| m[fi].get(n).cloned();
+                let (change, from) = if let Some(src) = get(facts.relocated) {
+                    (SymbolChange::Extracted, Some(src))
+                } else if let Some(src) = get(facts.moved_in) {
+                    (SymbolChange::Moved, Some(src))
+                } else if let Some(old) = get(facts.rename) {
+                    (SymbolChange::Renamed, Some(old))
+                } else if !facts.old_defs[fi].contains(n) {
+                    (SymbolChange::Added, None)
+                } else if facts.body_only[fi].contains(n) {
+                    (SymbolChange::Body, None)
+                } else {
+                    (SymbolChange::Signature, None)
+                };
+                // a symbol never counts as using itself
+                let used_by: Vec<String> = users
+                    .get(n)
+                    .map(|v| {
+                        v.iter()
+                            .filter(|id| **id != h.id.as_str())
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push((
+                    pos.get(h.id.as_str()).copied().unwrap_or(usize::MAX),
+                    LedgerEntry {
+                        name: sym.name.clone(),
+                        kind: Some(sym.kind.clone()),
+                        scope: sym.scope.clone(),
+                        path: f.path.clone(),
+                        change,
+                        from,
+                        used_by,
+                    },
+                ));
+            }
+        }
+        // A body-only edit introduces no symbol — the def's declaration line is
+        // not in the hunk — so it is found through the container instead: a
+        // hunk whose enclosing is a plain definition (`enclosing_kind` is None)
+        // and which declares nothing of its own edited that definition's body.
+        for h in &f.hunks {
+            if !h.symbols.is_empty() || h.enclosing_kind.is_some() {
+                continue;
+            }
+            let Some(name) = h.enclosing.as_deref() else {
+                continue;
+            };
+            if !seen.insert((f.path.clone(), name.to_string(), None)) {
+                continue;
+            }
+            // `body_only` is keyed by bare name; `enclosing` is qualified
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            let change = if facts.body_only[fi].contains(bare) {
+                SymbolChange::Body
+            } else {
+                SymbolChange::Signature
+            };
+            let used_by: Vec<String> = users
+                .get(bare)
+                .map(|v| {
+                    v.iter()
+                        .filter(|id| **id != h.id.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push((
+                pos.get(h.id.as_str()).copied().unwrap_or(usize::MAX),
+                LedgerEntry {
+                    name: name.to_string(),
+                    kind: None,
+                    scope: None,
+                    path: f.path.clone(),
+                    change,
+                    from: None,
+                    used_by,
+                },
+            ));
+        }
+        // A removed symbol has no defining node left to read a kind off, and
+        // `facts.removals` is a list of rendered rationale phrases rather than
+        // names — so it is computed from the def sets directly. A name that
+        // left because it was renamed, or moved to another file, is already
+        // reported as that and must not appear again as a removal.
+        for (name, row) in &old_rows[fi].0 {
+            if new_defs[fi].contains(name)
+                || facts.rename[fi].values().any(|old| old == name)
+                || moved_away.contains(&(f.path.as_str(), name.as_str()))
+            {
+                continue;
+            }
+            // Only a symbol some hunk actually deletes is reported gone. The
+            // set difference alone is not enough: when the caller sends
+            // `old` + `diff` rather than `old` + `new` there is no new-side
+            // symbol set to compare against, and every untouched definition
+            // in the file would read as removed. The deleting hunk is also
+            // where the entry belongs in the reading order.
+            let Some(at) = f
+                .hunks
+                .iter()
+                .find(|h| h.old_range[0] <= *row && *row <= h.old_range[1])
+            else {
+                continue;
+            };
+            if !seen.insert((f.path.clone(), name.clone(), None)) {
+                continue;
+            }
+            let used_by: Vec<String> = users
+                .get(name.as_str())
+                .map(|v| v.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            out.push((
+                pos.get(at.id.as_str()).copied().unwrap_or(usize::MAX),
+                LedgerEntry {
+                    name: name.clone(),
+                    kind: None,
+                    scope: None,
+                    path: f.path.clone(),
+                    change: SymbolChange::Removed,
+                    from: None,
+                    used_by,
+                },
+            ));
+        }
+    }
+    out.sort_by_key(|(p, _)| *p);
+    out.into_iter().map(|(_, e)| e).collect()
 }
 
 /// A path with this many hunks is churning rather than being edited.

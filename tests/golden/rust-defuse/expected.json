@@ -135,6 +135,24 @@
       "h2"
     ]
   ],
+  "ledger": [
+    {
+      "name": "make",
+      "kind": "function_item",
+      "path": "lib.rs",
+      "change": "added",
+      "used_by": [
+        "h2"
+      ]
+    },
+    {
+      "name": "run",
+      "kind": "function_item",
+      "path": "lib.rs",
+      "change": "added",
+      "used_by": []
+    }
+  ],
   "notes": [
     "code changed but no test touched"
   ]

@@ -496,6 +496,38 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+### The change ledger
+
+One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk
+is opened:
+
+| symbol | change | used by |
+| --- | --- | --- |
+| `fetch` | signature | 2 hunks |
+| `backoff` | renamed from `old_helper` | — |
+| `main` | body | — |
+| `old_fetch` | removed | — |
+
+```json
+"ledger": [
+  { "name": "fetch", "kind": "function_definition", "path": "api.py",
+    "change": "signature", "used_by": ["h2", "h3"] }
+]
+```
+
+Entries follow the reading order of the hunk that defines them, so the ledger
+and the hunk list tell the same story in the same sequence. Every field is a
+projection of what the engine already computed — `symbols`, the per-file status
+maps, and each hunk's `uses` — so this is a second view of the change, not a
+second analysis of it.
+
+Two ceilings worth stating. A **removed** symbol carries no `kind`, because the
+node that would answer no longer exists; and a symbol is only reported removed
+when some hunk actually deletes its lines, since a caller who sends `old` + a
+context-limited `diff` gives the engine no new-side symbol set to compare
+against. The **fan-in** counts uses *within the change*, which is the honest
+scope: those are the call sites the author touched.
+
 The changeset as a whole carries `notes` too — facts about the shape of the
 change, never judgments about it:
 

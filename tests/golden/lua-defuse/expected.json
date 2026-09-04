@@ -94,6 +94,17 @@
       "h1"
     ]
   ],
+  "ledger": [
+    {
+      "name": "helper",
+      "kind": "function_declaration",
+      "path": "m.lua",
+      "change": "added",
+      "used_by": [
+        "h1"
+      ]
+    }
+  ],
   "notes": [
     "code changed but no test touched"
   ]

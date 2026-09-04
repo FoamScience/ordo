@@ -9381,6 +9381,7 @@ mod tests {
             clusters: vec![],
             problems: vec![],
             notes: vec![],
+            ledger: vec![],
         };
         let items = build_items(&out);
         assert_eq!(items.len(), 2);
