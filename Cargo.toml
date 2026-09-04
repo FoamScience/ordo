@@ -1,6 +1,6 @@
 [package]
 name = "ordo"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Comprehension-optimized ordering of code-change hunks"
 license = "MIT"
