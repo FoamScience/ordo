@@ -2040,7 +2040,9 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
 fn unquote(s: &str) -> &str {
     let mut ch = s.chars();
     match (ch.next(), ch.next_back()) {
-        (Some(a), Some(b)) if a == b && (a == '"' || a == '\'') => &s[a.len_utf8()..s.len() - a.len_utf8()],
+        (Some(a), Some(b)) if a == b && (a == '"' || a == '\'') => {
+            &s[a.len_utf8()..s.len() - a.len_utf8()]
+        }
         _ => s,
     }
 }
@@ -2085,19 +2087,17 @@ fn cmake_first_arg(node: Node, src: &[u8]) -> Option<String> {
 fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
     let key = node.child_by_field_name("key").or_else(|| {
         let mut cur = node.walk();
-        let found = node
-            .named_children(&mut cur)
-            .find(|c| {
-                matches!(
-                    c.kind(),
-                    // toml
-                    "bare_key" | "quoted_key" | "dotted_key"
+        let found = node.named_children(&mut cur).find(|c| {
+            matches!(
+                c.kind(),
+                // toml
+                "bare_key" | "quoted_key" | "dotted_key"
                     // ini: `[user]` and `name = A B`
                     | "section_name" | "setting_name"
                     // nix: `meta.description = …` — the whole dotted path
                     | "attrpath"
-                )
-            });
+            )
+        });
         found
     })?;
     // ini wraps the name in its delimiters — `section_name` spans `[user]\n`,
