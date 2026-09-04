@@ -539,6 +539,30 @@ context-limited `diff` gives the engine no new-side symbol set to compare
 against. The **fan-in** counts uses *within the change*, which is the honest
 scope: those are the call sites the author touched.
 
+### Call sites that did not follow the signature
+
+`changes signature of fetch` is the easy sentence. The one that matters is
+whether the calls agree — and after a signature change ordo has both the new
+parameter list and every call to it in the change:
+
+```
+api.py:L1  changes signature of fetch
+  1 of 2 call sites in this change do not pass 2 arguments to fetch (cli.py:L4)
+```
+
+Change the function, update most callers, miss one: that is the most common way
+an edit goes wrong, and it is decidable from the tree.
+
+Deliberately narrow, because a false "wrong number of arguments" is worse than
+a missed one. It stays silent for a **variadic** definition (`*args` makes the
+upper bound meaningless), a **method** (the receiver is passed implicitly, so
+counting the two against each other would report every method call as short by
+one), a **qualified callee** (`obj.f(...)` may be passing a receiver) and a call
+using **keyword arguments** (passing by name says nothing about positional
+arity). An optional parameter widens the accepted range rather than narrowing
+it. Arity only, never types — and only callers *in the change*, which is the
+honest scope: those are the ones the author touched.
+
 The changeset as a whole carries `notes` too — facts about the shape of the
 change, never judgments about it:
 

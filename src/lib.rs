@@ -530,7 +530,7 @@ pub fn run(input: Input) -> Output {
         .collect();
 
     // per-file hunk metadata
-    let mut files = vec![];
+    let mut files: Vec<FileOut> = vec![];
     for (fi, change) in input.changes.iter().enumerate() {
         let mut hunks = vec![];
         for li in 0..raws[fi].len() {
@@ -597,6 +597,7 @@ pub fn run(input: Input) -> Output {
 
     let notes = changeset_notes(&files);
     let ledger = build_ledger(&files, &order, &facts, &new_defs_v, &old_rows);
+    arity_check(&mut files, &ledger, &input.changes);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -613,6 +614,83 @@ pub fn run(input: Input) -> Output {
         },
         notes,
         ledger,
+    }
+}
+
+/// P23.2: a definition whose signature changed, against the calls to it in
+/// this same change. The most common way an edit goes wrong is that the
+/// function moved and one caller did not follow.
+///
+/// Deliberately narrow — a false "wrong number of arguments" is worse than a
+/// missed one, so this only speaks when it can be exact. See `signatures` and
+/// `call_sites` for what is skipped (variadics, methods, keyword arguments,
+/// qualified callees). Only callers *in the change* are considered, which is
+/// the honest scope: those are the ones the author touched.
+fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]) {
+    let changed: Vec<&LedgerEntry> = ledger
+        .iter()
+        .filter(|e| e.change == SymbolChange::Signature)
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    // the new arity of everything in the change, and every call to anything
+    let mut sigs: HashMap<String, extract::SigInfo> = HashMap::new();
+    let mut calls: Vec<(usize, extract::CallSite)> = vec![];
+    for (fi, c) in changes.iter().enumerate() {
+        let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
+            continue;
+        };
+        for s in extract::signatures(spec, new) {
+            sigs.insert(s.name.clone(), s);
+        }
+        for cs in extract::call_sites(spec, new) {
+            calls.push((fi, cs));
+        }
+    }
+
+    for e in changed {
+        let Some(sig) = sigs.get(&e.name) else {
+            continue; // its arity could not be stated exactly
+        };
+        let bad: Vec<(usize, &extract::CallSite)> = calls
+            .iter()
+            .filter(|(_, c)| c.name == e.name && (c.argc < sig.required || c.argc > sig.total))
+            .map(|(fi, c)| (*fi, c))
+            .collect();
+        let total_calls = calls.iter().filter(|(_, c)| c.name == e.name).count();
+        if bad.is_empty() {
+            continue;
+        }
+        let where_ = bad
+            .iter()
+            .take(3)
+            .map(|(fi, c)| format!("{}:L{}", changes[*fi].path, c.row + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if bad.len() > 3 {
+            format!(" and {} more", bad.len() - 3)
+        } else {
+            String::new()
+        };
+        let expected = if sig.required == sig.total {
+            format!("{}", sig.required)
+        } else {
+            format!("{}–{}", sig.required, sig.total)
+        };
+        let note = format!(
+            "{} of {total_calls} call sites in this change do not pass {expected} arguments to {} ({where_}{more})",
+            bad.len(),
+            e.name
+        );
+        // the note belongs on the hunk that changed the signature — that is
+        // where a reviewer is standing when the question arises
+        for f in files.iter_mut() {
+            if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
+                h.notes.push(note);
+                break;
+            }
+        }
     }
 }
 

@@ -1956,6 +1956,125 @@ fn count_params(node: Node) -> usize {
     }
 }
 
+/// One definition's arity, for the call-site check (P23.2). Only definitions
+/// this can describe *exactly* are returned — see `signatures`.
+pub struct SigInfo {
+    pub name: String,
+    /// parameters that must be passed
+    pub required: usize,
+    /// every parameter; a call passing more than this is passing too many
+    pub total: usize,
+}
+
+/// One call site's arity, for the same check.
+pub struct CallSite {
+    /// 0-based row
+    pub row: usize,
+    pub name: String,
+    pub argc: usize,
+}
+
+/// Every definition in `content` whose arity can be stated without guessing.
+///
+/// Deliberately narrow, because a false "wrong number of arguments" is worse
+/// than a missed one. A definition is skipped when it is:
+///
+/// - not callable (`has_signature`) — a value has no arity;
+/// - variadic — `*args` makes the upper bound meaningless;
+/// - a method, detected by a leading `self` / `cls` / `this` parameter — the
+///   receiver is passed implicitly at the call site and comparing the two
+///   counts would report every method call as short by one.
+pub fn signatures(spec: &LangSpec, content: &str) -> Vec<SigInfo> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    fn walk(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<SigInfo>) {
+        if spec.is_def(node.kind()) && lang::has_signature(node.kind()) {
+            if let (Some(name), Some(params)) = (node_name(node, src), params_of(node)) {
+                let mut cur = params.walk();
+                let kinds: Vec<&str> = params.named_children(&mut cur).map(|c| c.kind()).collect();
+                let variadic = kinds
+                    .iter()
+                    .any(|k| lang::param_kind(k) == lang::ParamKind::Variadic);
+                let receiver = params
+                    .named_child(0)
+                    .and_then(|p| p.utf8_text(src).ok())
+                    .is_some_and(|t| matches!(t.trim(), "self" | "cls" | "this"));
+                if !variadic && !receiver {
+                    let required = kinds
+                        .iter()
+                        .filter(|k| lang::param_kind(k) == lang::ParamKind::Required)
+                        .count();
+                    out.push(SigInfo {
+                        name,
+                        required,
+                        total: kinds.len(),
+                    });
+                }
+            }
+        }
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            walk(ch, src, spec, out);
+        }
+    }
+    walk(tree.root_node(), src, spec, &mut out);
+    out
+}
+
+/// The parameter list of a definition, through the declarator chain c and c++
+/// hang theirs off (the same walk `count_params` does).
+fn params_of(node: Node) -> Option<Node> {
+    let mut n = node;
+    loop {
+        if let Some(p) = n.child_by_field_name("parameters") {
+            return Some(p);
+        }
+        n = n.child_by_field_name("declarator")?;
+    }
+}
+
+/// Every call in `content` whose arity can be compared to a definition's.
+///
+/// A call is skipped when its callee is not a bare name (`obj.method(...)` may
+/// be passing a receiver), or when any argument is passed by name — a keyword
+/// argument says nothing about positional arity.
+pub fn call_sites(spec: &LangSpec, content: &str) -> Vec<CallSite> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    fn walk(node: Node, src: &[u8], out: &mut Vec<CallSite>) {
+        if let Some(args) = node.child_by_field_name("arguments") {
+            let callee = node
+                .child_by_field_name("function")
+                .filter(|f| lang::is_ident(f.kind()))
+                .and_then(|f| f.utf8_text(src).ok());
+            let mut cur = args.walk();
+            let kids: Vec<Node> = args.named_children(&mut cur).collect();
+            let named = kids
+                .iter()
+                .any(|k| matches!(k.kind(), "keyword_argument" | "named_argument"));
+            if let (Some(name), false) = (callee, named) {
+                out.push(CallSite {
+                    row: node.start_position().row,
+                    name: name.trim().to_string(),
+                    argc: kids.len(),
+                });
+            }
+        }
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            walk(ch, src, out);
+        }
+    }
+    walk(tree.root_node(), src, &mut out);
+    out
+}
+
 /// A code identifier with any internal whitespace removed. C++ (OpenFOAM's
 /// house style especially) wraps a qualified name across lines —
 /// `Foam::frictionalStressModels::\nJohnsonJacksonSchaeffer::nu` — and that
