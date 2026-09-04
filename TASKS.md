@@ -136,9 +136,14 @@ pick above/below vs "in <path>".
 
 ## P12 — competitive features  ✅ (borrow rivals' strengths into ordering+rationale)
 
-- [ ] **#1 move detection** — a def whose (normalized) body leaves old file A and reappears in new file B → `moves foo from a.py` on B's def hunk, and `moves foo to b.py` (not "removes") on A's deletion hunk. Cross-file extension of P11.2's body matching. Rivals: difftastic/git only do single-file-pair / whole-file renames.
-- [ ] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
-- [ ] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
+<!-- boxes were left unticked when the section was closed; all three shipped:
+     `moves foo from a.py` (order.rs `moved_in`), `noise: true` + `formatting
+     only`, and `Output.clusters` from the connected components of the edge
+     graph. -->
+
+- [x] **#1 move detection** — a def whose (normalized) body leaves old file A and reappears in new file B → `moves foo from a.py` on B's def hunk, and `moves foo to b.py` (not "removes") on A's deletion hunk. Cross-file extension of P11.2's body matching. Rivals: difftastic/git only do single-file-pair / whole-file renames.
+- [x] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
+- [x] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
 
 
 ## P13 — structural smells (native, from ordo's own AST — no style rules, no deps)
