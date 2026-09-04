@@ -424,3 +424,115 @@ written design and only then touches code.
       written, and `{#snippet}` turned out to be a *definition* rather than a
       region — `{@render row(1)}` calls it, giving a component's markup its one
       def→use pair
+
+## P23 — review at the level of the symbol, not the line
+
+The asset every feature here spends is the one nothing else has: a deterministic
+graph of the change (which hunks define, which use, which are noise) plus symbol
+identity — name + tree-sitter kind + scope — that survives a line shift, a move
+and a rename. GitHub has line anchors and a "viewed" checkbox. difftastic has a
+structural diff of one file pair. An LLM reviewer has non-repeatable prose.
+Nobody else has the graph.
+
+Two premises drive the ordering:
+
+**A hunk is an artifact of `diff`; a symbol is what a reviewer reasons about.**
+Every item the reviewer liked most (P23.1, P23.3, P23.6) treats the *symbol* as
+the primary unit, and P23.1 may replace the hunk list as the default view rather
+than sitting beside it. That is a real architectural claim, not a cosmetic one,
+so it is written down before anything is built.
+
+**AI-generated code fails in consistency, not in single lines.** It is large,
+plausible, and wrong in the relationship between two places. That is exactly
+what a def→use graph can prove and a line-by-line reader cannot.
+
+Everything below stays inside the ceilings ordo already refuses to guess past:
+name-match resolution, changeset- or repo-scoped via git, no type analysis. Each
+item states a *fact about the change* a reviewer can verify in seconds — never a
+judgment about the author.
+
+**Considered and rejected:** *intent vs. shape* (compare the commit message's
+stated change class against the structural one, flag a mismatch). Declined by
+the reviewer. Recorded so it is not re-proposed.
+
+### P23.1 — the symbol ledger  (may become the default view)
+
+- [ ] one line per **symbol** across the whole change, not per hunk: added /
+      removed / renamed / moved / signature-changed / body-only, with fan-in.
+      A forty-hunk diff becomes a twelve-line table read *before* any hunk:
+      `fetch  signature  used by 4 hunks` · `Config.ttl  added field  unused in
+      change`. Every field is already computed — this is a second projection of
+      `symbols`, `moved_in`, `rename`, `relocated` and the edge graph, not new
+      analysis
+- [ ] `ordo-engine pack` leads with it, ahead of the reading order (changeset
+      `notes` already lead; the ledger sits between them and the hunks)
+- [ ] decide whether the TUI's default view becomes the ledger with hunks
+      *underneath* each symbol, rather than the flat reading order. This is the
+      P23 premise made concrete, and it is the one item here that changes an
+      interface people already use — so it ships behind a toggle first and the
+      default flips only on evidence
+
+### P23.2 — consistency the graph can prove
+
+- [ ] **call-site arity** — `changes signature of f` is already said; the next
+      sentence is the one that matters. ordo holds both the new parameter list
+      and every `f(...)` use in the changeset: `adds required param retries to
+      fetch — 2 of 3 call sites in this change still pass the old arity
+      (api.py:L40, cli.py:L12)`. The most common AI failure there is: change the
+      function, update most callers, miss one. **Ceiling:** arity only, never
+      types; and only callers *in the change*, which is honest — those are the
+      ones the author touched
+- [ ] **incomplete rename** — rename detection exists; its inverse does not.
+      After `renames parse_cfg → load_cfg`, does the old name still appear as a
+      use? `parse_cfg still used at main.py:L88 (not in this change)`. The
+      cross-file case needs repo access, so it belongs to the `ordo` reviewer
+      rather than the pure engine
+- [ ] **test theatre** — sharper than P13.2's `code changed but no test
+      touched`: a test file *was* touched, but its uses do not intersect the
+      changed definitions. `tests/test_api.py touched, but none of its uses
+      reference the 3 changed defs`. Set difference over the test↔code link
+      that already exists per hunk
+- [ ] **docs drift** — a def's body changed and its attached doc comment did
+      not. `ts_comment_lines` and def spans are both already computed.
+      **Ceiling:** "the docs were left alone while the behaviour moved", never
+      "the docs are wrong"
+
+### P23.3 — symbol-anchored review notes
+
+- [ ] a note anchored to `Symbol { name, kind, scope }` instead of
+      `path:line`. A line anchor rots on the first rebase; a symbol anchor
+      survives a rebase, a move *and* a rename, because the rename map already
+      carries old→new. This is the piece of infrastructure ordo has that a
+      line-oriented forge structurally cannot build
+- [ ] reuse the reviewed-mark persistence shape (`fnv1a`, deliberately stable
+      across toolchains) so anchors survive the same way marks already do
+
+### P23.4 — review-process integrity
+
+- [ ] **reviewed out of order** — a hunk marked reviewed whose dependency is
+      not: `h5 marked reviewed, but depends on unreviewed h2 (defines retry)`.
+      You approved a call before its callee. A dozen lines on top of marks and
+      edges that both already exist
+- [ ] **edge coverage** as the review metric — every tool reports hunks
+      reviewed; none reports *edges* reviewed at both ends. `80% of hunks, 40%
+      of def→use edges` is the number that actually tracks understanding
+- [ ] **re-review delta** — after a force-push every tool replays the whole
+      diff. ordo can diff two of its *own runs*: which hunks are new, which
+      changed, which edges appeared or vanished, and the one nobody offers —
+      which hunks are byte-identical but **moved in the reading order** because
+      their dependencies changed
+
+### P23.5 — rejection cascade
+
+- [ ] the graph's transitive closure: `h3 (adds retry) — rejecting it orphans
+      h5, h7, h9`. Cheap, and it changes how feedback is sequenced: push back on
+      the root, not the leaves
+
+### P23.6 — rule drafting from a hunk
+
+- [ ] the reviewer flags a hunk — "never want to see this shape again" — and
+      ordo emits a draft TOML rule from the structural facts it already knows
+      about that hunk (kind, children, limits, container). The rules engine and
+      ten shipped rulesets prove the format carries; this closes the loop from
+      *this* review to every future one, deterministically and with no LLM in
+      the path
