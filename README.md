@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
-  <img src="https://img.shields.io/badge/languages-10-5fd4c0" alt="10 supported languages">
+  <img src="https://img.shields.io/badge/languages-24-5fd4c0" alt="24 supported languages">
 </p>
 
 **Diffs arrive in file order. Nobody reads them that way.**
@@ -45,7 +45,7 @@ it as such.
 - **Intra-line refinement** — when a removed and an added line are the same line
   edited, only the part that changed is highlighted, over grammar leaves rather
   than characters: adding a parameter reads as adding that parameter.
-- **A reviewer TUI** — `ordo-tui`, a first-party client that shells to git and
+- **A reviewer TUI** — `ordo`, a first-party client that shells to git and
   renders the whole thing in the terminal.
 
 ## Why the order is principled
@@ -69,23 +69,23 @@ hunks.
 ## Install
 
 ```sh
-cargo install --path .          # from source (Rust)
+cargo install --path .          # from source: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI)
 npm  install -g @ordo/cli       # node wrapper (vendors a prebuilt binary)
 pip  install ordo               # python wrapper (vendors a prebuilt binary)
 ```
 
 The npm/pypi packages are thin wrappers around one prebuilt binary (the
-ruff/esbuild pattern). Set `ORDO_BIN=/path/to/ordo` to point them at a local
+ruff/esbuild pattern). Set `ORDO_BIN=/path/to/ordo-engine` to point them at a local
 build.
 
 ## CLI
 
 ```sh
-ordo order --json < input.json > output.json
-ordo pack  --json < input.json                 # compact LLM-ready review context
-ordo review path/to.patch                      # or: git diff | ordo review
-git diff -U100000 | ordo review --full-context  # modified files get full semantics
-ordo order --only-comments --json < input.json  # only comment/docstring hunks
+ordo-engine order --json < input.json > output.json
+ordo-engine pack  --json < input.json                 # compact LLM-ready review context
+ordo-engine review path/to.patch                      # or: git diff | ordo-engine review
+git diff -U100000 | ordo-engine review --full-context  # modified files get full semantics
+ordo-engine order --only-comments --json < input.json  # only comment/docstring hunks
 ```
 
 Input / output are frozen as **schema v1** (`schema/v1.json`):
@@ -103,10 +103,10 @@ Output carries the global `order`, per-file `hunks` (with `category`,
 `enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, `details`,
 `symbols`, `noise` for skippable formatting/generated hunks, and `comment` for
 comment/docstring-only hunks), the `groups`, the def→use `edges`, and the
-`clusters` shown above. `ordo pack` renders all of it as compact review
+`clusters` shown above. `ordo-engine pack` renders all of it as compact review
 context.
 
-`options.only_comments` (`--only-comments` on `ordo order`/`ordo pack`) drops
+`options.only_comments` (`--only-comments` on `ordo-engine order`/`ordo-engine pack`) drops
 every non-comment hunk before ordering, so `order`/`groups`/`edges`/`clusters`
 cover only comment/docstring changes — a lightweight pass over documentation
 edits without the noise of the surrounding code.
@@ -131,6 +131,7 @@ Not every hunk sits in a definition, and the ones that don't used to say only
 | `call` | a file-scope call whose multi-line arguments hold it | `execa('unicorns')` |
 | `preamble` | prose before a document's first heading | `preamble` |
 | `front-matter` | a document's `---` metadata block | `front matter` |
+| `document` | one `---` document of a multi-document yaml file | `document 2` |
 
 Only a definition is a symbol: a region name is never looked up, never enters
 `defines` or `symbols`, and never seeds a def→use edge. `#ifdef CURL_DISABLE_HTTP`
@@ -161,10 +162,31 @@ query-file = "rules/prefer-pathlib.scm"   # a tree-sitter query
 warn = "prefer pathlib.Path over os.path.*"
 ```
 
-A rule matches on facts the engine already computes — `path`, `lang`,
-`category`, `enclosing-kind`, `defines`/`uses`/`imports` — and/or a tree-sitter
-query for conventions about code *shape*. It can `note`, `warn`, mark a hunk
-`noise`, or give it a `priority`.
+A rule matches on facts the engine already computes — `path`/`path-not`, `lang`,
+`category`, `enclosing-kind`, `defines`/`uses`/`imports` — on a **shape the hunk
+introduces** (`kind`, with `with`/`without` for what its children must have or
+lack, `text` for a regex on the node), on a **limit** (`max-params`,
+`max-lines`, `max-nesting`, `max-file-lines`), on a **relationship** the engine
+already knows (`recursive`, `container-with`/`container-without`,
+`member-uninitialized` — decided across the whole change, header and `.cpp`
+together), and only then on a tree-sitter query, for relationships *between*
+nodes. It can `note`, `warn`, mark a hunk `noise`, or give it a `priority`.
+
+```toml
+[[rule]]
+name = "initialize-members"
+lang = "cpp"
+kind = "field_declaration"
+without = "default_value"       # absence, as a table entry
+warn = "[H.5] initialize at declaration"
+
+[[rule]]
+name = "equals-needs-hashcode"
+lang = "java"
+defines = "equals"
+container-without = "hashCode"
+warn = "override hashCode with equals"
+```
 
 Three properties make this safe to hand to a config file:
 
@@ -174,7 +196,7 @@ Three properties make this safe to hand to a config file:
   groups the dependency graph has *already freed* — a preference can never pull
   a use ahead of its definition. There is a test named after that.
 - **The engine reads no rule files.** They arrive in `Options.rules`; a client
-  collects them. `ordo order --json` stays a function of its arguments.
+  collects them. `ordo-engine order --json` stays a function of its arguments.
 
 And the reason a query rule isn't a linter: it fires on rows **inside the
 hunk**, so it reports what *this change introduces*, not the 400 pre-existing
@@ -182,13 +204,52 @@ occurrences a whole-file lint would list. Full reference:
 [`docs/rules.md`](docs/rules.md); ordo's own rules are in
 [`.ordo/rules.toml`](.ordo/rules.toml).
 
-## Reviewer TUI (`ordo-tui`)
+### Shipped rulesets
+
+Published guideline sets, as rules, under [`rulesets/`](rulesets/) — each one
+verified against a sample in which every rule fires:
+
+| file | source |
+| --- | --- |
+| `cpp-default-guidelines.toml` | Jan Wilmans' C++ Default Guidelines (H.1–H.18 and the details) |
+| `go-uber-guide.toml` | the Uber Go Style Guide and Go Code Review Comments |
+| `python-google-style.toml` | Google's Python Style Guide, §2 Language Rules |
+| `rust-api-guidelines.toml` | the Rust API Guidelines checklist, change-scoped |
+| `c-power-of-ten.toml` | NASA/JPL's Power of Ten |
+| `java-effective-java.toml` | Effective Java, the construct-level items |
+| `typescript-clean-code.toml`, `javascript-airbnb.toml` | the subset an eslint config doesn't already own |
+| `lua-style-guide.toml`, `markdown.toml` | the few rules those guides have that are about structure |
+
+They are bundled into `ordo` and **off by default**. Opt in by name, override
+by redefining, silence by name:
+
+```toml
+# <repo>/.ordo/rules.toml
+include = ["go-uber-guide"]
+disable = ["raw-loop"]
+
+[[rule]]
+name = "three-arguments"     # same name → replaces the preset's rule
+lang = "go"
+max-params = 4
+note = "more than 4 arguments"
+```
+
+```sh
+ordo HEAD~3 --rules go-uber-guide     # one more layer, for this review only
+```
+
+`:rules` shows what is active, where it came from, and what was replaced or
+disabled. Each file's header says what it deliberately leaves out — style that
+belongs to a formatter, lints a linter already owns, and anything needing dataflow.
+
+## Reviewer TUI (`ordo`)
 
 An interactive terminal reviewer — a first-party *client* of the engine, kept
 out of the pure default build behind the `tui` feature:
 
 ```sh
-cargo run --features tui --bin ordo-tui -- <rev> [<glob>...]   # rev defaults to HEAD
+cargo run --bin ordo -- <rev> [<glob>...]   # rev defaults to HEAD
 ```
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
@@ -247,10 +308,10 @@ an explicit `-diff`. `--all` keeps everything (the engine still flags known
 paths `noise`, so they render dimmed).
 
 ```sh
-ordo-tui main...feature 'src/*' '*.rs'          # the branch, Rust sources only
-ordo-tui zz --all                               # everything uncommitted, lock files included
-ordo-tui HEAD 'src/*' '!src/generated/*'        # src/, minus a generated subtree
-ordo-tui HEAD '!tests/*'                        # everything except tests/
+ordo main...feature 'src/*' '*.rs'          # the branch, Rust sources only
+ordo zz --all                               # everything uncommitted, lock files included
+ordo HEAD 'src/*' '!src/generated/*'        # src/, minus a generated subtree
+ordo HEAD '!tests/*'                        # everything except tests/
 ```
 
 A glob prefixed `!` is negative and excludes a path that matches it; with only
@@ -344,7 +405,7 @@ A theme colours twelve *syntax roles* rather than the twenty-six tree-sitter
 capture names mapped onto them, so a new grammar's captures never mean touching
 every theme.
 
-`ordo-tui --init-config` writes a starting config to
+`ordo --init-config` writes a starting config to
 `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml` (`--force` to overwrite): every
 binding and every colour of the current preset and theme, at its real value,
 commented out. It is generated from the same tables the program reads, so it
@@ -404,6 +465,7 @@ never conflated under the enclosing `main`.
 | python | `pair`, `keyword_argument` |
 | lua | `field` |
 | markdown | `section` (a nested subsection is a member of its parent) |
+| json / yaml / toml / ini | the key-value pair (a nested key is a member of the key above it) |
 
 </details>
 
@@ -416,6 +478,7 @@ never conflated under the enclosing `main`.
 | within-file order | `uses helper, defined above` · `adds helper, used by run below` |
 | add vs edit | `adds helper` (new) · `edits run` (body of an existing def) |
 | signature / type | `changes signature of parse` · `changes type Config` · `adds type Config` |
+| value changed | `changes SOURCES` — a cmake `set()`, a make variable, a yaml key: a value has no signature |
 | test ↔ code | `tests parse_cfg (config.py)` |
 | rename / delete | `renames foo → bar` · `removes old_helper` · `removes import sys` |
 | body deletion | `removes 31 lines` (a deletion inside a def, no symbol removed) |
@@ -432,6 +495,23 @@ counterpart.
 
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
+
+The changeset as a whole carries `notes` too — facts about the shape of the
+change, never judgments about it:
+
+```json
+"notes": [
+  "code changed but no test touched",
+  "src/parser.py: 14 hunks (high churn)"
+]
+```
+
+"Code" means any supported language that is neither prose nor a config format,
+so a docs-only or CI-config-only change never reports an untouched test suite.
+It does include css and html: a stylesheet-only change is still reported, since
+tightening that would need a notion of "language people write tests for" the
+registry does not have. Both notes lead the `ordo-engine pack` output, ahead of
+the reading order.
 
 Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
 **advisories** — advanced-construct guidance with an escalation ladder, and a
@@ -483,14 +563,300 @@ out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 
 ## Supported languages
 
-python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown.
+python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua, markdown,
+json, yaml, toml, ini, cmake, make, nix, bash, css, html, svelte, jinja, erb,
+go-template.
 Adding one is usually a single registry entry in `src/lang.rs` plus its
-grammar crate — no algorithm changes. Markdown is the one exception: a heading has no
-identifier to name a def by, so a def is a *section* (heading + content,
-nested by heading level) instead — `adds section Usage`, `edits section
-Install`. This is a rationale-quality improvement, not an ordering one:
-markdown has no `uses` (link targets aren't parsed), so markdown hunks fall
-back to file order.
+grammar crate — no algorithm changes. Two shapes are exceptions:
+
+**Markdown** — a heading has no identifier to name a def by, so a def is a
+*section* (heading + content, nested by heading level) instead — `adds section
+Usage`, `edits section Install`.
+
+**Config formats** (json, yaml, toml) — a def is a key-value pair, named by its
+key and nested through a dotted path, and each key is also a *member* of the key
+above it, so the detail layer can say what changed inside a block:
+
+```
+docker-compose.yml:L3  edits image
+  enclosing: services.web.image
+  details: changes image in services.web
+```
+
+**ini** covers the config files shaped like it, matched by *filename* as well
+as extension — `.gitconfig`, `.gitmodules`, `.git/config`, `.dvc/config`,
+`.editorconfig`, `.npmrc`, `.hgrc`, `.flake8`, `.pylintrc`, `.coveragerc`, and
+`.ini` / `.cfg` (`setup.cfg`, `tox.ini`, `pytest.ini`). A `.local` override
+(`.dvc/config.local`) resolves as the file it overrides. A git subsection keeps
+its quotes, because they are part of the name git gives it:
+
+```
+.gitconfig:L4  changes url
+  enclosing: remote "origin".url
+```
+
+A toml `[table]` header is a container in its own right; a yaml sequence item
+and a json array element carry no key, so they stay anonymous and their
+contents nest under the nearest named key (a list entry's position is not part
+of the path). Quoted and bare keys name the same thing (`"image"` == `image`).
+
+Markdown is a rationale-quality improvement, not an ordering one: it has no
+`uses` (link targets aren't parsed), so its hunks fall back to file order. So
+does most config — with one exception. A **yaml anchor is a definition and its
+alias is a use**, which is the one thing that lets a config hunk be *ordered*
+rather than merely described:
+
+```
+database.yml:L4   adds adapter, base, used by dev below
+database.yml:L11  edits dev
+```
+
+The merge key itself (`<<: *base`) is not a name anyone navigates by, so that
+pair stays anonymous and only the alias in its value is read.
+
+A multi-document yaml file (`---`) scopes each document by position, so two
+k8s objects' top-level keys stay distinct — `document 1.spec.port` and
+`document 2.spec.replicas` rather than two colliding `spec` paths. `document`
+is the one container kind that *scopes*; every other region names only itself,
+because `#ifdef X` is a fact about where a definition sits, not part of its
+name. A single-document file is unaffected and keeps its bare key paths.
+
+### cmake
+
+Every cmake construct is a command, so what a node *is* lives in its identifier
+rather than its node kind. `function` and `macro` define; `set` and `option`
+name a variable; `include`, `find_package` and `add_subdirectory` are imports
+naming what they pull in; every other command is transparent, so a `message()`
+contributes no definition. `${VAR}` is a use, and a function's parameters are
+bound so they can't be mistaken for one. `CMakeLists.txt` is matched by
+filename — its `.txt` extension says nothing about it.
+
+```
+cmake/x.cmake:L1  adds helper, used by caller below
+cmake/x.cmake:L6  uses helper, defined above
+```
+
+### make
+
+A makefile already *is* a dependency graph, so ordo reads it as one: a rule is a
+definition named by its target, and each prerequisite is a use of the target it
+names. The reading order that falls out is the build order — variables, then the
+rules nothing depends on, then the rules that depend on them.
+
+```
+Makefile:L2   adds SRCS, used by build below
+Makefile:L9   changes build, build used by all above
+Makefile:L6   changes all, used above
+```
+
+A special target (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so
+it stays anonymous — but the targets it lists are still read as uses of the real
+rules, which is what a `.PHONY` line is. `include` names the makefiles it pulls
+in. Matched by name (`Makefile`, `GNUmakefile`, `Makefile.am`) as well as by
+`.mk`.
+
+### nix
+
+An attribute set is the language's main structure, so a `binding` is both a
+definition and a member of the set above it — the same shape as the config
+formats. A function is not a separate declaration (it is a lambda bound to an
+attribute), so one node kind covers both. A dotted `meta.description = …` is
+one name, a lambda's formals (`{ pkgs, lib, ... }:`) are bound rather than read
+as references, and an `attrpath` never counts as a use — it is a name being
+bound or selected, not a reference to something defined elsewhere.
+
+nix spells an import as an ordinary application of a function named `import`,
+so it is recognised by that name rather than by node kind. Because such an
+import is nearly always bound (`overlay = import ./x.nix;`) the binding's name
+leads the rationale — the import rows are still recorded, which is what an
+`imports` glob in a rule matches on.
+
+### bash
+
+A shell command *is* a call, so `deploy prod` is a use of the function
+`deploy` — which gives a script the same def→use ordering a code file gets.
+Both spellings (`deploy() { … }` and `function deploy { … }`) share one node
+kind. `source x.sh` and its POSIX form `. x.sh` are imports named by the script
+they pull in, recognised by command name rather than node kind. `local`,
+`readonly` and `declare` all wrap the same assignment node, so one entry covers
+them. A positional parameter (`$1`) is never treated as a symbol.
+
+```
+deploy.sh:L2  adds import ./lib/common.sh
+deploy.sh:L4  adds deploy, used by main below
+deploy.sh:L9  uses deploy, defined above
+```
+
+Matched by `.sh`/`.bash` and by name for `.bashrc`, `.bash_profile`, `.profile`
+and `.env` — a dotenv file is assignments, which is exactly what this grammar
+reads, and `.env.local` resolves through the same variant strip as any other
+config override.
+
+### css
+
+A rule set is a definition named by its **whole selector list, sigils kept** —
+`.btn, .btn-primary`, `#nav a:hover`. That punctuation is the safety story, not
+decoration: no code grammar emits an identifier starting with `.`, `#` or `--`,
+so a css symbol is lexically incapable of colliding with a python function in
+the cross-file union. A declaration is a member of its rule, `@media` and
+`@supports` are regions (they are `#ifdef` in a different hat), and a selector
+list is a *name* — never a set of references, so a stylesheet seeds no bare
+`card` or `title` into the symbol table every other file is ordered against.
+
+A **custom property is css's yaml anchor**: `--brand: #0af` defines a name and
+`var(--brand)` uses it, which is the one thing that lets a css hunk be ordered
+rather than merely described.
+
+```
+t.css:L3  adds --brand, used by .btn below
+t.css:L8  uses --brand, defined above
+            details: changes color in .btn
+```
+
+Deliberately **not** done: a class name in HTML is not treated as a use of the
+selector that styles it. `class="btn tw-p-2 card"` is one un-tokenized string,
+and names like `card`, `title`, `active` and `root` collide with real code
+symbols — under a utility-class framework the false links would swamp the true
+ones and make the ordering worse, not better. `.scss` and `.less` are not read
+through this grammar either; they parse with errors, which is the same mistake
+as feeding `ssh_config` to the ini grammar.
+
+### html, and with it vue
+
+Only an element carrying an **`id`** is a definition — that is the one handle a
+stylesheet, a script or a fragment link addresses it by. Every other element
+resolves to no name and stays transparent, so a page of anonymous `<div>`s
+contributes nothing and a hunk inside one attributes to the nearest element
+that *is* named.
+
+```
+page.html:L6  adds #foot
+page.html:L3  edits #main
+```
+
+A **`.vue` single-file component needs no grammar of its own**: the html
+grammar parses `<script setup lang="ts">`, `v-for`, `:key`, `@click`, `{{ }}`
+and `<style module lang="scss">` with no error nodes, keeping the script and
+style blocks as opaque text. (The published `tree-sitter-vue` pins tree-sitter
+0.20 and could not be used regardless.)
+
+An SFC's `<script>` block **is** injected — parsed with the js/ts grammar its
+`lang` attribute names, and recorded as **uses only**, the same contract as a
+markdown code fence. That is what lets a component join the def→use graph:
+
+```
+money.ts   adds formatPrice, used in Card.vue
+Card.vue   uses formatPrice, defined in money.ts
+```
+
+Definitions are deliberately *not* taken from it. Recording them would mean a
+sub-tree whose rows are not file rows, threaded through all ten of `extract`'s
+parse entry points — eight of which are old-side collectors, so teaching only
+`analyze` would make every function in every component read as newly added on
+every commit. `<style>` is not injected at all: injection harvests every
+identifier as a use, and a stylesheet's identifiers are its *definitions*, so it
+would contribute nothing and would flood `uses` with exactly the `class_name`
+leak the css selector guard exists to prevent.
+
+Both blocks are still named the way a reviewer names them — `edits <script setup
+lang="ts">`, `edits <style scoped>` — as regions rather than definitions.
+
+**Svelte** has the same shape — `element`, `start_tag` and `attribute` are the
+same kinds, so the id-naming path is reused verbatim — but it needs its own
+grammar rather than riding on html's the way vue does: html cannot read a bare
+`>` inside braces, and both `{#if n > 1}` and `on:click={() => pick()}` contain
+one.
+
+Its **block forms are named containers** — `{#if n > 1}`, `{#each items as it}`,
+`{:else}`, plus `{#await}` and `{#key}` — written the way they appear in the
+file. Regions, like `#ifdef`: they hold markup but declare nothing. The branch
+is gated on the language because `if_statement` is a kind seven other shipped
+grammars also produce. Markup inside a block attributes to that block rather
+than to the enclosing element id, which is the tighter answer.
+
+`{#snippet}` is the exception, and a real definition rather than a region:
+`{#snippet row(x)}` declares a reusable named block and `{@render row(1)}` calls
+it, which is the one def→use pair a component's markup has.
+
+```
+List.svelte:L1  adds row, used below
+List.svelte:L7  uses row, defined above
+```
+
+### Templates
+
+A `.j2` (also `.jinja`, `.jinja2`, `.tmpl`, `.tpl`) or a `.erb` / `.ejs` is
+reviewed as **the format underneath it**. `values.yaml.j2` is yaml, `cfg.toml.j2` is toml, `app.py.j2` is
+python — one `{% for %}` is enough to make a whole yaml document a parse error,
+so the `{% … %}` statements and `{# … #}` comments are blanked out (space for
+space, newlines kept) before the underlying grammar sees the file. Byte, row and
+column offsets are unchanged, so every hunk still lines up with the file the
+reviewer is looking at. An interpolation (`{{ … }}`, `<%= … %>`) is left in
+place — it sits where a scalar does, and every format here already tolerates
+one. Which node kinds are literal text and which are interpolations comes from
+each templating grammar's own registry entry, so the pass belongs to no one
+language:
+
+```
+templates/app.yml.j2:L3  adds port
+  enclosing: services.{{s.name}}.port
+```
+
+The variables a template reads are recorded as **uses, never definitions** — a
+template consumes what an inventory or a `group_vars` file sets, and defines
+none of it. So the file that sets a variable sorts ahead of the template that
+renders it:
+
+```
+group_vars/all.yml:L2      adds db_port, used in templates/app.yml.j2
+templates/app.yml.j2:L3    adds port
+```
+
+Templating composes with the filename-matched formats above:
+`.dvc/config.j2`, `.dvc/config.local.j2`, `.gitconfig.j2` and `setup.cfg.j2`
+all resolve to ini. A hunk that touches *only* jinja is blank to the underlying
+grammar, so it would read as "formatting only" — it is exempted from that, and
+says what the statement reads instead (`uses prod` for an added `{% if prod %}`
+guard).
+
+**ERB / EJS** works the same way, with one honest difference: its `<% … %>`
+bodies are a single opaque blob of ruby or javascript rather than parsed
+identifiers, so an ERB template contributes no `uses` — and it cannot host a
+format that has no grammar of its own. `config.yml.erb` is yaml;
+`index.html.erb` stays `unsupported: true` rather than pretending to have been
+read. That falls out of one flag on the grammar's entry, not a special case.
+
+**Go templates, and with them Helm.** One pair of delimiters does both jobs
+here — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation — so
+the two are told apart by node kind rather than by delimiter, which is exactly
+what having a grammar buys over a scan. Helm is also the one exception to the
+extension convention: a chart's templates carry *no* template extension at all,
+so they are found by the directory Helm requires them to live in.
+
+```
+mychart/templates/deployment.yaml:L2  edits replicas
+  enclosing: spec.replicas
+mychart/templates/_helpers.tpl:L4     adds mychart.name
+```
+
+That directory rule is deliberately a loose heuristic: masking a file that
+turns out to hold no template syntax blanks nothing and changes nothing, so a
+`templates/` directory in a project that is not a chart costs exactly zero.
+`{{ define "x" }}` and `{{ block "x" }}` are named blocks, so a `_helpers.tpl`
+reads as structure rather than as text.
+
+This is the one grammar ordo vendors rather than depends on — no crate
+publishes a Go-template grammar for a current tree-sitter (the `gotmpl` /
+`gotpl` crates are template *renderers*, which evaluate a template rather than
+hand back a syntax tree). See
+[`grammars/tree-sitter-go-template/`](grammars/tree-sitter-go-template/).
+
+A template over a format that has *no* grammar (`nginx.conf.j2`,
+`deploy.sh.j2`, a bare `foo.j2`) is parsed as jinja itself: `{% block x %}` and
+`{% macro x() %}` are defs, and `{% include %}` / `{% extends %}` / `{% import %}`
+are imports naming the template they pull in (`adds import tls.j2`). `{% for %}`
+and `{% if %}` carry no name, so they stay transparent rather than contributing
+an `<anonymous>` segment to a path.
 
 ## Ceilings (by design)
 
@@ -505,6 +871,21 @@ back to file order.
   positional and is flagged `degraded: true` (no silent guessing — a partial
   diff can't be reconstructed without truncating the file). See
   [`docs/diff-input-design.md`](docs/diff-input-design.md).
+- **A template's format comes from its own path, not its destination** — one
+  extension is stripped and what remains must name a format on its own.
+  `.dvc/config.j2` is ini; a template kept somewhere else under a name its
+  target never has (`templates/dvc-config.j2`) is jinja, because nothing in the
+  path says otherwise.
+- **A template is read as written, not as rendered** — a `.j2` is analyzed as
+  the one document its source text spells out. A `{% for %}` that emits a key
+  per host contributes that key once, under the literal `{{ … }}` it is named
+  by; a `{% if %}`-guarded block sits at whatever indentation the source gives
+  it, which in yaml is the branch's own nesting, not the enclosing key's.
+- **`ssh_config` is not ini** — `~/.ssh/config` is `Host` blocks and
+  space-separated directives, not sections and `key = value`, and no
+  tree-sitter grammar for it is published to crates.io. It stays unsupported
+  rather than being fed to the ini grammar, which reads the whole file as one
+  error.
 - **Unsupported languages** — a file whose extension has no tree-sitter
   grammar (`.gif`, `.ttf`, `.astro`, `.css`, …) gets no structural analysis at
   all and is flagged `unsupported: true` on its file entry. Distinct from
@@ -514,7 +895,7 @@ back to file order.
 - **The engine has no filtering policy of its own** — it orders exactly the
   changes it is handed and has no opinion about which files belong in a
   review. *Path* filtering (globs, skipping generated/lock files) is entirely
-  client-side: `ordo-tui` has it, `ordo order`/`ordo review` deliberately do
+  client-side: `ordo` has it, `ordo-engine order`/`ordo-engine review` deliberately do
   not. A caller sends the set it wants ordered.
 
   One deliberate exception: `options.only_comments` (`--only-comments`) *is*
@@ -524,7 +905,7 @@ back to file order.
   in `files`. So the engine applies a selection the caller *states*; it never
   invents one.
 
-  Note `ordo-tui`'s `--only-comments` does NOT use the engine flag: it asks
+  Note `ordo`'s `--only-comments` does NOT use the engine flag: it asks
   for every hunk and filters the view, so `:only-comments` can toggle back off
   with something to reveal.
 

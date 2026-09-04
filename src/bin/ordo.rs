@@ -1,4 +1,4 @@
-//! ordo-tui — a terminal reviewer that is a pure client of the ordo engine.
+//! ordo — a terminal reviewer that is a pure client of the ordo engine.
 //! It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
 //! the change in comprehension order: the full file with the changed hunk
 //! highlighted in context, plus rationale, advisories and def→use edges. The
@@ -26,13 +26,13 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PAGE: u16 = 15;
 
 const USAGE: &str = "\
-ordo-tui — interactive review of a commit, ordered for comprehension.
+ordo — interactive review of a commit, ordered for comprehension.
 
 usage:
-  ordo-tui [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--all] [--only-comments]
-  ordo-tui --init-config [--force]
-  ordo-tui --help
-  ordo-tui --version
+  ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
+  ordo --init-config [--force]
+  ordo --help
+  ordo --version
 
 <rev> is any git commit-ish (a sha, HEAD~2, a tag), a commit range (main..branch,
 or main...branch to diff from the merge base), or `zz` for the uncommitted area.
@@ -335,7 +335,10 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
     Ok(PathGlobs { include, exclude })
 }
 
-fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
+/// rev, keymap, path filter, --only-comments, theme, --rules files
+type ParsedArgs = (String, Keymap, Filter, bool, Theme, Vec<String>);
+
+fn parse_args() -> Result<ParsedArgs, i32> {
     let mut rev: Option<String> = None;
     let mut globs: Vec<String> = vec![];
     let mut skip_generated = true;
@@ -348,6 +351,8 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     let mut theme_name = std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "dark".to_string());
     let mut want_preset = false;
     let mut want_theme = false;
+    let mut want_rules = false;
+    let mut extra_rules: Vec<String> = vec![];
     let mut want_init = false;
     let mut force = false;
     for a in std::env::args().skip(1) {
@@ -363,6 +368,11 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
             want_theme = false;
             continue;
         }
+        if want_rules {
+            extra_rules.push(a);
+            want_rules = false;
+            continue;
+        }
         match a.as_str() {
             "--keys" => want_preset = true,
             s if s.starts_with("--keys=") => {
@@ -374,6 +384,8 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
                 theme_name = s["--theme=".len()..].to_string();
                 theme_given = true;
             }
+            "--rules" => want_rules = true,
+            s if s.starts_with("--rules=") => extra_rules.push(s["--rules=".len()..].to_string()),
             "--all" => skip_generated = false,
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
@@ -384,14 +396,14 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
             }
             "-V" | "--version" | "version" => {
                 println!(
-                    "ordo-tui {} (ordo schema {})",
+                    "ordo {} (ordo schema {})",
                     env!("CARGO_PKG_VERSION"),
                     ordo::SCHEMA_VERSION
                 );
                 return Err(0);
             }
             s if s.starts_with('-') => {
-                eprintln!("ordo-tui: unknown flag '{s}'\n\n{USAGE}");
+                eprintln!("ordo: unknown flag '{s}'\n\n{USAGE}");
                 return Err(2);
             }
             s if rev.is_some() => globs.push(s.to_string()),
@@ -399,11 +411,11 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         }
     }
     if want_preset {
-        eprintln!("ordo-tui: --keys needs a preset name\n\n{USAGE}");
+        eprintln!("ordo: --keys needs a preset name\n\n{USAGE}");
         return Err(2);
     }
     if want_theme {
-        eprintln!("ordo-tui: --theme needs a value\n\n{USAGE}");
+        eprintln!("ordo: --theme needs a value\n\n{USAGE}");
         return Err(2);
     }
     // the config's preset is a default; an explicit --keys still wins
@@ -415,13 +427,13 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         _ => preset,
     };
     let Some(keys) = keymap(&preset) else {
-        eprintln!("ordo-tui: unknown key preset '{preset}' (want: vim, vscode)");
+        eprintln!("ordo: unknown key preset '{preset}' (want: vim, vscode)");
         return Err(2);
     };
     let keys = match &cfg {
         Some(c) => {
             for p in &c.problems {
-                eprintln!("ordo-tui: tui.toml: {p}");
+                eprintln!("ordo: tui.toml: {p}");
             }
             apply_key_config(keys, c)
         }
@@ -434,7 +446,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
     };
     let Some(theme) = theme(&theme_name) else {
         eprintln!(
-            "ordo-tui: unknown theme '{theme_name}' (want: {})",
+            "ordo: unknown theme '{theme_name}' (want: {})",
             theme_names().join(", ")
         );
         return Err(2);
@@ -451,7 +463,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         return Err(0);
     }
     let globs = build_globs(&globs).map_err(|e| {
-        eprintln!("ordo-tui: {e}");
+        eprintln!("ordo: {e}");
         2
     })?;
     let filter = Filter {
@@ -466,6 +478,7 @@ fn parse_args() -> Result<(String, Keymap, Filter, bool, Theme), i32> {
         filter,
         only_comments,
         theme,
+        extra_rules,
     ))
 }
 
@@ -489,13 +502,13 @@ fn highlight_progress(i: usize, total: usize) -> String {
 }
 
 fn main() -> std::io::Result<()> {
-    let (rev, keys, filter, only_comments, theme) = match parse_args() {
+    let (rev, keys, filter, only_comments, theme, extra_rules) = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
     };
     let Some(target) = resolve(&rev) else {
         eprintln!(
-            "ordo-tui: '{rev}' is not a git revision, a commit range or a \
+            "ordo: '{rev}' is not a git revision, a commit range or a \
              GitButler CLI ID (see `but status`)"
         );
         std::process::exit(1);
@@ -506,10 +519,12 @@ fn main() -> std::io::Result<()> {
     let uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
     // rules are the client's to collect: this user's, then this repository's
     let repo_root = git(&["rev-parse", "--show-toplevel"]);
-    let (rules, problems) = load_rules(repo_root.trim());
-    for p in &problems {
-        eprintln!("ordo-tui: {p}");
+    let report = load_rules_report(repo_root.trim(), &extra_rules);
+    for p in &report.problems {
+        eprintln!("ordo: {p}");
     }
+    let rules_report = report.lines();
+    let rules = report.rules;
     run(
         rev,
         keys,
@@ -520,6 +535,7 @@ fn main() -> std::io::Result<()> {
         uncommitted,
         theme,
         rules,
+        rules_report,
     )
 }
 
@@ -656,17 +672,17 @@ fn load(
     if view.is_empty() {
         let msg = if only_comments {
             format!(
-                "ordo-tui: nothing to review in {rev} — no comment changes{}",
+                "ordo: nothing to review in {rev} — no comment changes{}",
                 filter.note()
             )
         } else {
-            format!("ordo-tui: nothing to review in {rev}{}", filter.note())
+            format!("ordo: nothing to review in {rev}{}", filter.note())
         };
         let _ = tx.send(LoadMsg::Empty(msg));
         return;
     }
     let timing = format!(
-        "ordo-tui: read {files} file{} in {read_ms}ms · highlighted {hl_files} in {hl_ms}ms · \
+        "ordo: read {files} file{} in {read_ms}ms · highlighted {hl_files} in {hl_ms}ms · \
          ordered {} hunks into {} groups, {} cluster{} in {}ms",
         plural(files),
         items.len(),
@@ -747,6 +763,83 @@ fn git_stdin(args: &[&str], input: &str) -> String {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
+}
+
+// Fetches many `<rev>:<path>` blobs in one `git cat-file --batch` process
+// instead of one `git show` per spec — the same fork/exec is paid once for the
+// whole file list instead of once per file per side. Missing objects (a path
+// added or deleted on one side) come back absent from the map, same as `git`
+// returning empty on failure; look them up with `.unwrap_or_default()` to
+// match. Lossy UTF-8, same as `run_cmd`, so binary-ish content behaves the
+// same as the old per-file `git show` path. Stdin is written and dropped
+// (closing it) before stdout is read, to avoid deadlocking on a full pipe
+// buffer with a large spec list.
+fn git_cat_file_batch(specs: &[String]) -> HashMap<String, String> {
+    use std::io::{Read, Write};
+    let mut result = HashMap::with_capacity(specs.len());
+    if specs.is_empty() {
+        return result;
+    }
+    let mut child = match Command::new("git")
+        .args(["cat-file", "--batch"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return result,
+    };
+    {
+        let mut stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => return result,
+        };
+        for spec in specs {
+            if writeln!(stdin, "{spec}").is_err() {
+                break;
+            }
+        }
+        // `stdin` drops here, closing the pipe so the child's stdout can flush
+        // fully instead of the two of us deadlocking on a full pipe buffer.
+    }
+    let mut stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return result,
+    };
+    let mut buf = Vec::new();
+    if stdout.read_to_end(&mut buf).is_err() {
+        let _ = child.wait();
+        return result;
+    }
+    let _ = child.wait();
+
+    let mut i = 0;
+    for spec in specs {
+        let Some(nl) = buf[i..].iter().position(|&b| b == b'\n').map(|p| i + p) else {
+            break;
+        };
+        let header = String::from_utf8_lossy(&buf[i..nl]).into_owned();
+        i = nl + 1;
+        if header.ends_with("missing") {
+            continue;
+        }
+        // header: "<oid> <type> <size>" — take size by splitting from the
+        // right so an oid or type never gets mistaken for it.
+        let Some(size) = header
+            .rsplit(' ')
+            .next()
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            break;
+        };
+        let Some(content) = buf.get(i..i + size) else {
+            break;
+        };
+        result.insert(spec.clone(), String::from_utf8_lossy(content).into_owned());
+        i += size + 1; // skip the trailing newline after the content block
+    }
+    result
 }
 
 // GitButler CLI: empty string if `but` isn't installed or the call fails, so the
@@ -963,14 +1056,21 @@ fn gather_range(base: &str, tip: &str, filter: &Filter, progress: &dyn Fn(String
         .collect();
     let paths = filter.apply(paths);
     let total = paths.len();
+    let specs: Vec<String> = paths
+        .iter()
+        .flat_map(|p| [format!("{base}:{p}"), format!("{tip}:{p}")])
+        .collect();
+    let mut blobs = git_cat_file_batch(&specs);
     let changes = paths
         .into_iter()
         .enumerate()
         .map(|(i, path)| {
             progress(read_progress(&path, i, total));
+            let old = blobs.remove(&format!("{base}:{path}")).unwrap_or_default();
+            let new = blobs.remove(&format!("{tip}:{path}")).unwrap_or_default();
             Change {
-                old: Some(git(&["show", &format!("{base}:{path}")])),
-                new: Some(git(&["show", &format!("{tip}:{path}")])),
+                old: Some(old),
+                new: Some(new),
                 diff: None,
                 path,
             }
@@ -1018,13 +1118,16 @@ fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
     paths.dedup();
     let paths = filter.apply(paths);
     let total = paths.len();
+    let specs: Vec<String> = paths.iter().map(|p| format!("HEAD:{p}")).collect();
+    let mut blobs = git_cat_file_batch(&specs);
     let changes = paths
         .into_iter()
         .enumerate()
         .map(|(i, path)| {
             progress(read_progress(&path, i, total));
+            let old = blobs.remove(&format!("HEAD:{path}")).unwrap_or_default();
             Change {
-                old: Some(git(&["show", &format!("HEAD:{path}")])),
+                old: Some(old),
                 new: Some(std::fs::read_to_string(&path).unwrap_or_default()),
                 diff: None,
                 path,
@@ -1070,6 +1173,8 @@ fn gather_worktree_range(base: &str, filter: &Filter, progress: &dyn Fn(String))
     paths.dedup();
     let paths = filter.apply(paths);
     let total = paths.len();
+    let specs: Vec<String> = paths.iter().map(|p| format!("{base}:{p}")).collect();
+    let mut blobs = git_cat_file_batch(&specs);
     let changes = paths
         .into_iter()
         .enumerate()
@@ -1083,8 +1188,9 @@ fn gather_worktree_range(base: &str, filter: &Filter, progress: &dyn Fn(String))
                     return None;
                 }
             };
+            let old = blobs.remove(&format!("{base}:{path}")).unwrap_or_default();
             Some(Change {
-                old: Some(git(&["show", &format!("{base}:{path}")])),
+                old: Some(old),
                 new: Some(new),
                 diff: None,
                 path,
@@ -1943,6 +2049,53 @@ theme_roles! {
 /// Rule *files* are the client's business: the engine reads nothing (see
 /// `ordo::model::Options::rules`), which is what keeps `ordo order --json` a
 /// function of its arguments and the corpus tests meaningful.
+/// The rulesets shipped with ordo, bundled so `include = ["go-uber-guide"]`
+/// (or `--rules go-uber-guide`) needs no path. `rulesets/` is the source of
+/// truth; a test checks every file there is listed here.
+const PRESETS: &[(&str, &str)] = &[
+    (
+        "c-power-of-ten",
+        include_str!("../../rulesets/c-power-of-ten.toml"),
+    ),
+    (
+        "cpp-default-guidelines",
+        include_str!("../../rulesets/cpp-default-guidelines.toml"),
+    ),
+    (
+        "go-uber-guide",
+        include_str!("../../rulesets/go-uber-guide.toml"),
+    ),
+    (
+        "java-effective-java",
+        include_str!("../../rulesets/java-effective-java.toml"),
+    ),
+    (
+        "javascript-airbnb",
+        include_str!("../../rulesets/javascript-airbnb.toml"),
+    ),
+    (
+        "lua-style-guide",
+        include_str!("../../rulesets/lua-style-guide.toml"),
+    ),
+    ("markdown", include_str!("../../rulesets/markdown.toml")),
+    (
+        "python-google-style",
+        include_str!("../../rulesets/python-google-style.toml"),
+    ),
+    (
+        "rust-api-guidelines",
+        include_str!("../../rulesets/rust-api-guidelines.toml"),
+    ),
+    (
+        "typescript-clean-code",
+        include_str!("../../rulesets/typescript-clean-code.toml"),
+    ),
+];
+
+fn preset(name: &str) -> Option<&'static str> {
+    PRESETS.iter().find(|(n, _)| *n == name).map(|(_, t)| *t)
+}
+
 fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
     let mut out = vec![];
     if let Some(dir) = config_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
@@ -1954,123 +2107,433 @@ fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Read the rule files that exist, layering user rules then repo rules.
-/// A `query` may be given inline or as `query-file`, resolved relative to the
-/// rules file itself — a query is a block of tree-sitter, and keeping it in its
-/// own `.scm` is how anyone would want to write one.
-fn load_rules(repo_root: &str) -> (Vec<ordo::model::Rule>, Vec<String>) {
-    let mut rules = vec![];
-    let mut problems = vec![];
-    for path in rule_sources(repo_root) {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let (mut got, probs) = parse_rules(&text, path.parent().unwrap_or(Path::new(".")));
-        for p in probs {
-            problems.push(format!("{}: {p}", path.display()));
-        }
-        rules.append(&mut got);
-    }
-    (rules, problems)
+/// Everything `load_rules_report` learned: the rules to run, and the record a
+/// reviewer needs to trust them — where each came from, which definitions
+/// replaced an earlier one, which names were disabled. A silenced rule looks
+/// exactly like a convention nobody breaks, so the silencing is shown.
+struct RulesReport {
+    rules: Vec<ordo::model::Rule>,
+    problems: Vec<String>,
+    /// (origin, active rules from it), in load order
+    origins: Vec<(String, usize)>,
+    replaced: Vec<String>,
+    disabled: Vec<String>,
 }
 
-/// The rules file: a sequence of `[[rule]]` blocks, read the same way
-/// `tui.toml` is (see `parse_key_config`) — the same small subset, so a reader
-/// of one file can read the other.
-fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
-    use ordo::model::{Rule, When};
-    let mut rules: Vec<Rule> = vec![];
-    let mut problems = vec![];
-    let mut open = false;
-    for (n, raw) in text.lines().enumerate() {
-        let line = strip_comment(raw).trim().to_string();
-        if line.is_empty() {
-            continue;
+impl RulesReport {
+    /// The `:rules` popup, one line per fact.
+    fn lines(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "{} rule{} active",
+            self.rules.len(),
+            if self.rules.len() == 1 { "" } else { "s" }
+        )];
+        for (origin, n) in &self.origins {
+            out.push(format!("  {n:>3}  {origin}"));
         }
-        if line == "[[rule]]" {
-            rules.push(Rule {
-                name: String::new(),
-                when: When::default(),
-                note: None,
-                warn: None,
-                noise: false,
-                priority: 0,
-            });
-            open = true;
-            continue;
+        if !self.replaced.is_empty() {
+            out.push(String::new());
+            out.push("replaced (a later definition with the same name):".to_string());
+            out.extend(self.replaced.iter().map(|r| format!("  {r}")));
         }
-        if line.starts_with('[') {
-            problems.push(format!(
-                "line {}: expected `[[rule]]`, found `{line}`",
-                n + 1
-            ));
-            open = false;
-            continue;
+        if !self.disabled.is_empty() {
+            out.push(String::new());
+            out.push("disabled:".to_string());
+            out.extend(self.disabled.iter().map(|d| format!("  {d}")));
         }
-        let Some((k, v)) = line.split_once('=') else {
-            problems.push(format!("line {}: expected `key = value`", n + 1));
-            continue;
-        };
-        if !open {
-            problems.push(format!(
-                "line {}: `{}` is outside any [[rule]]",
-                n + 1,
-                k.trim()
-            ));
-            continue;
+        if !self.problems.is_empty() {
+            out.push(String::new());
+            out.push("problems:".to_string());
+            out.extend(self.problems.iter().map(|p| format!("  {p}")));
         }
-        let key = k.trim().to_string();
-        let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-        let rule = rules.last_mut().expect("open implies a rule");
-        match key.as_str() {
-            "name" => rule.name = val,
-            "note" => rule.note = Some(val),
-            "warn" => rule.warn = Some(val),
-            "noise" => rule.noise = val == "true",
-            "priority" => match val.parse() {
-                Ok(p) => rule.priority = p,
-                Err(_) => {
-                    problems.push(format!("line {}: priority `{val}` is not a number", n + 1))
+        if self.rules.is_empty() && self.origins.is_empty() {
+            out.push(String::new());
+            out.push("no rules loaded — `include = [\"go-uber-guide\"]` in .ordo/rules.toml, or --rules <preset|file>".to_string());
+        }
+        out
+    }
+}
+
+/// Merge one parsed rules document into the layered list: its `include`s first
+/// (a bundled preset by name, or a path relative to the file), then its own
+/// rules, where a name already present is *replaced* in place. Disables are
+/// only collected here; they apply once everything is layered, so a user can
+/// silence a rule the repo includes and the repo one a user includes.
+#[allow(clippy::too_many_arguments)]
+fn layer_rules(
+    text: &str,
+    origin: &str,
+    base: &Path,
+    depth: usize,
+    layered: &mut Vec<(ordo::model::Rule, String)>,
+    disables: &mut Vec<String>,
+    replaced: &mut Vec<String>,
+    problems: &mut Vec<String>,
+) {
+    if depth > 8 {
+        problems.push(format!(
+            "{origin}: include nesting deeper than 8 — a cycle?"
+        ));
+        return;
+    }
+    let doc = parse_rules_doc(text, base);
+    for p in doc.problems {
+        problems.push(format!("{origin}: {p}"));
+    }
+    for inc in &doc.include {
+        if let Some(t) = preset(inc) {
+            layer_rules(
+                t,
+                inc,
+                Path::new("."),
+                depth + 1,
+                layered,
+                disables,
+                replaced,
+                problems,
+            );
+        } else {
+            let path = base.join(inc);
+            match std::fs::read_to_string(&path) {
+                Ok(t) => {
+                    let label = path.display().to_string();
+                    let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+                    layer_rules(
+                        &t,
+                        &label,
+                        &parent,
+                        depth + 1,
+                        layered,
+                        disables,
+                        replaced,
+                        problems,
+                    );
                 }
-            },
-            "path" => rule.when.path = Some(val),
-            "lang" => rule.when.lang = Some(val),
-            "category" => match val.as_str() {
-                "import" => rule.when.category = Some(ordo::model::Category::Import),
-                "definition" => rule.when.category = Some(ordo::model::Category::Definition),
-                "other" => rule.when.category = Some(ordo::model::Category::Other),
-                _ => problems.push(format!(
-                    "line {}: category `{val}` (want: import, definition, other)",
-                    n + 1
-                )),
-            },
-            "enclosing-kind" => rule.when.enclosing_kind = Some(val),
-            "defines" => rule.when.defines = Some(val),
-            "uses" => rule.when.uses = Some(val),
-            "imports" => rule.when.imports = Some(val),
-            "noise-when" => rule.when.noise = Some(val == "true"),
-            "comment" => rule.when.comment = Some(val == "true"),
-            "query" => rule.when.query = Some(val),
-            "query-file" => match std::fs::read_to_string(base.join(&val)) {
-                Ok(q) => rule.when.query = Some(q),
-                Err(e) => problems.push(format!("line {}: {val}: {e}", n + 1)),
-            },
-            _ => problems.push(format!("line {}: unknown rule key `{key}`", n + 1)),
+                Err(e) => problems.push(format!("{origin}: include `{inc}`: {e}")),
+            }
         }
     }
-    // a rule with no name can't report itself, and a reviewer would see an
-    // annotation with nothing to look up
-    for (i, r) in rules.iter_mut().enumerate() {
-        if r.name.is_empty() {
-            r.name = format!("rule-{}", i + 1);
-            problems.push(format!(
-                "rule {} has no name; calling it `{}`",
-                i + 1,
-                r.name
-            ));
+    disables.extend(doc.disable);
+    for rule in doc.rules {
+        match layered.iter().position(|(r, _)| r.name == rule.name) {
+            Some(i) => {
+                replaced.push(format!("{}  ({} → {origin})", rule.name, layered[i].1));
+                layered[i] = (rule, origin.to_string());
+            }
+            None => layered.push((rule, origin.to_string())),
         }
     }
-    (rules, problems)
+}
+
+/// Read the rule files that exist — this user's, then this repository's, then
+/// any `--rules` file or preset — layer them, then apply every `disable`.
+fn load_rules_report(repo_root: &str, extra: &[String]) -> RulesReport {
+    report_from(rule_sources(repo_root), extra)
+}
+
+/// `implicit` sources (the user's and the repo's files) may be absent; every
+/// `extra` — a `--rules` argument — was asked for, so its absence is reported,
+/// unless it names a bundled preset.
+fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
+    let mut layered: Vec<(ordo::model::Rule, String)> = vec![];
+    let mut disables = vec![];
+    let mut replaced = vec![];
+    let mut problems = vec![];
+    let n_implicit = implicit.len();
+    for (i, src) in implicit
+        .into_iter()
+        .chain(extra.iter().map(PathBuf::from))
+        .enumerate()
+    {
+        let implicit = i < n_implicit;
+        let name = src.to_string_lossy().into_owned();
+        if !implicit && !src.exists() {
+            if let Some(t) = preset(&name) {
+                layer_rules(
+                    t,
+                    &name,
+                    Path::new("."),
+                    0,
+                    &mut layered,
+                    &mut disables,
+                    &mut replaced,
+                    &mut problems,
+                );
+                continue;
+            }
+        }
+        let text = match std::fs::read_to_string(&src) {
+            Ok(t) => t,
+            Err(_) if implicit => continue,
+            Err(e) => {
+                problems.push(format!("{name}: {e}"));
+                continue;
+            }
+        };
+        let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
+        layer_rules(
+            &text,
+            &name,
+            &base,
+            0,
+            &mut layered,
+            &mut disables,
+            &mut replaced,
+            &mut problems,
+        );
+    }
+    // disables win, whoever wrote them
+    let mut set = globset::GlobSetBuilder::new();
+    for d in &disables {
+        match globset::Glob::new(d) {
+            Ok(g) => {
+                set.add(g);
+            }
+            Err(e) => problems.push(format!("disable `{d}` is not a glob: {e}")),
+        }
+    }
+    let set = set.build().unwrap_or_else(|_| globset::GlobSet::empty());
+    let mut disabled = vec![];
+    layered.retain(|(r, origin)| {
+        let keep = !set.is_match(&r.name);
+        if !keep {
+            disabled.push(format!("{}  ({origin})", r.name));
+        }
+        keep
+    });
+    let mut origins: Vec<(String, usize)> = vec![];
+    for (_, origin) in &layered {
+        match origins.iter_mut().find(|(o, _)| o == origin) {
+            Some((_, n)) => *n += 1,
+            None => origins.push((origin.clone(), 1)),
+        }
+    }
+    RulesReport {
+        rules: layered.into_iter().map(|(r, _)| r).collect(),
+        problems,
+        origins,
+        replaced,
+        disabled,
+    }
+}
+
+#[cfg(test)]
+fn load_rules(repo_root: &str, extra: &[String]) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    let r = load_rules_report(repo_root, extra);
+    (r.rules, r.problems)
+}
+
+/// `kind = "x"` and `kind = ["x", "y"]` both read; a one-entry list is the
+/// common case and shouldn't need brackets. Mirrors `model::string_or_vec`,
+/// which is private to that module.
+fn string_or_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<V>::deserialize(d)? {
+        None => None,
+        Some(V::One(s)) => Some(vec![s]),
+        Some(V::Many(v)) => Some(v),
+    })
+}
+
+/// Flat TOML shape of one `[[rule]]` block: the file keeps rule fields and
+/// `when` conditions in one table, while `ordo::model::Rule` nests the
+/// conditions under `when` — this is the shape that gets converted.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RuleToml {
+    name: String,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    warn: Option<String>,
+    #[serde(default)]
+    noise: bool,
+    #[serde(default)]
+    priority: i64,
+
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    path_not: Option<String>,
+    #[serde(default)]
+    lang: Option<String>,
+    #[serde(default)]
+    category: Option<ordo::model::Category>,
+    #[serde(default)]
+    enclosing_kind: Option<String>,
+    #[serde(default)]
+    defines: Option<String>,
+    #[serde(default)]
+    uses: Option<String>,
+    #[serde(default)]
+    imports: Option<String>,
+    #[serde(default)]
+    noise_when: Option<bool>,
+    #[serde(default)]
+    comment: Option<bool>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    query_file: Option<String>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    kind: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    with: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    without: Option<Vec<String>>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    text_not: Option<String>,
+    #[serde(default)]
+    max_params: Option<usize>,
+    #[serde(default)]
+    max_lines: Option<usize>,
+    #[serde(default)]
+    max_nesting: Option<usize>,
+    #[serde(default)]
+    max_file_lines: Option<usize>,
+    #[serde(default)]
+    recursive: Option<bool>,
+    #[serde(default)]
+    container_with: Option<String>,
+    #[serde(default)]
+    container_without: Option<String>,
+    #[serde(default)]
+    member_uninitialized: Option<bool>,
+}
+
+/// Convert one already-parsed `[[rule]]` table into a `Rule`, independently of
+/// every other rule in the file — a bad type or an unknown key in one block
+/// must not cost the file its other, good rules. `query-file` is read
+/// relative to `base` and lands in `When.query`, same as an inline `query`;
+/// a missing file is a problem, not a panic.
+fn rule_from_toml(
+    v: toml::Value,
+    idx: usize,
+    base: &Path,
+    problems: &mut Vec<String>,
+) -> Option<ordo::model::Rule> {
+    let label = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("rule {}", idx + 1));
+    let parsed: RuleToml = match serde::Deserialize::deserialize(v) {
+        Ok(p) => p,
+        Err(e) => {
+            problems.push(format!("{label}: {e}"));
+            return None;
+        }
+    };
+    let mut when = ordo::model::When {
+        path: parsed.path,
+        path_not: parsed.path_not,
+        lang: parsed.lang,
+        category: parsed.category,
+        enclosing_kind: parsed.enclosing_kind,
+        defines: parsed.defines,
+        uses: parsed.uses,
+        imports: parsed.imports,
+        noise: parsed.noise_when,
+        comment: parsed.comment,
+        query: parsed.query,
+        kind: parsed.kind,
+        with: parsed.with,
+        without: parsed.without,
+        text: parsed.text,
+        text_not: parsed.text_not,
+        max_params: parsed.max_params,
+        max_lines: parsed.max_lines,
+        max_nesting: parsed.max_nesting,
+        max_file_lines: parsed.max_file_lines,
+        recursive: parsed.recursive,
+        container_with: parsed.container_with,
+        container_without: parsed.container_without,
+        member_uninitialized: parsed.member_uninitialized,
+    };
+    if let Some(qf) = &parsed.query_file {
+        match std::fs::read_to_string(base.join(qf)) {
+            Ok(q) => when.query = Some(q),
+            Err(e) => problems.push(format!("{label}: {qf}: {e}")),
+        }
+    }
+    Some(ordo::model::Rule {
+        name: parsed.name,
+        when,
+        note: parsed.note,
+        warn: parsed.warn,
+        noise: parsed.noise,
+        priority: parsed.priority,
+    })
+}
+
+/// The rules file: a sequence of `[[rule]]` blocks, real TOML — arrays
+/// (`kind = [...]`) and multi-line `'''...'''` query strings read like
+/// anywhere else in TOML. A syntax error, or a key outside `rule`, fails the
+/// whole file (there is no document to salvage rules from); once the document
+/// itself parses, each rule converts independently so one bad rule can't sink
+/// the rest (see `rule_from_toml`).
+/// One rules file, read: its rules, what it includes, what it disables.
+struct RulesDoc {
+    rules: Vec<ordo::model::Rule>,
+    include: Vec<String>,
+    disable: Vec<String>,
+    problems: Vec<String>,
+}
+
+fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RulesFile {
+        #[serde(default)]
+        include: Vec<String>,
+        #[serde(default)]
+        disable: Vec<String>,
+        #[serde(default)]
+        rule: Vec<toml::Value>,
+    }
+    let empty = |problems| RulesDoc {
+        rules: vec![],
+        include: vec![],
+        disable: vec![],
+        problems,
+    };
+    let doc: RulesFile = match toml::from_str(text) {
+        Ok(d) => d,
+        Err(e) => return empty(vec![e.to_string()]),
+    };
+    let mut rules: Vec<ordo::model::Rule> = vec![];
+    let mut problems = vec![];
+    for (i, v) in doc.rule.into_iter().enumerate() {
+        if let Some(r) = rule_from_toml(v, i, base, &mut problems) {
+            // the engine keys hits by name; two rules sharing one within a
+            // file would be indistinguishable, so it is a mistake to report
+            if rules.iter().any(|x| x.name == r.name) {
+                problems.push(format!("rule `{}` is defined twice in this file", r.name));
+                continue;
+            }
+            rules.push(r);
+        }
+    }
+    RulesDoc {
+        rules,
+        include: doc.include,
+        disable: doc.disable,
+        problems,
+    }
+}
+
+#[cfg(test)]
+fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
+    let d = parse_rules_doc(text, base);
+    (d.rules, d.problems)
 }
 
 /// The config file ordo would write for the current preset and theme — every
@@ -2085,10 +2548,10 @@ fn init_config(preset: &str, theme_name: &str) -> String {
     let km = keymap(preset).unwrap_or_else(|| keymap("vim").expect("vim preset exists"));
     let t = theme(theme_name).unwrap_or_else(|| theme("dark").expect("dark theme exists"));
     for line in [
-        "# ordo-tui configuration — every line below is this build's own default,",
+        "# ordo configuration — every line below is this build's own default,",
         "# commented out. Uncomment and edit what you want to change.",
         "#",
-        "# Written by `ordo-tui --init-config`; the values are this build's, for",
+        "# Written by `ordo --init-config`; the values are this build's, for",
         &format!("# preset `{preset}` and theme `{theme_name}`."),
     ] {
         let _ = writeln!(out, "{line}");
@@ -2161,19 +2624,19 @@ fn init_config(preset: &str, theme_name: &str) -> String {
 /// use if the reviewer can't find it.
 fn write_init_config(preset: &str, theme_name: &str, force: bool) -> Result<(), i32> {
     let Some(path) = config_path() else {
-        eprintln!("ordo-tui: no config directory (set $XDG_CONFIG_HOME or $HOME)");
+        eprintln!("ordo: no config directory (set $XDG_CONFIG_HOME or $HOME)");
         return Err(2);
     };
     if path.exists() && !force {
         eprintln!(
-            "ordo-tui: {} already exists — pass --force to overwrite it",
+            "ordo: {} already exists — pass --force to overwrite it",
             path.display()
         );
         return Err(1);
     }
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("ordo-tui: {}: {e}", dir.display());
+            eprintln!("ordo: {}: {e}", dir.display());
             return Err(1);
         }
     }
@@ -2183,7 +2646,7 @@ fn write_init_config(preset: &str, theme_name: &str, force: bool) -> Result<(), 
             Err(0)
         }
         Err(e) => {
-            eprintln!("ordo-tui: {}: {e}", path.display());
+            eprintln!("ordo: {}: {e}", path.display());
             Err(1)
         }
     }
@@ -2496,6 +2959,11 @@ struct CommandBar {
     text: String,
     candidates: Vec<String>,
     selected: Option<usize>,
+    /// `:e`'s ref pool (`rev_completions()`), fetched at most once per opened
+    /// bar and reused for every later keystroke in the same session — see
+    /// `recompute_candidates`. `None` until first needed; a fresh bar always
+    /// starts `None` so a branch created since the last session is picked up.
+    rev_cache: Option<Vec<String>>,
 }
 
 struct App {
@@ -2588,6 +3056,8 @@ struct App {
     collapsed: HashSet<String>,
     /// what the filters and the engine dropped on the way here — `:audit`
     ledger: Ledger,
+    /// what `:rules` shows: where the rules came from, what was replaced or disabled
+    rules_report: Vec<String>,
     /// the reviewer's own rules, carried so a re-order or an `:e` reload keeps
     /// applying them
     rules: Vec<ordo::model::Rule>,
@@ -2597,6 +3067,9 @@ struct App {
     /// exported `context.strategy` so a `:cnext` session in the editor knows
     /// what order it's walking.
     strategy: String,
+    /// per-path longest-line cache, so `draw`'s `hscroll` clamp doesn't rescan
+    /// the whole file every frame — filled in lazily, keyed by `Item::path`
+    max_col: HashMap<String, usize>,
 }
 
 /// Bound on the position stack `JumpToEdge`/`JumpBack` maintain — generous
@@ -2822,6 +3295,10 @@ fn display_rows(
     if !show_groups {
         return view.iter().map(|&i| DisplayRow::Item(i)).collect();
     }
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for &i in view {
+        *counts.entry(items[i].group.as_str()).or_insert(0) += 1;
+    }
     let mut rows = Vec::with_capacity(view.len());
     let mut last: Option<&str> = None;
     for &i in view {
@@ -2829,7 +3306,7 @@ fn display_rows(
         let folded = collapsed.contains(gid);
         if last != Some(gid) {
             let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
-            let n = view.iter().filter(|&&j| items[j].group == gid).count();
+            let n = counts.get(gid).copied().unwrap_or(0);
             // a folded group still says how much it is hiding — otherwise the
             // list silently shrinks and a reviewer can lose track of what is left
             let marker = if folded { "▸" } else { "▾" };
@@ -3210,8 +3687,65 @@ type Highlights = HashMap<String, Vec<LineSpans>>;
 // kept here because highlighting is a TUI-only presentation concern). The query
 // is owned so cpp can inherit C's rules (Neovim `; inherits: c`, which
 // tree-sitter-highlight doesn't resolve) by prepending the C query.
+fn owned_query(l: tree_sitter::Language, q: &str) -> (tree_sitter::Language, String) {
+    (l, q.to_string())
+}
+
 fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
-    let ext = path.rsplit('.').next()?;
+    // a template highlights as the format underneath it (`values.yaml.j2` is
+    // yaml with jinja in it); the jinja itself is left plain, which is close
+    // enough to how most editors render one
+    let path = match path.rsplit_once('.') {
+        Some((head, "j2" | "jinja" | "jinja2" | "tmpl" | "tpl" | "erb" | "ejs" | "gotmpl")) => head,
+        _ => path,
+    };
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let (path, name) = match name.rsplit_once('.') {
+        Some((head, "local")) if !head.is_empty() => {
+            (path.strip_suffix(".local").unwrap_or(path), head)
+        }
+        _ => (path, name),
+    };
+    if name == "CMakeLists.txt" {
+        return Some(owned_query(
+            tree_sitter_cmake::LANGUAGE.into(),
+            tree_sitter_cmake::HIGHLIGHTS_QUERY,
+        ));
+    }
+    if matches!(name, ".bashrc" | ".bash_profile" | ".profile" | ".env") {
+        return Some(owned_query(
+            tree_sitter_bash::LANGUAGE.into(),
+            tree_sitter_bash::HIGHLIGHT_QUERY,
+        ));
+    }
+    if matches!(
+        name,
+        "Makefile" | "makefile" | "GNUmakefile" | "Makefile.am" | "Makefile.in"
+    ) {
+        return Some(owned_query(
+            tree_sitter_make::LANGUAGE.into(),
+            tree_sitter_make::HIGHLIGHTS_QUERY,
+        ));
+    }
+    let ini_by_name = matches!(
+        name,
+        ".gitconfig"
+            | ".gitmodules"
+            | ".editorconfig"
+            | ".npmrc"
+            | ".hgrc"
+            | ".flake8"
+            | ".pylintrc"
+            | ".coveragerc"
+    ) || path.ends_with(".git/config")
+        || path.ends_with(".dvc/config");
+    if ini_by_name {
+        return Some(owned_query(
+            tree_sitter_ini::LANGUAGE.into(),
+            tree_sitter_ini::HIGHLIGHTS_QUERY,
+        ));
+    }
+    let ext = name.rsplit('.').next()?;
     let owned = |l: tree_sitter::Language, q: &str| (l, q.to_string());
     Some(match ext {
         "py" | "pyi" => owned(
@@ -3265,11 +3799,49 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_lua::LANGUAGE.into(),
             tree_sitter_lua::HIGHLIGHTS_QUERY,
         ),
-        // the engine has no TOML grammar (nothing to order in a config file), but
-        // manifests show up in most diffs and read badly unhighlighted
         "toml" => owned(
             tree_sitter_toml_ng::LANGUAGE.into(),
             tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        ),
+        "json" => owned(
+            tree_sitter_json::LANGUAGE.into(),
+            tree_sitter_json::HIGHLIGHTS_QUERY,
+        ),
+        "yml" | "yaml" => owned(
+            tree_sitter_yaml::LANGUAGE.into(),
+            tree_sitter_yaml::HIGHLIGHTS_QUERY,
+        ),
+        "cmake" => owned(
+            tree_sitter_cmake::LANGUAGE.into(),
+            tree_sitter_cmake::HIGHLIGHTS_QUERY,
+        ),
+        "mk" | "mak" | "make" => owned(
+            tree_sitter_make::LANGUAGE.into(),
+            tree_sitter_make::HIGHLIGHTS_QUERY,
+        ),
+        "sh" | "bash" => owned(
+            tree_sitter_bash::LANGUAGE.into(),
+            tree_sitter_bash::HIGHLIGHT_QUERY,
+        ),
+        "html" | "htm" | "vue" => owned(
+            tree_sitter_html::LANGUAGE.into(),
+            tree_sitter_html::HIGHLIGHTS_QUERY,
+        ),
+        "svelte" => owned(
+            tree_sitter_svelte_ng::LANGUAGE.into(),
+            tree_sitter_svelte_ng::HIGHLIGHTS_QUERY,
+        ),
+        "css" => owned(
+            tree_sitter_css::LANGUAGE.into(),
+            tree_sitter_css::HIGHLIGHTS_QUERY,
+        ),
+        "nix" => owned(
+            tree_sitter_nix::LANGUAGE.into(),
+            tree_sitter_nix::HIGHLIGHTS_QUERY,
+        ),
+        "ini" | "cfg" => owned(
+            tree_sitter_ini::LANGUAGE.into(),
+            tree_sitter_ini::HIGHLIGHTS_QUERY,
         ),
         "md" | "markdown" => (tree_sitter_md::LANGUAGE.into(), md_block_query()),
         _ => return None,
@@ -3385,6 +3957,41 @@ const MD_INJECTION_QUERY: &str = r#"
   (#set! injection.include-children))
 "#;
 
+thread_local! {
+    // Compiling a `HighlightConfiguration` (parsing its query into a
+    // capture-index table) is the expensive part of highlighting, and it only
+    // depends on the (language, query, injection-query) triple — not on which
+    // file it's for. Cache by the query text, which is a fixed string per
+    // grammar (see `highlight_spec`/`md_block_query`), so a run touching many
+    // files of one language compiles that language's query once. Lives on the
+    // loader worker thread that calls `highlight_file`, so a plain
+    // `thread_local!` needs no locking.
+    static HL_CFG_CACHE: std::cell::RefCell<HashMap<String, HighlightConfiguration>> = std::cell::RefCell::new(HashMap::new());
+}
+
+// Ensures `cache[key]` holds a `HighlightConfiguration` for `language`/`query`,
+// configured with `names` exactly once. Returns whether it's present after the
+// call (false only if construction failed).
+fn ensure_hl_cfg(
+    cache: &std::cell::RefCell<HashMap<String, HighlightConfiguration>>,
+    key: &str,
+    language: tree_sitter::Language,
+    name: &str,
+    query: &str,
+    injections: &str,
+    names: &[&str],
+) -> bool {
+    if cache.borrow().contains_key(key) {
+        return true;
+    }
+    let Ok(mut cfg) = HighlightConfiguration::new(language, name, query, injections, "") else {
+        return false;
+    };
+    cfg.configure(names);
+    cache.borrow_mut().insert(key.to_string(), cfg);
+    true
+}
+
 // Syntax-highlight `src` into per-line colored segments. None when the language
 // is unsupported or the grammar/query fails to build → caller renders plain.
 fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>> {
@@ -3392,75 +3999,86 @@ fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>>
     let names: Vec<&str> = HL.iter().map(|(n, _)| *n).collect();
     let is_markdown = matches!(path.rsplit('.').next(), Some("md" | "markdown"));
     let injections = if is_markdown { MD_INJECTION_QUERY } else { "" };
-    let mut cfg = HighlightConfiguration::new(language, path, &query, injections, "").ok()?;
-    cfg.configure(&names);
 
-    // Injected-layer configs: `markdown_inline` plus one per fenced-code
-    // language actually present. Built up front, before `highlight` runs, so
-    // they outlive the borrow the injection callback hands back (it must
-    // return `&'a HighlightConfiguration` for the same `'a` as `cfg`).
-    let mut injected: Vec<(String, HighlightConfiguration)> = Vec::new();
-    if is_markdown {
-        if let Ok(mut inline) = HighlightConfiguration::new(
-            tree_sitter_md::INLINE_LANGUAGE.into(),
-            path,
-            tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
-            "",
-            "",
-        ) {
-            inline.configure(&names);
-            injected.push(("markdown_inline".to_string(), inline));
+    HL_CFG_CACHE.with(|cache| {
+        if !ensure_hl_cfg(cache, &query, language, path, &query, injections, &names) {
+            return None;
         }
-        for lang_name in md_fence_languages(src) {
-            if injected.iter().any(|(n, _)| *n == lang_name) {
-                continue;
+
+        // Injected-layer configs: `markdown_inline` plus one per fenced-code
+        // language actually present. Keyed into the same cache, by query text,
+        // so they're built at most once per grammar too.
+        let mut injected_keys: Vec<(String, String)> = Vec::new();
+        if is_markdown {
+            let inline_query = tree_sitter_md::HIGHLIGHT_QUERY_INLINE;
+            if ensure_hl_cfg(
+                cache,
+                inline_query,
+                tree_sitter_md::INLINE_LANGUAGE.into(),
+                path,
+                inline_query,
+                "",
+                &names,
+            ) {
+                injected_keys.push(("markdown_inline".to_string(), inline_query.to_string()));
             }
-            let Some(ext) = fence_ext(&lang_name) else {
-                continue;
-            };
-            let Some((l, q)) = highlight_spec(&format!("x.{ext}")) else {
-                continue;
-            };
-            if let Ok(mut c) = HighlightConfiguration::new(l, &lang_name, &q, "", "") {
-                c.configure(&names);
-                injected.push((lang_name, c));
+            for lang_name in md_fence_languages(src) {
+                if injected_keys.iter().any(|(n, _)| *n == lang_name) {
+                    continue;
+                }
+                let Some(ext) = fence_ext(&lang_name) else {
+                    continue;
+                };
+                let Some((l, q)) = highlight_spec(&format!("x.{ext}")) else {
+                    continue;
+                };
+                if ensure_hl_cfg(cache, &q, l, &lang_name, &q, "", &names) {
+                    injected_keys.push((lang_name, q));
+                }
             }
         }
-    }
 
-    let mut hl = Highlighter::new();
-    let events = hl
-        .highlight(&cfg, src.as_bytes(), None, |name| {
-            injected.iter().find(|(n, _)| n == name).map(|(_, c)| c)
-        })
-        .ok()?;
+        let cache_ref = cache.borrow();
+        let cfg = cache_ref.get(&query)?;
+        let injected: Vec<(String, &HighlightConfiguration)> = injected_keys
+            .iter()
+            .filter_map(|(n, k)| cache_ref.get(k).map(|c| (n.clone(), c)))
+            .collect();
 
-    let mut lines: Vec<LineSpans> = vec![vec![]];
-    let mut stack: Vec<Color> = vec![];
-    for ev in events {
-        match ev.ok()? {
-            HighlightEvent::HighlightStart(h) => {
-                stack.push(HL.get(h.0).map(|(_, r)| syn.of(*r)).unwrap_or(syn.variable));
-            }
-            HighlightEvent::HighlightEnd => {
-                stack.pop();
-            }
-            HighlightEvent::Source { start, end } => {
-                let color = stack.last().copied().unwrap_or(syn.variable);
-                let mut first = true;
-                for piece in src.get(start..end).unwrap_or("").split('\n') {
-                    if !first {
-                        lines.push(vec![]);
-                    }
-                    first = false;
-                    if !piece.is_empty() {
-                        lines.last_mut().unwrap().push((piece.to_string(), color));
+        let mut hl = Highlighter::new();
+        let events = hl
+            .highlight(cfg, src.as_bytes(), None, |name| {
+                injected.iter().find(|(n, _)| n == name).map(|(_, c)| *c)
+            })
+            .ok()?;
+
+        let mut lines: Vec<LineSpans> = vec![vec![]];
+        let mut stack: Vec<Color> = vec![];
+        for ev in events {
+            match ev.ok()? {
+                HighlightEvent::HighlightStart(h) => {
+                    stack.push(HL.get(h.0).map(|(_, r)| syn.of(*r)).unwrap_or(syn.variable));
+                }
+                HighlightEvent::HighlightEnd => {
+                    stack.pop();
+                }
+                HighlightEvent::Source { start, end } => {
+                    let color = stack.last().copied().unwrap_or(syn.variable);
+                    let mut first = true;
+                    for piece in src.get(start..end).unwrap_or("").split('\n') {
+                        if !first {
+                            lines.push(vec![]);
+                        }
+                        first = false;
+                        if !piece.is_empty() {
+                            lines.last_mut().unwrap().push((piece.to_string(), color));
+                        }
                     }
                 }
             }
         }
-    }
-    Some(lines)
+        Some(lines)
+    })
 }
 
 // ------------------------------------------------------------------- code view
@@ -4064,14 +4682,12 @@ fn code_view(
     matches: &[(usize, usize, usize)],
     cur_match: Option<usize>,
     theme: &Theme,
-) -> (Vec<Line<'static>>, bool) {
+    start: usize,
+    rows: usize,
+) -> (Vec<Line<'static>>, bool, usize) {
     let mut out = vec![];
-    // shared (not exclusively-borrowed) so both `window` and `emit_removed`
-    // below can set it without fighting over a unique borrow across the
-    // whole function body
-    let right_clip = std::cell::Cell::new(false);
     let Some((ol, nl)) = sources.get(&it.path) else {
-        return (out, right_clip.get());
+        return (out, false, 0);
     };
     let hl = highlights.get(&it.path);
     let [o0, o1] = it.old_range;
@@ -4083,6 +4699,20 @@ fn code_view(
     };
     let num = Style::default().fg(theme.dim);
     let avail = width.saturating_sub(GUTTER_W);
+    // Every row this view would hold, counted rather than built: the pane shows
+    // `rows` of them, so building the whole file to throw all but a screenful
+    // away costs ~20 allocations per line of a file that can run to thousands.
+    // The removed block lands at `n0` (or after the last line when the deletion
+    // sits at EOF); `n0 == 0` is a change before line 1, where it is not shown.
+    let total = nl.len() + if n0 >= 1 { removed.len() } else { 0 };
+    let start = start.min(last_line(total) as usize);
+    let end = start.saturating_add(rows);
+    // Clipping is a property of the whole view, not of the rows on screen: the
+    // `›` marker would otherwise blink on and off as the reviewer scrolls past
+    // a long line. Counted over every line — no allocation, and `any` stops at
+    // the first one wide enough.
+    let over = |l: &str| l.chars().count() > hscroll + avail;
+    let right_clip = nl.iter().any(|l| over(l)) || (n0 >= 1 && removed.iter().any(|r| over(r)));
     // fill the rest of the row so the background tint spans the full width
     let pad = |spans: &mut Vec<Span<'static>>, used: usize, bg: Color| {
         if width > used {
@@ -4118,14 +4748,18 @@ fn code_view(
         }
         spans
     };
-    let emit_removed = |out: &mut Vec<Line<'static>>| {
+    let emit_removed = |out: &mut Vec<Line<'static>>, row: &mut usize| {
         for (k, r) in removed.iter().enumerate() {
+            let here = *row;
+            *row += 1;
+            if here < start || here >= end {
+                continue;
+            }
             let content = vec![Span::styled(
                 (*r).clone(),
                 Style::default().fg(theme.del_fg).bg(theme.del_bg),
             )];
-            let (visible, shown, clipped) = window(content, r.chars().count());
-            right_clip.set(right_clip.get() | clipped);
+            let (visible, shown, _) = window(content, r.chars().count());
             let mut spans = vec![
                 Span::styled(BAR, Style::default().fg(theme.del_fg)),
                 Span::styled("     ".to_string(), num.bg(theme.del_bg)),
@@ -4140,10 +4774,19 @@ fn code_view(
             out.push(Line::from(spans));
         }
     };
+    let mut row = 0usize;
     for (i, line) in nl.iter().enumerate() {
         let ln = i + 1;
         if ln == n0 {
-            emit_removed(&mut out);
+            emit_removed(&mut out, &mut row);
+        }
+        let here = row;
+        row += 1;
+        if here < start {
+            continue;
+        }
+        if here >= end {
+            break;
         }
         let added = n0 <= ln && ln <= n1;
         let bg = if added { theme.add_bg } else { Color::Reset };
@@ -4165,8 +4808,7 @@ fn code_view(
                 Style::default().fg(theme.fg).bg(bg),
             )],
         };
-        let (visible, shown, clipped) = window(content, line.chars().count());
-        right_clip.set(right_clip.get() | clipped);
+        let (visible, shown, _) = window(content, line.chars().count());
         spans.extend(visible);
         if added {
             pad(&mut spans, GUTTER_W + shown, bg);
@@ -4200,9 +4842,9 @@ fn code_view(
         out.push(Line::from(spans));
     }
     if n0 > nl.len() {
-        emit_removed(&mut out); // deletion at/after EOF
+        emit_removed(&mut out, &mut row); // deletion at/after EOF
     }
-    (out, right_clip.get())
+    (out, right_clip, total)
 }
 
 // ---------------------------------------------------------------------- hover
@@ -5269,6 +5911,7 @@ fn run(
     uncommitted: bool,
     theme: Theme,
     rules: Vec<ordo::model::Rule>,
+    rules_report: Vec<String>,
 ) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -5305,10 +5948,16 @@ fn run(
     let mut theme = theme;
     let mut timing: Option<String> = None;
     let mut post_msg: Option<String> = None;
+    // Nothing on screen changes on its own once the review is up, so a frame is
+    // only worth painting after something moved: a worker message, or an event.
+    // Without this the 50ms poll below doubles as a 20fps repaint of a review
+    // nobody is touching.
+    let mut dirty = true;
     let result: std::io::Result<()> = 'outer: loop {
         loop {
             match rx.try_recv() {
                 Ok(LoadMsg::Progress(s)) => {
+                    dirty = true;
                     if let State::Loading(status) = &mut state {
                         *status = s;
                     }
@@ -5318,6 +5967,7 @@ fn run(
                     break 'outer Ok(());
                 }
                 Ok(LoadMsg::Done(r)) => {
+                    dirty = true;
                     let LoadResult {
                         items,
                         view,
@@ -5379,6 +6029,8 @@ fn run(
                         ledger,
                         rules: rules.clone(),
                         strategy: "comprehension".to_string(),
+                        rules_report: rules_report.clone(),
+                        max_col: HashMap::new(),
                     }));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -5386,7 +6038,7 @@ fn run(
                     // the worker dropped its sender without a Done/Empty —
                     // only possible if it panicked; abort rather than spin
                     if matches!(state, State::Loading(_)) {
-                        post_msg = Some("ordo-tui: loading failed unexpectedly".to_string());
+                        post_msg = Some("ordo: loading failed unexpectedly".to_string());
                         break 'outer Ok(());
                     }
                     break;
@@ -5394,11 +6046,14 @@ fn run(
             }
         }
 
-        if let Err(e) = terminal.draw(|f| match &mut state {
-            State::Loading(status) => draw_loading(f, &rev, status),
-            State::Ready(app) => draw(f, app, &rev),
-        }) {
-            break 'outer Err(e);
+        if dirty {
+            if let Err(e) = terminal.draw(|f| match &mut state {
+                State::Loading(status) => draw_loading(f, &rev, status),
+                State::Ready(app) => draw(f, app, &rev),
+            }) {
+                break 'outer Err(e);
+            }
+            dirty = false;
         }
 
         match event::poll(Duration::from_millis(50)) {
@@ -5406,6 +6061,9 @@ fn run(
             Ok(false) => continue,
             Err(e) => break 'outer Err(e),
         }
+        // Any event at all — a key, but also a resize the next frame has to
+        // relayout for — means the screen is stale.
+        dirty = true;
         match event::read() {
             Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match &mut state {
                 State::Loading(_) => {
@@ -6128,18 +6786,23 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     app.code_height = rhs[0].height.saturating_sub(2);
     app.code_width = code_w.saturating_sub(GUTTER_W).min(u16::MAX as usize) as u16;
     // clamp to the selected file's longest line so hscroll can't run away
-    // past any content it could ever bring into view
-    let max_col = app
-        .sources
-        .get(&it.path)
-        .map(|(_, nl)| nl.iter().map(|l| l.chars().count()).max().unwrap_or(0))
-        .unwrap_or(0);
+    // past any content it could ever bring into view; cached per path since
+    // it only changes on a load/`:e`, not every frame
+    let sources = &app.sources;
+    let max_col = *app.max_col.entry(it.path.clone()).or_insert_with(|| {
+        sources
+            .get(&it.path)
+            .map(|(_, nl)| nl.iter().map(|l| l.chars().count()).max().unwrap_or(0))
+            .unwrap_or(0)
+    });
     app.hscroll = app.hscroll.min(max_col.min(u16::MAX as usize) as u16);
     let (search_matches, cur_match): (&[(usize, usize, usize)], Option<usize>) = match &app.search {
         Some(s) => (&s.matches, Some(s.index)),
         None => (&[], None),
     };
-    let (code, right_clip) = code_view(
+    // only the rows the pane can show are built; `code_total` is what the view
+    // would have been, which is what the scroll clamps below still work against
+    let (code, right_clip, code_total) = code_view(
         it,
         &app.sources,
         &app.highlights,
@@ -6149,6 +6812,8 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         search_matches,
         cur_match,
         &app.theme,
+        app.scroll as usize,
+        app.code_height as usize,
     );
     // `‹`/`›` mark content clipped off the left/right of the horizontal
     // window — truncation must never be silent, so this is always shown
@@ -6181,7 +6846,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
 
     let why_content = why_rows(it, &app.view, &app.theme);
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
-    app.code_len = code.len();
+    app.code_len = code_total;
     app.why_len = why_content.len();
     app.why_height = rhs[1].height.saturating_sub(2);
     app.scroll = app.scroll.min(last_line(app.code_len));
@@ -6204,9 +6869,11 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         })
         .collect();
 
+    // `code` is already the slice starting at `app.scroll`, so the paragraph
+    // renders it from the top rather than scrolling within it
     let code_view = Paragraph::new(Text::from(code))
         .block(pane_block(code_title, app.focus == Pane::Code, &app.theme))
-        .scroll((app.scroll, 0));
+        .scroll((0, 0));
     f.render_widget(code_view, rhs[0]);
 
     let info = Paragraph::new(Text::from(why))
@@ -6226,7 +6893,24 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     if let Some(popup) = &app.popup {
         let rect = popup_rect(rhs[0], popup.lines.len());
         f.render_widget(Clear, rect);
-        let text: Vec<Line> = popup.lines.clone();
+        // borrow each span's content instead of cloning the popup body every
+        // frame — Paragraph only needs `Into<Text>`, not an owned copy
+        let text: Vec<Line> = popup
+            .lines
+            .iter()
+            .map(|l| Line {
+                style: l.style,
+                alignment: l.alignment,
+                spans: l
+                    .spans
+                    .iter()
+                    .map(|s| Span {
+                        style: s.style,
+                        content: std::borrow::Cow::Borrowed(s.content.as_ref()),
+                    })
+                    .collect(),
+            })
+            .collect();
         let clipped =
             popup_width(&popup.lines) > rect.width.saturating_sub(2) as usize || popup.hscroll > 0;
         let block = Block::bordered()
@@ -6259,6 +6943,11 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         if !bar.candidates.is_empty() {
             let menu_rect = command_menu_rect(bar_rect, area, bar.candidates.len());
             f.render_widget(Clear, menu_rect);
+            // completing the command itself: each row carries the command's
+            // help sentence, since there is no central help to look it up in.
+            // Completing an argument: just the candidates.
+            let naming = !bar.text.contains(char::is_whitespace);
+            let width = menu_rect.width.saturating_sub(2) as usize;
             let entries: Vec<ListItem> = bar
                 .candidates
                 .iter()
@@ -6269,12 +6958,59 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(Line::from(Span::styled(c.clone(), style)))
+                    let (head, help) = command_menu_row(c, naming, &bar.candidates, width);
+                    let mut spans = vec![Span::styled(head, style)];
+                    if let Some(h) = help {
+                        spans.push(Span::styled(h, style.fg(app.theme.dim)));
+                    }
+                    ListItem::new(Line::from(spans))
                 })
                 .collect();
             f.render_widget(List::new(entries).block(Block::bordered()), menu_rect);
         }
     }
+}
+
+/// One row of the completion menu. While the command *name* is being
+/// completed the row is `name <args>` padded to a common column, then the
+/// command's help sentence, cut to what fits; an alias or an argument
+/// candidate has no sentence and is shown as is.
+fn command_menu_row(
+    candidate: &str,
+    naming: bool,
+    all: &[String],
+    width: usize,
+) -> (String, Option<String>) {
+    let cmd = naming
+        .then(|| COMMANDS.iter().find(|c| c.name == candidate))
+        .flatten();
+    let Some(cmd) = cmd else {
+        return (candidate.to_string(), None);
+    };
+    let label = |c: &Cmd| {
+        if c.args.is_empty() {
+            c.name.to_string()
+        } else {
+            format!("{} {}", c.name, c.args)
+        }
+    };
+    let col = all
+        .iter()
+        .filter_map(|n| COMMANDS.iter().find(|c| c.name == n))
+        .map(|c| label(c).chars().count())
+        .max()
+        .unwrap_or(0);
+    let head = format!("{:<col$}", label(cmd));
+    let room = width.saturating_sub(head.chars().count() + 4);
+    if room < 8 {
+        return (head, None);
+    }
+    let mut help: String = cmd.help.chars().take(room).collect();
+    if help.chars().count() < cmd.help.chars().count() {
+        help.pop();
+        help.push('…');
+    }
+    (head, Some(format!("  — {help}")))
 }
 
 // centered floating box over `area`, sized to the popup's content
@@ -6341,6 +7077,11 @@ const COMMANDS: &[Cmd] = &[
         name: "all",
         args: "",
         help: "toggle showing generated/formatting-noise hunks",
+    },
+    Cmd {
+        name: "rules",
+        args: "",
+        help: "where the active rules came from, and what was replaced or disabled",
     },
     Cmd {
         name: "filter",
@@ -6615,6 +7356,7 @@ fn open_command_bar(app: &mut App, text: String) {
         text,
         candidates: vec![],
         selected: None,
+        rev_cache: None,
     });
     recompute_candidates(app);
 }
@@ -6642,14 +7384,33 @@ fn recompute_candidates(app: &mut App) {
         Some(bar) => bar.text.clone(),
         None => return,
     };
-    // `:goto` only offers currently visible paths (jumping to a hidden one
-    // would strand `sel` outside `view`); `:filter` offers every loaded
+    // Only built for the command that actually consumes them — no point
+    // sorting every path/dir on every keystroke for a command that ignores
+    // them. `:goto` only offers currently visible paths (jumping to a hidden
+    // one would strand `sel` outside `view`); `:filter` offers every loaded
     // path's directory, since narrowing is the point of typing one.
-    let goto_paths = distinct_sorted(app.view.iter().map(|&i| app.items[i].path.as_str()));
-    let filter_dirs = distinct_sorted(app.items.iter().filter_map(|it| dir_prefix(&it.path)));
-    let rev_candidates = match text.find(char::is_whitespace) {
-        Some(pos) if &text[..pos] == "e" => rev_completions(),
-        _ => vec![],
+    let cmd_name = text.find(char::is_whitespace).map(|pos| &text[..pos]);
+    let goto_paths = if cmd_name == Some("goto") {
+        distinct_sorted(app.view.iter().map(|&i| app.items[i].path.as_str()))
+    } else {
+        vec![]
+    };
+    let filter_dirs = if cmd_name == Some("filter") {
+        distinct_sorted(app.items.iter().filter_map(|it| dir_prefix(&it.path)))
+    } else {
+        vec![]
+    };
+    // `:e`'s ref pool is fetched at most once per opened bar (see
+    // `CommandBar::rev_cache`) rather than shelling out to `git for-each-ref`
+    // on every keystroke.
+    let rev_candidates = if cmd_name == Some("e") {
+        let bar = app.command.as_mut().expect("checked above");
+        if bar.rev_cache.is_none() {
+            bar.rev_cache = Some(rev_completions());
+        }
+        bar.rev_cache.clone().expect("just set")
+    } else {
+        vec![]
     };
     let candidates = command_completions(&text, &goto_paths, &filter_dirs, &rev_candidates);
     if let Some(bar) = app.command.as_mut() {
@@ -6907,6 +7668,15 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 "commands",
                 build_command_help().into_iter().map(prose).collect(),
             ));
+            Ok(CommandOutcome::None)
+        }
+        "rules" => {
+            let lines: Vec<Line<'static>> = app
+                .rules_report
+                .iter()
+                .map(|l| Line::from(l.clone()))
+                .collect();
+            app.popup = Some(Popup::new("rules", lines));
             Ok(CommandOutcome::None)
         }
         "audit" => {
@@ -8049,13 +8819,48 @@ mod tests {
 
     #[test]
     fn dir_prefix_and_distinct_sorted_derive_stable_glob_candidates() {
-        assert_eq!(dir_prefix("src/bin/ordo-tui.rs"), Some("src/bin"));
+        assert_eq!(dir_prefix("src/bin/ordo.rs"), Some("src/bin"));
         assert_eq!(dir_prefix("Cargo.toml"), None);
         let got = distinct_sorted(["src/b.rs", "src/a.rs", "src/a.rs"].into_iter());
         assert_eq!(got, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
     }
 
     // ---- command mode: `:help` generated from the command table ----
+
+    #[test]
+    fn completing_a_command_name_shows_its_help_sentence_beside_it() {
+        let names = command_names();
+        let (head, help) = command_menu_row("strategy", true, &names, 120);
+        assert!(head.starts_with("strategy <"), "{head:?}");
+        let strategy = COMMANDS.iter().find(|c| c.name == "strategy").unwrap();
+        assert_eq!(
+            help.as_deref(),
+            Some(format!("  — {}", strategy.help).as_str())
+        );
+        // every name pads to the same column, so the sentences line up
+        let (h1, _) = command_menu_row("q", true, &names, 120);
+        assert_eq!(h1.chars().count(), head.chars().count());
+    }
+
+    #[test]
+    fn a_narrow_menu_cuts_the_sentence_and_a_very_narrow_one_drops_it() {
+        let names = command_names();
+        let (_, help) = command_menu_row("strategy", true, &names, 60);
+        let help = help.unwrap();
+        assert!(help.ends_with('…'), "{help:?}");
+        assert!(help.chars().count() <= 60);
+        let (_, none) = command_menu_row("strategy", true, &names, 20);
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn argument_candidates_carry_no_sentence() {
+        let pool = vec!["vim".to_string(), "vscode".to_string()];
+        assert_eq!(
+            command_menu_row("vim", false, &pool, 120),
+            ("vim".to_string(), None)
+        );
+    }
 
     #[test]
     fn command_help_is_generated_from_the_command_table() {
@@ -8308,7 +9113,7 @@ mod tests {
         sources.insert("f.rs".to_string(), (vec![], vec![line]));
         let highlights: Highlights = HashMap::new();
         // width = gutter (6) + 10 cols of code
-        let (unscrolled, right_clip_0) = code_view(
+        let (unscrolled, right_clip_0, _) = code_view(
             &it,
             &sources,
             &highlights,
@@ -8318,8 +9123,10 @@ mod tests {
             &[],
             None,
             &theme("dark").unwrap(),
+            0,
+            usize::MAX,
         );
-        let (scrolled, right_clip_5) = code_view(
+        let (scrolled, right_clip_5, _) = code_view(
             &it,
             &sources,
             &highlights,
@@ -8329,6 +9136,8 @@ mod tests {
             &[],
             None,
             &theme("dark").unwrap(),
+            0,
+            usize::MAX,
         );
         assert_eq!(unscrolled.len(), 1);
         assert_eq!(scrolled.len(), 1);
@@ -8374,7 +9183,7 @@ mod tests {
         );
 
         let theme = theme("dark").unwrap();
-        let (rows, _) = code_view(
+        let (rows, _, _) = code_view(
             it,
             &sources,
             &HashMap::new(),
@@ -8384,6 +9193,8 @@ mod tests {
             &[],
             None,
             &theme,
+            0,
+            usize::MAX,
         );
         // the added row is the one carrying the add tint (the removed row
         // comes first, on the del tint)
@@ -8418,7 +9229,7 @@ mod tests {
         assert_eq!(items[0].refined.added[0], None);
 
         let theme = theme("dark").unwrap();
-        let (rows, _) = code_view(
+        let (rows, _, _) = code_view(
             &items[0],
             &sources,
             &HashMap::new(),
@@ -8428,6 +9239,8 @@ mod tests {
             &[],
             None,
             &theme,
+            0,
+            usize::MAX,
         );
         let added = rows.last().unwrap();
         assert!(
@@ -8445,7 +9258,7 @@ mod tests {
         let mut sources: Sources = HashMap::new();
         sources.insert("f.rs".to_string(), (vec![], vec!["short".to_string()]));
         let highlights: Highlights = HashMap::new();
-        let (_, right_clip) = code_view(
+        let (_, right_clip, _) = code_view(
             &it,
             &sources,
             &highlights,
@@ -8455,8 +9268,65 @@ mod tests {
             &[],
             None,
             &theme("dark").unwrap(),
+            0,
+            usize::MAX,
         );
         assert!(!right_clip);
+    }
+
+    /// The viewport slice must be exactly the window it replaces: whatever
+    /// `code_view` builds for `(start, rows)` has to equal that range of the
+    /// full view, and `total` has to stay the full view's length whatever
+    /// window is asked for. The removed block shifts every row after it, so
+    /// this is checked with the deletion mid-file and again at EOF.
+    #[test]
+    fn code_view_window_matches_the_same_slice_of_the_whole_view() {
+        let theme = theme("dark").unwrap();
+        let old: Vec<String> = (1..=4).map(|i| format!("gone {i}")).collect();
+        let new: Vec<String> = (1..=30).map(|i| format!("fn line_{i}() {{}}")).collect();
+
+        for (label, new_range) in [("mid-file", [10, 12]), ("at EOF", [31, 33])] {
+            let mut it = test_item("f.rs");
+            it.old_range = [1, 4];
+            it.new_range = new_range;
+            let mut sources: Sources = HashMap::new();
+            sources.insert("f.rs".to_string(), (old.clone(), new.clone()));
+            let highlights: Highlights = HashMap::new();
+
+            let call = |start: usize, rows: usize| {
+                code_view(
+                    &it,
+                    &sources,
+                    &highlights,
+                    60,
+                    0,
+                    None,
+                    &[],
+                    None,
+                    &theme,
+                    start,
+                    rows,
+                )
+            };
+            let (full, clip_full, total) = call(0, usize::MAX);
+            assert_eq!(total, new.len() + old.len(), "{label}: total row count");
+            assert_eq!(full.len(), total, "{label}: unwindowed view is complete");
+
+            for start in 0..total {
+                let (win, clip, t) = call(start, 7);
+                assert_eq!(t, total, "{label}: total is window-independent");
+                assert_eq!(clip, clip_full, "{label}: clipping is window-independent");
+                let want = &full[start..(start + 7).min(total)];
+                assert_eq!(win.len(), want.len(), "{label}: window length at {start}");
+                for (a, b) in win.iter().zip(want) {
+                    assert_eq!(spans_of(a), spans_of(b), "{label}: row {start} content");
+                }
+            }
+        }
+    }
+
+    fn spans_of(l: &Line<'static>) -> Vec<String> {
+        l.spans.iter().map(|s| s.content.to_string()).collect()
     }
 
     // ---- def→use edges: target resolution ----
@@ -8510,6 +9380,7 @@ mod tests {
             ],
             clusters: vec![],
             problems: vec![],
+            notes: vec![],
         };
         let items = build_items(&out);
         assert_eq!(items.len(), 2);
@@ -8640,6 +9511,8 @@ mod tests {
             ledger: Ledger::default(),
             rules: vec![],
             strategy: "comprehension".to_string(),
+            rules_report: vec![],
+            max_col: HashMap::new(),
         }
     }
 
@@ -8802,7 +9675,7 @@ mod tests {
 
     #[test]
     fn load_marks_degrades_to_empty_on_a_missing_or_corrupt_file() {
-        let dir = std::env::temp_dir().join(format!("ordo-tui-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ordo-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let missing = dir.join("missing.json");
         assert!(load_marks(&missing).is_empty());
@@ -8815,8 +9688,7 @@ mod tests {
 
     #[test]
     fn save_marks_then_load_marks_round_trips() {
-        let dir =
-            std::env::temp_dir().join(format!("ordo-tui-test-roundtrip-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ordo-test-roundtrip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("marks.json");
         let mut marks: HashMap<u64, u64> = HashMap::new();
@@ -9020,33 +9892,49 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_without_a_name_gets_one_and_says_so() {
-        // an unnamed rule can't report itself, and an annotation with nothing
-        // to look up is worse than a complaint
+    fn a_rule_without_a_name_is_a_problem_not_a_silent_default() {
+        // the old line-based parser couldn't tell "missing" from "empty" and
+        // papered over it with an auto name (`rule-1`); real TOML makes `name`
+        // a required field, so a rule without one fails to convert and is
+        // reported, rather than kept under a name nobody wrote
         let (rules, problems) =
             parse_rules("[[rule]]\npath = \"a/**\"\nnote = \"n\"\n", Path::new("."));
-        assert_eq!(rules[0].name, "rule-1");
-        assert!(problems[0].contains("no name"), "{problems:?}");
+        assert!(rules.is_empty(), "{rules:?}");
+        assert!(problems[0].contains("missing field `name`"), "{problems:?}");
     }
 
     #[test]
-    fn a_bad_rules_line_is_reported_by_number() {
+    fn a_bad_rule_is_reported_and_dropped_not_partially_applied() {
+        // the old parser evaluated each `key = value` line independently, so
+        // a rule with a bad line still got kept with whatever lines *did*
+        // parse, plus a problem per bad line. A typed table deserializes
+        // atomically: an unknown key fails the whole rule, one problem,
+        // nothing partially applied
+        let (rules, problems) =
+            parse_rules("[[rule]]\nname = \"a\"\nnonsense = \"x\"\n", Path::new("."));
+        assert!(rules.is_empty(), "{rules:?}");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("nonsense"), "{problems:?}");
+    }
+
+    #[test]
+    fn one_broken_rule_does_not_sink_the_others() {
         let (rules, problems) = parse_rules(
-            "[[rule]]\nname = \"a\"\nnonsense = \"x\"\npriority = \"soon\"\ncategory = \"nope\"\n",
+            "[[rule]]\nname = \"bad\"\npriority = \"soon\"\n\n[[rule]]\nname = \"good\"\npath = \"x/**\"\n",
             Path::new("."),
         );
-        assert_eq!(rules.len(), 1);
-        assert_eq!(problems.len(), 3, "{problems:?}");
-        assert!(problems[0].contains("line 3"), "{problems:?}");
-        assert!(problems[1].contains("line 4"), "{problems:?}");
-        assert!(problems[2].contains("line 5"), "{problems:?}");
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert_eq!(rules[0].name, "good");
+        assert_eq!(rules[0].when.path.as_deref(), Some("x/**"));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("bad"), "{problems:?}");
     }
 
     #[test]
-    fn a_key_outside_any_rule_block_is_reported() {
+    fn an_unknown_key_names_itself_in_the_problem() {
         let (rules, problems) = parse_rules("name = \"loose\"\n", Path::new("."));
         assert!(rules.is_empty());
-        assert!(problems[0].contains("outside any [[rule]]"), "{problems:?}");
+        assert!(problems[0].contains("name"), "{problems:?}");
     }
 
     #[test]
@@ -9065,6 +9953,216 @@ mod tests {
             parse_rules("[[rule]]\nname = \"q\"\nquery-file = \"nope.scm\"\n", &dir);
         assert!(problems[0].contains("nope.scm"), "{problems:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_multi_line_query_and_a_kind_list_both_read() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"loop-shapes\"\nkind = [\"for_statement\", \"while_statement\"]\nquery = '''\n(call\n  function: (identifier) @f)\n'''\n",
+            Path::new("."),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            rules[0].when.kind.as_deref(),
+            Some(&["for_statement".to_string(), "while_statement".to_string()][..])
+        );
+        assert_eq!(
+            rules[0].when.query.as_deref(),
+            Some("(call\n  function: (identifier) @f)\n")
+        );
+    }
+
+    #[test]
+    fn kind_as_a_bare_string_also_reads_as_a_one_entry_list() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"one-kind\"\nkind = \"for_statement\"\n",
+            Path::new("."),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            rules[0].when.kind.as_deref(),
+            Some(&["for_statement".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn kebab_case_keys_reach_the_matching_when_fields() {
+        let (rules, problems) = parse_rules(
+            "[[rule]]\nname = \"limits\"\npath-not = \"vendor/**\"\nmax-params = 4\ncontainer-without = \"Drop\"\nmember-uninitialized = true\n",
+            Path::new("."),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let w = &rules[0].when;
+        assert_eq!(w.path_not.as_deref(), Some("vendor/**"));
+        assert_eq!(w.max_params, Some(4));
+        assert_eq!(w.container_without.as_deref(), Some("Drop"));
+        assert_eq!(w.member_uninitialized, Some(true));
+    }
+
+    #[test]
+    fn a_rules_flag_file_is_layered_last_and_a_missing_one_is_a_problem() {
+        let dir = std::env::temp_dir().join(format!("ordo-rules-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let extra = dir.join("extra.toml");
+        std::fs::write(
+            &extra,
+            "[[rule]]\nname = \"from-flag\"\nkind = \"type_definition\"\nnote = \"n\"\n",
+        )
+        .unwrap();
+        let (rules, problems) = load_rules("", &[extra.to_string_lossy().into_owned()]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(rules.iter().any(|r| r.name == "from-flag"));
+        // the implicit user/repo files may be absent; a file named on the
+        // command line was asked for, so its absence is reported
+        let (_, problems) = load_rules("", &[dir.join("nope.toml").to_string_lossy().into_owned()]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("nope.toml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_shipped_ruleset_is_a_bundled_preset() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rulesets");
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let p = entry.path();
+            if p.extension().is_some_and(|x| x == "toml") {
+                let stem = p.file_stem().unwrap().to_str().unwrap();
+                assert!(
+                    preset(stem).is_some(),
+                    "rulesets/{stem}.toml is not in PRESETS"
+                );
+            }
+        }
+        for (name, text) in PRESETS {
+            let d = parse_rules_doc(text, Path::new("."));
+            assert!(d.problems.is_empty(), "{name}: {:?}", d.problems);
+        }
+    }
+
+    fn rules_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ordo-rules-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_included_preset_layers_first_and_a_same_named_rule_replaces_its_entry() {
+        let dir = rules_dir("include");
+        let mine = dir.join("rules.toml");
+        std::fs::write(&mine, concat!(
+            "include = [\"go-uber-guide\"]\n",
+            "[[rule]]\nname = \"no-panic\"\nlang = \"go\"\nuses = \"panic\"\nnote = \"ours: panic is fine in main\"\n",
+            "[[rule]]\nname = \"no-cgo\"\nlang = \"go\"\nimports = \"C\"\nwarn = \"cgo\"\n",
+        )).unwrap();
+        let r = report_from(vec![], &[mine.to_string_lossy().into_owned()]);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        let preset_len = parse_rules_doc(preset("go-uber-guide").unwrap(), Path::new("."))
+            .rules
+            .len();
+        assert_eq!(
+            r.rules.len(),
+            preset_len + 1,
+            "one replaced in place, one added"
+        );
+        let np = r.rules.iter().find(|x| x.name == "no-panic").unwrap();
+        assert_eq!(np.note.as_deref(), Some("ours: panic is fine in main"));
+        assert_eq!(r.replaced.len(), 1);
+        assert!(r.replaced[0].starts_with("no-panic"), "{:?}", r.replaced);
+        assert_eq!(
+            r.origins
+                .iter()
+                .find(|(o, _)| o == "go-uber-guide")
+                .map(|(_, n)| *n),
+            Some(preset_len - 1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disables_apply_after_every_layer_so_an_earlier_file_can_silence_a_later_include() {
+        let dir = rules_dir("disable");
+        let user = dir.join("user.toml");
+        let repo = dir.join("repo.toml");
+        std::fs::write(&user, "disable = [\"no-init\", \"*-size\"]\n").unwrap();
+        std::fs::write(&repo, "include = [\"go-uber-guide\"]\n").unwrap();
+        let r = report_from(
+            vec![],
+            &[
+                user.to_string_lossy().into_owned(),
+                repo.to_string_lossy().into_owned(),
+            ],
+        );
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert!(r.rules.iter().all(|x| x.name != "no-init"));
+        assert!(
+            r.disabled.iter().any(|d| d.starts_with("no-init")),
+            "{:?}",
+            r.disabled
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_include_and_a_duplicate_name_are_problems() {
+        let dir = rules_dir("problems");
+        let f = dir.join("rules.toml");
+        std::fs::write(
+            &f,
+            concat!(
+                "include = [\"./nope.toml\"]\n",
+                "[[rule]]\nname = \"twice\"\nnote = \"a\"\n",
+                "[[rule]]\nname = \"twice\"\nnote = \"b\"\n",
+            ),
+        )
+        .unwrap();
+        let r = report_from(vec![], &[f.to_string_lossy().into_owned()]);
+        assert_eq!(r.rules.len(), 1);
+        assert!(
+            r.problems.iter().any(|p| p.contains("nope.toml")),
+            "{:?}",
+            r.problems
+        );
+        assert!(
+            r.problems.iter().any(|p| p.contains("defined twice")),
+            "{:?}",
+            r.problems
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_include_cycle_is_reported_not_looped() {
+        let dir = rules_dir("cycle");
+        let f = dir.join("rules.toml");
+        std::fs::write(&f, "include = [\"./rules.toml\"]\n").unwrap();
+        let r = report_from(vec![], &[f.to_string_lossy().into_owned()]);
+        assert!(
+            r.problems.iter().any(|p| p.contains("cycle")),
+            "{:?}",
+            r.problems
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rules_flag_names_a_preset_or_a_file() {
+        let r = report_from(vec![], &["c-power-of-ten".to_string()]);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert!(r.rules.iter().any(|x| x.name == "no-recursion"));
+        assert_eq!(
+            r.origins,
+            vec![("c-power-of-ten".to_string(), r.rules.len())]
+        );
+        assert!(r.lines()[0].ends_with("rules active"));
+    }
+
+    #[test]
+    fn ordos_own_rules_file_loads_with_zero_problems() {
+        let text = std::fs::read_to_string(".ordo/rules.toml").expect("repo has .ordo/rules.toml");
+        let (rules, problems) = parse_rules(&text, Path::new(".ordo"));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!rules.is_empty());
     }
 
     // ---- --init-config ----

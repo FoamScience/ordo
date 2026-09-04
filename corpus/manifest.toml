@@ -116,3 +116,28 @@ max_commits = 350
 # its 343 commits touch a .xsh file. Build scripts, so the shapes are the ones
 # xonsh exists for: bare command lines at file scope, $ENV bindings, and
 # `with with_pushd(...)` blocks holding the actual work.
+
+[[repo]]
+name = "nvm"
+lang = "bash"
+url = "https://github.com/nvm-sh/nvm.git"
+rev = "80e700ec217e8b5835f9c88dc02adb77c17d2f63"
+max_commits = 350
+# the bash corpus. Shell is present in almost every repo and changed in almost
+# none of them: across the other eleven entries only 4 commits in 3343 touch a
+# `.sh` file at all, so bash needed an entry of its own rather than riding
+# along. Here 48% of commits do (168 of 350), the densest of any candidate
+# measured — bats-core managed 14%, rbenv 3%, dokku 1% (now mostly Go).
+#
+# Nearly all of it lands in one ~4k-line `nvm.sh` of `nvm_*` functions calling
+# each other, which is the point: a single file that large exercises the
+# within-file def→use ordering harder than a repo of small scripts, and cross-
+# file ordering is already covered by the other eleven. A sample run produced
+# `adds nvm_print_alias_file, extracted from nvm, used by nvm_alias below` —
+# extraction detection and a def→use edge on real shell.
+#
+# `source`/`.` is barely used here (nvm is self-contained), so the import path
+# stays thin; that is true of real shell generally rather than a gap in this
+# choice. Note also that rbenv/pyenv-style extensionless `libexec/` scripts are
+# invisible to ordo at all — there is no shebang detection — which ruled rbenv
+# out before density did.

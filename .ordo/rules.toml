@@ -37,7 +37,7 @@ name = "engine-purity"
 path = "src/{lib,order,extract,rules,advisories,lang,patch,refine,model}.rs"
 lang = "rust"
 query-file = "rules/engine-io.scm"
-warn = "the engine is pure: no filesystem, no process, no environment. A client owns git and config — this is what keeps `ordo order` a function of its arguments"
+warn = "the engine is pure: no filesystem, no process, no environment. A client owns git and config — this is what keeps `ordo-engine order` a function of its arguments"
 priority = 80
 
 [[rule]]
@@ -102,5 +102,5 @@ note = "regenerated output: confirm the diff is the wording change you intended,
 
 [[rule]]
 name = "client-owns-policy"
-path = "src/bin/ordo-tui.rs"
+path = "src/bin/ordo.rs"
 note = "the client owns filtering, git and config; the engine has no opinion about which files belong in a review (README: Ceilings)"

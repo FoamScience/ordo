@@ -50,6 +50,27 @@ fn callee_text<'a>(call: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
         .and_then(|f| f.utf8_text(src).ok())
 }
 
+// true if the node's raw bytes start with `prefix`, without UTF-8-validating
+// the node's whole (possibly deeply-nested) span just to check a few bytes.
+fn starts_with_at(node: Node, src: &[u8], prefix: &[u8]) -> bool {
+    src.get(node.start_byte()..)
+        .is_some_and(|s| s.starts_with(prefix))
+}
+
+// bytes from node's start up to its first `{` (or its end if none) — the
+// "header" a caller wants to grep, without validating the whole body as utf8.
+fn header_bytes<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+    let start = node.start_byte();
+    let end = node.end_byte().min(src.len());
+    let bytes = src.get(start..end).unwrap_or(&[]);
+    let brace = bytes.iter().position(|&b| b == b'{').unwrap_or(bytes.len());
+    &bytes[..brace]
+}
+
+fn contains_bytes(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
 fn named<'a>(node: Node<'a>) -> Vec<Node<'a>> {
     let mut cur = node.walk();
     node.named_children(&mut cur).collect()
@@ -202,7 +223,7 @@ fn walk_python(node: Node, src: &[u8], path: &str, out: &mut Out) {
         "function_definition" if callee_text(node, "name", src) == Some("__getattribute__") => {
             push(out, node, "getattribute-override", GETATTRIBUTE_PY, false);
         }
-        "function_definition" if node.utf8_text(src).is_ok_and(|t| t.starts_with("async")) => {
+        "function_definition" if starts_with_at(node, src, b"async") => {
             scan_async_blocking(node, src, out);
         }
         "decorated_definition" => py_lru_method(node, src, out),
@@ -802,17 +823,12 @@ fn walk_cpp(node: Node, src: &[u8], path: &str, out: &mut Out) {
     // ponytail: text-prefix match, may double-report when the cast heads a larger
     // expression — tighten to an exact node kind if that surfaces.
     if node.kind().contains("expression") {
-        match node.utf8_text(src) {
-            Ok(t) if t.starts_with("reinterpret_cast") => {
-                push(out, node, "reinterpret_cast", REINTERPRET_CAST, false)
-            }
-            Ok(t) if t.starts_with("const_cast") => {
-                push(out, node, "const-cast", CONST_CAST, false)
-            }
-            Ok(t) if t.starts_with("dynamic_cast") => {
-                push(out, node, "dynamic-cast", DYNAMIC_CAST, false)
-            }
-            _ => {}
+        if starts_with_at(node, src, b"reinterpret_cast") {
+            push(out, node, "reinterpret_cast", REINTERPRET_CAST, false)
+        } else if starts_with_at(node, src, b"const_cast") {
+            push(out, node, "const-cast", CONST_CAST, false)
+        } else if starts_with_at(node, src, b"dynamic_cast") {
+            push(out, node, "dynamic-cast", DYNAMIC_CAST, false)
         }
     }
 }
@@ -858,9 +874,8 @@ fn cpp_throw_unwind(node: Node, src: &[u8]) -> bool {
         match p.kind() {
             "lambda_expression" => return false,
             "function_definition" => {
-                let txt = p.utf8_text(src).unwrap_or("");
-                let header = txt.split('{').next().unwrap_or(txt);
-                return header.contains('~') || header.contains("noexcept");
+                let header = header_bytes(p, src);
+                return header.contains(&b'~') || contains_bytes(header, b"noexcept");
             }
             _ => {}
         }
@@ -871,14 +886,16 @@ fn cpp_throw_unwind(node: Node, src: &[u8]) -> bool {
 
 // a [&] default-reference-capture lambda (not [&x], an explicit single capture)
 fn cpp_lambda_default_ref(node: Node, src: &[u8]) -> bool {
-    let t = node.utf8_text(src).unwrap_or("");
-    let inner = t
-        .strip_prefix('[')
-        .and_then(|s| s.split(']').next())
-        .unwrap_or("")
-        .trim();
-    let mut c = inner.chars();
-    c.next() == Some('&') && matches!(c.next(), None | Some(','))
+    let start = node.start_byte();
+    let end = node.end_byte().min(src.len());
+    let bytes = src.get(start..end).unwrap_or(&[]);
+    if bytes.first() != Some(&b'[') {
+        return false;
+    }
+    let close = bytes.iter().position(|&b| b == b']').unwrap_or(bytes.len());
+    let inner = bytes[1..close].trim_ascii();
+    let mut c = inner.iter();
+    c.next() == Some(&b'&') && matches!(c.next(), None | Some(&b','))
 }
 
 // catch (E e) by value on a class type — slices; skip catch(const E&) and catch(int)
@@ -907,13 +924,10 @@ fn cpp_catch_by_value(node: Node) -> bool {
 
 // a definition/declaration of operator&& / operator|| / operator,
 fn cpp_bad_operator(node: Node, src: &[u8]) -> bool {
-    let head = node
-        .utf8_text(src)
-        .unwrap_or("")
-        .split('{')
-        .next()
-        .unwrap_or("");
-    head.contains("operator&&") || head.contains("operator||") || head.contains("operator,")
+    let head = header_bytes(node, src);
+    contains_bytes(head, b"operator&&")
+        || contains_bytes(head, b"operator||")
+        || contains_bytes(head, b"operator,")
 }
 
 // -------------------------------------------------------------------- java

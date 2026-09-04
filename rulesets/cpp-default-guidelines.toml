@@ -1,0 +1,221 @@
+# Jan Wilmans' C++ Default Guidelines — https://github.com/janwilmans/guidelines
+#
+# Use: `ordo --rules rulesets/cpp-default-guidelines.toml`, or copy the
+# rules you want into <repo>/.ordo/rules.toml. Add `path-not = "third_party/**"`
+# to a rule to keep it off vendored code, as the guidelines themselves ask.
+#
+# Not here, because ordo's advisory catalog already fires on them with no
+# config: C-style casts (H.13), raw new/delete (H.12), const_cast and volatile
+# (H.16), lambda capture by reference, catch-by-value, throw in a destructor.
+#
+# Every rule fires on what a hunk *introduces* — none of them flag the 400
+# pre-existing violations in a legacy tree.
+
+# ------------------------------------------------------------ limits
+
+[[rule]]
+name = "function-size"
+lang = "cpp"
+max-lines = 42
+note = "over 42 lines — split it, keeping related logic together"
+
+[[rule]]
+name = "three-arguments"
+lang = "cpp"
+max-params = 3
+note = "more than 3 arguments — two functions, or a struct of related values?"
+
+[[rule]]
+name = "two-levels-of-nesting"
+lang = "cpp"
+max-nesting = 2
+warn = "more than 2 nested conditionals — return early, or extract a function"
+
+[[rule]]
+name = "file-size"
+lang = "cpp"
+max-file-lines = 2000
+note = "this change pushed the file past 2000 lines — poor decomposition"
+
+# ------------------------------------------------------------ [H.12] memory
+
+[[rule]]
+name = "no-c-allocation"
+lang = "cpp"
+uses = "{malloc,calloc,realloc,free}"
+warn = "[H.12] no manual memory management — a container or smart pointer owns this"
+
+# ------------------------------------------------------------ [H.16] banned constructs
+
+[[rule]]
+name = "no-typedef"
+lang = "cpp"
+kind = "type_definition"
+note = "[H.16] prefer `using X = Y` — reads left to right, works with templates"
+
+[[rule]]
+name = "no-reinterpret-cast"
+lang = "cpp"
+uses = "reinterpret_cast"
+warn = "[H.16] reinterpret_cast — if this is type punning, std::bit_cast says so safely"
+
+[[rule]]
+name = "no-va-arg"
+lang = "cpp"
+uses = "va_*"
+warn = "[H.16] varargs are type-unsafe — a variadic template or std::format is checked"
+
+[[rule]]
+name = "no-register-extern"
+lang = "cpp"
+kind = "storage_class_specifier"
+text = "^(register|extern)$"
+note = "[H.16] `register` means nothing since C++17; `extern` is usually a global wanting to be a function"
+
+# ------------------------------------------------------------ classes
+
+[[rule]]
+name = "no-protected"
+lang = "cpp"
+kind = "access_specifier"
+text = "^protected"
+note = "[H.15] `protected` breaks the separation the base class provides — usually a design problem"
+
+[[rule]]
+name = "no-reference-member"
+lang = "cpp"
+kind = "field_declaration"
+with = "reference_declarator"
+warn = "[H.18] a reference data member makes the type unmovable and unassignable"
+
+[[rule]]
+name = "initialize-members"
+lang = "cpp"
+member-uninitialized = true
+warn = "[H.5] no constructor in this change initializes this member — in-class or in the initializer list"
+
+[[rule]]
+name = "virtual-destructor"
+lang = "cpp"
+kind = "declaration"
+with = "function_declarator"
+without = "virtual"
+text = "~"
+warn = "[H.17] a destructor in a hierarchy is `virtual` on the base or `override` on the derived"
+
+[[rule]]
+name = "explicit-single-arg-ctor"
+lang = "cpp"
+query = '''
+(declaration . (function_declarator
+  declarator: (identifier)
+  parameters: (parameter_list . (parameter_declaration) .))) @c
+'''
+warn = "mark a single-argument constructor `explicit` unless the conversion is the point"
+
+[[rule]]
+name = "nodiscard-on-const-getters"
+lang = "cpp"
+kind = "field_declaration"
+with = "function_declarator"
+without = "attribute_declaration"
+text = "\\)\\s*const\\s*;"
+note = "[H.7] a const member function returning a value wants [[nodiscard]]"
+
+[[rule]]
+name = "interface-without-data"
+lang = "cpp"
+query = '''
+(struct_specifier
+  body: (field_declaration_list
+    (field_declaration declarator: (function_declarator) default_value: (number_literal))
+    (field_declaration declarator: (field_identifier)))) @s
+'''
+warn = "[H.14] a pure virtual interface must not carry data members"
+
+[[rule]]
+name = "final-needs-rationale"
+lang = "cpp"
+kind = "virtual_specifier"
+text = "^final"
+note = "`final` needs a comment saying why, and what breaks if it is removed"
+
+[[rule]]
+name = "initializer-list-not-ctor-body"
+lang = "cpp"
+query = '''
+((function_definition
+   declarator: (function_declarator
+     declarator: (qualified_identifier scope: (namespace_identifier) @s name: (identifier) @n))
+   body: (compound_statement (expression_statement (assignment_expression)))) @f
+ (#eq? @s @n))
+'''
+note = "assignment in a constructor body — use the member initializer list"
+
+# ------------------------------------------------------------ variables
+
+[[rule]]
+name = "initialize-variables"
+lang = "cpp"
+kind = "declaration"
+with = "identifier"
+without = "init_declarator"
+warn = "[H.5] initialize at declaration — an uninitialized variable has no known state"
+
+[[rule]]
+name = "mutable-global"
+lang = "cpp"
+query = '(translation_unit (declaration . (primitive_type)) @d)'
+warn = "[H.3] mutable global — make it const/constexpr, or hide it behind a function"
+
+# ------------------------------------------------------------ functions
+
+[[rule]]
+name = "bool-parameter"
+lang = "cpp"
+kind = "parameter_declaration"
+text = "^bool\\b"
+note = "prefer an enum class over a bool parameter — it names the intent at the call site"
+
+[[rule]]
+name = "no-reference-return"
+lang = "cpp"
+query = '''
+[(declaration declarator: (reference_declarator (function_declarator)))
+ (declaration declarator: (pointer_declarator (function_declarator)))] @f
+'''
+note = "returning a reference or pointer hands the caller a lifetime question"
+
+[[rule]]
+name = "string-view-parameter"
+lang = "cpp"
+query = '((parameter_declaration type: (qualified_identifier) @t declarator: (reference_declarator)) @p (#eq? @t "std::string"))'
+note = "`const std::string&` is right only if this needs zero-termination — otherwise std::string_view"
+
+[[rule]]
+name = "raw-loop"
+lang = "cpp"
+kind = ["for_statement", "while_statement"]
+note = "[H.2] no raw loops — does a standard algorithm say this more clearly? (range-for is fine)"
+
+[[rule]]
+name = "lambda-default-capture"
+lang = "cpp"
+kind = "lambda_capture_specifier"
+text = "^\\[[=&]\\]"
+warn = "capture explicitly — a default capture takes `this` by accident"
+
+# ------------------------------------------------------------ files and dependencies
+
+[[rule]]
+name = "static-assert-in-header"
+lang = "cpp"
+path = "**/*.{hpp,hxx,hh}"
+kind = "static_assert_declaration"
+note = "move static_assert to the .cpp so it is checked once, not once per includer"
+
+[[rule]]
+name = "prefer-stl-over-boost"
+lang = "cpp"
+imports = "boost/**"
+note = "prefer the STL over Boost — fewer dependencies, no version skew"

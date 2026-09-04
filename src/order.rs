@@ -375,24 +375,33 @@ pub fn order_all(
         }
     }
 
+    // gfile/grow depend only on group membership, which is fixed by this
+    // point — precompute once instead of re-walking every member hunk on
+    // every sort/min_by_key comparison below (and again further down for
+    // group_file/group_row, which are the same values).
+    let gfile_v: Vec<usize> = (0..g).map(|gi| gfile(gi, &groups)).collect();
+    let grow_v: Vec<usize> = (0..g).map(|gi| grow(gi, &groups)).collect();
+
     // ---- order groups per strategy ----
     let group_order: Vec<usize> = match strategy {
         Strategy::File => {
             let mut v: Vec<usize> = (0..g).collect();
-            v.sort_by_key(|&gi| (gfile(gi, &groups), grow(gi, &groups), gi));
+            v.sort_by_key(|&gi| (gfile_v[gi], grow_v[gi], gi));
             v
         }
         Strategy::DefsFirst => {
-            let gcat = |gi: usize| {
-                groups[gi]
-                    .members
-                    .iter()
-                    .map(|&i| cat_rank(sem[i].category))
-                    .min()
-                    .unwrap_or(2)
-            };
+            let gcat_v: Vec<u8> = (0..g)
+                .map(|gi| {
+                    groups[gi]
+                        .members
+                        .iter()
+                        .map(|&i| cat_rank(sem[i].category))
+                        .min()
+                        .unwrap_or(2)
+                })
+                .collect();
             let mut v: Vec<usize> = (0..g).collect();
-            v.sort_by_key(|&gi| (gcat(gi), gfile(gi, &groups), grow(gi, &groups), gi));
+            v.sort_by_key(|&gi| (gcat_v[gi], gfile_v[gi], grow_v[gi], gi));
             v
         }
         Strategy::Comprehension => {
@@ -407,38 +416,38 @@ pub fn order_all(
             // position, so it replaces the positional tiebreaker among groups
             // the graph has already freed — never the graph itself. A rule
             // cannot pull a use ahead of its definition.
-            let gprio = |gi: usize, groups: &[GroupInfo]| {
-                groups[gi]
-                    .members
-                    .iter()
-                    .map(|&i| sem[i].priority)
-                    .max()
-                    .unwrap_or(0)
-            };
+            let gprio_v: Vec<i64> = (0..g)
+                .map(|gi| {
+                    groups[gi]
+                        .members
+                        .iter()
+                        .map(|&i| sem[i].priority)
+                        .max()
+                        .unwrap_or(0)
+                })
+                .collect();
             // Imports sort where they live, not first. Ranking them ahead of
             // everything made sense while they were dropped and never seen; now
             // that they are visible noise, leading with forty dimmed rows
             // buries the change they came with. A reviewer who does want them
             // first can say so with a rule (`priority`).
-            let key = |gi: usize, groups: &[GroupInfo]| {
-                (
-                    std::cmp::Reverse(gprio(gi, groups)),
-                    gfile(gi, groups),
-                    grow(gi, groups),
-                    gi,
-                )
-            };
+            // Static for the whole Kahn loop below (depends only on group
+            // membership, not on which groups are done/ready), so it is
+            // computed once here rather than per ready-set comparison.
+            let key_v: Vec<(std::cmp::Reverse<i64>, usize, usize, usize)> = (0..g)
+                .map(|gi| (std::cmp::Reverse(gprio_v[gi]), gfile_v[gi], grow_v[gi], gi))
+                .collect();
             let mut done = vec![false; g];
             let mut order = vec![];
             for _ in 0..g {
                 let ready: Vec<usize> = (0..g).filter(|&gi| !done[gi] && indeg[gi] == 0).collect();
                 let pick = if !ready.is_empty() {
-                    *ready.iter().min_by_key(|&&gi| key(gi, &groups)).unwrap()
+                    *ready.iter().min_by_key(|&&gi| key_v[gi]).unwrap()
                 } else {
                     // cycle: break by deterministic key
                     (0..g)
                         .filter(|&gi| !done[gi])
-                        .min_by_key(|&gi| key(gi, &groups))
+                        .min_by_key(|&gi| key_v[gi])
                         .unwrap()
                 };
                 done[pick] = true;
@@ -461,24 +470,15 @@ pub fn order_all(
         perm.extend(mem);
     }
 
-    // per-group file + source position, for provenance and above/below wording
-    let group_file: Vec<usize> = (0..g).map(|gi| coord[groups[gi].members[0]].0).collect();
-    let group_row: Vec<usize> = (0..g)
-        .map(|gi| {
-            groups[gi]
-                .members
-                .iter()
-                .map(|&i| sem[i].start_row)
-                .min()
-                .unwrap_or(0)
-        })
-        .collect();
+    // per-group file + source position, for provenance and above/below
+    // wording — same values as gfile_v/grow_v above, reused rather than
+    // re-walking every member hunk a second time.
     let ctx = RatCtx {
         groups: &groups,
         definers: &definers,
         users: &users,
-        group_file: &group_file,
-        group_row: &group_row,
+        group_file: &gfile_v,
+        group_row: &grow_v,
         paths,
         old_defs,
         old_imports,
@@ -796,8 +796,22 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             };
             frags.push(format!("{verb} {label}"));
         }
-        if !ch_sig.is_empty() {
-            frags.push(format!("changes signature of {}", name_list(&ch_sig)));
+        // "changes signature of f" only for something that *has* a signature.
+        // A value touched on its own declaration line — a cmake `set()`, a
+        // make variable, a yaml key, a rust `const` — simply changes. The kind
+        // comes from the hunk's own symbols; a name with no symbol entry keeps
+        // the weaker wording rather than claiming a signature it may not have.
+        let (sig, plain): (Vec<&str>, Vec<&str>) = ch_sig.iter().partition(|d| {
+            s.symbols
+                .iter()
+                .find(|sy| sy.name.as_str() == **d)
+                .is_some_and(|sy| crate::lang::has_signature(&sy.kind))
+        });
+        if !sig.is_empty() {
+            frags.push(format!("changes signature of {}", name_list(&sig)));
+        }
+        if !plain.is_empty() {
+            frags.push(format!("changes {}", name_list(&plain)));
         }
         if !ch_ty.is_empty() {
             frags.push(format!("changes type {}", name_list(&ch_ty)));

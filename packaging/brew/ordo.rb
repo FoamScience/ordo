@@ -17,10 +17,10 @@ class Ordo < Formula
   end
 
   def install
-    bin.install "ordo"
+    bin.install "ordo", "ordo-engine"
   end
 
   test do
-    assert_match "usage", shell_output("#{bin}/ordo --help 2>&1", 0)
+    assert_match "usage", shell_output("#{bin}/ordo-engine --help 2>&1", 0)
   end
 end

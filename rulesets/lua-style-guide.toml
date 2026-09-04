@@ -1,0 +1,45 @@
+# Lua style — Olivine Labs (https://github.com/Olivine-Labs/lua-style-guide)
+# and luarocks (https://github.com/luarocks/lua-style-guide)
+#
+# Use: `ordo --rules rulesets/lua-style-guide.toml`, or copy the rules you
+# want into <repo>/.ordo/rules.toml.
+#
+# Both guides are almost entirely formatting — indentation, quoting, line
+# length — a formatter's job, not a review signal. What's left is one rule
+# that actually carries the language, plus the usual construct-level handful.
+
+# ------------------------------------------------------------ globals
+
+[[rule]]
+name = "no-globals"
+lang = "lua"
+query = '(chunk (assignment_statement) @a)'
+warn = "assigns into the global namespace — `local` it, or attach it to a module table"
+
+# ------------------------------------------------------------ control flow
+
+[[rule]]
+name = "flat-control-flow"
+lang = "lua"
+max-nesting = 2
+warn = "more than 2 nested conditionals — validate and return early instead"
+
+# ------------------------------------------------------------ functions
+
+[[rule]]
+name = "function-size"
+lang = "lua"
+max-lines = 40
+note = "over 40 lines — split it"
+
+[[rule]]
+name = "three-arguments"
+lang = "lua"
+max-params = 3
+note = "more than 3 arguments — a table of named fields reads better at the call site"
+
+[[rule]]
+name = "no-function-in-table"
+lang = "lua"
+query = '(table_constructor (field value: (function_definition) @f))'
+note = "define the function outside the table literal and reference it by name"

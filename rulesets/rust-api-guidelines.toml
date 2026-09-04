@@ -1,0 +1,110 @@
+# Rust API Guidelines checklist — https://rust-lang.github.io/api-guidelines/checklist.html
+# (54 `C-*` items) and rust-unofficial/patterns anti-patterns —
+# https://rust-unofficial.github.io/patterns/anti_patterns/
+#
+# Use: `ordo --rules rulesets/rust-api-guidelines.toml`, or copy the rules
+# you want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's built-in advisory already fires on it with no
+# config: `unsafe` blocks (src/advisories.rs UNSAFE_RS).
+#
+# Skipped from the checklist: naming (C-CASE, C-CONV, C-GETTER, C-ITER,
+# C-ITER-TY, C-WORD-ORDER, C-FEATURE) and documentation requirements
+# (C-CRATE-DOC, C-EXAMPLE, C-FAILURE, C-LINK, C-METADATA, C-RELNOTES,
+# C-HIDDEN, C-DEBUG-NONEMPTY) — these grade naming and prose quality, which
+# has no AST shape to match; a human reading the docs decides them, ordo
+# can't. Same for the "obvious in review" items with no construct at all
+# (C-STABLE, C-PERMISSIVE, C-INTERMEDIATE, C-CALLER-CONTROL, C-GENERIC,
+# C-OBJECT, C-SEALED, C-NEWTYPE, C-NEWTYPE-HIDE, C-BUILDER, C-VALIDATE,
+# C-COMMON-TRAITS and friends): each is a judgment call about a whole type's
+# design, not a shape one hunk introduces.
+#
+# Also skipped: C-QUESTION-MARK ("examples use `?`, not `unwrap`"). Its real
+# scope is doc-comment code fences and files under `examples/**` — a `path`
+# glob is the only way to say that, and Clippy's `unwrap_used` restriction
+# lint already covers unscoped "no unwrap" if a project wants it turned on.
+# Scoped to `path = "examples/**"` it duplicates nothing Clippy has, but it
+# can't be demonstrated against a single flat sample file (see
+# rulesets/samples/README-less note below): scripts/ruleset-check.py always
+# passes the sample as a bare filename with no directory, so a
+# directory-anchored `path` glob can never match it. Left out rather than
+# shipped unverifiable.
+#
+# Every rule fires on what a hunk *introduces* — none of them flag the 400
+# pre-existing violations in a legacy tree.
+
+# ------------------------------------------------------------ future proofing
+
+[[rule]]
+name = "struct-fields-private"
+lang = "rust"
+kind = "field_declaration"
+with = "visibility_modifier"
+note = "[C-STRUCT-PRIVATE] a public field on a public struct is API surface forever — private it behind accessors, unless this is genuinely a plain data struct with no invariants"
+
+# ------------------------------------------------------------ type safety
+
+[[rule]]
+name = "custom-type-not-bool-option"
+lang = "rust"
+kind = "parameter"
+text = ":\\s*(bool|Option\\s*<)"
+note = "[C-CUSTOM-TYPE] a bare `bool`/`Option<_>` argument reads as noise at the call site — a small enum or newtype names the meaning"
+
+# ------------------------------------------------------------ predictability
+
+[[rule]]
+name = "no-out-parameters"
+lang = "rust"
+query = '''
+(function_item
+  parameters: (parameters
+    (parameter type: (reference_type (mutable_specifier))))
+  !return_type) @f
+'''
+note = "[C-NO-OUT] this takes `&mut` but returns nothing — return the value instead of writing through an out-parameter"
+
+[[rule]]
+name = "constructor-named-new"
+lang = "rust"
+defines = "new"
+note = "[C-CTOR] `new` is conventionally an inherent, static, infallible constructor returning `Self` — put anything that can fail on `try_new`, anything async on a name that says so"
+
+# ------------------------------------------------------------ dependability
+
+[[rule]]
+name = "destructor-never-fails"
+lang = "rust"
+defines = "drop"
+uses = "{panic,unwrap,expect}"
+warn = "[C-DTOR-FAIL] a panicking `Drop::drop` aborts the process if it runs during unwinding — never `panic!`/`unwrap`/`expect` here"
+
+# ------------------------------------------------------------ debuggability
+
+[[rule]]
+name = "public-type-implements-debug"
+lang = "rust"
+query = '''
+(
+  (attribute_item)? @attr
+  .
+  (struct_item (visibility_modifier) name: (type_identifier)) @s
+  (#not-match? @attr "Debug")
+)
+'''
+note = "[C-DEBUG] a public struct without `#[derive(Debug)]` can't be inspected with `{:?}` or `dbg!` — implement or derive it"
+
+# ------------------------------------------------------------ anti-patterns (rust-unofficial/patterns)
+
+[[rule]]
+name = "no-deny-warnings"
+lang = "rust"
+kind = "inner_attribute_item"
+text = "deny\\(\\s*warnings\\s*\\)"
+warn = "`#![deny(warnings)]` breaks the build on a new compiler/lint release you don't control — pass `-D warnings` from CI or the build script instead"
+
+[[rule]]
+name = "no-deref-polymorphism"
+lang = "rust"
+defines = "deref"
+note = "implementing `Deref` to reach for the inner type's methods emulates inheritance Rust doesn't have — `Deref` should model a smart pointer's transparent indirection, not shortcut delegation"

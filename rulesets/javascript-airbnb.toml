@@ -1,0 +1,87 @@
+# airbnb/javascript — https://github.com/airbnb/javascript
+#
+# Use: `ordo --rules rulesets/javascript-airbnb.toml`, or copy the rules
+# you want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's advisory catalog already fires on them with no
+# config: `eval` (rule 5), empty `catch`.
+#
+# Airbnb's guide is 161 numbered rules and ~120 of them cite an eslint rule by
+# name — `eslint-config-airbnb` already enforces the whole thing file-wide,
+# every time, with no review step involved. Re-encoding that here would be a
+# linter's job done worse. What's left, and what earns a place in this file,
+# is the construct-level subset worth seeing change-scoped and in the reading
+# order even when a project has no eslint config wired up: `var`, `arguments`,
+# `new Function`, namespace imports, `prototype` manipulation, default
+# parameters out of order, nested ternaries, a function declared inside a
+# block. Everything about formatting, quotes, semicolons, spacing — the other
+# ~150 rules — is a formatter's business, not this file's.
+#
+# Every rule fires on what a hunk *introduces* — none of them flag the
+# pre-existing violations in a legacy tree.
+
+[[rule]]
+name = "no-var"
+lang = "javascript"
+kind = "variable_declaration"
+note = "`var` — use `const`, or `let` if it's reassigned (eslint: no-var, prefer-const)"
+
+[[rule]]
+name = "no-arguments-object"
+lang = "javascript"
+uses = "arguments"
+note = "the `arguments` object — rest syntax (`...args`) is the same thing, array-shaped (eslint: prefer-rest-params)"
+
+[[rule]]
+name = "no-new-function"
+lang = "javascript"
+kind = "new_expression"
+text = "^new\\s+Function\\b"
+warn = "`new Function(...)` — builds and evals a string as code, same risk as eval (eslint: no-new-func)"
+
+[[rule]]
+name = "no-namespace-import"
+lang = "javascript"
+kind = "namespace_import"
+note = "wildcard import — name what this module actually needs"
+
+[[rule]]
+name = "no-prototype-mutation"
+lang = "javascript"
+uses = "prototype"
+note = "`class` says the same thing without touching `.prototype` by hand"
+
+[[rule]]
+name = "default-params-last"
+lang = "javascript"
+query = '''
+(formal_parameters
+  (assignment_pattern) .
+  (identifier)) @param
+'''
+note = "a default parameter before a required one — the caller can't skip it either way (eslint: default-param-last)"
+
+[[rule]]
+name = "no-nested-ternary"
+lang = "javascript"
+query = '''
+[
+  (ternary_expression consequence: (ternary_expression))
+  (ternary_expression alternative: (ternary_expression))
+  (ternary_expression condition: (ternary_expression))
+] @ternary
+'''
+warn = "a ternary inside a ternary — an if/else chain reads top to bottom instead (eslint: no-nested-ternary)"
+
+[[rule]]
+name = "no-function-in-block"
+lang = "javascript"
+query = '''
+[
+  (if_statement consequence: (statement_block (function_declaration) @fn))
+  (if_statement alternative: (else_clause (statement_block (function_declaration) @fn)))
+  (while_statement body: (statement_block (function_declaration) @fn))
+  (for_statement body: (statement_block (function_declaration) @fn))
+]
+'''
+warn = "a function declared inside an if/while/for — its binding is hoisted and engine-dependent; assign a function expression instead (eslint: no-loop-func)"

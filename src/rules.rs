@@ -19,6 +19,7 @@
 use crate::lang::{self, LangSpec};
 use crate::model::{Category, ContainerKind, Rule, RuleHit};
 use globset::{Glob, GlobMatcher};
+use regex::Regex;
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
@@ -28,9 +29,36 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 pub struct Compiled<'r> {
     pub rule: &'r Rule,
     path: Option<GlobMatcher>,
+    path_not: Option<GlobMatcher>,
     defines: Option<GlobMatcher>,
     uses: Option<GlobMatcher>,
     imports: Option<GlobMatcher>,
+    container_with: Option<GlobMatcher>,
+    container_without: Option<GlobMatcher>,
+    text: Option<Regex>,
+    text_not: Option<Regex>,
+}
+
+/// Everything the engine knows about one hunk that a rule can ask about.
+pub struct HunkFacts<'a> {
+    pub path: &'a str,
+    /// 1-based inclusive new-side rows
+    pub rows: (usize, usize),
+    pub category: Category,
+    pub enclosing_kind: Option<ContainerKind>,
+    pub defines: &'a [String],
+    pub uses: &'a [String],
+    pub imports: &'a [String],
+    pub noise: bool,
+    pub comment: bool,
+    pub def_lines: usize,
+    pub def_params: usize,
+    pub nesting: usize,
+    /// the file's old (if known) and new line counts
+    pub file_lines: (Option<usize>, usize),
+    pub recursive: bool,
+    pub container_members: &'a [String],
+    pub uninit_members: &'a [String],
 }
 
 pub struct Rules<'r> {
@@ -42,6 +70,27 @@ pub struct Rules<'r> {
     /// parse under another, but one that parses under *none* of the languages
     /// in the change is broken, and saying so is the whole point of reporting.
     tried: HashMap<&'r str, (bool, String)>,
+    /// compiled queries, cached by (rule name, language name) — `query_rows`
+    /// runs once per file, so without this the same rule's `Query::new`
+    /// (an automaton build, not cheap) reran for every file sharing a
+    /// language. Same idea as the globs/regexes `Rules::new` compiles once.
+    query_cache: HashMap<(&'r str, &'static str), Result<Query, String>>,
+}
+
+fn regex(
+    pattern: &Option<String>,
+    name: &str,
+    rule: &str,
+    problems: &mut Vec<String>,
+) -> Option<Regex> {
+    let p = pattern.as_ref()?;
+    match Regex::new(p) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            problems.push(format!("rule `{rule}`: {name} `{p}` is not a regex: {e}"));
+            None
+        }
+    }
 }
 
 fn glob(
@@ -70,9 +119,24 @@ impl<'r> Rules<'r> {
                 Compiled {
                     rule,
                     path: glob(&w.path, "path", &rule.name, &mut problems),
+                    path_not: glob(&w.path_not, "path_not", &rule.name, &mut problems),
                     defines: glob(&w.defines, "defines", &rule.name, &mut problems),
                     uses: glob(&w.uses, "uses", &rule.name, &mut problems),
                     imports: glob(&w.imports, "imports", &rule.name, &mut problems),
+                    container_with: glob(
+                        &w.container_with,
+                        "container_with",
+                        &rule.name,
+                        &mut problems,
+                    ),
+                    container_without: glob(
+                        &w.container_without,
+                        "container_without",
+                        &rule.name,
+                        &mut problems,
+                    ),
+                    text: regex(&w.text, "text", &rule.name, &mut problems),
+                    text_not: regex(&w.text_not, "text_not", &rule.name, &mut problems),
                 }
             })
             .collect();
@@ -80,6 +144,7 @@ impl<'r> Rules<'r> {
             compiled,
             problems,
             tried: HashMap::new(),
+            query_cache: HashMap::new(),
         }
     }
 
@@ -87,24 +152,13 @@ impl<'r> Rules<'r> {
         self.compiled.is_empty()
     }
 
-    /// Which rules match one hunk. `query_rows` holds, per rule name, the rows
-    /// that rule's query matched in this file (see `query_hits`) — computed once
-    /// per file rather than per hunk.
-    #[allow(clippy::too_many_arguments)]
-    pub fn hits(
-        &self,
-        path: &str,
-        rows: (usize, usize),
-        category: Category,
-        enclosing_kind: Option<ContainerKind>,
-        defines: &[String],
-        uses: &[String],
-        imports: &[String],
-        noise: bool,
-        comment: bool,
-        query_rows: &HashMap<&str, Vec<usize>>,
-    ) -> Vec<RuleHit> {
-        let lang = lang::for_path(path).map(|s| s.name);
+    /// Which rules match one hunk. `pattern_rows` holds, per rule name, the
+    /// rows that rule's query or kind pattern matched in this file (see
+    /// `query_rows`) — computed once per file rather than per hunk.
+    pub fn hits(&self, f: &HunkFacts, pattern_rows: &HashMap<&str, Vec<usize>>) -> Vec<RuleHit> {
+        let lang = lang::for_path(f.path).map(|s| s.name);
+        let (r0, r1) = f.rows;
+        let (old_lines, new_lines) = f.file_lines;
         self.compiled
             .iter()
             .filter(|c| {
@@ -113,22 +167,31 @@ impl<'r> Rules<'r> {
                     Some(g) => names.iter().any(|n| g.is_match(n)),
                     None => true,
                 };
-                c.path.as_ref().is_none_or(|g| g.is_match(path))
+                c.path.as_ref().is_none_or(|g| g.is_match(f.path))
+                    && c.path_not.as_ref().is_none_or(|g| !g.is_match(f.path))
                     && w.lang.as_deref().is_none_or(|l| lang == Some(l))
-                    && w.category.is_none_or(|c2| c2 == category)
-                    && w.enclosing_kind
-                        .as_deref()
-                        .is_none_or(|k| kind_name(enclosing_kind) == k)
-                    && any(&c.defines, defines)
-                    && any(&c.uses, uses)
-                    && any(&c.imports, imports)
-                    && w.noise.is_none_or(|n| n == noise)
-                    && w.comment.is_none_or(|n| n == comment)
-                    && w.query.as_ref().is_none_or(|_| {
-                        query_rows
+                    && w.category.is_none_or(|c2| c2 == f.category)
+                    && w.enclosing_kind.as_deref().is_none_or(|k| kind_name(f.enclosing_kind) == k)
+                    && any(&c.defines, f.defines)
+                    && any(&c.uses, f.uses)
+                    && any(&c.imports, f.imports)
+                    && w.noise.is_none_or(|n| n == f.noise)
+                    && w.comment.is_none_or(|n| n == f.comment)
+                    && w.max_params.is_none_or(|m| f.def_params > m)
+                    && w.max_lines.is_none_or(|m| f.def_lines > m)
+                    && w.max_nesting.is_none_or(|m| f.nesting > m)
+                    // the file crossed the limit in this change — not every
+                    // hunk of a file that was already over it
+                    && w.max_file_lines
+                        .is_none_or(|m| new_lines > m && old_lines.is_none_or(|o| o <= m))
+                    && w.recursive.is_none_or(|r| r == f.recursive)
+                    && c.container_with.as_ref().is_none_or(|g| f.container_members.iter().any(|n| g.is_match(n)))
+                    && c.container_without.as_ref().is_none_or(|g| !f.container_members.iter().any(|n| g.is_match(n)))
+                    && w.member_uninitialized.is_none_or(|b| b == !f.uninit_members.is_empty())
+                    && (w.query.is_none() && w.kind.is_none()
+                        || pattern_rows
                             .get(c.rule.name.as_str())
-                            .is_some_and(|rs| rs.iter().any(|r| rows.0 <= *r && *r <= rows.1))
-                    })
+                            .is_some_and(|rs| rs.iter().any(|r| r0 <= *r && *r <= r1)))
             })
             .flat_map(|c| {
                 let mut out = vec![];
@@ -200,15 +263,53 @@ impl<'r> Rules<'r> {
                 Some((c.rule.name.as_str(), q, c.rule.when.lang.is_some()))
             })
             .collect();
-        if queries.is_empty() {
+        let kind_rules: Vec<&Compiled> = self
+            .compiled
+            .iter()
+            .filter(|c| c.rule.when.kind.is_some())
+            .filter(|c| c.rule.when.lang.as_deref().is_none_or(|l| l == spec.name))
+            .collect();
+        if queries.is_empty() && kind_rules.is_empty() {
             return out;
         }
         let language = (spec.language)();
         let Some(tree) = lang::parse(spec, content) else {
             return out;
         };
+        // kind rules: "this hunk introduces a node of kind K, with children X
+        // and without children Y" — one walk of the tree, every rule checked
+        // at every node. Children include anonymous tokens, so `without =
+        // "virtual"` reads a keyword an anchor never could.
+        if !kind_rules.is_empty() {
+            let mut kind_hits: Vec<Vec<usize>> = vec![vec![]; kind_rules.len()];
+            let mut stack = vec![tree.root_node()];
+            while let Some(node) = stack.pop() {
+                for (i, c) in kind_rules.iter().enumerate() {
+                    if c.introduces(node, content.as_bytes()) {
+                        kind_hits[i].push(node_row(node));
+                    }
+                }
+                let mut cur = node.walk();
+                for ch in node.named_children(&mut cur) {
+                    stack.push(ch);
+                }
+            }
+            for (c, mut rows) in kind_rules.iter().zip(kind_hits) {
+                rows.sort_unstable();
+                rows.dedup();
+                out.entry(c.rule.name.as_str()).or_default().extend(rows);
+            }
+        }
+        if queries.is_empty() {
+            return out;
+        }
         for (name, src, explicit) in queries {
-            let query = match Query::new(&language, src) {
+            let key = (name, spec.name);
+            let compiled = self
+                .query_cache
+                .entry(key)
+                .or_insert_with(|| Query::new(&language, src).map_err(|e| e.to_string()));
+            let query = match compiled {
                 Ok(q) => q,
                 Err(e) => {
                     if explicit {
@@ -217,7 +318,7 @@ impl<'r> Rules<'r> {
                             spec.name
                         ));
                     } else {
-                        self.tried.entry(name).or_insert((false, e.to_string()));
+                        self.tried.entry(name).or_insert((false, e.clone()));
                     }
                     continue;
                 }
@@ -227,7 +328,7 @@ impl<'r> Rules<'r> {
             }
             let mut cursor = QueryCursor::new();
             let mut rows = vec![];
-            let mut it = cursor.matches(&query, tree.root_node(), content.as_bytes());
+            let mut it = cursor.matches(query, tree.root_node(), content.as_bytes());
             while let Some(m) = it.next() {
                 for cap in m.captures {
                     rows.push(node_row(cap.node));
@@ -238,6 +339,52 @@ impl<'r> Rules<'r> {
             out.entry(name).or_default().extend(rows);
         }
         out
+    }
+}
+
+impl Compiled<'_> {
+    /// Does `node` satisfy this rule's `kind` / `with` / `without` / `text`?
+    fn introduces(&self, node: Node, src: &[u8]) -> bool {
+        let w = &self.rule.when;
+        let Some(kinds) = &w.kind else { return false };
+        if !kinds.iter().any(|k| k == node.kind()) {
+            return false;
+        }
+        // a child by kind (`init_declarator`), by keyword token (`virtual`),
+        // or by field name (`default_value`) — whichever the grammar exposes
+        let has = |want: &str| {
+            if node.child_by_field_name(want).is_some() {
+                return true;
+            }
+            let mut cur = node.walk();
+            let mut found = false;
+            for ch in node.children(&mut cur) {
+                if ch.kind() == want {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if w.with.as_ref().is_some_and(|ws| !ws.iter().all(|k| has(k))) {
+            return false;
+        }
+        if w.without
+            .as_ref()
+            .is_some_and(|ws| ws.iter().any(|k| has(k)))
+        {
+            return false;
+        }
+        if self.text.is_some() || self.text_not.is_some() {
+            let text = node.utf8_text(src).unwrap_or("");
+            if self.text.as_ref().is_some_and(|r| !r.is_match(text)) {
+                return false;
+            }
+            if self.text_not.as_ref().is_some_and(|r| r.is_match(text)) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -274,5 +421,6 @@ fn kind_name(k: Option<ContainerKind>) -> &'static str {
         Some(ContainerKind::FrontMatter) => "front-matter",
         Some(ContainerKind::Binding) => "binding",
         Some(ContainerKind::Call) => "call",
+        Some(ContainerKind::Document) => "document",
     }
 }

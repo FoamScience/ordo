@@ -93,5 +93,8 @@
       "h0",
       "h1"
     ]
+  ],
+  "notes": [
+    "code changed but no test touched"
   ]
 }

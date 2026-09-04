@@ -4,7 +4,7 @@
 use crate::lang::{self, LangSpec};
 use crate::model::{Advisory, Category, ContainerKind, Symbol};
 use similar::TextDiff;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 pub struct RawHunk {
@@ -58,6 +58,19 @@ pub struct HunkSem {
     pub old_range: [usize; 2],
     /// hunk adds no new lines (pure deletion) — drives removal wording
     pub new_empty: bool,
+    /// longest definition the hunk starts, in lines, and the most parameters
+    /// one takes — the facts a `max-lines` / `max-params` rule reads
+    pub def_lines: usize,
+    pub def_params: usize,
+    /// deepest control-flow nesting any row of the hunk sits at
+    pub nesting: usize,
+    /// a definition starting in the hunk uses its own name
+    pub recursive: bool,
+    /// names the hunk's container already has — methods, fields, variants —
+    /// so a rule can ask "defines `equals` in a class without `hashCode`"
+    pub container_members: Vec<String>,
+    /// data members the hunk adds that nothing in the change initializes
+    pub uninit_members: Vec<String>,
 }
 
 /// A local binding introduced by this hunk and where its name is used
@@ -93,6 +106,12 @@ impl HunkSem {
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
             new_empty: h.new_r0.is_none(),
+            def_lines: 0,
+            def_params: 0,
+            nesting: 0,
+            recursive: false,
+            container_members: vec![],
+            uninit_members: vec![],
         }
     }
 }
@@ -130,11 +149,14 @@ struct Collected {
     def_rows: HashSet<usize>,
     type_rows: HashSet<usize>,
     defs: Vec<DefRec>,
-    decls: Vec<(usize, String)>,
+    /// (start_row, end_row, name); a plain declaration has start == end, an
+    /// import spans its whole statement (see `import_like`) stored once
+    /// rather than once per row
+    decls: Vec<(usize, usize, String)>,
     /// (row, name, tree-sitter kind, enclosing scope) for each real definition
     /// — the raw material for `symbols` (name+kind+scope identity)
     sym_decls: Vec<(usize, String, String, Option<String>)>,
-    import_decls: Vec<(usize, String)>,
+    import_decls: Vec<(usize, usize, String)>,
     uses: Vec<(usize, String)>,
     /// parameter names (local bindings) seen anywhere in the file
     bound: HashSet<String>,
@@ -150,11 +172,43 @@ struct Collected {
     /// occurrences themselves), so the use-search below can exclude them
     /// without guessing from row/text alone
     bind_ids: HashSet<usize>,
-    /// every identifier node in the file as (row, text, node id) — the use
-    /// search's raw material, kept separate from `uses` (which already feeds
-    /// the def→use edge graph and must not gain binding-target entries)
-    all_idents: Vec<(usize, String, usize)>,
+    /// every identifier node in the file as (row, index into `uses`, node id)
+    /// — the use search's raw material, kept separate from `uses` (which
+    /// already feeds the def→use edge graph and must not gain binding-target
+    /// entries). Always pushed immediately after the matching `uses` entry,
+    /// so the index is `uses.len() - 1` at push time.
+    all_idents: Vec<(usize, usize, usize)>,
+    /// deepest control-flow construct each row sits inside (0 = none)
+    nest_rows: HashMap<usize, usize>,
+    nest_depth: usize,
+    /// (row, name) of every data member declared without an initializer
+    uninit_fields: Vec<(usize, String)>,
+    /// every member name an initializer list (c++) or `this.x = …` (java)
+    /// in this file initializes
+    field_inits: HashSet<String>,
 }
+
+/// Node kinds that open a level of control flow, across the grammars ordo
+/// ships. A kind another grammar doesn't have simply never matches.
+const CONTROL_KINDS: &[&str] = &[
+    "if_statement",
+    "for_statement",
+    "while_statement",
+    "do_statement",
+    "switch_statement",
+    "for_range_loop",
+    "for_in_statement",
+    "try_statement",
+    "with_statement",
+    "match_expression",
+    "if_expression",
+    "loop_expression",
+    "while_expression",
+    "for_expression",
+    "if_let_expression",
+    "repeat_statement",
+    "elif_clause",
+];
 
 struct DefRec {
     s: usize,
@@ -183,6 +237,13 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
     let adv = crate::advisories::advise(spec, tree.root_node(), src, path);
 
     let lines: Vec<&str> = new.lines().collect();
+    // loop-invariant: does not depend on the hunk, so it's built once here
+    // rather than on every iteration below.
+    let decl_at_row: HashSet<(usize, &str)> = c
+        .decls
+        .iter()
+        .flat_map(|(s, e, n)| (*s..=*e).map(move |r| (r, n.as_str())))
+        .collect();
     let mut out = Vec::with_capacity(hunks.len());
     for h in hunks {
         let (r0, r1) = match h.new_r0 {
@@ -247,8 +308,8 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         let mut defines: Vec<String> = c
             .decls
             .iter()
-            .filter(|(row, _)| r0 <= *row && *row <= r1)
-            .map(|(_, n)| n.clone())
+            .filter(|(s, e, _)| *s <= r1 && r0 <= *e)
+            .map(|(_, _, n)| n.clone())
             .collect();
         defines.sort();
         defines.dedup();
@@ -273,8 +334,8 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         let mut imports: Vec<String> = c
             .import_decls
             .iter()
-            .filter(|(row, _)| r0 <= *row && *row <= r1)
-            .map(|(_, n)| n.clone())
+            .filter(|(s, e, _)| *s <= r1 && r0 <= *e)
+            .map(|(_, _, n)| n.clone())
             .collect();
         imports.sort();
         imports.dedup();
@@ -298,6 +359,74 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                 notes.push(format!("{} params", d.params));
             }
         }
+        // the same measurements, as facts a rule can put its own limit on
+        let started: Vec<&DefRec> = c
+            .defs
+            .iter()
+            .filter(|d| r0 <= d.s && d.s <= r1 && d.kind == ContainerKind::Definition)
+            .collect();
+        let def_lines = started.iter().map(|d| d.e - d.s + 1).max().unwrap_or(0);
+        let def_params = started.iter().map(|d| d.params).max().unwrap_or(0);
+        let nesting = (r0..=r1)
+            .filter_map(|r| c.nest_rows.get(&r))
+            .copied()
+            .max()
+            .unwrap_or(0);
+        // a definition that names itself inside its own body — over and above
+        // the declaring identifier, which `uses` also carries
+        let recursive = started.iter().any(|d| {
+            let declared = c
+                .decls
+                .iter()
+                .filter(|(s, e, n)| *s <= d.s && d.s <= *e && *n == d.name)
+                .count();
+            let named = c
+                .uses
+                .iter()
+                .filter(|(row, n)| d.s <= *row && *row <= d.e && *n == d.name)
+                .count();
+            named > declared
+        });
+        // the container a defined symbol lives in (its scope), else the hunk's
+        // enclosing one; its members are every symbol declared with that scope
+        // plus the detail layer's members of it
+        let container: Option<String> = defines
+            .first()
+            .and_then(|d| {
+                c.sym_decls
+                    .iter()
+                    .find(|(row, n, _, _)| r0 <= *row && *row <= r1 && n == d)
+                    .and_then(|(_, _, _, scope)| scope.clone())
+            })
+            .or_else(|| enclosing.clone());
+        // data members this hunk declares that nothing in this file
+        // initializes; `lib` widens the check to every file in the change
+        let uninit_members: Vec<String> = c
+            .uninit_fields
+            .iter()
+            .filter(|(row, n)| r0 <= *row && *row <= r1 && !c.field_inits.contains(n))
+            .map(|(_, n)| n.clone())
+            .collect();
+        let container_members: Vec<String> = match &container {
+            None => vec![],
+            Some(cn) => {
+                let mut m: Vec<String> = c
+                    .sym_decls
+                    .iter()
+                    .filter(|(_, _, _, scope)| scope.as_deref() == Some(cn.as_str()))
+                    .map(|(_, n, _, _)| n.clone())
+                    .chain(
+                        c.member_rows
+                            .iter()
+                            .filter(|(_, _, _, key)| key.as_deref() == Some(cn.as_str()))
+                            .map(|(_, n, _, _)| n.clone()),
+                    )
+                    .collect();
+                m.sort();
+                m.dedup();
+                m
+            }
+        };
         let advisories: Vec<Advisory> = adv
             .iter()
             .filter(|(row, _)| r0 <= *row && *row <= r1)
@@ -323,8 +452,6 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         // no navigational signal, same reasoning `rationale_for` already
         // applies to `defines` — drop them here too rather than passing a
         // dead entry through to the rationale layer.
-        let decl_at_row: HashSet<(usize, &str)> =
-            c.decls.iter().map(|(r, n)| (*r, n.as_str())).collect();
         // several `locals`-kind nodes reassigning the same name within one
         // hunk (a variable rebound across a loop body, tuple-unpacked twice,
         // …) must collapse into one entry — otherwise the same name/use-list
@@ -347,7 +474,9 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             let uses_here = c
                 .all_idents
                 .iter()
-                .filter(|(r, n, id)| n == name && *r >= lo && *r <= hi && !c.bind_ids.contains(id))
+                .filter(|(r, i, id)| {
+                    c.uses[*i].1 == *name && *r >= lo && *r <= hi && !c.bind_ids.contains(id)
+                })
                 .map(|(r, _, _)| r + 1);
             match bindings.iter_mut().find(|b| &b.name == name) {
                 Some(b) => b.uses.extend(uses_here),
@@ -385,6 +514,12 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             // to say for itself as a pure deletion, and the same wording fits:
             // what a reviewer wants to know is what left
             new_empty: (r0..=r1).all(|r| lines.get(r).is_none_or(|l| l.trim().is_empty())),
+            def_lines,
+            def_params,
+            nesting,
+            recursive,
+            container_members,
+            uninit_members,
         });
     }
     Some(out)
@@ -415,7 +550,31 @@ fn is_bookkeeping_export(node: Node) -> bool {
 
 /// Import-like for classification: a real import, or an export that only moves
 /// names around (see `is_bookkeeping_export`).
-fn import_like(node: Node, spec: &LangSpec) -> bool {
+fn import_like(node: Node, src: &[u8], spec: &LangSpec) -> bool {
+    // cmake names its imports rather than spelling them as distinct node
+    // kinds: `include(Utils)` and `find_package(Boost)` are ordinary commands
+    // bash sources a file with a command, not a keyword: `source x.sh` and its
+    // POSIX spelling `. x.sh`
+    if spec.name == "bash" && node.kind() == "command" {
+        return node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(src).ok())
+            .is_some_and(|t| matches!(t.trim(), "source" | "."));
+    }
+    // nix spells an import as an ordinary application of a function named
+    // `import`, so the kind alone cannot tell one from any other call
+    if spec.name == "nix" && node.kind() == "apply_expression" {
+        return node
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "variable_expression")
+            .and_then(|f| f.utf8_text(src).ok())
+            .is_some_and(|t| t.trim() == "import");
+    }
+    if spec.name == "cmake" && node.kind() == "normal_command" {
+        return cmake_command(node, src).is_some_and(|c| {
+            matches!(c.as_str(), "include" | "find_package" | "add_subdirectory")
+        });
+    }
     spec.is_import(node.kind()) || is_bookkeeping_export(node)
 }
 
@@ -506,6 +665,164 @@ fn test_block_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
 fn is_test_label(s: &str) -> bool {
     s.split_once(' ')
         .is_some_and(|(head, rest)| rest.starts_with(['"', '\'', '`']) && !head.is_empty())
+}
+
+/// A single-file component's `<script>` block holds real code in another
+/// language. It is parsed with that grammar and recorded as **uses only**, the
+/// same contract as an injected markdown fence — see `inject_fence` for why
+/// that contract exists, and `docs/document-languages-design.md` for why an
+/// SFC does not get definitions out of it: `walk` reads file rows at some
+/// twenty sites and eight of `extract`'s ten parse entry points are old-side
+/// collectors, so teaching only `analyze` about injected defs would make every
+/// function in every component read as newly added on every commit.
+///
+/// `<style>` is deliberately not injected. Injection harvests every identifier
+/// as a use, and a stylesheet's identifiers are its *definitions* — doing it
+/// would contribute nothing and would flood `uses` with exactly the
+/// `class_name` leak the css selector guard exists to prevent.
+fn inject_sfc_script(node: Node, src: &[u8], c: &mut Collected) {
+    let mut cur = node.walk();
+    let Some(body) = node
+        .named_children(&mut cur)
+        .find(|n| n.kind() == "raw_text")
+    else {
+        return;
+    };
+    // `<script lang="ts">` picks typescript; anything else is javascript,
+    // which also parses the plain-js majority correctly
+    let mut tc = node.walk();
+    let declared = node
+        .named_children(&mut tc)
+        .find(|n| matches!(n.kind(), "start_tag" | "self_closing_tag"))
+        .and_then(|t| {
+            let mut ac = t.walk();
+            let found = t.named_children(&mut ac).find_map(|a| {
+                let mut pc = a.walk();
+                let parts: Vec<Node> = a.named_children(&mut pc).collect();
+                let is_lang = parts
+                    .first()
+                    .and_then(|n| n.utf8_text(src).ok())
+                    .is_some_and(|t| t.eq_ignore_ascii_case("lang"));
+                is_lang
+                    .then(|| parts.get(1).and_then(|v| v.utf8_text(src).ok()))
+                    .flatten()
+            });
+            found
+        })
+        .map(|t| unquote(t.trim()).to_string());
+    let inner = declared
+        .as_deref()
+        .and_then(lang::for_lang_name)
+        .or_else(|| lang::for_lang_name("javascript"));
+    let (Some(inner), Ok(text)) = (inner, body.utf8_text(src)) else {
+        return;
+    };
+    let Some(tree) = lang::parse(inner, text) else {
+        return;
+    };
+    // rows inside the block are relative to it; report them in the file's own
+    // coordinates so a hunk lines up with them
+    let offset = body.start_position().row;
+    collect_injected_uses(tree.root_node(), text.as_bytes(), offset, c);
+}
+
+/// Templating over another format: a `values.yaml.j2` is yaml everywhere
+/// except its `{% … %}` statements and `{# … #}` comments, which are not yaml
+/// at all — one `{% for %}` is enough to make the whole document a parse
+/// error. Blanking those regions (space for space, newlines kept) leaves text
+/// that parses as the underlying format at **identical byte, row and column
+/// offsets**, so every hunk range, every node position and every downstream
+/// parse lines up with the file the reviewer is looking at.
+///
+/// An interpolation (`{{ … }}`, `<%= … %>`) is deliberately *not* blanked: it
+/// sits where a scalar does and every format here already tolerates one, so
+/// `web:\n  image: {{ tag }}` keeps both its key and a name worth reporting.
+/// Which kinds are literal text and which are interpolations comes from the
+/// templating grammar's own `Template` entry, so the pass is not jinja's.
+///
+/// Returns the rewritten text and the 0-based rows it blanked, so a hunk that
+/// touches nothing but template syntax can still be told apart from one that
+/// touches nothing at all. `None` when there was nothing to mask (the common
+/// case for a path that merely ends in `.j2`), so the caller keeps the original.
+pub fn mask_template(spec: &LangSpec, content: &str) -> Option<(String, HashSet<usize>)> {
+    let t = spec.template?;
+    let tree = lang::parse(spec, content)?;
+    let mut keep: Vec<(usize, usize)> = vec![];
+    collect_template_text(tree.root_node(), t, &mut keep);
+    let mut out = content.as_bytes().to_vec();
+    let len = out.len();
+    let mut blank = vec![true; len];
+    for (a, b) in keep {
+        blank[a.min(len)..b.min(len)].fill(false);
+    }
+    let mut rows = HashSet::new();
+    let mut row = 0;
+    for (i, b) in blank.iter().enumerate() {
+        if out[i] == b'\n' {
+            row += 1;
+            continue;
+        }
+        if *b {
+            out[i] = b' ';
+            rows.insert(row);
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8(out).expect("blanking ASCII keeps UTF-8 valid");
+    Some((text, rows))
+}
+
+// Byte ranges that are *not* template syntax: the host format's own text,
+// plus the interpolations kept for its grammar (see `mask_template`).
+fn collect_template_text(node: Node, t: &lang::Template, out: &mut Vec<(usize, usize)>) {
+    if t.literal.contains(&node.kind()) || t.interpolation.contains(&node.kind()) {
+        out.push((node.start_byte(), node.end_byte()));
+        return;
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_template_text(ch, t, out);
+    }
+}
+
+/// Every identifier a template's own syntax reads — `{{ db_host }}`,
+/// `{% if tls %}` — as `(row, name)`. Recorded as **uses only**, like an
+/// injected code fence: a template consumes variables defined elsewhere (an
+/// inventory, a `group_vars` file) and defines none of them itself.
+///
+/// Empty for a grammar whose directives are one opaque blob rather than parsed
+/// identifiers — ERB's ruby, say. That falls out rather than being special
+/// cased: there are no identifier nodes to find.
+pub fn template_uses(spec: &LangSpec, content: &str) -> Vec<(usize, String)> {
+    let Some(t) = spec.template else {
+        return vec![];
+    };
+    let Some(tree) = lang::parse(spec, content) else {
+        return vec![];
+    };
+    let mut c = Collected::default();
+    collect_template_uses(tree.root_node(), content.as_bytes(), t, &mut c);
+    c.uses
+}
+
+fn collect_template_uses(node: Node, src: &[u8], t: &lang::Template, c: &mut Collected) {
+    // literal text is the *host* format's business, not the template's
+    if t.literal.contains(&node.kind()) {
+        return;
+    }
+    if lang::is_ident(node.kind()) {
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                c.uses.push((node.start_position().row, t.to_string()));
+            }
+        }
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_template_uses(ch, src, t, c);
+    }
 }
 
 /// Language injection: a fenced code block in a prose file holds real code in
@@ -752,6 +1069,72 @@ fn region_label(
             let label = subprocess_label(node, src)?;
             Some((label, ContainerKind::Call))
         }
+        // yaml: a stream can hold several `---` documents whose top-level keys
+        // collide — two k8s objects each own a `spec`, and `spec.replicas`
+        // alone does not say which. Name each document by its position, but
+        // only when there is more than one: a single-document file keeps the
+        // paths it has always had. A region, not a definition: an ordinal is
+        // where a thing sits, never a symbol anything can use or define.
+        "document" if node.parent().is_some_and(|p| p.kind() == "stream") => {
+            let parent = node.parent()?;
+            let mut cur = parent.walk();
+            let docs: Vec<usize> = parent
+                .named_children(&mut cur)
+                .filter(|c| c.kind() == "document")
+                .map(|c| c.id())
+                .collect();
+            if docs.len() < 2 {
+                return None;
+            }
+            let n = docs.iter().position(|id| *id == node.id())? + 1;
+            Some((format!("document {n}"), ContainerKind::Document))
+        }
+        // svelte's own block forms, named as written: `{#if n > 1}`,
+        // `{#each items as it}`, `{:else}`. Regions, like `#ifdef` — they hold
+        // markup but declare nothing. Gated on the language because
+        // `if_statement` is a kind seven other grammars here also produce;
+        // `{#snippet}` is deliberately absent, being a real definition.
+        "if_statement" | "else_if_block" | "else_block" | "each_statement" | "await_statement"
+        | "key_statement"
+            if spec.name == "svelte" =>
+        {
+            let mut cur = node.walk();
+            let start = node
+                .named_children(&mut cur)
+                .find(|c| c.kind().ends_with("_start"))?;
+            let text = start.utf8_text(src).ok()?;
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then_some((text, ContainerKind::Region))
+        }
+        // `<script setup>`, `<style scoped>`, `<style module lang="scss">` —
+        // what a reviewer actually calls these blocks. A region, not a
+        // definition: the block declares nothing itself, whatever its contents
+        // do. Both kinds are unique to html and svelte among shipped grammars.
+        "script_element" | "style_element" => {
+            let mut cur = node.walk();
+            let tag = node
+                .named_children(&mut cur)
+                .find(|n| matches!(n.kind(), "start_tag" | "self_closing_tag"))?;
+            let text = tag.utf8_text(src).ok()?;
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then_some((text, ContainerKind::Region))
+        }
+        // `@media (min-width: 700px)` is `#ifdef` in a different hat: a real
+        // container worth naming that declares nothing.
+        "media_statement" | "supports_statement" => {
+            let head = node
+                .named_children(&mut node.walk())
+                .find(|c| !matches!(c.kind(), "block"))
+                .and_then(|c| c.utf8_text(src).ok())
+                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|t| !t.is_empty())?;
+            let at = if node.kind() == "media_statement" {
+                "@media"
+            } else {
+                "@supports"
+            };
+            Some((format!("{at} {head}"), ContainerKind::Region))
+        }
         "minus_metadata" | "plus_metadata" if spec.prose => {
             Some(("front matter".to_string(), ContainerKind::FrontMatter))
         }
@@ -770,13 +1153,34 @@ fn region_label(
 }
 
 fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
+    let control = CONTROL_KINDS.contains(&node.kind());
+    if control {
+        c.nest_depth += 1;
+        for r in node.start_position().row..=node.end_position().row {
+            let d = c.nest_rows.entry(r).or_insert(0);
+            *d = (*d).max(c.nest_depth);
+        }
+    }
+    walk_node(node, src, spec, stack, c);
+    if control {
+        c.nest_depth -= 1;
+    }
+}
+
+fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
     let kind = node.kind();
     let sr = node.start_position().row;
-    if import_like(node, spec) {
+    if let Some(n) = field_init_name(node, src, spec) {
+        c.field_inits.insert(n);
+    }
+    if let Some(name) = uninit_field(node, src, spec) {
+        c.uninit_fields.push((sr, name));
+    }
+    if import_like(node, src, spec) {
         // the whole statement's rows count as import — a hunk that lands
         // anywhere in a multi-line `from x import (\n  a,\n  b,\n)` (tail,
         // middle, or head) is still an import hunk, not a bare "change".
-        let er = node.end_position().row;
+        let er = end_row(node, spec);
         for r in sr..=er {
             c.import_rows.insert(r);
         }
@@ -787,10 +1191,8 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         for (_, name) in
             import_bound_names(node, src, spec).unwrap_or_else(|| ident_text_rows(node, src))
         {
-            for r in sr..=er {
-                c.decls.push((r, name.clone()));
-                c.import_decls.push((r, name.clone()));
-            }
+            c.decls.push((sr, er, name.clone()));
+            c.import_decls.push((sr, er, name));
         }
         return; // don't descend: import identifiers are declarations, not uses
     }
@@ -828,6 +1230,12 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         });
         // fall through: the value still holds locals, uses and nested defs
     }
+    // a single-file component's `<script>` is real code in another language.
+    // This has to run *before* the region branch below, which names the block
+    // and then returns.
+    if matches!(spec.name, "html" | "svelte") && kind == "script_element" {
+        inject_sfc_script(node, src, c);
+    }
     if let Some((label, kind)) = region_label(node, src, spec, stack.is_empty()) {
         // a region names itself and nothing else: no `def_rows` (it declares
         // nothing, so a hunk in it is never a definition hunk), no `decls`
@@ -836,10 +1244,23 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         // a use of that macro — which is exactly what it is.
         let er = end_row(node, spec);
         let depth = stack.len();
+        // A document is a namespace; every other region names only itself. An
+        // `#ifdef` must not prefix the defs inside it — the definition is what
+        // a reviewer navigates to, and the region is a fact about where it
+        // sits. A `---` document is the opposite: the two `spec` keys of two
+        // k8s objects are different keys, and the path has to say so.
+        let scopes = kind == ContainerKind::Document;
+        if scopes {
+            stack.push(label.clone());
+        }
         c.defs.push(DefRec {
             s: sr,
             e: er,
-            name: label,
+            name: if scopes {
+                stack.join(lang::scope_sep(spec))
+            } else {
+                label
+            },
             depth,
             params: 0,
             kind,
@@ -847,6 +1268,9 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
             walk(ch, src, spec, stack, c);
+        }
+        if scopes {
+            stack.pop();
         }
         return;
     }
@@ -869,7 +1293,7 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         // name is not a symbol another file can reference, and must never seed
         // a def→use edge or key a persisted review mark.
         c.def_rows.insert(sr);
-        c.decls.push((sr, label.clone()));
+        c.decls.push((sr, sr, label.clone()));
         stack.push(label);
         c.defs.push(DefRec {
             s: sr,
@@ -924,24 +1348,36 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
                 c.bound.insert(name);
             }
         }
+        // a jinja macro hangs its parameters off the same `function_call` that
+        // carries its name — everything after that leading identifier
+        for name in jinja_macro_params(node, src) {
+            c.bound.insert(name);
+        }
+        // cmake spells a parameter list as the command's remaining arguments:
+        // `function(my_helper arg)` binds `arg`, so `${arg}` in the body is not
+        // read as a use of whatever else happens to be called `arg`
+        for name in cmake_params(node, src) {
+            c.bound.insert(name);
+        }
         c.def_rows.insert(sr);
         if lang::is_type_kind(kind) {
             c.type_rows.insert(sr);
         }
-        c.decls.push((sr, own.clone()));
-        // prose only: a def kind that is *also* a member kind (markdown's
-        // `section`) registers itself as a member of its enclosing container
-        // too, so a new subsection shows up in the P15 detail layer. Gated on
-        // `spec.prose` so this can't change member_rows for any code language
-        // (none of them has a kind that is both a def and reaches this branch
-        // as its own member — see lang.rs's java comment on that exact trap).
-        if spec.prose && spec.is_member(kind) {
+        c.decls.push((sr, sr, own.clone()));
+        // prose and config only: a def kind that is *also* a member kind
+        // (markdown's `section`, a config format's key) registers itself as a
+        // member of its enclosing container too, so a new subsection or key
+        // shows up in the P15 detail layer. Gated on the language shape rather
+        // than on the overlap alone, because javascript's `method_definition`
+        // *is* in both sets and must keep today's behavior — see lang.rs's
+        // java comment on that same trap.
+        if (spec.prose || spec.data) && spec.is_member(kind) {
             let text = node
                 .utf8_text(src)
                 .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
                 .unwrap_or_default();
-            // markdown has no calls: container is always the enclosing
-            // section (`stack`, not yet pushed with `own` at this point).
+            // neither prose nor config has calls: the container is always
+            // the enclosing def (`stack`, not yet pushed with `own` here).
             let container = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
             c.member_rows.push((sr, own.clone(), text, container));
         }
@@ -1020,14 +1456,154 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
         inject_fence(node, src, c);
         // fall through: the fence's own prose structure is still walked
     }
-    if lang::is_ident(kind) {
-        // A zero-width identifier node is a parse artifact (C++ template and
-        // macro constructs produce them); an empty name would surface in the
-        // rationale as a stray comma.
+    // nix: an `attrpath` is a name being bound (`meta.description = …`) or
+    // selected (`pkgs.gcc`) — never a free reference to something defined
+    // elsewhere, so its identifiers are not uses. The binding's own name is
+    // already filtered out of `uses` per hunk, but a dotted path is not.
+    if spec.name == "nix" && kind == "attrpath" {
+        return;
+    }
+    // a nix lambda binds its parameters: `{ pkgs, lib, ... }:` and `x: …`.
+    // Not a definition, so the def branch's parameter handling never sees it.
+    if kind == "function_expression" {
+        if let Some(f) = node.child_by_field_name("formals") {
+            for name in param_names(f, src) {
+                c.bound.insert(name);
+            }
+        }
+        if let Some(u) = node.child_by_field_name("universal") {
+            if let Ok(t) = u.utf8_text(src) {
+                c.bound.insert(t.to_string());
+            }
+        }
+        // fall through: the body still holds bindings and uses
+    }
+    // bash: a command *is* a call, so `deploy main` uses the function `deploy`.
+    // The name is a bare `word` — a kind make also uses for its targets — so
+    // it is read here rather than through IDENT_KINDS. A builtin (`echo`,
+    // `set`) resolves to no definition and costs nothing.
+    if spec.name == "bash" && kind == "command_name" {
         if let Ok(t) = node.utf8_text(src).map(str::trim) {
             if !t.is_empty() {
                 c.uses.push((sr, t.to_string()));
-                c.all_idents.push((sr, t.to_string(), node.id()));
+                c.all_idents.push((sr, c.uses.len() - 1, node.id()));
+            }
+        }
+        return;
+    }
+    // make: a prerequisite names another target, and `$(CC)` names a variable.
+    // Both are bare `word` nodes — a kind too generic to put in IDENT_KINDS,
+    // so they are read from the two parents that make one mean a reference.
+    if matches!(kind, "prerequisites" | "variable_reference") {
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            if ch.kind() == "word" {
+                if let Ok(t) = ch.utf8_text(src).map(str::trim) {
+                    if !t.is_empty() {
+                        c.uses.push((sr, t.to_string()));
+                        c.all_idents.push((sr, c.uses.len() - 1, ch.id()));
+                    }
+                }
+            } else {
+                walk(ch, src, spec, stack, c);
+            }
+        }
+        return;
+    }
+    // svelte: `{@render row(1)}` puts the call in raw text rather than an
+    // identifier node, so the name is the leading word of that text.
+    if spec.name == "svelte" && kind == "render_tag" {
+        let mut cur = node.walk();
+        if let Some(raw) = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "svelte_raw_text")
+        {
+            if let Ok(t) = raw.utf8_text(src) {
+                let name: String = t
+                    .trim()
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                    .collect();
+                if !name.is_empty() {
+                    c.uses.push((sr, name));
+                    c.all_idents.push((sr, c.uses.len() - 1, node.id()));
+                }
+            }
+        }
+        return;
+    }
+    // css: a selector list is a *name*, never a set of references. Its
+    // `class_name`/`id_name` wrap a plain `identifier`, which IDENT_KINDS
+    // matches — so without this a stylesheet emits bare uses of `btn`,
+    // `card`, `root` and `hover` into the union symbol table every other file
+    // is ordered against, and starts drawing edges to python functions.
+    if spec.name == "css" && kind == "selectors" {
+        return;
+    }
+    // css custom properties: `--brand: #0af` declares a name and `var(--brand)`
+    // uses it — the one def→use pair a stylesheet has, and so the only thing
+    // that lets a css hunk be ordered rather than merely described. Both are
+    // spelled as ordinary declarations and values, told apart by the `--`
+    // every custom property must start with.
+    if spec.name == "css" {
+        if kind == "declaration" {
+            let mut cur = node.walk();
+            let prop = node
+                .named_children(&mut cur)
+                .find(|c| c.kind() == "property_name")
+                .and_then(|c| c.utf8_text(src).ok())
+                .map(str::trim)
+                .filter(|t| t.starts_with("--"));
+            if let Some(name) = prop {
+                c.decls.push((sr, sr, name.to_string()));
+                c.def_rows.insert(sr);
+                let scope = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
+                c.sym_decls
+                    .push((sr, name.to_string(), kind.to_string(), scope));
+            }
+            // fall through: the declaration is still a member, and its value
+            // can still hold a `var(--other)`
+        }
+        if kind == "plain_value" {
+            if let Ok(t) = node.utf8_text(src).map(str::trim) {
+                if t.starts_with("--") {
+                    c.uses.push((sr, t.to_string()));
+                    c.all_idents.push((sr, c.uses.len() - 1, node.id()));
+                    return;
+                }
+            }
+        }
+    }
+    // yaml anchors: `&base` declares a name and `*base` uses it — the one real
+    // def→use pair a config format has, and the only thing that lets a yaml
+    // hunk be *ordered* rather than merely described. Both kinds are unique to
+    // that grammar, so neither can shadow another language's identifiers.
+    if matches!(kind, "anchor_name" | "alias_name") {
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() {
+                if kind == "anchor_name" {
+                    c.decls.push((sr, sr, t.to_string()));
+                    c.def_rows.insert(sr);
+                    c.sym_decls
+                        .push((sr, t.to_string(), kind.to_string(), None));
+                } else {
+                    c.uses.push((sr, t.to_string()));
+                    c.all_idents.push((sr, c.uses.len() - 1, node.id()));
+                }
+            }
+        }
+        return;
+    }
+    if lang::is_ident(kind) {
+        // A zero-width identifier node is a parse artifact (C++ template and
+        // macro constructs produce them); an empty name would surface in the
+        // rationale as a stray comma. An all-digits one is a shell positional
+        // parameter (`$1`, `$2`) — no language has a numeric symbol, so it can
+        // never resolve to a definition and only clutters `uses`.
+        if let Ok(t) = node.utf8_text(src).map(str::trim) {
+            if !t.is_empty() && !t.chars().all(|c| c.is_ascii_digit()) {
+                c.uses.push((sr, t.to_string()));
+                c.all_idents.push((sr, c.uses.len() - 1, node.id()));
             }
         }
     }
@@ -1047,6 +1623,9 @@ fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
         // xonsh `$FOO = …`: `left` is an `env_variable` wrapping the plain
         // identifier, so the bound name matches a use of `$FOO` elsewhere
         "assignment" | "short_var_declaration" | "env_assignment" => "left",
+        // bash `APP_DIR=/srv/app`, and the same node inside a `local` /
+        // `readonly` / `declare` wrapper the walk descends through
+        "variable_assignment" => "name",
         "let_declaration" => "pattern",
         "var_spec" | "variable_declarator" => "name",
         // java local_variable_declaration / c/cpp declaration: one or more
@@ -1143,7 +1722,7 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
     for field in ["name", "key"] {
         if let Some(n) = node.child_by_field_name(field) {
             if let Ok(t) = n.utf8_text(src) {
-                let name = tidy_ident(t.trim_matches(['"', '\'']));
+                let name = tidy_ident(unquote(t.trim()));
                 if !name.is_empty() {
                     return Some(name);
                 }
@@ -1157,7 +1736,9 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        if lang::is_ident(ch.kind()) {
+        // `property_name` is css's: a declaration names itself with one, and
+        // no other grammar here produces that kind
+        if lang::is_ident(ch.kind()) || ch.kind() == "property_name" {
             return ch.utf8_text(src).ok().map(str::to_string);
         }
     }
@@ -1180,7 +1761,7 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
 //
 // KNOWN LIMITATION: two calls sharing both callee and first literal argument
 // within one hunk collide onto the same key — the same class of limitation
-// documented at `symbol_identity_key` (src/bin/ordo-tui.rs).
+// documented at `symbol_identity_key` (src/bin/ordo.rs).
 fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -> Option<String> {
     call_container(node, src).or_else(|| {
         // a test block's label is a sentence, and a nested one is two: naming
@@ -1313,13 +1894,66 @@ fn param_names(params: Node, src: &[u8]) -> Vec<String> {
     out
 }
 
+// `{% macro row(a, b) %}` parses as `macro_statement -> function_call`, whose
+// first identifier is the macro's own name and whose `arg`s are its
+// parameters. Empty for every other node kind.
+fn jinja_macro_params(node: Node, src: &[u8]) -> Vec<String> {
+    if node.kind() != "macro_block" {
+        return vec![];
+    }
+    let Some(call) = node
+        .named_child(0)
+        .and_then(|st| st.named_child(0))
+        .filter(|n| n.kind() == "function_call")
+    else {
+        return vec![];
+    };
+    let mut cur = call.walk();
+    call.named_children(&mut cur)
+        .filter(|n| n.kind() == "arg")
+        .filter_map(|n| first_ident_text(n, src))
+        .collect()
+}
+
+// `function(my_helper arg …)` / `macro(m a b)`: every argument after the first
+// is a parameter. Empty for every other node kind.
+fn cmake_params(node: Node, src: &[u8]) -> Vec<String> {
+    if !matches!(node.kind(), "function_def" | "macro_def") {
+        return vec![];
+    }
+    let Some(args) = node.named_child(0).and_then(|head| {
+        let mut cur = head.walk();
+        let found = head
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "argument_list");
+        found
+    }) else {
+        return vec![];
+    };
+    let mut cur = args.walk();
+    args.named_children(&mut cur)
+        .skip(1)
+        .filter_map(|a| a.utf8_text(src).ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Parameters of a definition. Most grammars put a `parameters` field on the
+/// definition itself; C and C++ hang it off the declarator chain
+/// (`declarator: (function_declarator parameters: …)`), so follow that.
 fn count_params(node: Node) -> usize {
-    node.child_by_field_name("parameters")
-        .map(|p| {
+    let mut n = node;
+    loop {
+        if let Some(p) = n.child_by_field_name("parameters") {
             let mut cur = p.walk();
-            p.named_children(&mut cur).count()
-        })
-        .unwrap_or(0)
+            return p.named_children(&mut cur).count();
+        }
+        match n.child_by_field_name("declarator") {
+            Some(d) => n = d,
+            None => return 0,
+        }
+    }
 }
 
 /// A code identifier with any internal whitespace removed. C++ (OpenFOAM's
@@ -1338,7 +1972,10 @@ fn tidy_ident(s: &str) -> String {
 fn node_name(node: Node, src: &[u8]) -> Option<String> {
     // markdown headings are prose: their spacing is meaningful, so they are
     // named by `heading_name` and never passed through `tidy_ident`.
-    if node.kind() == "section" {
+    // a markdown heading and a css selector list are both punctuation-and-
+    // spacing, not identifiers: their own naming paths normalize them, and
+    // `tidy_ident` would glue `.btn, .btn-primary` into `.btn,.btn-primary`.
+    if matches!(node.kind(), "section" | "rule_set") {
         return node_name_inner(node, src);
     }
     node_name_inner(node, src)
@@ -1358,14 +1995,24 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         // (e.g. an HTML comment or a stray paragraph at the top of a file).
         // Naming it after that raw content reads badly, so it stays
         // anonymous rather than borrowing the wrong node's text.
-        return node
+        if let Some(h) = node
             .named_child(0)
             .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
-            .and_then(|h| heading_name(h, src));
+        {
+            return heading_name(h, src);
+        }
+        // ini spells `[user]` as a `section` too — same kind name, a different
+        // grammar, told apart by the child that carries the name. It falls
+        // through to the config-key path below; a *markdown* section with no
+        // heading finds nothing there either (that grammar has no `*_name`
+        // child and no identifier kind) and stays anonymous, as before.
     }
-    // 1. own name (function foo, class Foo, local function foo, impl Foo, …)
+    // 1. own name (function foo, class Foo, local function foo, impl Foo, …).
+    // Unquoted: a few grammars name a construct with a string literal rather
+    // than an identifier — `{{ define "mychart.labels" }}` — and the quotes
+    // are the grammar's, not part of the name.
     if let Some(n) = node.child_by_field_name("name") {
-        return n.utf8_text(src).ok().map(|s| s.to_string());
+        return n.utf8_text(src).ok().map(|t| unquote(t.trim()).to_string());
     }
     // 1b. name nested one or more levels down a `declarator` field — java
     // `field_declaration` -> `variable_declarator`, c/cpp `declaration` ->
@@ -1381,6 +2028,118 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         if let Some(name) = node_name(d, src) {
             return Some(name);
         }
+    }
+    // 1c-svelte. `{#snippet row(x)}` declares a reusable named block that
+    // `{@render row(1)}` calls — a real definition, not a region, and the one
+    // def→use pair a component's markup has.
+    if node.kind() == "snippet_statement" {
+        let mut cur = node.walk();
+        let start = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "snippet_start")?;
+        let mut sc = start.walk();
+        let name = start
+            .named_children(&mut sc)
+            .find(|c| c.kind() == "snippet_name")?;
+        let t = name.utf8_text(src).ok()?.trim();
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    // 1c-html. An element is named by its `id`, and only by that: an id is
+    // the one handle a stylesheet, a script or a fragment link addresses it
+    // by. Without one the element resolves to no name and is transparent, so
+    // a page of anonymous `<div>`s contributes no definitions at all.
+    if node.kind() == "element" {
+        let mut cur = node.walk();
+        let tag = node
+            .named_children(&mut cur)
+            .find(|c| matches!(c.kind(), "start_tag" | "self_closing_tag"))?;
+        let mut tc = tag.walk();
+        for attr in tag.named_children(&mut tc) {
+            if attr.kind() != "attribute" {
+                continue;
+            }
+            let mut ac = attr.walk();
+            let parts: Vec<Node> = attr.named_children(&mut ac).collect();
+            let is_id = parts
+                .first()
+                .filter(|n| n.kind() == "attribute_name")
+                .and_then(|n| n.utf8_text(src).ok())
+                .is_some_and(|t| t.eq_ignore_ascii_case("id"));
+            if !is_id {
+                continue;
+            }
+            let val = parts.get(1)?;
+            let text = unquote(val.utf8_text(src).ok()?.trim());
+            return (!text.is_empty()).then(|| format!("#{text}"));
+        }
+        return None;
+    }
+    // 1c-css. A rule set is named by its whole selector list — `.btn` and
+    // `#nav a:hover` as written, sigils kept, because the sigil is what makes
+    // a css symbol unable to collide with a code one. Runs of whitespace
+    // collapse to one space (a selector list is punctuation, not an
+    // identifier, so `node_name` leaves it out of `tidy_ident`).
+    if node.kind() == "rule_set" {
+        let mut cur = node.walk();
+        let sel = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "selectors")?;
+        let text = sel.utf8_text(src).ok()?;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        return (!text.is_empty()).then_some(text);
+    }
+    if node.kind() == "keyframes_statement" {
+        let mut cur = node.walk();
+        let n = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "keyframes_name")?;
+        let t = n.utf8_text(src).ok()?.trim();
+        return (!t.is_empty()).then(|| format!("@keyframes {t}"));
+    }
+    // 1c-make. A rule is named by its first target. A *special* target
+    // (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so it
+    // stays anonymous — its prerequisites are still read as uses of the real
+    // targets it lists, which is exactly what a `.PHONY` line is.
+    if node.kind() == "rule" {
+        // `targets` is a node kind here, not a field (unlike `normal:` for
+        // prerequisites) — verified against tree-sitter-make-1.1.1
+        let mut cur = node.walk();
+        let targets = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "targets")?;
+        let text = targets.named_child(0)?.utf8_text(src).ok()?.trim();
+        return (!text.is_empty() && !text.starts_with('.')).then(|| text.to_string());
+    }
+    // 1c-cmake. Every cmake construct is a command whose name is its first
+    // argument: `function(my_helper …)`, `set(SOURCES …)`. A command that
+    // introduces nothing resolves to no name and stays transparent, which is
+    // why `normal_command` can sit in `defs` without every `message()` call
+    // becoming a definition.
+    if matches!(node.kind(), "function_def" | "macro_def") {
+        return cmake_first_arg(node, src);
+    }
+    if node.kind() == "normal_command" {
+        let cmd = cmake_command(node, src)?;
+        if !matches!(cmd.as_str(), "set" | "option") {
+            return None;
+        }
+        return cmake_first_arg(node, src);
+    }
+    // 1c-jinja. `{% block server %}` / `{% macro row(a) %}`: the name lives in
+    // the opening statement, and for a macro one level further down inside a
+    // `function_call` (jinja spells a parameter list the same way it spells a
+    // call). Both kinds are unique to this grammar, so the deep search for the
+    // first identifier can't reach into another language's shapes.
+    if matches!(node.kind(), "block_block" | "macro_block") {
+        return node.named_child(0).and_then(|st| first_ident_text(st, src));
+    }
+    // 1d. config formats: a key-value pair (and a toml `[table]` header) is
+    // named by its key. json and yaml label it with a `key` field; toml-ng
+    // labels no fields at all, so its key is the first `*_key` child. Reached
+    // only for kinds the config specs declare as defs — python's and js's own
+    // `pair` is a member, never a def, so it never enters `node_name`.
+    if let Some(name) = config_key_name(node, src) {
+        return Some(name);
     }
     // 2. anonymous expression → the binding it's assigned to
     //    (local x = function…, x = function…, t.x = function…, x: fn)
@@ -1414,6 +2173,89 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         }
     }
     None
+}
+
+// Strip one matched pair of surrounding quotes. Matched, not `trim_matches`:
+// a gitconfig subsection is `remote "origin"`, whose quotes are part of the
+// name and whose leading character is not one — trimming from both ends
+// independently would leave `remote "origin`.
+fn unquote(s: &str) -> &str {
+    let mut ch = s.chars();
+    match (ch.next(), ch.next_back()) {
+        (Some(a), Some(b)) if a == b && (a == '"' || a == '\'') => {
+            &s[a.len_utf8()..s.len() - a.len_utf8()]
+        }
+        _ => s,
+    }
+}
+
+/// cmake's command name — the identifier a `normal_command` leads with, or the
+/// keyword a `function_def`/`macro_def` opens with. Every cmake construct is a
+/// command, so this is what tells `set()` from `include()` from a call.
+fn cmake_command(node: Node, src: &[u8]) -> Option<String> {
+    let head = match node.kind() {
+        "normal_command" => node,
+        "function_def" | "macro_def" => node.named_child(0)?,
+        _ => return None,
+    };
+    let mut cur = head.walk();
+    let ident = head
+        .named_children(&mut cur)
+        .find(|c| c.kind() == "identifier")?;
+    ident.utf8_text(src).ok().map(|t| t.to_ascii_lowercase())
+}
+
+/// The first argument of a cmake command — the name a `function`, `macro`,
+/// `set` or `option` introduces, and the module an `include` pulls in.
+fn cmake_first_arg(node: Node, src: &[u8]) -> Option<String> {
+    let head = match node.kind() {
+        "normal_command" => node,
+        "function_def" | "macro_def" => node.named_child(0)?,
+        _ => return None,
+    };
+    let mut cur = head.walk();
+    let args = head
+        .named_children(&mut cur)
+        .find(|c| c.kind() == "argument_list")?;
+    let first = args.named_child(0)?;
+    let text = unquote(first.utf8_text(src).ok()?.trim());
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+// The key naming a config entry: a json/yaml pair (field `key`), a toml pair
+// or `[table]` header, or an ini `[section]` / `setting` — the last two
+// grammars label no fields, so their key is the first `*_key`/`*_name` child.
+// Quotes are stripped so `"image"` and `image` name the same key.
+fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
+    let key = node.child_by_field_name("key").or_else(|| {
+        let mut cur = node.walk();
+        let found = node.named_children(&mut cur).find(|c| {
+            matches!(
+                c.kind(),
+                // toml
+                "bare_key" | "quoted_key" | "dotted_key"
+                    // ini: `[user]` and `name = A B`
+                    | "section_name" | "setting_name"
+                    // nix: `meta.description = …` — the whole dotted path
+                    | "attrpath"
+            )
+        });
+        found
+    })?;
+    // ini wraps the name in its delimiters — `section_name` spans `[user]\n`,
+    // with the bare name under a `text` child
+    let key = key
+        .named_child(0)
+        .filter(|c| c.kind() == "text")
+        .unwrap_or(key);
+    let text = unquote(key.utf8_text(src).ok()?.trim());
+    // yaml's merge key: `<<: *defaults` is not a key a reviewer navigates by,
+    // and "edits <<" says nothing. The pair stays anonymous, so the alias in
+    // its value is still read as a use of the anchor it merges in.
+    if text.is_empty() || text == "<<" {
+        return None;
+    }
+    Some(text.to_string())
 }
 
 // The bare name of a type node, unwrapping a generic application so
@@ -1528,6 +2370,24 @@ fn declarator_name(node: Node, src: &[u8]) -> Option<String> {
         .utf8_text(src)
         .ok()
         .map(str::to_string)
+}
+
+// The first quoted string anywhere under `node`, unquoted.
+fn first_string_literal(node: Node, src: &[u8]) -> Option<String> {
+    if matches!(
+        node.kind(),
+        "string_literal" | "interpreted_string_literal" | "raw_string_literal"
+    ) {
+        let t = node.utf8_text(src).ok()?.trim_matches(['"', '\'']);
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        if let Some(t) = first_string_literal(ch, src) {
+            return Some(t);
+        }
+    }
+    None
 }
 
 fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
@@ -1679,7 +2539,21 @@ fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) 
             // a signature change because the header would be the whole node.
             let body = node
                 .child_by_field_name("body")
-                .or_else(|| node.child_by_field_name("value"));
+                .or_else(|| node.child_by_field_name("value"))
+                // css labels no field: a `rule_set`'s declarations are a
+                // `block` child. Without this the header is the whole rule, so
+                // every declaration edit reads as a change to the selector
+                // itself and a renamed selector never matches its old body.
+                // Gated to css so no shipped language moves — cmake's
+                // `function_def` has an unlabelled `body` child too.
+                .or_else(|| {
+                    if spec.name != "css" {
+                        return None;
+                    }
+                    let mut cur = node.walk();
+                    let found = node.named_children(&mut cur).find(|c| c.kind() == "block");
+                    found
+                });
             // header = everything before the body (the signature); body text drives
             // rename/relocation matching. Fall back to the whole node when unsplit.
             let header = match body {
@@ -1712,7 +2586,7 @@ fn collect_rows(
 ) {
     let kind = node.kind();
     let row = node.start_position().row + 1; // 1-based
-    if import_like(node, spec) {
+    if import_like(node, src, spec) {
         match import_bound_names(node, src, spec) {
             Some(names) => imports.extend(names.into_iter().map(|(_, n)| (n, row))),
             None => imports.extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
@@ -1761,7 +2635,7 @@ pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
     let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
-    each_import(tree.root_node(), spec, &mut |n| {
+    each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
         for r in n.start_position().row..=n.end_position().row {
             out.insert(r + 1);
         }
@@ -1770,14 +2644,14 @@ pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
 }
 
 /// Visits every import statement, without descending into one.
-fn each_import(node: Node, spec: &LangSpec, f: &mut impl FnMut(Node)) {
-    if import_like(node, spec) {
+fn each_import(node: Node, src: &[u8], spec: &LangSpec, f: &mut impl FnMut(Node)) {
+    if import_like(node, src, spec) {
         f(node);
         return;
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        each_import(ch, spec, f);
+        each_import(ch, src, spec, f);
     }
 }
 
@@ -1791,7 +2665,7 @@ pub fn import_statements(spec: &LangSpec, content: &str) -> HashSet<String> {
         return out;
     };
     let src = content.as_bytes();
-    each_import(tree.root_node(), spec, &mut |n| {
+    each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
         if let Ok(t) = n.utf8_text(src) {
             out.insert(t.split_whitespace().collect::<Vec<_>>().join(" "));
         }
@@ -1815,11 +2689,82 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
     // they are shaped nothing alike: python has `name:` children, js has an
     // `import_clause` and a `source`. Gate on the language rather than trust a
     // shared kind name.
+    let row = node.start_position().row;
+    let text = |n: Node| n.utf8_text(src).ok().map(|t| (row, t.to_string()));
+    // an include or a go import names a *path*, not an identifier, so the
+    // identifier fallback finds nothing and the hunk binds no name at all —
+    // `imports = "boost/**"` could never match. Bind the path text instead:
+    // the include as written, a go package by the name code refers to it by.
+    match (spec.name, node.kind()) {
+        ("c" | "cpp", "preproc_include") => {
+            let path = node.child_by_field_name("path")?.utf8_text(src).ok()?;
+            let path = path.trim().trim_matches(|c| matches!(c, '<' | '>' | '"'));
+            return Some(vec![(row, path.to_string())]);
+        }
+        // bash: the script `source ./lib/common.sh` pulls in
+        ("bash", "command") => {
+            let arg = node.child_by_field_name("argument")?;
+            let text = unquote(arg.utf8_text(src).ok()?.trim());
+            return (!text.is_empty()).then(|| vec![(row, text.to_string())]);
+        }
+        // nix: the path `import ./overlays.nix` pulls in
+        ("nix", "apply_expression") => {
+            let arg = node.child_by_field_name("argument")?;
+            let text = arg.utf8_text(src).ok()?.trim();
+            return (!text.is_empty()).then(|| vec![(row, text.to_string())]);
+        }
+        // make: `include common.mk` names the makefiles it pulls in
+        ("make", "include_directive") => {
+            let list = node.child_by_field_name("filenames")?;
+            let mut cur = list.walk();
+            let out: Vec<(usize, String)> = list
+                .named_children(&mut cur)
+                .filter_map(|n| n.utf8_text(src).ok())
+                .map(|t| (row, t.trim().to_string()))
+                .filter(|(_, t)| !t.is_empty())
+                .collect();
+            return (!out.is_empty()).then_some(out);
+        }
+        // cmake: the module, package or subdirectory the command names
+        ("cmake", _) => return Some(vec![(row, cmake_first_arg(node, src)?)]),
+        // a jinja `{% include 'tls.j2' %}` / `{% extends 'base.j2' %}` names a
+        // template path, same shape as a c include: bind the path as written
+        // so the hunk says which template arrived rather than bare "import".
+        // `{% from 'c.j2' import d %}` also binds `d`, which the identifier
+        // fallback below already picks up — so only the path is added here.
+        ("jinja", _) => {
+            let mut cur = node.walk();
+            let lit = node
+                .named_children(&mut cur)
+                .find_map(|n| first_string_literal(n, src))?;
+            return Some(vec![(row, lit)]);
+        }
+        ("go", "import_spec") => return Some(go_import_name(node, src).into_iter().collect()),
+        ("go", "import_declaration") => {
+            let mut cur = node.walk();
+            let mut out = vec![];
+            for spec_node in node.named_children(&mut cur) {
+                match spec_node.kind() {
+                    "import_spec" => out.extend(go_import_name(spec_node, src)),
+                    "import_spec_list" => {
+                        let mut c2 = spec_node.walk();
+                        for sp in spec_node
+                            .named_children(&mut c2)
+                            .filter(|n| n.kind() == "import_spec")
+                        {
+                            out.extend(go_import_name(sp, src));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return Some(out);
+        }
+        _ => {}
+    }
     if !matches!(spec.name, "python" | "xonsh") {
         return None;
     }
-    let row = node.start_position().row;
-    let text = |n: Node| n.utf8_text(src).ok().map(|t| (row, t.to_string()));
     match node.kind() {
         // python: `import a.b` binds `a`; `from a.b import c, d as e` binds c, e
         "import_statement" | "import_from_statement" => {
@@ -1843,6 +2788,100 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
         }
         _ => None,
     }
+}
+
+/// `import "go.uber.org/zap"` binds `zap`; `import z "go.uber.org/zap"` binds
+/// `z`; a blank or dot import binds nothing a hunk could be said to use.
+/// Fields verified against tree-sitter-go-0.23's node-types.json.
+fn go_import_name(spec: Node, src: &[u8]) -> Option<(usize, String)> {
+    let row = spec.start_position().row;
+    if let Some(alias) = spec.child_by_field_name("name") {
+        let a = alias.utf8_text(src).ok()?;
+        return (a != "_" && a != ".").then(|| (row, a.to_string()));
+    }
+    let path = spec.child_by_field_name("path")?.utf8_text(src).ok()?;
+    let last = path.trim_matches('"').rsplit('/').next()?;
+    (!last.is_empty()).then(|| (row, last.to_string()))
+}
+
+/// A data member declared without an initializer — `int a;`, `int* p;` in C++
+/// (a `field_identifier` under the declarator chain, no `default_value`),
+/// `int a;` in Java (a `variable_declarator` with no `value`). A member
+/// *function* is a `field_declaration` in C++ too and is not data. C structs
+/// have no constructors to initialize in, so C is left alone.
+/// Shapes verified against tree-sitter-cpp-0.23 / tree-sitter-java-0.23.
+fn uninit_field(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
+    if node.kind() != "field_declaration" {
+        return None;
+    }
+    let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+    match spec.name {
+        "cpp" => {
+            if node.child_by_field_name("default_value").is_some() {
+                return None;
+            }
+            let mut d = node.child_by_field_name("declarator")?;
+            // pointer/array declarators name their inner declarator as a
+            // field; a reference declarator holds it as a bare child
+            while matches!(
+                d.kind(),
+                "pointer_declarator" | "reference_declarator" | "array_declarator"
+            ) {
+                d = d
+                    .child_by_field_name("declarator")
+                    .or_else(|| d.named_child(0))?;
+            }
+            (d.kind() == "field_identifier").then(|| text(d)).flatten()
+        }
+        "java" => {
+            let d = node.child_by_field_name("declarator")?;
+            if d.kind() != "variable_declarator" || d.child_by_field_name("value").is_some() {
+                return None;
+            }
+            text(d.child_by_field_name("name")?)
+        }
+        _ => None,
+    }
+}
+
+/// The member an initializer names: `: a(x)` in a C++ constructor's
+/// initializer list, `this.a = x` in a Java constructor body.
+fn field_init_name(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
+    let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+    match (spec.name, node.kind()) {
+        ("cpp", "field_initializer") => text(
+            node.named_child(0)
+                .filter(|n| n.kind() == "field_identifier")?,
+        ),
+        ("java", "assignment_expression") => {
+            let left = node.child_by_field_name("left")?;
+            if left.kind() != "field_access" || left.child_by_field_name("object")?.kind() != "this"
+            {
+                return None;
+            }
+            text(left.child_by_field_name("field")?)
+        }
+        _ => None,
+    }
+}
+
+/// Every member name the constructors in `content` initialize — the other
+/// half of "a member added in this change with no initializer", which may
+/// live in the `.cpp` while the member lives in the header.
+pub fn field_initializers(spec: &LangSpec, content: &str) -> HashSet<String> {
+    let Some(tree) = lang::parse(spec, content) else {
+        return HashSet::new();
+    };
+    let mut c = Collected::default();
+    let mut stack: Vec<String> = vec![];
+    walk(
+        tree.root_node(),
+        content.as_bytes(),
+        spec,
+        &mut stack,
+        &mut c,
+    );
+    c.field_inits
 }
 
 fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {

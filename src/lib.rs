@@ -21,6 +21,12 @@ pub use patch::split_patch;
 pub const SCHEMA_VERSION: u32 = 1;
 
 pub fn run(input: Input) -> Output {
+    // Templates are rewritten before anything else looks at them: every later
+    // parse (semantics, symbol rows, bodies, advisories) then sees text the
+    // underlying grammar can read, at unchanged offsets. What the jinja
+    // statements *said* is harvested first, since blanking is what makes the
+    // rest work — see `extract::mask_template`.
+    let (input, templates) = mask_templates(input);
     // per-file hunks + semantics
     let mut raws: Vec<Vec<RawHunk>> = vec![];
     let mut sems: Vec<Vec<HunkSem>> = vec![];
@@ -28,8 +34,9 @@ pub fn run(input: Input) -> Output {
     let mut comment_only: Vec<Vec<bool>> = vec![];
     let mut switched: Vec<Vec<Option<SideShift>>> = vec![];
     let mut dropped: Vec<Vec<DroppedHunk>> = vec![];
-    for change in &input.changes {
-        let (raw, sem, deg, com, sw) = build_change(change, input.options.full_context);
+    for (fi, change) in input.changes.iter().enumerate() {
+        let (raw, mut sem, deg, com, sw) = build_change(change, input.options.full_context);
+        apply_template_facts(&templates[fi], &change.path, &raw, &mut sem);
         if deg {
             eprintln!(
                 "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
@@ -377,6 +384,45 @@ pub fn run(input: Input) -> Output {
     }
 
     // ---- reviewing rules (Options.rules) ----
+    // A data member added in this change is initialized in-class or in a
+    // constructor's initializer list — and if that constructor changed, its
+    // file is in the diff. So "no initializer anywhere in the change" is
+    // decidable from the change alone, header and `.cpp` together. A member
+    // the old side already had is not this change's to answer for.
+    let mut inits: HashSet<String> = HashSet::new();
+    for change in &input.changes {
+        if let (Some(spec), Some(new)) = (lang::for_path(&change.path), change.new.as_deref()) {
+            if matches!(spec.name, "cpp" | "java") {
+                inits.extend(extract::field_initializers(spec, new));
+            }
+        }
+    }
+    for (fi, change) in input.changes.iter().enumerate() {
+        let Some(spec) = lang::for_path(&change.path) else {
+            continue;
+        };
+        if !matches!(spec.name, "cpp" | "java") {
+            continue;
+        }
+        let old_names: HashSet<String> = change
+            .old
+            .as_deref()
+            .map(|o| {
+                extract::member_rows(spec, o)
+                    .into_iter()
+                    .map(|(_, n, _, _)| n)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for sem in &mut sems[fi] {
+            sem.uninit_members
+                .retain(|n| !inits.contains(n) && !old_names.contains(n));
+            for n in &sem.uninit_members {
+                sem.notes.push(format!("uninitialized member {n}"));
+            }
+        }
+    }
+
     // Evaluated after the semantics they match on, and before the ordering they
     // can influence. A rule's `noise` and `priority` reach the hunk itself; its
     // notes ride along to the output.
@@ -389,23 +435,33 @@ pub fn run(input: Input) -> Output {
                 (Some(spec), Some(new)) => rule_engine.query_rows(spec, new),
                 _ => HashMap::new(),
             };
+            let file_lines = (
+                change.old.as_deref().map(|o| o.lines().count()),
+                change.new.as_deref().map_or(0, |n| n.lines().count()),
+            );
             let mut per_file = vec![];
             for li in 0..raws[fi].len() {
                 let sem = &sems[fi][li];
                 let [r0, r1] = raws[fi][li].new_range;
-                let hits = rule_engine.hits(
+                let facts = rules::HunkFacts {
                     path,
-                    (r0, r1),
-                    sem.category,
-                    sem.enclosing_kind,
-                    &sem.defines,
-                    &sem.uses,
-                    &sem.imports,
-                    sem.noise,
-                    comment_only[fi][li],
-                    &query_rows,
-                );
-                per_file.push(hits);
+                    rows: (r0, r1),
+                    category: sem.category,
+                    enclosing_kind: sem.enclosing_kind,
+                    defines: &sem.defines,
+                    uses: &sem.uses,
+                    imports: &sem.imports,
+                    noise: sem.noise,
+                    comment: comment_only[fi][li],
+                    def_lines: sem.def_lines,
+                    def_params: sem.def_params,
+                    nesting: sem.nesting,
+                    file_lines,
+                    recursive: sem.recursive,
+                    container_members: &sem.container_members,
+                    uninit_members: &sem.uninit_members,
+                };
+                per_file.push(rule_engine.hits(&facts, &query_rows));
             }
             rule_hits[fi] = per_file;
         }
@@ -539,6 +595,7 @@ pub fn run(input: Input) -> Output {
         .map(|c| c.iter().map(|&i| hid(i)).collect())
         .collect();
 
+    let notes = changeset_notes(&files);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -553,7 +610,39 @@ pub fn run(input: Input) -> Output {
             p.dedup();
             p
         },
+        notes,
     }
+}
+
+/// A path with this many hunks is churning rather than being edited.
+const HIGH_CHURN: usize = 10;
+
+/// P13.2: what the *changeset* looks like, as facts a reviewer can act on —
+/// never judgments. Both signals are decidable from the finished output alone.
+///
+/// "code" here means any supported language that is neither prose nor a config
+/// format. That deliberately includes css and html, so a stylesheet-only change
+/// also reports an untouched test suite; tightening it would need a notion of
+/// "language people write tests for" that the registry does not have and that
+/// nothing has yet asked for.
+fn changeset_notes(files: &[FileOut]) -> Vec<String> {
+    let mut notes = vec![];
+    let is_code =
+        |p: &str| lang::for_path(p).is_some_and(|s| !s.prose && !s.data && s.template.is_none());
+    // a hunk-less file is one the caller sent with nothing in it; it says
+    // nothing about whether code changed
+    let touched: Vec<&FileOut> = files.iter().filter(|f| !f.hunks.is_empty()).collect();
+    let any_code = touched.iter().any(|f| is_code(&f.path));
+    let any_test = touched.iter().any(|f| lang::is_test_path(&f.path));
+    if any_code && !any_test {
+        notes.push("code changed but no test touched".to_string());
+    }
+    for f in &touched {
+        if f.hunks.len() >= HIGH_CHURN {
+            notes.push(format!("{}: {} hunks (high churn)", f.path, f.hunks.len()));
+        }
+    }
+    notes
 }
 
 /// P12.4: render a compact, deterministic review pack from the engine output —
@@ -585,6 +674,14 @@ pub fn pack(out: &Output) -> String {
         out.files.len(),
         out.clusters.len()
     );
+    // changeset-level signals lead: they are about the change as a whole, so
+    // they frame the reading order rather than sitting after it
+    if !out.notes.is_empty() {
+        let _ = writeln!(s, "\n## notes");
+        for n in &out.notes {
+            let _ = writeln!(s, "- {n}");
+        }
+    }
     let _ = writeln!(s, "\n## reading order");
     for o in &out.order {
         if let Some((path, h)) = by_id.get(o.hunk.as_str()) {
@@ -666,6 +763,90 @@ type ChangeParts = (
     Vec<Option<SideShift>>,
 );
 
+// Blank the jinja out of every templated file whose *underlying* format has a
+// grammar of its own, so `values.yaml.j2` is analyzed as the yaml it renders
+// to. A bare `.j2` (or one over a format with no grammar) is parsed as jinja
+// itself and is left alone. `old` is masked too: rename/move/removal matching
+// compares the two sides, and one masked side against one raw side would read
+// every statement line as a change.
+/// What a template's jinja said, once it has been blanked out of the text the
+/// grammars see: the variables it reads, and the rows that held the statements.
+#[derive(Default)]
+struct TemplateFacts {
+    uses: Vec<(usize, String)>,
+    /// 0-based new-side rows that were blanked
+    masked: HashSet<usize>,
+}
+
+fn mask_templates(mut input: Input) -> (Input, Vec<TemplateFacts>) {
+    let mut facts: Vec<TemplateFacts> = vec![];
+    for c in &mut input.changes {
+        let Some(tspec) = lang::template_lang(&c.path) else {
+            facts.push(TemplateFacts::default());
+            continue;
+        };
+        // a bare `.j2` (or one over a format with no grammar of its own) is
+        // parsed as jinja itself — nothing to mask, and the ordinary walk
+        // already reads its variables, its macro names and its parameters
+        // properly. Harvesting them a second time here would re-add a macro's
+        // own name and parameters as uses of themselves.
+        if lang::for_path(&c.path).is_some_and(|s| std::ptr::eq(s, tspec)) {
+            facts.push(TemplateFacts::default());
+            continue;
+        }
+        // read the jinja *before* blanking it, or the variables this exists
+        // to report would already be gone
+        let mut f = TemplateFacts {
+            uses: c
+                .new
+                .as_deref()
+                .map(|n| extract::template_uses(tspec, n))
+                .unwrap_or_default(),
+            masked: HashSet::new(),
+        };
+        for (side, keep_rows) in [(&mut c.old, false), (&mut c.new, true)] {
+            if let Some((text, rows)) = side
+                .as_deref()
+                .and_then(|t| extract::mask_template(tspec, t))
+            {
+                *side = Some(text);
+                if keep_rows {
+                    f.masked = rows;
+                }
+            }
+        }
+        facts.push(f);
+    }
+    (input, facts)
+}
+
+// A template's `{{ … }}` and `{% … %}` name variables the file consumes; a
+// hunk that touches those rows uses them. Uses only — a template defines
+// nothing, so `{{ db_host }}` can link to wherever `db_host` is actually set
+// without a second template ever claiming to define it.
+fn apply_template_facts(f: &TemplateFacts, path: &str, raw: &[RawHunk], sem: &mut [HunkSem]) {
+    if f.uses.is_empty() && f.masked.is_empty() {
+        return;
+    }
+    // a blanked row is whitespace to the underlying grammar, so a hunk that
+    // touches only jinja — a `{% if %}` guard put around a block, a loop
+    // rewritten — would otherwise read as "formatting only" and be dimmed as
+    // noise. It is the substance of a template, not its formatting.
+    let generated = lang::is_generated_path(path);
+    for (h, s) in raw.iter().zip(sem.iter_mut()) {
+        let Some(r0) = h.new_r0 else { continue };
+        let rows = r0..=h.new_r1;
+        for (row, name) in &f.uses {
+            if rows.contains(row) && !s.uses.contains(name) {
+                s.uses.push(name.clone());
+            }
+        }
+        if !generated && rows.clone().any(|r| f.masked.contains(&r)) {
+            s.noise = false;
+        }
+    }
+}
+
 fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let old = change.old.as_deref();
     let (raw, new, degraded): (Vec<RawHunk>, String, bool) = if let Some(new) = &change.new {
@@ -719,7 +900,15 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         let phrases: Vec<Vec<String>> = raw
             .iter()
             .enumerate()
-            .map(|(i, h)| detail_phrases(&sems[i], h, &old_members, spec.prose))
+            .map(|(i, h)| {
+                detail_phrases(
+                    &sems[i],
+                    h,
+                    &old_members,
+                    spec.prose,
+                    spec.prose || spec.data,
+                )
+            })
             .collect();
         for (i, d) in phrases.into_iter().enumerate() {
             sems[i].details = d;
@@ -942,6 +1131,7 @@ fn detail_phrases(
     h: &RawHunk,
     old_members: &[extract::MemberRow],
     prose: bool,
+    nests: bool,
 ) -> Vec<String> {
     let [o0, o1] = h.old_range;
     // Anything the hunk introduces wholesale is already named by the rationale
@@ -959,9 +1149,14 @@ fn detail_phrases(
     // enclosing definition) falls back to the hunk's enclosing definition,
     // same as before this member-level attribution existed. Placeholder
     // segments never reach the wording (as in the rationale itself).
+    //
+    // Not for a language where a definition is *also* a member of the one
+    // above it — a prose section, a config key. There `None` means top level,
+    // and the fallback reports a **sibling** as the parent: two keys side by
+    // side read as `adds two to one`.
     let clean =
         |c: String| (!c.split('.').any(|seg| seg == "<anonymous>" || seg == "_")).then_some(c);
-    let fallback = s.enclosing.clone();
+    let fallback = if nests { None } else { s.enclosing.clone() };
     let resolve = |c: &Option<String>| c.clone().or_else(|| fallback.clone()).and_then(clean);
 
     let mut old_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();

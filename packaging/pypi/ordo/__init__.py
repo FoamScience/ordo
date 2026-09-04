@@ -1,6 +1,6 @@
-"""Thin Python wrapper over the ordo binary.
+"""Thin Python wrapper over the ordo-engine binary.
 
-Binary resolution: ORDO_BIN env → vendored (shipped in the wheel) → `ordo` on PATH.
+Binary resolution: ORDO_BIN env → vendored (shipped in the wheel) → `ordo-engine` on PATH.
 """
 import json
 import os
@@ -16,14 +16,14 @@ def binary_path() -> str:
     env = os.environ.get("ORDO_BIN")
     if env:
         return env
-    exe = "ordo.exe" if sys.platform == "win32" else "ordo"
+    exe = "ordo-engine.exe" if sys.platform == "win32" else "ordo-engine"
     vendored = Path(__file__).parent / "vendor" / exe
     if vendored.exists():
         return str(vendored)
-    found = shutil.which("ordo")
+    found = shutil.which("ordo-engine")
     if found:
         return found
-    raise FileNotFoundError("ordo binary not found; set ORDO_BIN or install a prebuilt")
+    raise FileNotFoundError("ordo-engine binary not found; set ORDO_BIN or install a prebuilt")
 
 
 def _run(args, stdin: str) -> dict:

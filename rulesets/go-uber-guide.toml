@@ -1,0 +1,284 @@
+# Uber Go Style Guide — https://github.com/uber-go/guide (style.md)
+# Go Code Review Comments — https://go.dev/wiki/CodeReviewComments
+#
+# Use: `ordo --rules rulesets/go-uber-guide.toml`, or copy the rules you
+# want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's advisory catalog already fires on it with no
+# config: `unsafe`.
+#
+# Skipped, and why:
+#   - Pointers to Interfaces / Pass Values: telling a pointer-to-interface
+#     parameter from a legitimate pointer-to-struct one needs to know
+#     whether the pointee is an interface — a cross-file type lookup, not a
+#     shape in the hunk.
+#   - Verify Interface Compliance, Doc Comments, Package Comments: all three
+#     are "X should exist but doesn't" — absence of a fact nothing in the
+#     hunk states, not a shape the hunk introduces.
+#   - Copy Slices/Maps at Boundaries, Defer to Clean Up, Handle Errors Once,
+#     Reduce Scope of Variables, Goroutine Lifetimes, In-Band Errors: each
+#     turns on what the *rest of the function* does with a value — dataflow,
+#     not a construct.
+#   - Receiver Type consistency (pointer vs value across a type's methods):
+#     Go methods aren't nested inside the type declaration the way C++
+#     members are, so there is no single container node to inspect — it
+#     needs every method of a type collected across the file.
+#   - Use "time" (time.Time/time.Duration sections), Use go.uber.org/atomic,
+#     Exit in Main, field tags in marshaled structs, Format/Printf-style
+#     naming, Prefer Specifying Container Capacity, Crypto Rand: each needs
+#     knowing what a type or a call is *for* (is this struct marshaled? is
+#     this int64 a duration? is this rand security-sensitive?) — a judgment
+#     call ordo has no fact for, not a fixed shape.
+#   - Everything under Style, Linting and Patterns (import grouping,
+#     declaration grouping, struct literal field names, table tests,
+#     functional options, line length, gofmt/goimports territory): pure
+#     formatting or design pattern, not a correctness-flavored convention.
+#
+# Most Go conventions turn on one *named* child (a parameter's name, a
+# receiver's name, an import's alias) rather than the whole matched node, so
+# `text` — which reads the entire node — is too coarse; those use a query
+# to anchor the regex on just that capture. `kind`/`with`/`without` cover
+# the plain shape checks (embedded fields, pointer-to-Mutex, naked returns).
+
+# ------------------------------------------------------------ facts
+
+[[rule]]
+name = "no-init"
+lang = "go"
+defines = "init"
+note = "[uber: Avoid init()] init() runs implicitly and hides setup order — an explicit constructor is easier to test and reason about"
+
+[[rule]]
+name = "no-panic"
+lang = "go"
+uses = "panic"
+warn = "[uber: Don't Panic] panic crosses package boundaries as a crash — return an error instead"
+
+[[rule]]
+name = "mutable-global"
+lang = "go"
+query = '(source_file (var_declaration) @v)'
+note = "[uber: Avoid Mutable Globals] a package-level var is shared, mutable state — inject it instead, or make it a const"
+
+# ------------------------------------------------------------ shape (kind/with/without/text)
+
+[[rule]]
+name = "pointer-to-mutex"
+lang = "go"
+kind = "field_declaration"
+with = "pointer_type"
+text = "sync\\.(Mutex|RWMutex)"
+warn = "[uber: Zero-value Mutexes are Valid] a sync.Mutex needs no init — store it by value, not *sync.Mutex"
+
+[[rule]]
+name = "avoid-embedding-in-struct"
+lang = "go"
+kind = "field_declaration"
+without = "name"
+note = "[uber: Avoid Embedding Types in Public Structs] embedding leaks the embedded type's methods and fields into this one's API — name the field instead, if this struct is exported"
+
+[[rule]]
+name = "import-blank"
+lang = "go"
+kind = "import_spec"
+with = "blank_identifier"
+note = "[uber/crc: Import Blank] a blank import's side effect isn't obvious at the call site — say why in a comment above it"
+
+[[rule]]
+name = "import-dot"
+lang = "go"
+kind = "import_spec"
+with = "dot"
+warn = "[uber/crc: Import Dot] a dot import puts the package's names directly in this file's scope — spell out the package name instead"
+
+[[rule]]
+name = "naked-return"
+lang = "go"
+kind = "return_statement"
+without = "expression_list"
+note = "[uber/crc: Naked Returns] a naked return hides what's actually returned — fine in a five-line function, confusing past that"
+
+[[rule]]
+name = "fire-and-forget-goroutine"
+lang = "go"
+kind = "go_statement"
+note = "[uber: Don't fire-and-forget goroutines] who waits for this, and who sees its error?"
+
+[[rule]]
+name = "package-name"
+lang = "go"
+kind = "package_clause"
+text = "^package\\s+\\S*[A-Z_]"
+warn = "[uber/crc: Package Names] a package name is all lowercase, one word — no underscores, no mixedCaps"
+
+# ------------------------------------------------------------ relationships (query)
+
+[[rule]]
+name = "unnecessary-else"
+lang = "go"
+query = '''
+(if_statement
+  consequence: (block (return_statement) .)
+  alternative: (block)) @if
+'''
+note = "[uber: Unnecessary Else] the if-branch already returns — drop the else and de-indent"
+
+[[rule]]
+name = "type-assertion-must-check"
+lang = "go"
+query = '''
+(short_var_declaration
+  left: (expression_list . (identifier) .)
+  right: (expression_list (type_assertion_expression) @ta))
+'''
+warn = "[crc: Handle Type Assertion Failures] a single-value type assertion panics on mismatch — use the `v, ok := x.(T)` form"
+
+[[rule]]
+name = "channel-buffer-size"
+lang = "go"
+query = '''
+((call_expression
+   function: (identifier) @f
+   arguments: (argument_list (channel_type) (int_literal) @n .))
+ (#eq? @f "make")
+ (#match? @n "^([2-9]|[0-9]{2,})$"))
+'''
+note = "[uber: Channel Size is One or None] a buffered channel wants a size of one or none — anything bigger asks for a justifying comment"
+
+[[rule]]
+name = "enum-start-at-one"
+lang = "go"
+query = '''
+(const_spec value: (expression_list (iota) .)) @spec
+'''
+note = "[uber: Start Enums at One] starting at iota (zero) makes the zero value a valid enumerator — start at iota + 1 unless zero is meant to be meaningful"
+
+[[rule]]
+name = "context-not-first-param"
+lang = "go"
+query = '''
+(parameter_list
+  (parameter_declaration)
+  .
+  (parameter_declaration
+    type: (qualified_type
+      package: (package_identifier) @pkg
+      name: (type_identifier) @ty))
+  (#eq? @pkg "context")
+  (#eq? @ty "Context"))
+'''
+warn = "[crc: Contexts] context.Context is conventionally the first parameter, named ctx"
+
+[[rule]]
+name = "avoid-builtin-names"
+lang = "go"
+query = '''
+((parameter_declaration name: (identifier) @n)
+ (#match? @n "^(len|cap|new|make|append|copy|delete|panic|recover|print|println|error|string|int|bool|byte|rune|true|false|nil|iota)$"))
+'''
+warn = "[uber: Avoid Using Built-In Names] shadowing a predeclared identifier works, but confuses the next reader who expects the real one"
+
+[[rule]]
+name = "no-goroutine-in-init"
+lang = "go"
+query = '''
+(function_declaration
+  name: (identifier) @fn
+  body: (block (go_statement))
+  (#eq? @fn "init"))
+'''
+warn = "[uber: No goroutines in init()] a goroutine started in init() runs before main — nothing has had a chance to wait for it"
+
+[[rule]]
+name = "prefer-strconv-over-fmt"
+lang = "go"
+query = '''
+((call_expression
+   function: (selector_expression
+     operand: (identifier) @pkg
+     field: (field_identifier) @fn))
+ (#eq? @pkg "fmt")
+ (#match? @fn "^Sprint"))
+'''
+note = "[uber: Prefer strconv over fmt] strconv is measurably faster for simple conversions and makes the intent explicit"
+
+[[rule]]
+name = "error-naming"
+lang = "go"
+query = '''
+((var_spec
+   name: (identifier) @n
+   value: (expression_list
+     (call_expression
+       function: (selector_expression operand: (identifier) @pkg field: (field_identifier) @fn))))
+ (#match? @pkg "^(errors|fmt)$")
+ (#match? @fn "^(New|Errorf)$")
+ (#not-match? @n "^[Ee]rr"))
+'''
+note = "[uber: Error Naming] a sentinel error variable is named Err... (or err... if unexported)"
+
+[[rule]]
+name = "error-string-format"
+lang = "go"
+query = '''
+((call_expression
+   function: (selector_expression operand: (identifier) @pkg field: (field_identifier) @fn)
+   arguments: (argument_list . (interpreted_string_literal (interpreted_string_literal_content) @msg)))
+ (#match? @pkg "^(errors|fmt)$")
+ (#match? @fn "^(New|Errorf)$")
+ (#match? @msg "^[A-Z]|[.!?:]$"))
+'''
+warn = "[crc: Error Strings] error strings aren't capitalized and don't end in punctuation — they're often wrapped into a larger sentence"
+
+[[rule]]
+name = "declaring-empty-slices"
+lang = "go"
+query = '''
+((short_var_declaration
+   right: (expression_list
+     (composite_literal
+       type: (slice_type)
+       body: (literal_value) @body)))
+ (#eq? @body "{}"))
+'''
+note = "[crc: Declaring Empty Slices] `var s []T` reads clearer and is nil-safe the same way `s := []T{}` is"
+
+[[rule]]
+name = "receiver-name-generic"
+lang = "go"
+query = '''
+((method_declaration
+   receiver: (parameter_list (parameter_declaration name: (identifier) @n)))
+ (#match? @n "^(this|self)$"))
+'''
+note = "[crc: Receiver Names] a receiver name is a one- or two-letter abbreviation of the type, not `this`/`self` — Go isn't that kind of OO language"
+
+[[rule]]
+name = "function-name-underscore"
+lang = "go"
+query = '''
+([
+  (function_declaration name: (identifier) @n)
+  (method_declaration name: (field_identifier) @n)
+]
+ (#match? @n "_"))
+'''
+note = "[uber/crc: Function Names, Mixed Caps] Go names use MixedCaps, not underscores"
+
+[[rule]]
+name = "initialisms"
+lang = "go"
+query = '''
+((var_spec name: (identifier) @n)
+ (#match? @n "(Id|Url|Api|Http|Json|Xml)$"))
+'''
+note = "[crc: Initialisms] an initialism keeps one consistent case — UserID, not UserId"
+
+[[rule]]
+name = "avoid-naked-parameters"
+lang = "go"
+query = '''
+(call_expression
+  arguments: (argument_list [(true) (false)] @lit))
+'''
+note = "[uber: Avoid Naked Parameters] a bare true/false at a call site says nothing about what it means — a named constant or an inline comment does"

@@ -9,7 +9,7 @@ const MAX = 64 * 1024 * 1024;
 
 function binaryPath() {
   if (process.env.ORDO_BIN) return process.env.ORDO_BIN;
-  const exe = process.platform === "win32" ? "ordo.exe" : "ordo";
+  const exe = process.platform === "win32" ? "ordo-engine.exe" : "ordo-engine";
   const vendored = path.join(__dirname, "vendor", exe);
   if (fs.existsSync(vendored)) return vendored;
   return exe; // PATH fallback

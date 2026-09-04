@@ -4,8 +4,27 @@
 //! is the one exception: it also needed a small, `prose`-gated naming path in
 //! extract.rs and order.rs, since a heading has no identifier to name a def by).
 //! Tier-1: python, xonsh, javascript, typescript, tsx, go, c, cpp, java, lua,
-//! markdown.
+//! markdown. Config formats (json, yaml, toml) are a third shape alongside
+//! code and prose — see the `data` flag.
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use tree_sitter::{Language, Parser, Tree};
+
+/// A templating grammar: what it wraps, and how much of it to blank out so
+/// the *host* format underneath can be parsed. See `extract::mask_template`.
+pub struct Template {
+    /// node kinds holding the host format's own bytes
+    pub literal: &'static [&'static str],
+    /// node kinds left in place when masking — an interpolation sits where a
+    /// scalar does, and every host format here already tolerates one
+    pub interpolation: &'static [&'static str],
+    /// Can this grammar stand alone as the host when the wrapped format has
+    /// no grammar of its own? jinja can: its blocks, macros and includes are
+    /// real structure. ERB cannot — its directives are opaque ruby text, so
+    /// `index.html.erb` has nothing to read and stays honestly unsupported.
+    pub standalone: bool,
+}
 
 pub struct LangSpec {
     pub name: &'static str,
@@ -29,6 +48,13 @@ pub struct LangSpec {
     /// rationale wording (adds/edits/removes X) to say "section X" and lets a
     /// nested def's enclosing scope resolve to its parent rather than itself.
     pub prose: bool,
+    /// a data/config format (json, yaml, toml): structure is keys, not code.
+    /// A key is both a definition and a member of the key above it, so an
+    /// edit inside a block can say which keys changed. No uses, no imports —
+    /// like `prose`, this improves rationale, not ordering.
+    pub data: bool,
+    /// set only for a templating grammar (jinja, ERB) — see `Template`
+    pub template: Option<&'static Template>,
     /// node types that bind a name without being a definition (local
     /// variable / assignment target) — drives the "adds local X, used at …"
     /// rationale wording. Verified against each grammar's node-types.json.
@@ -73,6 +99,58 @@ fn lua() -> Language {
 fn md() -> Language {
     tree_sitter_md::LANGUAGE.into()
 }
+fn json() -> Language {
+    tree_sitter_json::LANGUAGE.into()
+}
+fn yaml() -> Language {
+    tree_sitter_yaml::LANGUAGE.into()
+}
+fn toml() -> Language {
+    tree_sitter_toml_ng::LANGUAGE.into()
+}
+fn ini() -> Language {
+    tree_sitter_ini::LANGUAGE.into()
+}
+fn cmake() -> Language {
+    tree_sitter_cmake::LANGUAGE.into()
+}
+fn make() -> Language {
+    tree_sitter_make::LANGUAGE.into()
+}
+fn nix() -> Language {
+    tree_sitter_nix::LANGUAGE.into()
+}
+fn bash() -> Language {
+    tree_sitter_bash::LANGUAGE.into()
+}
+fn css() -> Language {
+    tree_sitter_css::LANGUAGE.into()
+}
+fn html() -> Language {
+    tree_sitter_html::LANGUAGE.into()
+}
+fn svelte() -> Language {
+    tree_sitter_svelte_ng::LANGUAGE.into()
+}
+// the crate still ships pre-0.25 bindings (a `language()` fn, no `LANGUAGE`
+// constant); the grammar itself loads fine against tree-sitter 0.25.
+fn jinja() -> Language {
+    tree_sitter_jinja::language()
+}
+fn erb() -> Language {
+    tree_sitter_embedded_template::LANGUAGE.into()
+}
+// The one grammar this crate vendors rather than depends on — no crate
+// publishes a Go-template grammar for a current tree-sitter. Built by
+// `build.rs`; see grammars/tree-sitter-go-template/README.md.
+// the symbol `parser.c` actually exports — upstream's own Rust binding still
+// names `tree_sitter_go_template`, which the generated parser no longer defines
+extern "C" {
+    fn tree_sitter_gotmpl() -> Language;
+}
+fn gotmpl() -> Language {
+    unsafe { tree_sitter_gotmpl() }
+}
 
 static SPECS: &[LangSpec] = &[
     LangSpec {
@@ -91,6 +169,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["pair", "keyword_argument"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["assignment"],
     },
     // a python superset: every node kind python's entry names exists in this
@@ -111,6 +191,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["pair", "keyword_argument"],
         prose: false,
+        data: false,
+        template: None,
         // `env_assignment` is xonsh's own: `$FOO = …` binds a name no python
         // `assignment` node covers
         locals: &["assignment", "env_assignment"],
@@ -138,6 +220,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["pair", "field_definition", "method_definition"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["variable_declarator"],
     },
     LangSpec {
@@ -159,6 +243,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["enum_variant", "field_declaration"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["let_declaration"],
     },
     LangSpec {
@@ -189,6 +275,8 @@ static SPECS: &[LangSpec] = &[
             "pair",
         ],
         prose: false,
+        data: false,
+        template: None,
         locals: &["variable_declarator"],
     },
     LangSpec {
@@ -217,6 +305,8 @@ static SPECS: &[LangSpec] = &[
             "pair",
         ],
         prose: false,
+        data: false,
+        template: None,
         locals: &["variable_declarator"],
     },
     LangSpec {
@@ -231,6 +321,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["field_declaration", "const_spec", "var_spec", "type_spec"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["short_var_declaration", "var_spec"],
     },
     LangSpec {
@@ -252,6 +344,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["field_declaration", "enumerator"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["declaration"],
     },
     LangSpec {
@@ -275,6 +369,8 @@ static SPECS: &[LangSpec] = &[
         ],
         members: &["field_declaration", "enumerator"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["declaration"],
     },
     LangSpec {
@@ -299,6 +395,8 @@ static SPECS: &[LangSpec] = &[
         // becomes its own enclosing definition.
         members: &["enum_constant"],
         prose: false,
+        data: false,
+        template: None,
         locals: &["local_variable_declaration"],
     },
     LangSpec {
@@ -310,6 +408,8 @@ static SPECS: &[LangSpec] = &[
         defs: &["function_declaration", "function_definition"],
         members: &["field"],
         prose: false,
+        data: false,
+        template: None,
         // `local x = …` parses as `variable_declaration` wrapping an
         // `assignment_statement`/`variable_list` — the name sits several
         // levels down (see extract.rs's lua-specific binding walk), not
@@ -329,14 +429,418 @@ static SPECS: &[LangSpec] = &[
         defs: &["section"],
         members: &["section"],
         prose: true,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // The three config formats below share one shape: a key-value pair is
+    // both the definition of its key and a member of the key above it, so
+    // `edits services.web` can list `adds ports, changes image`. Naming is
+    // `node_name`'s config-key path in extract.rs (the `key` field for
+    // json/yaml, the first `*_key` child for toml, whose grammar labels no
+    // fields). A yaml sequence item and a json array element carry no key:
+    // both stay anonymous and their contents nest under the nearest named
+    // key, so a list entry's position is not part of the path.
+    LangSpec {
+        name: "json",
+        language: json,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["pair"],
+        members: &["pair"],
+        prose: false,
+        data: true,
+        template: None,
+        locals: &[],
+    },
+    LangSpec {
+        name: "yaml",
+        language: yaml,
+        test_blocks: &[],
+        imports: &[],
+        // `flow_pair` is the inline form (`{a: 1}`); anchors and aliases are
+        // real def/use pairs but are not read yet (see README ceilings).
+        defs: &["block_mapping_pair", "flow_pair"],
+        members: &["block_mapping_pair", "flow_pair"],
+        prose: false,
+        data: true,
+        template: None,
+        locals: &[],
+    },
+    LangSpec {
+        name: "toml",
+        language: toml,
+        test_blocks: &[],
+        imports: &[],
+        // a `[table]` header names a container the pairs beneath it belong
+        // to, so it is a def in its own right alongside the pairs.
+        defs: &["table", "table_array_element", "pair"],
+        members: &["table", "table_array_element", "pair"],
+        prose: false,
+        data: true,
+        template: None,
+        locals: &[],
+    },
+    // ini and the config files shaped like it — a `[section]` header and
+    // `key = value` settings, both named by `node_name`'s config-key path.
+    // git's `[remote "origin"]` subsection and dvc's `['remote "x"']` are
+    // section text like any other, kept verbatim (quotes and space included)
+    // because that is how the file names them.
+    LangSpec {
+        name: "ini",
+        language: ini,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["section", "setting"],
+        members: &["section", "setting"],
+        prose: false,
+        data: true,
+        template: None,
+        locals: &[],
+    },
+    // cmake: one node kind (`normal_command`) covers every command, so which
+    // command a node *is* lives in its identifier, not its kind — see
+    // `extract::cmake_command`. `normal_command` is listed as a def so that
+    // `set()`/`option()` can be named; every other command resolves to no name
+    // and is transparent, exactly as an anonymous def already is.
+    LangSpec {
+        name: "cmake",
+        language: cmake,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["function_def", "macro_def", "normal_command"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // make: a rule is a definition named by its target, and a prerequisite is
+    // a *use* of another target — the dependency graph a makefile already is,
+    // read straight off the tree. Targets, prerequisites and variable names
+    // are all `word` nodes, a kind far too generic for IDENT_KINDS, so uses
+    // are collected from the two parents that mean one (see `extract::walk`).
+    LangSpec {
+        name: "make",
+        language: make,
+        test_blocks: &[],
+        imports: &["include_directive"],
+        defs: &["rule", "variable_assignment"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // nix: an attribute set is the language's main structure, so a `binding`
+    // is both a definition and a member of the set above it — the same shape
+    // as the config formats, which is why `data` is set. A function is not a
+    // separate declaration here (it is a lambda bound to an attribute), so
+    // `binding` covers both. `import ./x.nix` is an ordinary application
+    // whose function happens to be named `import`; see `extract::import_like`.
+    LangSpec {
+        name: "nix",
+        language: nix,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["binding"],
+        members: &["binding"],
+        prose: false,
+        data: true,
+        template: None,
+        locals: &[],
+    },
+    // bash: `foo() { … }` and `function foo { … }` share one node kind, and a
+    // command is a call — so `deploy main` is a use of the function `deploy`.
+    // `source x.sh` / `. x.sh` are commands too, named rather than spelled as
+    // a distinct kind (see `extract::import_like`). A command name is a bare
+    // `word`, a kind make also uses, so it is read explicitly rather than
+    // through IDENT_KINDS.
+    LangSpec {
+        name: "bash",
+        language: bash,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["function_definition"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        // `local x=1` / `readonly P=8080` wrap this in a `declaration_command`
+        // the walk descends through, so the one kind covers both
+        locals: &["variable_assignment"],
+    },
+    // jinja: the host language of a template whose *underlying* format has no
+    // grammar (`nginx.conf.j2`, `deploy.sh.j2`, a bare `foo.j2`). When the
+    // underlying format does have one — `values.yaml.j2` — that format is the
+    // host instead and the jinja statements are masked out of it; see
+    // `extract::mask_template`.
+    LangSpec {
+        name: "jinja",
+        language: jinja,
+        template: Some(&Template {
+            literal: &["content"],
+            interpolation: &["render_expression"],
+            standalone: true,
+        }),
+        test_blocks: &[],
+        // a template's dependencies are other templates
+        imports: &["include_statement", "import_statement", "extends_statement"],
+        // the two *named* blocks. `{% for %}` / `{% if %}` are containers too
+        // but carry no name, so they stay transparent (`walk` descends through
+        // an unnamed def) rather than contributing `<anonymous>` to a path.
+        defs: &["block_block", "macro_block"],
+        members: &[],
+        prose: false,
+        data: false,
+        locals: &[],
+    },
+    // css: a rule set is a definition named by its *whole* selector list,
+    // sigil included (`.btn, .btn-primary`, `#nav a:hover`). That punctuation
+    // is the safety story for the cross-file union symbol table: no code
+    // grammar emits an identifier starting with `.`, `#` or `--`, so a css
+    // symbol is lexically incapable of colliding with a python function.
+    // A `--custom-property` and its `var(--x)` are the one honest def→use pair
+    // a stylesheet has (see `extract::walk`), the way a yaml anchor is.
+    LangSpec {
+        name: "css",
+        language: css,
+        test_blocks: &[],
+        imports: &["import_statement"],
+        defs: &["rule_set", "keyframes_statement"],
+        members: &["declaration"],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // html, and with it vue. Only an element carrying an `id` is a
+    // definition — that is the one name a reviewer navigates to and other
+    // things reference; every other element resolves to no name and stays
+    // transparent, so a page of `<div>`s contributes nothing. A class is
+    // deliberately *not* a use of the css that styles it (see
+    // docs/document-languages-design.md).
+    //
+    // A `.vue` single-file component needs no grammar of its own: this one
+    // parses `<script setup lang="ts">`, `v-for`, `:key`, `@click`, `{{ }}`
+    // and `<style module lang="scss">` with no error nodes, keeping the
+    // script and style blocks as opaque `raw_text`. The published
+    // `tree-sitter-vue` pins tree-sitter 0.20 and could not be used anyway.
+    LangSpec {
+        name: "html",
+        language: html,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["element"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // svelte: the same shape as html — `element`, `start_tag`, `attribute`
+    // are the same kinds, so the id-naming path is reused verbatim — but it
+    // needs its own grammar rather than riding on html's the way vue does.
+    // html breaks on a bare `>` inside braces, and both `{#if n > 1}` and
+    // `on:click={() => pick()}` contain one. Its own block forms (`{#if}`,
+    // `{#each}`) are left unnamed for now: they are containers worth naming,
+    // but `if_statement` is a kind three other grammars here also produce,
+    // so claiming it would need a language-gated branch.
+    LangSpec {
+        name: "svelte",
+        language: svelte,
+        test_blocks: &[],
+        imports: &[],
+        // `{#snippet row(x)}` is a real named block, and `{@render row(1)}`
+        // calls it — the one def→use pair a component's markup has
+        defs: &["element", "snippet_statement"],
+        members: &[],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // Go templates, and with them Helm. One pair of delimiters does both jobs
+    // — `{{ if … }}` is a statement and `{{ .Values.x }}` an interpolation —
+    // so the two are told apart by node kind rather than by delimiter, which
+    // is exactly what having a grammar buys. A control action *contains* the
+    // text it guards, the same shape jinja has, so the masking recursion is
+    // unchanged. Vendored: see grammars/tree-sitter-go-template/README.md.
+    LangSpec {
+        name: "gotmpl",
+        language: gotmpl,
+        template: Some(&Template {
+            literal: &["text"],
+            interpolation: &["template_action"],
+            standalone: true,
+        }),
+        test_blocks: &[],
+        imports: &[],
+        // `{{ define "mychart.labels" }}` in a Helm `_helpers.tpl` is a real
+        // named block, and `{{ template "x" }}` / `{{ include "x" }}` use it
+        defs: &["define_action", "block_action"],
+        members: &[],
+        prose: false,
+        data: false,
+        locals: &[],
+    },
+    // ERB / EJS. The host format is everything outside the directives:
+    // `<%= … %>` stays in place like a jinja interpolation, `<% … %>` and
+    // `<%# … %>` are blanked. Its `code` is one opaque blob — ruby or
+    // javascript, neither of which this crate reads — so an ERB template
+    // contributes no uses, and cannot host a format with no grammar of its own.
+    LangSpec {
+        name: "erb",
+        language: erb,
+        template: Some(&Template {
+            literal: &["content"],
+            interpolation: &["output_directive"],
+            standalone: false,
+        }),
+        test_blocks: &[],
+        imports: &[],
+        defs: &[],
+        members: &[],
+        prose: false,
+        data: false,
         locals: &[],
     },
 ];
 
+/// Extensions that mark a file as a template *over* another format, and the
+/// templating grammar each one names. Strip the extension and what remains
+/// names the host language.
+const TEMPLATE_EXTS: &[(&str, &str)] = &[
+    ("j2", "jinja"),
+    ("jinja", "jinja"),
+    ("jinja2", "jinja"),
+    ("erb", "erb"),
+    ("ejs", "erb"),
+    // `.tmpl` is Go's own spelling and `.tpl` is Helm's; neither was ever
+    // jinja, they were mapped there only because nothing else read them
+    ("tmpl", "gotmpl"),
+    ("tpl", "gotmpl"),
+    ("gotmpl", "gotmpl"),
+];
+
+/// Does the final extension itself mark a template, so that stripping it names
+/// the host format? True for `.j2`/`.erb`/`.tpl`; false for a Helm template,
+/// whose extension is the host format's own.
+fn has_template_ext(path: &str) -> bool {
+    path.rsplit('.')
+        .next()
+        .is_some_and(|e| TEMPLATE_EXTS.iter().any(|(x, _)| *x == e))
+}
+
+/// The templating grammar wrapping this file — the one whose own syntax is
+/// masked out, not the host format underneath it.
+pub fn template_lang(path: &str) -> Option<&'static LangSpec> {
+    if let Some(ext) = path.rsplit('.').next() {
+        if let Some((_, name)) = TEMPLATE_EXTS.iter().find(|(e, _)| *e == ext) {
+            return SPECS.iter().find(|s| s.name == *name);
+        }
+    }
+    // Helm is the exception to the whole extension convention: a chart's
+    // templates carry no template extension at all — `templates/deployment.yaml`
+    // is yaml with Go template actions written through it. Detected by the
+    // directory Helm requires them to live in, which is a heuristic and is
+    // meant to be a loose one: masking a file that turns out to hold no
+    // template syntax blanks nothing and changes nothing, so a false positive
+    // on some other project's `templates/` directory costs exactly zero.
+    if is_helm_template(path) {
+        return SPECS.iter().find(|s| s.name == "gotmpl");
+    }
+    None
+}
+
+fn is_helm_template(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("");
+    matches!(ext, "yaml" | "yml")
+        && (path.starts_with("templates/") || path.contains("/templates/"))
+}
+
+/// The spec a *template* is parsed with: the underlying format when it has a
+/// grammar (`values.yaml.j2` → yaml), jinja itself otherwise (`foo.j2`,
+/// `nginx.conf.j2`). Only ever called for a path `has_template_ext` accepts.
+fn template_spec(path: &str) -> Option<&'static LangSpec> {
+    let inner = path.rsplit_once('.').map(|(head, _)| head)?;
+    // a second template extension (`a.j2.j2`) is not stripped again: one
+    // level is what the convention means, and looping invites a path that is
+    // nothing but extensions.
+    if let Some(host) = for_path_plain(inner) {
+        return Some(host);
+    }
+    // nothing underneath: the templating grammar hosts the file if it can
+    // stand alone, otherwise the file is honestly unsupported
+    template_lang(path).filter(|t| t.template.is_some_and(|t| t.standalone))
+}
+
 /// Resolve a path to a language spec by file extension, or None when
-/// unsupported (caller then falls back to file order).
+/// unsupported (caller then falls back to file order). A template extension
+/// (`.j2` and friends) resolves to the format underneath it.
 pub fn for_path(path: &str) -> Option<&'static LangSpec> {
-    let ext = path.rsplit('.').next()?;
+    // only an extension that *marks* a template is stripped; a Helm template's
+    // extension is the host format's own and stays
+    if has_template_ext(path) {
+        return template_spec(path);
+    }
+    for_path_plain(path)
+}
+
+/// Suffixes that mark a file as a *variant* of another: `.dvc/config.local`
+/// overrides `.dvc/config` and is the same format. Stripped before resolving,
+/// the way a template extension is.
+const VARIANT_EXTS: &[&str] = &["local"];
+
+/// Config files named by filename rather than extension — a gitconfig has no
+/// extension at all, and `.dvc/config` shares its basename with half the files
+/// on a disk, so that one is matched by the directory it sits in.
+fn for_filename(path: &str, name: &str) -> Option<&'static LangSpec> {
+    // cmake's entry point has a `.txt` extension that says nothing about it
+    if name == "CMakeLists.txt" {
+        return SPECS.iter().find(|s| s.name == "cmake");
+    }
+    // shell config and dotenv files carry no extension
+    if matches!(name, ".bashrc" | ".bash_profile" | ".profile" | ".env") {
+        return SPECS.iter().find(|s| s.name == "bash");
+    }
+    // a makefile is named, not extended
+    if matches!(
+        name,
+        "Makefile" | "makefile" | "GNUmakefile" | "Makefile.am" | "Makefile.in"
+    ) {
+        return SPECS.iter().find(|s| s.name == "make");
+    }
+    let is_ini = matches!(
+        name,
+        ".gitconfig"
+            | ".gitmodules"
+            | ".editorconfig"
+            | ".npmrc"
+            | ".hgrc"
+            | ".flake8"
+            | ".pylintrc"
+            | ".coveragerc"
+    ) || path.ends_with(".git/config")
+        || path.ends_with(".dvc/config");
+    is_ini.then(|| SPECS.iter().find(|s| s.name == "ini"))?
+}
+
+fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
+    // resolve against the basename: a dotted *directory* (`.dvc/config`,
+    // `.ssh/config`) otherwise hands the extension split a whole path segment
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let (path, name) = match name.rsplit_once('.') {
+        Some((head, v)) if !head.is_empty() && VARIANT_EXTS.contains(&v) => (
+            path.strip_suffix(v).unwrap_or(path).trim_end_matches('.'),
+            head,
+        ),
+        _ => (path, name),
+    };
+    if let Some(spec) = for_filename(path, name) {
+        return Some(spec);
+    }
+    let ext = name.rsplit('.').next()?;
     let name = match ext {
         "py" | "pyi" => "python",
         "xsh" | "xonsh" | "xonshrc" => "xonsh",
@@ -353,6 +857,17 @@ pub fn for_path(path: &str) -> Option<&'static LangSpec> {
         "java" => "java",
         "lua" => "lua",
         "md" | "markdown" => "markdown",
+        "json" => "json",
+        "yml" | "yaml" => "yaml",
+        "toml" => "toml",
+        "ini" | "cfg" => "ini",
+        "cmake" => "cmake",
+        "mk" | "mak" | "make" => "make",
+        "nix" => "nix",
+        "sh" | "bash" => "bash",
+        "css" => "css",
+        "html" | "htm" | "vue" => "html",
+        "svelte" => "svelte",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -360,8 +875,8 @@ pub fn for_path(path: &str) -> Option<&'static LangSpec> {
 
 /// Resolve a markdown fence's info string (```python, ```rs, ```C++) to a
 /// spec — the language *injected* into a prose file. Only names this crate has
-/// a grammar for resolve; a `console`, `json` or `diff` fence has no structure
-/// to read and returns None rather than being guessed at.
+/// a grammar for resolve; a `console` or `diff` fence has no structure to read
+/// and returns None rather than being guessed at.
 pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
     // an info string may carry attributes after the language (```py title=x)
     let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();
@@ -379,6 +894,16 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "java" => "java",
         "lua" => "lua",
         "md" | "markdown" => "markdown",
+        "json" => "json",
+        "yml" | "yaml" => "yaml",
+        "toml" => "toml",
+        "ini" | "cfg" | "conf" | "dosini" => "ini",
+        "cmake" => "cmake",
+        "make" | "makefile" | "mk" => "make",
+        "nix" => "nix",
+        // not `console`: that fence is a shell *session* (`$ cmd` and its
+        // output), not a script — see tests/injection.rs
+        "sh" | "bash" | "shell" | "zsh" => "bash",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == canonical)
@@ -409,6 +934,10 @@ pub const IDENT_KINDS: &[&str] = &[
     "shorthand_property_identifier",
     "shorthand_property_identifier_pattern",
     "constant",
+    // cmake `${SOURCES}` — the only grammar here with a bare `variable` kind
+    "variable",
+    // bash `$APP_DIR` and the left of an assignment
+    "variable_name",
 ];
 
 /// How a qualified enclosing name joins its parts. Code nests through a dot
@@ -469,6 +998,42 @@ pub fn is_generated_path(p: &str) -> bool {
         || p.contains("/node_modules/")
 }
 
+/// Does a definition of this kind *have* a signature — is it callable, with a
+/// parameter list a change can alter? `changes signature of X` is the wording
+/// for those; everything else that already existed and was touched on its own
+/// declaration line simply `changes`. A cmake `set()`, a make variable, a yaml
+/// key and a rust `const` are all values, not calls, and a value has no
+/// signature to change.
+///
+/// A positive list rather than an exclusion: a kind this does not name gets
+/// the weaker, always-true wording, so a language added later reads acceptably
+/// before anyone thinks about it.
+pub fn has_signature(kind: &str) -> bool {
+    matches!(
+        kind,
+        // python, c, cpp, lua, bash all spell it this way; nix has no such kind
+        "function_definition"
+            | "function_declaration"
+            | "generator_function_declaration"
+            | "function_expression"
+            | "generator_function"
+            | "arrow_function"
+            | "method_definition"
+            | "method_signature"
+            | "method_declaration"
+            | "constructor_declaration"
+            | "function_item"
+            | "macro_definition"
+            | "preproc_function_def"
+            // cmake `function(f a b)` / `macro(m a)`; its `normal_command`
+            // (a `set()`) is deliberately absent
+            | "function_def"
+            | "macro_def"
+            // a jinja macro takes parameters; a `{% block %}` does not
+            | "macro_block"
+    )
+}
+
 /// Is this def node a *type* (class/struct/enum/interface/…) rather than a
 /// function? Node kinds are distinctive enough to judge language-agnostically.
 /// Used to word signature vs type changes (#4).
@@ -493,10 +1058,69 @@ pub fn is_type_kind(kind: &str) -> bool {
     )
 }
 
+/// Small memoized cache of the last few (language, content) -> Tree parses.
+/// `lib.rs` calls `parse` 13-16 times per changed file on the same two
+/// strings (old/new side); a handful of slots is enough since the access
+/// pattern is "same string, many times in a row, then move to the next
+/// file" — an LRU would be overkill. `Tree::clone` is a cheap refcount bump
+/// (`ts_tree_copy`), not a deep copy, so handing out clones from the cache
+/// is free.
+const TREE_CACHE_CAP: usize = 4;
+
+struct CacheEntry {
+    lang: &'static str,
+    hash: u64,
+    len: usize,
+    tree: Tree,
+}
+
+thread_local! {
+    static PARSER: RefCell<(Parser, &'static str)> = RefCell::new((Parser::new(), ""));
+    static TREE_CACHE: RefCell<Vec<CacheEntry>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Parse `content` with this spec's grammar. `None` when the grammar refuses
 /// to load or the parse fails — callers degrade rather than abort.
 pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
-    let mut parser = Parser::new();
-    parser.set_language(&(spec.language)()).ok()?;
-    parser.parse(content, None)
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    // Hash + length as the collision guard: a 64-bit hash match alone is
+    // already astronomically unlikely to be wrong, and pairing it with the
+    // length costs nothing extra to check.
+    let cached = TREE_CACHE.with(|c| {
+        c.borrow()
+            .iter()
+            .find(|e| e.lang == spec.name && e.hash == hash && e.len == content.len())
+            .map(|e| e.tree.clone())
+    });
+    if let Some(tree) = cached {
+        return Some(tree);
+    }
+
+    let tree = PARSER.with(|p| {
+        let mut p = p.borrow_mut();
+        let (parser, last_lang) = &mut *p;
+        if *last_lang != spec.name {
+            parser.set_language(&(spec.language)()).ok()?;
+            *last_lang = spec.name;
+        }
+        parser.parse(content, None)
+    })?;
+
+    TREE_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= TREE_CACHE_CAP {
+            c.clear();
+        }
+        c.push(CacheEntry {
+            lang: spec.name,
+            hash,
+            len: content.len(),
+            tree: tree.clone(),
+        });
+    });
+
+    Some(tree)
 }

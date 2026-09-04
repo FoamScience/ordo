@@ -1,0 +1,119 @@
+# Google Python Style Guide — https://google.github.io/styleguide/pyguide.html
+# Source: raw.githubusercontent.com/google/styleguide/gh-pages/pyguide.md,
+# section 2 "Language Rules" (section 3 is formatting — a formatter's job,
+# not a review signal) plus 3.18 Function length, the one style-section rule
+# with a concrete construct behind it.
+#
+# Use: `ordo --rules rulesets/python-google-style.toml`, or copy the
+# rules you want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's built-in python advisories already fire on them
+# with no config: metaclass, yaml.load without a safe loader, subprocess
+# shell=True, SQL string building, broad contextlib.suppress, eval/exec,
+# bare `except:` (2.4), assert used for validation (2.4), and a
+# list/dict/set-valued mutable default argument (2.12, the classic case).
+# `mutable-default-arg` below still earns its place: the advisory doesn't
+# catch a *call*-valued default (`b=time.time()`, `b=_FOO.value`), which
+# 2.12's own "No" examples call out by name.
+#
+# Every rule fires on what a hunk *introduces* — none of them flag the
+# pre-existing violations in a legacy tree.
+#
+# Skipped, and why: 2.1 Lint (a tool to run, not a shape), 2.3 Packages
+# (its one enforceable bit — no relative imports — folds into
+# `no-relative-import` below), 2.6 Nested/Local classes ("fine with some
+# caveats", no concrete anti-pattern), 2.9 Generators / 2.11 Conditional
+# expressions / 2.13 Properties / 2.16 Lexical scoping ("okay to use", no
+# decision to enforce), 2.10 Lambda Functions (the only decision is a line
+# count on a node the engine doesn't track as a definition, so `max-lines`
+# can't reach it), 2.18 Threading (not a static property), 2.19 Power
+# Features beyond `__import__` (`getattr` reflection is too common and
+# idiomatic to flag), 2.20 `__future__` imports (Python 2/3 migration,
+# moot), 2.21 Type Annotations (a recommendation with its own large
+# sub-guide, not a single anti-pattern).
+
+# ------------------------------------------------------------ facts
+
+[[rule]]
+name = "no-staticmethod"
+lang = "python"
+uses = "staticmethod"
+note = "[2.17] avoid `staticmethod` — write a module-level function instead, unless integrating with an existing library's API"
+
+[[rule]]
+name = "no-import-hack"
+lang = "python"
+uses = "__import__"
+note = "[2.19] import hack — a power feature; prefer `importlib.import_module` and make the dynamic import explicit"
+
+# ------------------------------------------------------------ kind / with / without / text
+
+[[rule]]
+name = "no-relative-import"
+lang = "python"
+kind = "import_from_statement"
+with = ["relative_import"]
+note = "[2.2/2.3] import each module by its full package name — a relative `from . import x` / `from .pkg import y` risks unintentionally importing a package twice and obscures where a name comes from"
+
+[[rule]]
+name = "no-broad-except"
+lang = "python"
+kind = "except_clause"
+text = "^except\\s+Exception\\b"
+warn = "[2.4] catching bare `Exception` swallows almost everything — narrow the type, unless you are re-raising or isolating a thread's outermost block from crashing"
+
+[[rule]]
+name = "no-bool-literal-compare"
+lang = "python"
+kind = "comparison_operator"
+with = ["false"]
+text = "==|!="
+warn = "[2.14] never compare a boolean to False with ==/!= — use `if not x:` (chain `and x is not None` if None must be told apart)"
+
+# ------------------------------------------------------------ limits
+
+[[rule]]
+name = "function-length"
+lang = "python"
+max-lines = 40
+note = "[3.18] over ~40 lines — no hard limit, but think about whether this can be broken up without harming the program's structure"
+
+# ------------------------------------------------------------ query
+
+[[rule]]
+name = "mutable-default-arg"
+lang = "python"
+query = '''
+[(default_parameter value: [(list) (dictionary) (call)])
+ (typed_default_parameter value: [(list) (dictionary) (call)])] @p
+'''
+warn = "[2.12] default arguments are evaluated once, at def time — a mutable default (list/dict) is shared and mutated across every call, and a call default (e.g. time.time()) runs once at import, not per call; default to None and build the value inside the function body"
+
+[[rule]]
+name = "prefer-default-iterator"
+lang = "python"
+query = '''
+((for_statement right: (call function: (attribute attribute: (identifier) @m))) @f
+ (#match? @m "^(keys|readlines)$"))
+'''
+note = "[2.8] prefer the default iterator — `for k in adict:` / `for line in afile:` — over `.keys()` / `.readlines()`"
+
+[[rule]]
+name = "single-for-comprehension"
+lang = "python"
+query = '''
+[(list_comprehension (for_in_clause) (for_in_clause))
+ (dictionary_comprehension (for_in_clause) (for_in_clause))
+ (set_comprehension (for_in_clause) (for_in_clause))
+ (generator_expression (for_in_clause) (for_in_clause))] @c
+'''
+note = "[2.7] one `for` clause per comprehension — multiple `for`s or filter expressions read more clearly as a plain loop"
+
+[[rule]]
+name = "mutable-global-state"
+lang = "python"
+query = '''
+((module (expression_statement (assignment left: (identifier) @name right: [(list) (dictionary) (set) (call)]))) @a
+ (#not-match? @name "^_?[A-Z][A-Z0-9_]*$"))
+'''
+note = "[2.5] avoid mutable global state — a module-level constant (ALL_CAPS) is fine; a mutable module-level value should be internal (leading `_`) with access through a function, and the design reason belongs in a comment"

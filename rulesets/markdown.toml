@@ -1,0 +1,24 @@
+# Markdown — two rules pulled from markdownlint's list
+# (https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md)
+#
+# Use: `ordo --rules rulesets/markdown.toml`, or copy the rules you want
+# into <repo>/.ordo/rules.toml.
+#
+# markdownlint already exists and covers all 78 of its rules file-level; most
+# of them are whitespace. These two are here because they're change-scoped in
+# a way a linter isn't, and nothing more — ordo parses markdown with the block
+# grammar only, so inline-level rules (bare URLs, missing alt text) are out of
+# reach.
+
+[[rule]]
+name = "fenced-code-needs-language"
+lang = "markdown"
+kind = "fenced_code_block"
+without = "info_string"
+note = "MD040: fenced code block has no language — add one for syntax highlighting"
+
+[[rule]]
+name = "no-inline-html"
+lang = "markdown"
+kind = "html_block"
+warn = "MD033: inline HTML — prefer a markdown equivalent"

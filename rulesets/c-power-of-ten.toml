@@ -1,0 +1,107 @@
+# NASA/JPL "The Power of 10: Rules for Developing Safety-Critical Code"
+# (Holzmann, 2006) — https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code
+#
+# Use: `ordo --rules rulesets/c-power-of-ten.toml`, or copy the rules you
+# want into <repo>/.ordo/rules.toml.
+#
+# Not here, because ordo's advisory catalog already fires on them with no
+# config: `goto` (rule 1), unsafe string functions (`strcpy`, `strcat`,
+# `sprintf`, `gets`, ...).
+#
+# Also not here, honestly:
+#  - rule 5 (>= 2 assertions per function) — ordo's limits are all upper
+#    bounds (`max-lines`, `max-params`, ...); it has no way to say "at least".
+#  - rule 7 (check every return value) — dataflow the engine doesn't track.
+#  - rule 10 (compile clean at the compiler's strictest setting) — a build
+#    concern, not something a hunk's shape can say.
+#
+# Every rule fires on what a hunk *introduces* — none of them flag the 400
+# pre-existing violations in a legacy tree.
+
+# ------------------------------------------------------------ [1] simple control flow
+
+[[rule]]
+name = "no-setjmp-longjmp"
+lang = "c"
+uses = "{setjmp,longjmp}"
+warn = "[1] no setjmp/longjmp — unstructured control flow defeats static analysis"
+
+[[rule]]
+name = "no-recursion"
+lang = "c"
+recursive = true
+warn = "[1] no direct or indirect recursion — bounds the call stack statically"
+
+# ------------------------------------------------------------ [2] fixed loop bounds
+
+[[rule]]
+name = "loop-bound-for"
+lang = "c"
+kind = "for_statement"
+without = "condition"
+warn = "[2] every loop needs a fixed upper bound — `for (;;)` has none"
+
+[[rule]]
+name = "loop-bound-while"
+lang = "c"
+kind = "while_statement"
+text = "^while\\s*\\(\\s*(1|true)\\s*\\)"
+warn = "[2] every loop needs a fixed upper bound — `while (1)`/`while (true)` has none"
+
+# ------------------------------------------------------------ [3] no dynamic memory
+
+[[rule]]
+name = "no-dynamic-memory"
+lang = "c"
+uses = "{malloc,calloc,realloc,free}"
+warn = "[3] no dynamic memory after initialization — a static buffer or pool"
+
+# ------------------------------------------------------------ [4] short functions
+
+[[rule]]
+name = "function-size"
+lang = "c"
+max-lines = 60
+warn = "[4] over 60 lines — a function should fit on one printed page"
+
+# ------------------------------------------------------------ [6] smallest scope
+
+[[rule]]
+name = "file-scope-declaration"
+lang = "c"
+query = '(translation_unit (declaration) @d)'
+note = "[6] file-scope declaration — give data the smallest scope that can hold it"
+
+# ------------------------------------------------------------ [8] restrict the preprocessor
+
+[[rule]]
+name = "no-function-like-macros"
+lang = "c"
+kind = "preproc_function_def"
+warn = "[8] the preprocessor is for header inclusion and simple constants — a function-like macro isn't type-checked; use a function"
+
+[[rule]]
+name = "no-nested-conditional-compilation"
+lang = "c"
+query = '''
+[(preproc_if (preproc_if))
+ (preproc_if (preproc_ifdef))
+ (preproc_ifdef (preproc_if))
+ (preproc_ifdef (preproc_ifdef))] @p
+'''
+warn = "[8] nested conditional compilation — each directive is another path to test; isolate it in one header"
+
+# ------------------------------------------------------------ [9] limited pointer use
+
+[[rule]]
+name = "one-level-of-indirection"
+lang = "c"
+kind = "pointer_declarator"
+with = "pointer_declarator"
+warn = "[9] more than one level of pointer dereferencing — `T **p` hides who owns the memory"
+
+[[rule]]
+name = "no-function-pointers"
+lang = "c"
+query = '(function_declarator declarator: (parenthesized_declarator (pointer_declarator))) @f'
+warn = "[9] no function pointers — they defeat static call-graph analysis"

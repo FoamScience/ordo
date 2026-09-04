@@ -28,8 +28,8 @@ Working name `ordo` — TBD. Rust core.
 - [x] Golden/property tests: permutation, def-before-use, determinism
 
 ## P3 — CLI + contract  ✅
-- [x] `ordo order --json` (stdin→stdout)
-- [x] `ordo review [patch]` subcommand (arg or stdin → JSON)
+- [x] `ordo-engine order --json` (stdin→stdout)
+- [x] `ordo-engine review [patch]` subcommand (arg or stdin → JSON)
 - [x] Emit versioned output (`schema` field = 1)
 - [x] Unified-diff input parsing (`change.diff`) — `src/patch.rs`; full semantics for additions, positional for modified files (ceiling documented)
 - [x] Golden-file snapshot harness (`tests/golden/`, `UPDATE_GOLDEN=1` to regen) — py/rust/crossfile cases
@@ -53,7 +53,7 @@ Working name `ordo` — TBD. Rust core.
 - [x] Test: corrupted/fuzzy diff (context mismatch) → graceful positional fallback, no panic
 
 ### P9.2 — L2: `{path, diff}` full-context → reconstruct both sides (OPT-IN — auto-detect is unsafe, see design)
-- [x] `model.rs Options`: add `full_context: bool` (default false); `main.rs`: `ordo review --full-context` flag
+- [x] `model.rs Options`: add `full_context: bool` (default false); `main.rs`: `ordo-engine review --full-context` flag
 - [x] `patch.rs parse_file_diff(diff, full_context)`: when `full_context` AND single hunk starting at old line 1 → reconstruct `old` (ctx+removed) **and** `new` (ctx+added); else old/new = None
 - [x] `ParsedFile`: carry optional `old`; `build_change`/`from_diff` use `compute_hunks(old,new)` when both present
 - [x] Preserve trailing-newline / no-normalization in reconstruction
@@ -67,9 +67,9 @@ Working name `ordo` — TBD. Rust core.
 - [x] Test: partial diff → positional order + `degraded == true` + warning on stderr
 
 ### P9.4 — CLI, contract, docs
-- [x] Verify `ordo review` picks all of this up (full-context patch → full semantics; else warns) — add a `review` test
+- [x] Verify `ordo-engine review` picks all of this up (full-context patch → full semantics; else warns) — add a `review` test
 - [x] `schema/v1.json`: document `{old, diff}` input combo + optional output `files[].degraded` (no `schema` bump — additive)
-- [x] README: "`git diff -U100000 | ordo review` for full semantics" + note the old/new API is always full
+- [x] README: "`git diff -U100000 | ordo-engine review` for full semantics" + note the old/new API is always full
 - [x] Promote the dogfood wrapper to `scripts/ordo-commit` (repo-read stays OUT of the binary)
 
 ### P9.5 — wrap
@@ -136,9 +136,14 @@ pick above/below vs "in <path>".
 
 ## P12 — competitive features  ✅ (borrow rivals' strengths into ordering+rationale)
 
-- [ ] **#1 move detection** — a def whose (normalized) body leaves old file A and reappears in new file B → `moves foo from a.py` on B's def hunk, and `moves foo to b.py` (not "removes") on A's deletion hunk. Cross-file extension of P11.2's body matching. Rivals: difftastic/git only do single-file-pair / whole-file renames.
-- [ ] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
-- [ ] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
+<!-- boxes were left unticked when the section was closed; all three shipped:
+     `moves foo from a.py` (order.rs `moved_in`), `noise: true` + `formatting
+     only`, and `Output.clusters` from the connected components of the edge
+     graph. -->
+
+- [x] **#1 move detection** — a def whose (normalized) body leaves old file A and reappears in new file B → `moves foo from a.py` on B's def hunk, and `moves foo to b.py` (not "removes") on A's deletion hunk. Cross-file extension of P11.2's body matching. Rivals: difftastic/git only do single-file-pair / whole-file renames.
+- [x] **#2 noise / skippable** — formatting-only hunk (old-slice ≡ new-slice after whitespace/token normalization) and generated/lockfile paths → output `noise: true` + rationale `formatting only`. Lets consumers collapse/de-prioritize (GitHub's generated-file collapse, but per-hunk).
+- [x] **#3 PR-split suggestion** — connected components of the group def→use graph → emit independent clusters ("splits into N independent parts"). Output-only, from existing `edges`. Nobody does this deterministically.
 
 
 ## P13 — structural smells (native, from ordo's own AST — no style rules, no deps)
@@ -146,8 +151,8 @@ pick above/below vs "in <path>".
 Change-shape signals as `notes`, not judgments. Language-agnostic thresholds.
 
 - [x] **P13.1 per-hunk def smells** — a def introduced in a hunk that is large (≥60 lines), deeply nested (≥4 ancestors), or param-heavy (≥6 params) → `hunks[].notes[]` (`large definition (120 lines)`, `deeply nested (depth 4)`, `7 params`). Data: DefRec span/depth + params node count.
-- [ ] **P13.2 changeset notes** — `Output.notes[]`: `code changed but no test touched` (code file changed, no test file in changeset), `path: N hunks (high churn)` (≥10 hunks). Needs `is_test_path` shared (move to lang.rs).
-- [x] **P13.3 surface** — fold notes into `ordo pack`; document `hunks[].notes` + `notes` in schema/v1.json + README.
+- [x] **P13.2 changeset notes** — `Output.notes[]`: `code changed but no test touched` (code file changed, no test file in changeset), `path: N hunks (high churn)` (≥10 hunks). `is_test_path` was already shared in lang.rs. "Code" is any supported language that is neither prose nor a config format, so a docs- or CI-only change stays silent; css/html are included, and tightening that would need a notion of "language people write tests for" the registry does not have. Notes lead the `pack` output, ahead of the reading order.
+- [x] **P13.3 surface** — fold notes into `ordo-engine pack`; document `hunks[].notes` + `notes` in schema/v1.json + README.
 
 ## P14 — advanced-construct advisor (curated catalog, not a linter)
 
@@ -155,16 +160,21 @@ Detect powerful/overusable constructs, attach an escalation-ladder advisory, and
 a downgrade **verdict** only where a body-inspection signal backs it.
 `src/advisories.rs` — deterministic tree-sitter detection; `hunks[].advisories`.
 
-- [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo pack`, schema, README.
+- [x] **P14.1 framework + python metaclass** — detect `class(metaclass=)` / `class(type)`; ladder (descriptor → `__init_subclass__` → class decorator → metaclass); ⚠ verdict when a metaclass-definition overrides only `__init_subclass__`-able behavior (no `__new__`/`__prepare__`/`__call__`). Surfaced in `ordo-engine pack`, schema, README.
 - [x] **catalog expansion (batch 1)** — py mutable-default-arg + bare-except (verdicts) + eval/exec; rust unsafe + transmute; js/ts eval + with (verdict); go unsafe + reflect. Tested (`p14_catalog`).
 - [x] **catalog expansion (batch 2)** — path-aware advisor; +c/cpp/java coverage. py assert-validation/dynamic-type/empty-except; rust static-mut; js/ts any/empty-catch; go panic; c/cpp goto + reinterpret_cast; java empty-catch + reflection. Tested (`p14_batch2`).
 
-## P15 — ordo-tui reviewer (feature-gated bin, engine stays pure)  ✅
-- [x] `[[bin]] ordo-tui` behind `tui` feature (ratatui optional; default build unaffected)
+## P15 — ordo reviewer (feature-gated bin, engine stays pure)  ✅
+- [x] `[[bin]] ordo` behind `tui` feature (ratatui optional; default build unaffected)
 - [x] git layer (shell) → `ordo::run` → ratatui review in comprehension order
 - [x] reading-order list (⚠ advisories, dimmed noise) + detail pane (rationale, notes, def→use edges, advisory ladders); j/k/g/G/q nav
 - [x] diff-body view (colored old→new, capped) + mark-reviewed (x, ✓, n/N progress)
-- [ ] follow-ups: jump-along-edge (gd), detail-pane scroll, working-tree/range revs
+- [x] follow-ups: jump-along-edge (`gd`/`Enter`/`C-Enter` → `jump_to_edge`, with
+      `JumpBack` on `C-o`/`Alt-Left` and a position stack), detail-pane scroll
+      (`why_cursor_move` for j/k, `page` for the why pane's own scroll),
+      working-tree/range revs (`<rev>` takes any commit-ish, `a..b`, `a...b`,
+      `zz` for the uncommitted area, and `base..zz`). Boxes were left unticked
+      after the work landed.
 
 ## P16 — relocation / extraction detection  ✅
 - [x] `symbol_bodies` also returns each def's substantial body lines
@@ -260,3 +270,269 @@ counterpart.
       reordered import block is not a pile of edits
 - [x] `DropReason::Import` is gone: `only_comments` is now the only thing that
       drops a hunk
+
+## P21 — rules as a table, and published guidelines as rulesets  ✅
+
+Started from one C++ guideline set (janwilmans) and the question "what would it
+take to enforce this?". The answer was mostly *engine* work: nearly every
+guideline is "this hunk introduces shape X" or "…exceeds limit N", and both are
+facts the engine can state once, for every language, so a rule is a table entry
+rather than a tree-sitter query.
+
+- [x] **shapes** — `kind` / `with` / `without` / `text` / `text-not`: the node
+      kinds a hunk introduces, what their children must have or lack. A child is
+      a node kind, a *field name* (`default_value`) or a *keyword token*
+      (`virtual`) — the last is what a query anchor can never see, so absence is
+      a config field now instead of `(field_declaration declarator: (_) .)`
+- [x] **limits** — `max-params` / `max-lines` / `max-nesting` / `max-file-lines`,
+      on facts the engine already computed for its own notes (which were `const`
+      before); `max-file-lines` fires on the hunks of a file this *change*
+      pushed past the limit, not every edit to a file already over it
+- [x] `path-not` — third-party code, a framework carve-out
+- [x] `recursive` — a definition that names itself, from the def→use graph
+- [x] `container-with` / `container-without` — the members of the container a
+      hunk defines into (`equals` without `hashCode`)
+- [x] `member-uninitialized` — decided across the **whole change**: a member
+      added in the header is fine if the `.cpp` constructor's initializer list
+      names it, because if that constructor changed its file is in the diff
+- [x] a C/C++ `#include` and a go `import` bind a name — `imports = "boost/**"`
+      was dead for them, and the include line also claimed the row after it
+- [x] C/C++ parameter counting followed the wrong field; the `N params` note had
+      never fired for them
+- [x] `ordo` reads rules as real TOML (arrays, multi-line queries) and
+      `--rules <file>` layers a set on top of your own
+- [x] **rulesets/** — ten published guideline sets as rules, each verified by a
+      harness that fails on any engine problem *and* on any rule that never
+      fires on its sample: C++ Default Guidelines, Uber Go, Google Python §2,
+      Rust API Guidelines, Power of Ten, Effective Java, clean-code TypeScript,
+      Airbnb JavaScript, Lua, markdown
+- [ ] parked: `:split` — propose clusters, let the reviewer merge them, emit
+      `but` commands; uncommitted work only, GitButler first
+
+## P22 — the config frontier, shell, and templating as a general mechanism
+
+Four rounds, in order. The first two are registry work the architecture already
+absorbs; the third generalizes machinery that exists; the fourth is the one
+that needs a design before any code, because none of these languages has a
+"definition" in the sense the walk assumes.
+
+### P22.1 — finish config
+
+Config formats currently produce rationale but no `uses`, so their hunks always
+fall back to file order. The first two items are what change that.
+
+- [x] **yaml anchors and aliases** — `&base` is a definition, `*base` a use, and
+      both are already in the tree as `anchor_name` / `alias_name`. This is the
+      only thing on the list that gives a config file real def→use edges rather
+      than better wording
+- [x] **yaml document identity** — a multi-document file shares one namespace
+      today, so two objects' `spec` collapse onto `spec.replicas` with nothing
+      saying which. k8s manifests are the common case and are nearly always
+      multi-doc. Took the generic `document N`, as a new `ContainerKind` that
+      *scopes* (every other region names only itself); a single-document file
+      is unaffected. Naming a document by its own `kind`/`metadata.name` was
+      rejected for now — it is k8s knowledge the engine otherwise does not
+      carry, and it can be layered on this without changing the shape
+- [x] **cmake** — `tree-sitter-cmake` 0.7. `function`/`macro` definitions,
+      `set()` bindings, `include()`/`find_package()` as imports
+- [x] **make** — `tree-sitter-make` 1.1. A rule is a definition named by its
+      target, a variable assignment is a binding, `include` is an import; a
+      prerequisite is a *use* of another target, which is a genuine edge
+- [x] **nix** — `tree-sitter-nix` 0.3. Attribute-set paths are the same shape as
+      the config formats; `import`/`inherit` bind names
+- [~] **dockerfile** — parked, no trustworthy grammar. `tree-sitter-dockerfile`
+      0.2 pins tree-sitter **0.20**: its `Language` type is not ours and adding
+      it would pull a second tree-sitter into the tree. The only crate that
+      builds against 0.25 is `tree-sitter-dockerfile-updated`, a one-person
+      fork with no track record. The grammar itself is fine — it parses a
+      multi-stage file cleanly and gives `from_instruction` / `image_alias` /
+      `copy_instruction (param)` — so the work is ~40 lines whenever a
+      maintained crate exists. **Decision: wait for the crate** — the in-tree
+      grammar route works (go-template proved it) but is not worth repeating
+      per language; ssh_config and nginx are parked on the same terms. Note a stage is *not* a container in the tree: the
+      instructions after a `FROM` are its siblings, so its extent has to be
+      read off the sibling chain in `end_row`
+
+Follow-up noticed while adding these two, since **done**: `changes signature of
+X` was wrong wording for a def that has no signature — a cmake `set()`, a make
+variable, a rust `const_item`. Fixed with a language-agnostic
+`lang::has_signature(kind)` beside `is_type_kind`, a positive list of callable
+kinds, so a language added later reads acceptably before anyone thinks about
+it. It subsumed the `is_data` special case the config work had added, which is
+now gone: the rule is the *kind*, never the language.
+
+### P22.2 — bash
+
+- [x] **bash** — `tree-sitter-bash` 0.25. `function_definition` is the def,
+      `variable_assignment` the local, `source`/`.` the import. Widest coverage
+      gain of any single entry, and `.env` files parse with it for free
+
+### P22.3 — templating as a general mechanism
+
+`extract::mask_template` is not jinja-specific: it blanks whatever a grammar
+says is not literal text. Make that explicit, then point it at more grammars.
+
+- [x] generalize the masking pass — a template grammar declares which node kinds
+      are literal text and which are interpolations to leave in place, so jinja
+      stops being hardcoded in `mask_template` / `template_uses`
+- [x] **ERB / EJS** — `tree-sitter-embedded-template` 0.25, the official grammar
+- [x] **Go templates** — vendored (`grammars/tree-sitter-go-template`, MIT,
+      built by `build.rs` with `cc`). Two findings worth keeping: the exported
+      symbol is `tree_sitter_gotmpl`, not the `tree_sitter_go_template` that
+      upstream's own Rust binding still names; and **Helm carries no template
+      extension at all** — `templates/deployment.yaml` is yaml — so extension
+      stripping had to be split from "is this templated at all". The same
+      vendoring route stands ready for ssh_config, nginx and dockerfile, but
+      is deliberately not being repeated: those three wait for a crate on a
+      current tree-sitter rather than carrying more generated C in-tree
+
+### P22.4 — different-shape languages  (design first)
+
+Not registry work. A CSS selector, an HTML element and a Vue single-file
+component each break an assumption the walk makes, so this round starts with a
+written design and only then touches code.
+
+- [x] design pass first — `docs/document-languages-design.md`. Verdicts: css
+      builds; html and vue ship together as one entry (`tree-sitter-html`
+      parses a hostile `.vue` SFC with zero errors, so vue needs no grammar of
+      its own, and `tree-sitter-vue` pins tree-sitter 0.20 — the dockerfile
+      rejection again); svelte defers but needs `tree-sitter-svelte-ng`,
+      because html breaks on a bare `>` inside `{ }`. Selector→class edges
+      **refused** in both directions, argued from Tailwind/CSS-modules/BEM
+- [x] **css** — a rule set is a definition named by its whole selector list,
+      sigils kept; a declaration is a member; `@media`/`@supports` are regions;
+      a `--custom-property` and its `var()` are the one def→use pair. The
+      selector-list guard (`selectors` returns early) shipped in the same
+      commit as the grammar, with a test named after it — without it a
+      stylesheet leaks bare `card`/`title`/`root` into the union symbol table
+- [x] **html** — only an element with an `id` is a definition; everything else
+      is transparent. A class is *not* a use of the css that styles it
+- [x] **vue** — shipped with html, no grammar of its own needed: the html
+      grammar reads a hostile SFC with zero error nodes. Ceiling: a hunk in the
+      `<script>` block is injected into js/ts as **uses only**, so a component
+      joins the def→use graph (`uses formatPrice, defined in money.ts`), and
+      both blocks are named as regions (`edits <style scoped>`). Definitions
+      from the script are still not recorded — that needs an offset-aware
+      sub-parse across all ten entry points, argued in the design doc
+- [x] **svelte** — the design deferred this until css and html/vue shipped;
+      both did, so it went in. `tree-sitter-svelte-ng` 1.0.2, clean against
+      0.25. Same kinds as html, so the id-naming path is reused unchanged; it
+      needs its own grammar only because html cannot read a bare `>` inside
+      braces. `{#if}`/`{#each}` left unnamed — `if_statement` is a kind three
+      other grammars produce, so the branch is language-gated. **Done since**:
+      `{#if}`/`{#each}`/`{:else}`/`{#await}`/`{#key}` are regions named as
+      written, and `{#snippet}` turned out to be a *definition* rather than a
+      region — `{@render row(1)}` calls it, giving a component's markup its one
+      def→use pair
+
+## P23 — review at the level of the symbol, not the line
+
+The asset every feature here spends is the one nothing else has: a deterministic
+graph of the change (which hunks define, which use, which are noise) plus symbol
+identity — name + tree-sitter kind + scope — that survives a line shift, a move
+and a rename. GitHub has line anchors and a "viewed" checkbox. difftastic has a
+structural diff of one file pair. An LLM reviewer has non-repeatable prose.
+Nobody else has the graph.
+
+Two premises drive the ordering:
+
+**A hunk is an artifact of `diff`; a symbol is what a reviewer reasons about.**
+Every item the reviewer liked most (P23.1, P23.3, P23.6) treats the *symbol* as
+the primary unit, and P23.1 may replace the hunk list as the default view rather
+than sitting beside it. That is a real architectural claim, not a cosmetic one,
+so it is written down before anything is built.
+
+**AI-generated code fails in consistency, not in single lines.** It is large,
+plausible, and wrong in the relationship between two places. That is exactly
+what a def→use graph can prove and a line-by-line reader cannot.
+
+Everything below stays inside the ceilings ordo already refuses to guess past:
+name-match resolution, changeset- or repo-scoped via git, no type analysis. Each
+item states a *fact about the change* a reviewer can verify in seconds — never a
+judgment about the author.
+
+**Considered and rejected:** *intent vs. shape* (compare the commit message's
+stated change class against the structural one, flag a mismatch). Declined by
+the reviewer. Recorded so it is not re-proposed.
+
+### P23.1 — the symbol ledger  (may become the default view)
+
+- [ ] one line per **symbol** across the whole change, not per hunk: added /
+      removed / renamed / moved / signature-changed / body-only, with fan-in.
+      A forty-hunk diff becomes a twelve-line table read *before* any hunk:
+      `fetch  signature  used by 4 hunks` · `Config.ttl  added field  unused in
+      change`. Every field is already computed — this is a second projection of
+      `symbols`, `moved_in`, `rename`, `relocated` and the edge graph, not new
+      analysis
+- [ ] `ordo-engine pack` leads with it, ahead of the reading order (changeset
+      `notes` already lead; the ledger sits between them and the hunks)
+- [ ] decide whether the TUI's default view becomes the ledger with hunks
+      *underneath* each symbol, rather than the flat reading order. This is the
+      P23 premise made concrete, and it is the one item here that changes an
+      interface people already use — so it ships behind a toggle first and the
+      default flips only on evidence
+
+### P23.2 — consistency the graph can prove
+
+- [ ] **call-site arity** — `changes signature of f` is already said; the next
+      sentence is the one that matters. ordo holds both the new parameter list
+      and every `f(...)` use in the changeset: `adds required param retries to
+      fetch — 2 of 3 call sites in this change still pass the old arity
+      (api.py:L40, cli.py:L12)`. The most common AI failure there is: change the
+      function, update most callers, miss one. **Ceiling:** arity only, never
+      types; and only callers *in the change*, which is honest — those are the
+      ones the author touched
+- [ ] **incomplete rename** — rename detection exists; its inverse does not.
+      After `renames parse_cfg → load_cfg`, does the old name still appear as a
+      use? `parse_cfg still used at main.py:L88 (not in this change)`. The
+      cross-file case needs repo access, so it belongs to the `ordo` reviewer
+      rather than the pure engine
+- [ ] **test theatre** — sharper than P13.2's `code changed but no test
+      touched`: a test file *was* touched, but its uses do not intersect the
+      changed definitions. `tests/test_api.py touched, but none of its uses
+      reference the 3 changed defs`. Set difference over the test↔code link
+      that already exists per hunk
+- [ ] **docs drift** — a def's body changed and its attached doc comment did
+      not. `ts_comment_lines` and def spans are both already computed.
+      **Ceiling:** "the docs were left alone while the behaviour moved", never
+      "the docs are wrong"
+
+### P23.3 — symbol-anchored review notes
+
+- [ ] a note anchored to `Symbol { name, kind, scope }` instead of
+      `path:line`. A line anchor rots on the first rebase; a symbol anchor
+      survives a rebase, a move *and* a rename, because the rename map already
+      carries old→new. This is the piece of infrastructure ordo has that a
+      line-oriented forge structurally cannot build
+- [ ] reuse the reviewed-mark persistence shape (`fnv1a`, deliberately stable
+      across toolchains) so anchors survive the same way marks already do
+
+### P23.4 — review-process integrity
+
+- [ ] **reviewed out of order** — a hunk marked reviewed whose dependency is
+      not: `h5 marked reviewed, but depends on unreviewed h2 (defines retry)`.
+      You approved a call before its callee. A dozen lines on top of marks and
+      edges that both already exist
+- [ ] **edge coverage** as the review metric — every tool reports hunks
+      reviewed; none reports *edges* reviewed at both ends. `80% of hunks, 40%
+      of def→use edges` is the number that actually tracks understanding
+- [ ] **re-review delta** — after a force-push every tool replays the whole
+      diff. ordo can diff two of its *own runs*: which hunks are new, which
+      changed, which edges appeared or vanished, and the one nobody offers —
+      which hunks are byte-identical but **moved in the reading order** because
+      their dependencies changed
+
+### P23.5 — rejection cascade
+
+- [ ] the graph's transitive closure: `h3 (adds retry) — rejecting it orphans
+      h5, h7, h9`. Cheap, and it changes how feedback is sequenced: push back on
+      the root, not the leaves
+
+### P23.6 — rule drafting from a hunk
+
+- [ ] the reviewer flags a hunk — "never want to see this shape again" — and
+      ordo emits a draft TOML rule from the structural facts it already knows
+      about that hunk (kind, children, limits, container). The rules engine and
+      ten shipped rulesets prove the format carries; this closes the loop from
+      *this* review to every future one, deterministically and with no LLM in
+      the path
