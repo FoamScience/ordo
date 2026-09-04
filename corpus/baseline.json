@@ -79,6 +79,16 @@
     "with_details": 2194,
     "with_symbols": 195
   },
+  "nvm": {
+    "anonymous": 0,
+    "bare_change": 0,
+    "degraded_files": 0,
+    "hunks": 419,
+    "longest_rationale": 176,
+    "unsupported_files": 0,
+    "with_details": 56,
+    "with_symbols": 59
+  },
   "openfoam": {
     "anonymous": 0,
     "bare_change": 0,
