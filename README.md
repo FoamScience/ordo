@@ -765,9 +765,23 @@ lang="ts">`, `edits <style scoped>` — as regions rather than definitions.
 same kinds, so the id-naming path is reused verbatim — but it needs its own
 grammar rather than riding on html's the way vue does: html cannot read a bare
 `>` inside braces, and both `{#if n > 1}` and `on:click={() => pick()}` contain
-one. Its own block forms (`{#if}`, `{#each}`) are left unnamed for now; they
-are containers worth naming, but `if_statement` is a kind three other grammars
-here also produce, so claiming it needs a language-gated branch.
+one.
+
+Its **block forms are named containers** — `{#if n > 1}`, `{#each items as it}`,
+`{:else}`, plus `{#await}` and `{#key}` — written the way they appear in the
+file. Regions, like `#ifdef`: they hold markup but declare nothing. The branch
+is gated on the language because `if_statement` is a kind seven other shipped
+grammars also produce. Markup inside a block attributes to that block rather
+than to the enclosing element id, which is the tighter answer.
+
+`{#snippet}` is the exception, and a real definition rather than a region:
+`{#snippet row(x)}` declares a reusable named block and `{@render row(1)}` calls
+it, which is the one def→use pair a component's markup has.
+
+```
+List.svelte:L1  adds row, used below
+List.svelte:L7  uses row, defined above
+```
 
 ### Templates
 

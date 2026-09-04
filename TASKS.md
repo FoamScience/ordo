@@ -411,4 +411,8 @@ written design and only then touches code.
       0.25. Same kinds as html, so the id-naming path is reused unchanged; it
       needs its own grammar only because html cannot read a bare `>` inside
       braces. `{#if}`/`{#each}` left unnamed — `if_statement` is a kind three
-      other grammars produce, so claiming it needs a language-gated branch
+      other grammars produce, so the branch is language-gated. **Done since**:
+      `{#if}`/`{#each}`/`{:else}`/`{#await}`/`{#key}` are regions named as
+      written, and `{#snippet}` turned out to be a *definition* rather than a
+      region — `{@render row(1)}` calls it, giving a component's markup its one
+      def→use pair

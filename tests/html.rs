@@ -82,8 +82,8 @@ fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
     // `{#if n > 1}` and `on:click={() => pick()}` each hold a bare `>`, which
     // the html grammar cannot read — so svelte gets its own. The element and
     // attribute kinds are identical, so the id-naming path is unchanged.
-    let old = "<div id=\"root\">\n{#if n > 1}\n  <button on:click={() => pick()}>go</button>\n{/if}\n</div>\n";
-    let new = "<div id=\"root\">\n{#if n > 2}\n  <button on:click={() => pick()}>stop</button>\n{/if}\n</div>\n";
+    let old = "<div id=\"root\">\n  <span>a</span>\n{#if n > 1}\n  <button on:click={() => pick()}>go</button>\n{/if}\n</div>\n";
+    let new = "<div id=\"root\">\n  <span>b</span>\n{#if n > 1}\n  <button on:click={() => pick()}>stop</button>\n{/if}\n</div>\n";
     let inp: Input = serde_json::from_value(serde_json::json!({
         "changes": [{ "path": "App.svelte", "old": old, "new": new }]
     }))
@@ -91,8 +91,15 @@ fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
     let out = ordo::run(inp);
     assert!(!out.files[0].unsupported);
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
+    // markup outside any block attributes to the element id; markup inside a
+    // `{#if}` attributes to that block instead, which is the tighter answer
     assert!(
         hs.iter().any(|h| h.enclosing.as_deref() == Some("#root")),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("{#if n > 1}")),
         "{hs:?}"
     );
 }
@@ -151,4 +158,72 @@ fn a_style_block_is_never_injected() {
         "<style scoped>\n.card, .title { color: blue; }\n</style>\n",
     );
     assert!(hs.iter().all(|h| h.uses.is_empty()), "{hs:?}");
+}
+
+#[test]
+fn svelte_block_forms_are_named_containers() {
+    let old = "{#if n > 1}\n  <p>x</p>\n{/if}\n\n{#each items as it}\n  <p>{it}</p>\n{/each}\n";
+    let new =
+        "{#if n > 2}\n  <p>x</p>\n{/if}\n\n{#each items as thing}\n  <p>{thing}</p>\n{/each}\n";
+    let hs = one("App.svelte", old, new);
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("{#each items as thing}")),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.enclosing.as_deref() == Some("{#if n > 2}")),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn a_svelte_block_declares_nothing() {
+    // `{#if}` is `#ifdef` in a different hat: a container, never a symbol
+    let hs = one(
+        "App.svelte",
+        "{#if ready}\n  <p>x</p>\n{/if}\n",
+        "{#if ready}\n  <p>y</p>\n{/if}\n",
+    );
+    assert!(hs.iter().all(|h| h.defines.is_empty()), "{hs:?}");
+}
+
+#[test]
+fn a_snippet_defines_and_render_uses_it() {
+    // `{#snippet}` is the exception: a real named block, so it is a definition
+    // rather than a region, and `{@render}` calls it
+    let old = "<p>a</p>\n";
+    let new = "{#snippet row(x)}\n  <li>{x}</li>\n{/snippet}\n\n<p>a</p>\n\n<div>\n{@render row(1)}\n</div>\n";
+    let out = ordo::run(
+        serde_json::from_value::<Input>(serde_json::json!({
+            "changes": [{ "path": "List.svelte", "old": old, "new": new }]
+        }))
+        .unwrap(),
+    );
+    let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
+    assert!(
+        hs.iter().any(|h| h.defines.contains(&"row".to_string())),
+        "{hs:?}"
+    );
+    assert!(
+        out.edges.iter().any(|e| e.why.contains("row")),
+        "{:?}",
+        out.edges
+    );
+}
+
+#[test]
+fn html_keeps_its_own_if_statements_out_of_this() {
+    // seven shipped grammars produce `if_statement`; only svelte's is a block
+    let hs = one(
+        "a.py",
+        "def f(n):\n    if n:\n        return 1\n",
+        "def f(n):\n    if n:\n        return 2\n",
+    );
+    assert!(
+        hs.iter()
+            .all(|h| !h.enclosing.as_deref().unwrap_or("").starts_with('{')),
+        "{hs:?}"
+    );
 }

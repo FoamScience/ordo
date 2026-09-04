@@ -1089,6 +1089,23 @@ fn region_label(
             let n = docs.iter().position(|id| *id == node.id())? + 1;
             Some((format!("document {n}"), ContainerKind::Document))
         }
+        // svelte's own block forms, named as written: `{#if n > 1}`,
+        // `{#each items as it}`, `{:else}`. Regions, like `#ifdef` — they hold
+        // markup but declare nothing. Gated on the language because
+        // `if_statement` is a kind seven other grammars here also produce;
+        // `{#snippet}` is deliberately absent, being a real definition.
+        "if_statement" | "else_if_block" | "else_block" | "each_statement" | "await_statement"
+        | "key_statement"
+            if spec.name == "svelte" =>
+        {
+            let mut cur = node.walk();
+            let start = node
+                .named_children(&mut cur)
+                .find(|c| c.kind().ends_with("_start"))?;
+            let text = start.utf8_text(src).ok()?;
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then_some((text, ContainerKind::Region))
+        }
         // `<script setup>`, `<style scoped>`, `<style module lang="scss">` —
         // what a reviewer actually calls these blocks. A region, not a
         // definition: the block declares nothing itself, whatever its contents
@@ -1489,6 +1506,28 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
                 }
             } else {
                 walk(ch, src, spec, stack, c);
+            }
+        }
+        return;
+    }
+    // svelte: `{@render row(1)}` puts the call in raw text rather than an
+    // identifier node, so the name is the leading word of that text.
+    if spec.name == "svelte" && kind == "render_tag" {
+        let mut cur = node.walk();
+        if let Some(raw) = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "svelte_raw_text")
+        {
+            if let Ok(t) = raw.utf8_text(src) {
+                let name: String = t
+                    .trim()
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                    .collect();
+                if !name.is_empty() {
+                    c.uses.push((sr, name));
+                    c.all_idents.push((sr, c.uses.len() - 1, node.id()));
+                }
             }
         }
         return;
@@ -1989,6 +2028,21 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
         if let Some(name) = node_name(d, src) {
             return Some(name);
         }
+    }
+    // 1c-svelte. `{#snippet row(x)}` declares a reusable named block that
+    // `{@render row(1)}` calls — a real definition, not a region, and the one
+    // def→use pair a component's markup has.
+    if node.kind() == "snippet_statement" {
+        let mut cur = node.walk();
+        let start = node
+            .named_children(&mut cur)
+            .find(|c| c.kind() == "snippet_start")?;
+        let mut sc = start.walk();
+        let name = start
+            .named_children(&mut sc)
+            .find(|c| c.kind() == "snippet_name")?;
+        let t = name.utf8_text(src).ok()?.trim();
+        return (!t.is_empty()).then(|| t.to_string());
     }
     // 1c-html. An element is named by its `id`, and only by that: an id is
     // the one handle a stylesheet, a script or a fragment link addresses it

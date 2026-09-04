@@ -651,7 +651,9 @@ static SPECS: &[LangSpec] = &[
         language: svelte,
         test_blocks: &[],
         imports: &[],
-        defs: &["element"],
+        // `{#snippet row(x)}` is a real named block, and `{@render row(1)}`
+        // calls it — the one def→use pair a component's markup has
+        defs: &["element", "snippet_statement"],
         members: &[],
         prose: false,
         data: false,
