@@ -496,6 +496,33 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+### From this review to every future one
+
+Flag a hunk you never want to see the shape of again, and `:rule` drafts the
+rule for it:
+
+```toml
+# paste into .ordo/rules.toml, then delete the conditions that were
+# incidental — every line below is a fact about the hunk you flagged.
+
+[[rule]]
+name = "no-function-definition"
+lang = "python"
+kind = ["function_definition"]
+max-params = 6
+warn = "TODO: say why this shape is unwanted"
+```
+
+Every condition is a structural fact the engine already recorded about that
+hunk, evaluated later by the same rules engine — no model in the path, and the
+draft is reproducible from the hunk alone. Limits come out one below what the
+hunk measured, so the rule fires on the thing that prompted it.
+
+It is deliberately a *draft*, and deliberately over-specific: deleting a
+condition that turned out to be incidental is easy, inventing the one that
+mattered is not. A hunk that declares no symbol produces a rule with no `kind`
+to match on, and the draft says so rather than quietly being broad.
+
 ### What a rejection would strand
 
 Before pushing back on a hunk, the graph can say what else loses its footing:

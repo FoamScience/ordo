@@ -16,6 +16,13 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 pub use lang::is_generated_path;
+
+/// The language name `src/lang.rs` knows a path by (`python`, `cpp`, `yaml`, …)
+/// — the same string a rule's `lang` condition is written against. `None` when
+/// the path has no grammar.
+pub fn lang_name_for_path(path: &str) -> Option<&'static str> {
+    lang::for_path(path).map(|s| s.name)
+}
 pub use patch::split_patch;
 
 pub const SCHEMA_VERSION: u32 = 1;

@@ -1437,6 +1437,74 @@ fn note_key(item: &Item) -> Option<u64> {
     Some(fnv1a(symbols_identity(&item.symbols).as_bytes()))
 }
 
+/// A draft rule matching the shape of item `i`, as TOML the reviewer can paste
+/// into `.ordo/rules.toml` (P23.6).
+///
+/// Every condition comes from a structural fact the engine already recorded
+/// about this hunk — no LLM, no guessing, and the same facts the rules engine
+/// will evaluate it against. It is deliberately a *draft*: the conditions are
+/// as specific as the evidence allows, so the reviewer's job is to delete the
+/// ones that were incidental rather than to invent the ones that matter.
+///
+/// The limits are emitted one below what this hunk actually measured, so the
+/// rule fires on the hunk that prompted it.
+fn draft_rule(app: &App, i: usize) -> Vec<String> {
+    let it = &app.items[i];
+    let mut when: Vec<String> = vec![];
+
+    if let Some(spec) = ordo::lang_name_for_path(&it.path) {
+        when.push(format!("lang = \"{spec}\""));
+    }
+    let mut kinds: Vec<String> = it.symbols.iter().map(|s| s.kind.clone()).collect();
+    kinds.sort();
+    kinds.dedup();
+    if !kinds.is_empty() {
+        let list = kinds
+            .iter()
+            .map(|k| format!("\"{k}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        when.push(format!("kind = [{list}]"));
+    }
+    // the structural notes are already measurements; turn each into the limit
+    // it just exceeded
+    for n in &it.notes {
+        let num = |prefix: &str, suffix: &str| -> Option<usize> {
+            let rest = n.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            rest.trim().parse().ok()
+        };
+        if let Some(p) = n
+            .strip_suffix(" params")
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            when.push(format!("max-params = {}", p.saturating_sub(1)));
+        } else if let Some(l) = num("large definition (", " lines)") {
+            when.push(format!("max-lines = {}", l.saturating_sub(1)));
+        } else if let Some(d) = num("deeply nested (depth ", ")") {
+            when.push(format!("max-nesting = {}", d.saturating_sub(1)));
+        }
+    }
+    let name = kinds
+        .first()
+        .map(|k| format!("no-{}", k.replace('_', "-")))
+        .unwrap_or_else(|| "unnamed-rule".to_string());
+    let mut out = vec![
+        "# paste into .ordo/rules.toml, then delete the conditions that were".to_string(),
+        "# incidental — every line below is a fact about the hunk you flagged.".to_string(),
+        String::new(),
+        "[[rule]]".to_string(),
+        format!("name = \"{name}\""),
+    ];
+    out.extend(when);
+    out.push("warn = \"TODO: say why this shape is unwanted\"".to_string());
+    if it.symbols.is_empty() {
+        out.push(String::new());
+        out.push("# this hunk declares no symbol, so the draft has no `kind` to".to_string());
+        out.push("# match on — it will be broader than you probably want.".to_string());
+    }
+    out
+}
+
 /// Everything that would lose its footing if item `i` were rejected — the
 /// hunks that depend on it, and the hunks that depend on those.
 ///
@@ -7663,6 +7731,11 @@ const COMMANDS: &[Cmd] = &[
         help: "toggle group-reason headers in the reading-order list",
     },
     Cmd {
+        name: "rule",
+        args: "",
+        help: "draft a rule matching the selected hunk's shape",
+    },
+    Cmd {
         name: "delta",
         args: "",
         help: "what changed since this review was last opened",
@@ -8347,6 +8420,13 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         }
         "group" => {
             app.show_groups = !app.show_groups;
+            Ok(CommandOutcome::None)
+        }
+        "rule" => {
+            app.popup = Some(Popup::new(
+                "draft rule".to_string(),
+                draft_rule(app, app.sel).into_iter().map(prose).collect(),
+            ));
             Ok(CommandOutcome::None)
         }
         "delta" => {
@@ -10261,6 +10341,42 @@ mod tests {
         app.view = vec![0, 1, 2];
         app.reviewed = vec![false, false, false];
         app
+    }
+
+    #[test]
+    fn a_draft_rule_states_the_hunk_it_came_from() {
+        let mut app = test_app(1);
+        app.items = vec![item_with_symbol("a.py", "fetch")];
+        app.items[0].notes = vec!["7 params".to_string()];
+        let d = draft_rule(&app, 0).join("\n");
+        assert!(d.contains("[[rule]]"), "{d}");
+        assert!(d.contains("lang = \"python\""), "{d}");
+        assert!(d.contains("kind = [\"function_definition\"]"), "{d}");
+        // one below what this hunk measured, so the rule fires on it
+        assert!(d.contains("max-params = 6"), "{d}");
+        assert!(d.contains("warn ="), "{d}");
+    }
+
+    #[test]
+    fn a_draft_turns_each_structural_note_into_its_limit() {
+        let mut app = test_app(1);
+        app.items = vec![item_with_symbol("a.py", "f")];
+        app.items[0].notes = vec![
+            "large definition (120 lines)".to_string(),
+            "deeply nested (depth 4)".to_string(),
+        ];
+        let d = draft_rule(&app, 0).join("\n");
+        assert!(d.contains("max-lines = 119"), "{d}");
+        assert!(d.contains("max-nesting = 3"), "{d}");
+    }
+
+    #[test]
+    fn a_draft_from_a_hunk_with_no_symbol_says_it_is_broad() {
+        let mut app = test_app(1);
+        app.items = vec![test_item("a.py")];
+        let d = draft_rule(&app, 0).join("\n");
+        assert!(!d.contains("kind = ["), "{d}");
+        assert!(d.contains("no symbol"), "{d}");
     }
 
     #[test]
