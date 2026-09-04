@@ -721,9 +721,30 @@ A **`.vue` single-file component needs no grammar of its own**: the html
 grammar parses `<script setup lang="ts">`, `v-for`, `:key`, `@click`, `{{ }}`
 and `<style module lang="scss">` with no error nodes, keeping the script and
 style blocks as opaque text. (The published `tree-sitter-vue` pins tree-sitter
-0.20 and could not be used regardless.) The consequence is a real ceiling: a
-hunk in an SFC's `<script>` block gets no structure, because that block is not
-yet injected into the js/ts grammar. **Svelte** has the same shape — `element`, `start_tag` and `attribute` are the
+0.20 and could not be used regardless.)
+
+An SFC's `<script>` block **is** injected — parsed with the js/ts grammar its
+`lang` attribute names, and recorded as **uses only**, the same contract as a
+markdown code fence. That is what lets a component join the def→use graph:
+
+```
+money.ts   adds formatPrice, used in Card.vue
+Card.vue   uses formatPrice, defined in money.ts
+```
+
+Definitions are deliberately *not* taken from it. Recording them would mean a
+sub-tree whose rows are not file rows, threaded through all ten of `extract`'s
+parse entry points — eight of which are old-side collectors, so teaching only
+`analyze` would make every function in every component read as newly added on
+every commit. `<style>` is not injected at all: injection harvests every
+identifier as a use, and a stylesheet's identifiers are its *definitions*, so it
+would contribute nothing and would flood `uses` with exactly the `class_name`
+leak the css selector guard exists to prevent.
+
+Both blocks are still named the way a reviewer names them — `edits <script setup
+lang="ts">`, `edits <style scoped>` — as regions rather than definitions.
+
+**Svelte** has the same shape — `element`, `start_tag` and `attribute` are the
 same kinds, so the id-naming path is reused verbatim — but it needs its own
 grammar rather than riding on html's the way vue does: html cannot read a bare
 `>` inside braces, and both `{#if n > 1}` and `on:click={() => pick()}` contain

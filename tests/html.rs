@@ -96,3 +96,59 @@ fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
         "{hs:?}"
     );
 }
+
+#[test]
+fn an_sfc_script_block_links_to_the_module_it_imports() {
+    // the payoff: before injection a `.vue` script hunk said "change" with no
+    // container — now it joins the def→use graph and sorts after its module
+    let out = ordo::run(
+        serde_json::from_value::<Input>(serde_json::json!({
+            "options": {"cross_file": true},
+            "changes": [
+              {"path": "Card.vue",
+               "old": "<template>\n  <p>{{ n }}</p>\n</template>\n\n<script setup lang=\"ts\">\nconst n = 1\n</script>\n",
+               "new": "<template>\n  <p>{{ n }}</p>\n</template>\n\n<script setup lang=\"ts\">\nimport { formatPrice } from './money'\nconst n = formatPrice(1)\n</script>\n"},
+              {"path": "money.ts",
+               "old": "export const VAT = 0.2\n",
+               "new": "export const VAT = 0.2\n\nexport function formatPrice(v: number) {\n  return v * (1 + VAT)\n}\n"}
+            ]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        out.edges.iter().any(|e| e.why.contains("formatPrice")),
+        "{:?}",
+        out.edges
+    );
+    // the definition sorts ahead of the component consuming it
+    assert_eq!(out.order[0].path, "money.ts", "{:?}", out.order);
+}
+
+#[test]
+fn sfc_blocks_are_named_the_way_a_reviewer_names_them() {
+    let old = "<script setup lang=\"ts\">\nconst msg = 'hi'\n</script>\n\n<style scoped>\n.card { color: red; }\n</style>\n";
+    let new = "<script setup lang=\"ts\">\nconst msg = 'hey'\n</script>\n\n<style scoped>\n.card { color: blue; }\n</style>\n";
+    let hs = one("Card.vue", old, new);
+    assert!(
+        hs.iter()
+            .any(|h| h.rationale == "edits <script setup lang=\"ts\">"),
+        "{hs:?}"
+    );
+    assert!(
+        hs.iter().any(|h| h.rationale == "edits <style scoped>"),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn a_style_block_is_never_injected() {
+    // injection is uses-only, and a stylesheet's identifiers are its
+    // definitions — injecting would flood `uses` with the `class_name` leak
+    // the css selector guard exists to prevent
+    let hs = one(
+        "Card.vue",
+        "<style scoped>\n.card, .title { color: red; }\n</style>\n",
+        "<style scoped>\n.card, .title { color: blue; }\n</style>\n",
+    );
+    assert!(hs.iter().all(|h| h.uses.is_empty()), "{hs:?}");
+}

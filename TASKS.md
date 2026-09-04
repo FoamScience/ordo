@@ -401,8 +401,11 @@ written design and only then touches code.
       is transparent. A class is *not* a use of the css that styles it
 - [x] **vue** — shipped with html, no grammar of its own needed: the html
       grammar reads a hostile SFC with zero error nodes. Ceiling: a hunk in the
-      `<script>` block gets no structure, since that block is not yet injected
-      into js/ts. That injection is the natural next step
+      `<script>` block is injected into js/ts as **uses only**, so a component
+      joins the def→use graph (`uses formatPrice, defined in money.ts`), and
+      both blocks are named as regions (`edits <style scoped>`). Definitions
+      from the script are still not recorded — that needs an offset-aware
+      sub-parse across all ten entry points, argued in the design doc
 - [x] **svelte** — the design deferred this until css and html/vue shipped;
       both did, so it went in. `tree-sitter-svelte-ng` 1.0.2, clean against
       0.25. Same kinds as html, so the id-naming path is reused unchanged; it

@@ -667,6 +667,65 @@ fn is_test_label(s: &str) -> bool {
         .is_some_and(|(head, rest)| rest.starts_with(['"', '\'', '`']) && !head.is_empty())
 }
 
+/// A single-file component's `<script>` block holds real code in another
+/// language. It is parsed with that grammar and recorded as **uses only**, the
+/// same contract as an injected markdown fence — see `inject_fence` for why
+/// that contract exists, and `docs/document-languages-design.md` for why an
+/// SFC does not get definitions out of it: `walk` reads file rows at some
+/// twenty sites and eight of `extract`'s ten parse entry points are old-side
+/// collectors, so teaching only `analyze` about injected defs would make every
+/// function in every component read as newly added on every commit.
+///
+/// `<style>` is deliberately not injected. Injection harvests every identifier
+/// as a use, and a stylesheet's identifiers are its *definitions* — doing it
+/// would contribute nothing and would flood `uses` with exactly the
+/// `class_name` leak the css selector guard exists to prevent.
+fn inject_sfc_script(node: Node, src: &[u8], c: &mut Collected) {
+    let mut cur = node.walk();
+    let Some(body) = node
+        .named_children(&mut cur)
+        .find(|n| n.kind() == "raw_text")
+    else {
+        return;
+    };
+    // `<script lang="ts">` picks typescript; anything else is javascript,
+    // which also parses the plain-js majority correctly
+    let mut tc = node.walk();
+    let declared = node
+        .named_children(&mut tc)
+        .find(|n| matches!(n.kind(), "start_tag" | "self_closing_tag"))
+        .and_then(|t| {
+            let mut ac = t.walk();
+            let found = t.named_children(&mut ac).find_map(|a| {
+                let mut pc = a.walk();
+                let parts: Vec<Node> = a.named_children(&mut pc).collect();
+                let is_lang = parts
+                    .first()
+                    .and_then(|n| n.utf8_text(src).ok())
+                    .is_some_and(|t| t.eq_ignore_ascii_case("lang"));
+                is_lang
+                    .then(|| parts.get(1).and_then(|v| v.utf8_text(src).ok()))
+                    .flatten()
+            });
+            found
+        })
+        .map(|t| unquote(t.trim()).to_string());
+    let inner = declared
+        .as_deref()
+        .and_then(lang::for_lang_name)
+        .or_else(|| lang::for_lang_name("javascript"));
+    let (Some(inner), Ok(text)) = (inner, body.utf8_text(src)) else {
+        return;
+    };
+    let Some(tree) = lang::parse(inner, text) else {
+        return;
+    };
+    // rows inside the block are relative to it; report them in the file's own
+    // coordinates so a hunk lines up with them
+    let offset = body.start_position().row;
+    collect_injected_uses(tree.root_node(), text.as_bytes(), offset, c);
+}
+
 /// Templating over another format: a `values.yaml.j2` is yaml everywhere
 /// except its `{% … %}` statements and `{# … #}` comments, which are not yaml
 /// at all — one `{% for %}` is enough to make the whole document a parse
@@ -1030,6 +1089,19 @@ fn region_label(
             let n = docs.iter().position(|id| *id == node.id())? + 1;
             Some((format!("document {n}"), ContainerKind::Document))
         }
+        // `<script setup>`, `<style scoped>`, `<style module lang="scss">` —
+        // what a reviewer actually calls these blocks. A region, not a
+        // definition: the block declares nothing itself, whatever its contents
+        // do. Both kinds are unique to html and svelte among shipped grammars.
+        "script_element" | "style_element" => {
+            let mut cur = node.walk();
+            let tag = node
+                .named_children(&mut cur)
+                .find(|n| matches!(n.kind(), "start_tag" | "self_closing_tag"))?;
+            let text = tag.utf8_text(src).ok()?;
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then_some((text, ContainerKind::Region))
+        }
         // `@media (min-width: 700px)` is `#ifdef` in a different hat: a real
         // container worth naming that declares nothing.
         "media_statement" | "supports_statement" => {
@@ -1140,6 +1212,12 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             kind: ContainerKind::Binding,
         });
         // fall through: the value still holds locals, uses and nested defs
+    }
+    // a single-file component's `<script>` is real code in another language.
+    // This has to run *before* the region branch below, which names the block
+    // and then returns.
+    if matches!(spec.name, "html" | "svelte") && kind == "script_element" {
+        inject_sfc_script(node, src, c);
     }
     if let Some((label, kind)) = region_label(node, src, spec, stack.is_empty()) {
         // a region names itself and nothing else: no `def_rows` (it declares
