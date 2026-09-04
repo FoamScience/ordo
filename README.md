@@ -496,6 +496,23 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+The changeset as a whole carries `notes` too — facts about the shape of the
+change, never judgments about it:
+
+```json
+"notes": [
+  "code changed but no test touched",
+  "src/parser.py: 14 hunks (high churn)"
+]
+```
+
+"Code" means any supported language that is neither prose nor a config format,
+so a docs-only or CI-config-only change never reports an untouched test suite.
+It does include css and html: a stylesheet-only change is still reported, since
+tightening that would need a notion of "language people write tests for" the
+registry does not have. Both notes lead the `ordo-engine pack` output, ahead of
+the reading order.
+
 Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
 **advisories** — advanced-construct guidance with an escalation ladder, and a
 `verdict` when a downgrade is concretely warranted:

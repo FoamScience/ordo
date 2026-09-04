@@ -134,5 +134,8 @@
       "h1",
       "h2"
     ]
+  ],
+  "notes": [
+    "code changed but no test touched"
   ]
 }

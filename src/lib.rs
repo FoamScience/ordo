@@ -595,6 +595,7 @@ pub fn run(input: Input) -> Output {
         .map(|c| c.iter().map(|&i| hid(i)).collect())
         .collect();
 
+    let notes = changeset_notes(&files);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -609,7 +610,39 @@ pub fn run(input: Input) -> Output {
             p.dedup();
             p
         },
+        notes,
     }
+}
+
+/// A path with this many hunks is churning rather than being edited.
+const HIGH_CHURN: usize = 10;
+
+/// P13.2: what the *changeset* looks like, as facts a reviewer can act on —
+/// never judgments. Both signals are decidable from the finished output alone.
+///
+/// "code" here means any supported language that is neither prose nor a config
+/// format. That deliberately includes css and html, so a stylesheet-only change
+/// also reports an untouched test suite; tightening it would need a notion of
+/// "language people write tests for" that the registry does not have and that
+/// nothing has yet asked for.
+fn changeset_notes(files: &[FileOut]) -> Vec<String> {
+    let mut notes = vec![];
+    let is_code =
+        |p: &str| lang::for_path(p).is_some_and(|s| !s.prose && !s.data && s.template.is_none());
+    // a hunk-less file is one the caller sent with nothing in it; it says
+    // nothing about whether code changed
+    let touched: Vec<&FileOut> = files.iter().filter(|f| !f.hunks.is_empty()).collect();
+    let any_code = touched.iter().any(|f| is_code(&f.path));
+    let any_test = touched.iter().any(|f| lang::is_test_path(&f.path));
+    if any_code && !any_test {
+        notes.push("code changed but no test touched".to_string());
+    }
+    for f in &touched {
+        if f.hunks.len() >= HIGH_CHURN {
+            notes.push(format!("{}: {} hunks (high churn)", f.path, f.hunks.len()));
+        }
+    }
+    notes
 }
 
 /// P12.4: render a compact, deterministic review pack from the engine output —
@@ -641,6 +674,14 @@ pub fn pack(out: &Output) -> String {
         out.files.len(),
         out.clusters.len()
     );
+    // changeset-level signals lead: they are about the change as a whole, so
+    // they frame the reading order rather than sitting after it
+    if !out.notes.is_empty() {
+        let _ = writeln!(s, "\n## notes");
+        for n in &out.notes {
+            let _ = writeln!(s, "- {n}");
+        }
+    }
     let _ = writeln!(s, "\n## reading order");
     for o in &out.order {
         if let Some((path, h)) = by_id.get(o.hunk.as_str()) {

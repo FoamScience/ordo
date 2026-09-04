@@ -107,6 +107,11 @@ pub struct Output {
     /// never matching. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+    /// P13.2: change-shape signals about the changeset as a whole, as facts
+    /// rather than judgments — `code changed but no test touched`,
+    /// `a.py: 14 hunks (high churn)`. Per-hunk signals live on `hunks[].notes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

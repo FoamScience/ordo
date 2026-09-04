@@ -151,7 +151,7 @@ pick above/below vs "in <path>".
 Change-shape signals as `notes`, not judgments. Language-agnostic thresholds.
 
 - [x] **P13.1 per-hunk def smells** — a def introduced in a hunk that is large (≥60 lines), deeply nested (≥4 ancestors), or param-heavy (≥6 params) → `hunks[].notes[]` (`large definition (120 lines)`, `deeply nested (depth 4)`, `7 params`). Data: DefRec span/depth + params node count.
-- [ ] **P13.2 changeset notes** — `Output.notes[]`: `code changed but no test touched` (code file changed, no test file in changeset), `path: N hunks (high churn)` (≥10 hunks). Needs `is_test_path` shared (move to lang.rs).
+- [x] **P13.2 changeset notes** — `Output.notes[]`: `code changed but no test touched` (code file changed, no test file in changeset), `path: N hunks (high churn)` (≥10 hunks). `is_test_path` was already shared in lang.rs. "Code" is any supported language that is neither prose nor a config format, so a docs- or CI-only change stays silent; css/html are included, and tightening that would need a notion of "language people write tests for" the registry does not have. Notes lead the `pack` output, ahead of the reading order.
 - [x] **P13.3 surface** — fold notes into `ordo-engine pack`; document `hunks[].notes` + `notes` in schema/v1.json + README.
 
 ## P14 — advanced-construct advisor (curated catalog, not a linter)
