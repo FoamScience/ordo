@@ -496,6 +496,33 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+### Since you last looked
+
+After a force-push every tool replays the whole diff. ordo instead diffs two of
+its **own runs** — `:delta`:
+
+```
+since you last looked
+  3 new
+  2 changed
+  4 unchanged but reordered
+  1 gone
+
+  moved: api.py:L40   uses fetch, defined above
+```
+
+That third number is the one nothing else offers. A hunk can be **byte-identical
+and still need re-reading**, because what it depends on changed and it now sits
+somewhere else in the order. A diff sees nothing there, so the hunk looks
+untouched while the reason to read it moved.
+
+A hunk's identity across runs is its symbol and its file — not its content and
+not the revision, since those are what the delta is measuring. The snapshot
+lives in `${XDG_CACHE_HOME:-~/.cache}/ordo/runs/<repo>.json` and is overwritten
+each time the review opens, so a delta always answers "since I last looked"
+rather than "since some fixed point". On a first run there is nothing to
+compare against, and it says so instead of calling everything new.
+
 ### Reviewing in the wrong order
 
 Marking a hunk reviewed while the definition it depends on is still outstanding

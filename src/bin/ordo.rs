@@ -583,6 +583,8 @@ struct LoadResult {
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
     notes: HashMap<u64, String>,
     notes_path: Option<PathBuf>,
+    deltas: Vec<Delta>,
+    delta_gone: usize,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -743,6 +745,18 @@ fn load(
         .iter()
         .map(|it| mark_key(&rev, it, &sources).is_some_and(|k| marks.contains_key(&k)))
         .collect();
+    // what changed since this review was last opened, then overwrite the
+    // snapshot so the next run answers the same question about this one
+    let runs_path = (!repo_root.is_empty())
+        .then(|| runs_file_path(repo_root))
+        .flatten();
+    let prev = runs_path.as_deref().map(load_snaps).unwrap_or_default();
+    let order: Vec<usize> = (0..items.len()).collect();
+    let (snaps, deltas) = compare_runs(&items, &order, &sources, &prev);
+    let delta_gone = prev.keys().filter(|k| !snaps.contains_key(*k)).count();
+    if let Some(p) = runs_path.as_deref() {
+        save_snaps(p, &snaps);
+    }
     let _ = tx.send(LoadMsg::Done(Box::new(LoadResult {
         items,
         view,
@@ -758,6 +772,8 @@ fn load(
         symbol_ledger: out.ledger.clone(),
         notes,
         notes_path,
+        deltas,
+        delta_gone,
     })));
 }
 
@@ -1421,6 +1437,23 @@ fn note_key(item: &Item) -> Option<u64> {
     Some(fnv1a(symbols_identity(&item.symbols).as_bytes()))
 }
 
+/// The one-line delta for item `i`, or `None` when it reads exactly as it did
+/// last time — and when there was no last time, since "everything is new" on a
+/// first run is noise rather than information.
+fn delta_line(app: &App, i: usize) -> Option<&'static str> {
+    if app.deltas.iter().all(|d| *d == Delta::New) {
+        return None; // no previous run to compare against
+    }
+    match app.deltas.get(i)? {
+        Delta::New => Some("new since you last looked"),
+        Delta::Changed => Some("changed since you last looked"),
+        Delta::Moved => {
+            Some("unchanged, but it reads in a different place now — its dependencies moved")
+        }
+        Delta::Same => None,
+    }
+}
+
 /// The locations of `i`'s unreviewed dependencies, for the why pane — empty
 /// unless `i` is itself marked reviewed, since the warning is about the *order*
 /// things were approved in, not about work still to do.
@@ -1519,6 +1552,114 @@ fn cache_home() -> Option<PathBuf> {
 fn marks_file_path(repo_root: &str) -> Option<PathBuf> {
     let dir = cache_home()?.join("ordo").join("reviewed");
     Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+/// What one hunk looked like the last time this review was opened: what it
+/// contained, where it sat in the reading order, and what it depended on.
+#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct Snap {
+    /// hex hash of both sides of the hunk
+    c: String,
+    /// its position in the reading order
+    p: usize,
+    /// keys of the hunks defining what it uses
+    d: Vec<String>,
+}
+
+/// How a hunk differs from the last time this review was opened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Delta {
+    /// not in the previous run at all
+    New,
+    /// same symbol, different content
+    Changed,
+    /// **byte-identical, but it reads in a different place now** — because
+    /// what it depends on changed. No other tool reports this: a diff sees
+    /// nothing, so the hunk looks untouched while the reason to read it moved.
+    Moved,
+    /// same content, same position, same dependencies
+    Same,
+}
+
+/// A hunk's identity across runs: its symbol, and the file it lives in. Not
+/// the content and not the revision — those are what the delta is measuring.
+fn snap_key(item: &Item) -> String {
+    format!(
+        "{:016x}",
+        fnv1a(format!("{}\u{0}{}", item.path, symbol_identity_key(item)).as_bytes())
+    )
+}
+
+/// `${XDG_CACHE_HOME:-$HOME/.cache}/ordo/runs/<repo>.json` — the previous run,
+/// so the next one can say what moved. Overwritten each time the review is
+/// opened, so a delta always answers "since I last looked".
+fn runs_file_path(repo_root: &str) -> Option<PathBuf> {
+    let dir = cache_home()?.join("ordo").join("runs");
+    Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+fn load_snaps(path: &Path) -> HashMap<String, Snap> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_snaps(path: &Path, snaps: &HashMap<String, Snap>) {
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(snaps) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// This run's snapshot, and how each item differs from the stored one.
+fn compare_runs(
+    items: &[Item],
+    order: &[usize],
+    sources: &Sources,
+    prev: &HashMap<String, Snap>,
+) -> (HashMap<String, Snap>, Vec<Delta>) {
+    let key_of: Vec<String> = items.iter().map(snap_key).collect();
+    let pos_of: HashMap<usize, usize> = order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
+    let mut now: HashMap<String, Snap> = HashMap::new();
+    for (i, it) in items.iter().enumerate() {
+        let deps: Vec<String> = it
+            .edges
+            .iter()
+            .filter(|e| e.dependency)
+            .filter_map(|e| e.target)
+            .map(|t| key_of[t].clone())
+            .collect();
+        now.insert(
+            key_of[i].clone(),
+            Snap {
+                c: format!("{:016x}", hunk_content_hash(it, sources).unwrap_or(0)),
+                p: pos_of.get(&i).copied().unwrap_or(usize::MAX),
+                d: deps,
+            },
+        );
+    }
+    let deltas = items
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let k = &key_of[i];
+            let (Some(was), Some(is)) = (prev.get(k), now.get(k)) else {
+                return Delta::New;
+            };
+            if was.c != is.c {
+                Delta::Changed
+            } else if was.p != is.p || was.d != is.d {
+                Delta::Moved
+            } else {
+                Delta::Same
+            }
+        })
+        .collect();
+    (now, deltas)
 }
 
 /// `${XDG_CACHE_HOME:-$HOME/.cache}/ordo/notes/<repo>.json` — beside the marks,
@@ -3253,6 +3394,10 @@ struct App {
     group_reasons: HashMap<String, String>,
     /// what the reading-order list is a list of — ledger by default
     mode: ViewMode,
+    /// how each item differs from the previous run of this review
+    deltas: Vec<Delta>,
+    /// keys present last run but gone now, for the `:delta` summary
+    delta_gone: usize,
     /// symbol-anchored review notes, key -> text (see `note_key`)
     notes: HashMap<u64, String>,
     /// where notes get persisted; `None` when the cache dir can't be resolved
@@ -6254,6 +6399,8 @@ fn run(
                         symbol_ledger,
                         notes,
                         notes_path,
+                        deltas,
+                        delta_gone,
                     } = *r;
                     let sel0 = view[0];
                     let scroll = auto_scroll(&items[sel0]);
@@ -6304,6 +6451,8 @@ fn run(
                         symbol_ledger,
                         notes,
                         notes_path,
+                        deltas,
+                        delta_gone,
                         collapsed: HashSet::new(),
                         ledger,
                         rules: rules.clone(),
@@ -6785,8 +6934,16 @@ fn why_rows(
     theme: &Theme,
     note: Option<&str>,
     out_of_order: &[String],
+    delta: Option<&str>,
 ) -> Vec<WhyRow> {
     let mut rows = vec![];
+    if let Some(d) = delta {
+        rows.push(WhyRow {
+            text: format!("· {d}"),
+            style: Style::default().fg(theme.accent),
+            kind: WhyKind::Text,
+        });
+    }
     // approving a call before its callee is the one review-order mistake the
     // graph can actually prove
     if !out_of_order.is_empty() {
@@ -6880,6 +7037,7 @@ fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
         &app.theme,
         note_for(app, app.sel),
         &out_of_order_labels(app, app.sel),
+        delta_line(app, app.sel),
     );
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
@@ -7173,6 +7331,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         &app.theme,
         note_for(app, app.sel),
         &out_of_order_labels(app, app.sel),
+        delta_line(app, app.sel),
     );
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code_total;
@@ -7436,6 +7595,11 @@ const COMMANDS: &[Cmd] = &[
         name: "group",
         args: "",
         help: "toggle group-reason headers in the reading-order list",
+    },
+    Cmd {
+        name: "delta",
+        args: "",
+        help: "what changed since this review was last opened",
     },
     Cmd {
         name: "note",
@@ -8117,6 +8281,41 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         }
         "group" => {
             app.show_groups = !app.show_groups;
+            Ok(CommandOutcome::None)
+        }
+        "delta" => {
+            if app.deltas.iter().all(|d| *d == Delta::New) {
+                return Err("no previous run of this review to compare against".to_string());
+            }
+            let count = |k: Delta| app.deltas.iter().filter(|d| **d == k).count();
+            let (new, changed, moved) = (
+                count(Delta::New),
+                count(Delta::Changed),
+                count(Delta::Moved),
+            );
+            let mut lines = vec![
+                format!("{new} new"),
+                format!("{changed} changed"),
+                // the one no other tool reports
+                format!("{moved} unchanged but reordered"),
+                format!("{} gone", app.delta_gone),
+            ];
+            lines.push(String::new());
+            lines.extend(
+                app.view
+                    .iter()
+                    .filter(|&&i| matches!(app.deltas.get(i), Some(Delta::Moved)))
+                    .map(|&i| {
+                        format!(
+                            "  moved: {}:L{}  {}",
+                            app.items[i].path, app.items[i].new_range[0], app.items[i].rationale
+                        )
+                    }),
+            );
+            app.popup = Some(Popup::new(
+                "since you last looked".to_string(),
+                lines.into_iter().map(prose).collect(),
+            ));
             Ok(CommandOutcome::None)
         }
         "note" => {
@@ -9828,6 +10027,7 @@ mod tests {
             &Theme::terminal("dark", false),
             None,
             &[],
+            None,
         );
         let edges: Vec<&WhyKind> = rows
             .iter()
@@ -9843,7 +10043,14 @@ mod tests {
         let mut it = test_item("a.rs");
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
         // target 3 exists (it's a valid item index) but isn't in `view`
-        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false), None, &[]);
+        let rows = why_rows(
+            &it,
+            &[0, 1, 2],
+            &Theme::terminal("dark", false),
+            None,
+            &[],
+            None,
+        );
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9896,6 +10103,8 @@ mod tests {
             symbol_ledger: vec![],
             notes: HashMap::new(),
             notes_path: None,
+            deltas: vec![],
+            delta_gone: 0,
             collapsed: HashSet::new(),
             ledger: Ledger::default(),
             rules: vec![],
@@ -9968,6 +10177,69 @@ mod tests {
         app.view = vec![0, 1];
         app.reviewed = vec![false, false];
         app
+    }
+
+    fn snaps_of(app: &App, sources: &Sources) -> HashMap<String, Snap> {
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        compare_runs(&app.items, &order, sources, &HashMap::new()).0
+    }
+
+    #[test]
+    fn a_hunk_that_only_moved_in_the_reading_order_is_reported_as_such() {
+        // the case no other tool reports: byte-identical, but it reads
+        // somewhere else now because what it depends on changed
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let mut prev = snaps_of(&app, &sources);
+        // same content, different position last time
+        for v in prev.values_mut() {
+            v.p += 5;
+        }
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &prev);
+        assert!(deltas.iter().all(|d| *d == Delta::Moved), "{deltas:?}");
+    }
+
+    #[test]
+    fn a_run_identical_to_the_last_one_reports_nothing() {
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let prev = snaps_of(&app, &sources);
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &prev);
+        assert!(deltas.iter().all(|d| *d == Delta::Same), "{deltas:?}");
+    }
+
+    #[test]
+    fn a_hunk_with_no_previous_snapshot_is_new() {
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &HashMap::new());
+        assert!(deltas.iter().all(|d| *d == Delta::New), "{deltas:?}");
+    }
+
+    #[test]
+    fn a_first_run_says_nothing_rather_than_calling_everything_new() {
+        let mut app = dependent_pair();
+        app.deltas = vec![Delta::New, Delta::New];
+        assert!(delta_line(&app, 0).is_none());
+        // but once there is a real comparison, New is worth saying
+        app.deltas = vec![Delta::New, Delta::Same];
+        assert!(delta_line(&app, 0).is_some());
+    }
+
+    #[test]
+    fn a_changed_dependency_set_counts_as_moved() {
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let mut prev = snaps_of(&app, &sources);
+        for v in prev.values_mut() {
+            v.d = vec!["something-else".to_string()];
+        }
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &prev);
+        assert!(deltas.contains(&Delta::Moved), "{deltas:?}");
     }
 
     #[test]
