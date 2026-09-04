@@ -594,6 +594,21 @@ change, never judgments about it:
 ]
 ```
 
+A sharper sibling of the first one: a test file *was* touched, but what the
+change wrote there references none of the definitions the change altered.
+
+```json
+"notes": [
+  "tests/test_api.py touched, but none of its uses reference the 1 changed def"
+]
+```
+
+That is the shape of a test which exercises something adjacent to the thing
+that moved. It reads the hunks of the test file rather than its whole content,
+because untouched tests are existing coverage rather than part of this change.
+The two test notes are mutually exclusive by construction — a changeset either
+touched no test at all, or touched one that missed.
+
 "Code" means any supported language that is neither prose nor a config format,
 so a docs-only or CI-config-only change never reports an untouched test suite.
 It does include css and html: a stylesheet-only change is still reported, since

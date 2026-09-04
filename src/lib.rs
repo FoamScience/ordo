@@ -595,8 +595,8 @@ pub fn run(input: Input) -> Output {
         .map(|c| c.iter().map(|&i| hid(i)).collect())
         .collect();
 
-    let notes = changeset_notes(&files);
     let ledger = build_ledger(&files, &order, &facts, &new_defs_v, &old_rows);
+    let notes = changeset_notes(&files, &ledger);
     arity_check(&mut files, &ledger, &input.changes);
     incomplete_rename(&mut files, &ledger, &input.changes, &new_defs_v);
     Output {
@@ -946,7 +946,7 @@ const HIGH_CHURN: usize = 10;
 /// also reports an untouched test suite; tightening it would need a notion of
 /// "language people write tests for" that the registry does not have and that
 /// nothing has yet asked for.
-fn changeset_notes(files: &[FileOut]) -> Vec<String> {
+fn changeset_notes(files: &[FileOut], ledger: &[LedgerEntry]) -> Vec<String> {
     let mut notes = vec![];
     let is_code =
         |p: &str| lang::for_path(p).is_some_and(|s| !s.prose && !s.data && s.template.is_none());
@@ -961,6 +961,31 @@ fn changeset_notes(files: &[FileOut]) -> Vec<String> {
     for f in &touched {
         if f.hunks.len() >= HIGH_CHURN {
             notes.push(format!("{}: {} hunks (high churn)", f.path, f.hunks.len()));
+        }
+    }
+
+    // Sharper than "no test touched": a test file *was* touched, but what the
+    // change wrote there references none of the definitions the change altered.
+    // The failure it catches is a test that exercises something adjacent to the
+    // thing that moved.
+    let changed: HashSet<&str> = ledger
+        .iter()
+        .filter(|e| !lang::is_test_path(&e.path))
+        .map(|e| e.name.as_str())
+        .collect();
+    if !changed.is_empty() {
+        for f in touched.iter().filter(|f| lang::is_test_path(&f.path)) {
+            // what the change wrote in this test file, not what the file
+            // already contained — untouched tests are existing coverage
+            let mut refs = f.hunks.iter().flat_map(|h| h.uses.iter());
+            if !refs.any(|u| changed.contains(u.as_str())) {
+                notes.push(format!(
+                    "{} touched, but none of its uses reference the {} changed def{}",
+                    f.path,
+                    changed.len(),
+                    if changed.len() == 1 { "" } else { "s" }
+                ));
+            }
         }
     }
     notes
