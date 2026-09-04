@@ -496,6 +496,32 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+### Reviewing in the wrong order
+
+Marking a hunk reviewed while the definition it depends on is still outstanding
+means a call was approved before its callee. That is the one review-order
+mistake the graph can prove, so it says so:
+
+```
+⚠ marked reviewed, but depends on unreviewed api.py:L4
+```
+
+It only fires on a hunk you have actually approved — an unreviewed hunk with
+unreviewed dependencies is just work still to do, not a mistake.
+
+Alongside it, the reviewer counts **edge coverage** as well as hunk coverage:
+
+```
+ HEAD — 8/10 reviewed · 4/9 edges · vim
+```
+
+Every tool reports how many hunks were ticked. An edge with *both* ends
+reviewed is the number that tracks whether the relationship between two places
+was actually checked — which is the thing a reading order exists to make
+possible, and it is routinely much lower. Only edges whose ends are both in the
+current view count, so filtering the review never makes the number look better
+than it is.
+
 ### Notes that survive a rebase
 
 A review note is anchored to a **symbol** — name, tree-sitter kind and

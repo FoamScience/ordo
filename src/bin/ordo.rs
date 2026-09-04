@@ -1302,6 +1302,10 @@ struct Item {
 struct EdgeRef {
     label: String,
     target: Option<usize>,
+    /// this hunk *uses* what the target defines — so the target is something
+    /// this hunk depends on, and reviewing this one first is reviewing a call
+    /// before its callee
+    dependency: bool,
 }
 
 // ---------------------------------------------------------- reviewed-mark persistence
@@ -1415,6 +1419,58 @@ fn note_key(item: &Item) -> Option<u64> {
         return None;
     }
     Some(fnv1a(symbols_identity(&item.symbols).as_bytes()))
+}
+
+/// The locations of `i`'s unreviewed dependencies, for the why pane — empty
+/// unless `i` is itself marked reviewed, since the warning is about the *order*
+/// things were approved in, not about work still to do.
+fn out_of_order_labels(app: &App, i: usize) -> Vec<String> {
+    if !app.reviewed[i] {
+        return vec![];
+    }
+    unreviewed_deps(app, i)
+        .into_iter()
+        .map(|t| format!("{}:L{}", app.items[t].path, app.items[t].new_range[0]))
+        .collect()
+}
+
+/// Dependencies of item `i` that are part of this review but not yet reviewed
+/// — the hunks defining what `i` uses. Marking `i` reviewed while any of these
+/// are outstanding means a call was approved before its callee.
+fn unreviewed_deps(app: &App, i: usize) -> Vec<usize> {
+    app.items[i]
+        .edges
+        .iter()
+        .filter(|e| e.dependency)
+        .filter_map(|e| e.target)
+        .filter(|&t| !app.reviewed[t])
+        .collect()
+}
+
+/// How much of the review is actually understood, as two numbers.
+///
+/// Hunk coverage is what every tool reports. Edge coverage — a def→use link
+/// with *both* ends reviewed — is the one that tracks whether the relationship
+/// between two places was checked, which is the thing a reading order exists to
+/// make possible. Only edges whose ends are both in the current view count, so
+/// filtering the review does not make the number look better than it is.
+fn coverage(app: &App) -> (usize, usize, usize, usize) {
+    let done = app.view.iter().filter(|&&i| app.reviewed[i]).count();
+    let mut edges = 0;
+    let mut both = 0;
+    for &i in &app.view {
+        for e in app.items[i].edges.iter().filter(|e| e.dependency) {
+            let Some(t) = e.target else { continue };
+            if !app.view.contains(&t) {
+                continue;
+            }
+            edges += 1;
+            if app.reviewed[i] && app.reviewed[t] {
+                both += 1;
+            }
+        }
+    }
+    (done, app.view.len(), both, edges)
 }
 
 /// The note anchored to item `i`'s symbol, if any.
@@ -3333,7 +3389,8 @@ fn build_items(out: &Output) -> Vec<Item> {
                 .iter()
                 .filter(|e| e.from == h.id || e.to == h.id)
                 .map(|e| {
-                    let (label, target_id) = if e.from == h.id {
+                    let defines_it = e.from == h.id;
+                    let (label, target_id) = if defines_it {
                         (format!("→ {}   {}", loc(&e.to), e.why), e.to.as_str())
                     } else {
                         (format!("← {}   {}", loc(&e.from), e.why), e.from.as_str())
@@ -3341,6 +3398,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                     EdgeRef {
                         label,
                         target: item_index.get(target_id).copied(),
+                        dependency: !defines_it,
                     }
                 })
                 .collect();
@@ -6721,8 +6779,26 @@ fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
 /// a dep line whose target is currently filtered out renders — and resolves
 /// — the same as one that was never part of the review) so it doubles as the
 /// source of truth for what `why_sel` is currently sitting on.
-fn why_rows(it: &Item, view: &[usize], theme: &Theme, note: Option<&str>) -> Vec<WhyRow> {
+fn why_rows(
+    it: &Item,
+    view: &[usize],
+    theme: &Theme,
+    note: Option<&str>,
+    out_of_order: &[String],
+) -> Vec<WhyRow> {
     let mut rows = vec![];
+    // approving a call before its callee is the one review-order mistake the
+    // graph can actually prove
+    if !out_of_order.is_empty() {
+        rows.push(WhyRow {
+            text: format!(
+                "⚠ marked reviewed, but depends on unreviewed {}",
+                out_of_order.join(", ")
+            ),
+            style: Style::default().fg(theme.warn),
+            kind: WhyKind::Text,
+        });
+    }
     // a review note leads: it is the reviewer's own words about this symbol,
     // and it outranks anything the engine derived
     if let Some(n) = note {
@@ -6803,6 +6879,7 @@ fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
         &app.view,
         &app.theme,
         note_for(app, app.sel),
+        &out_of_order_labels(app, app.sel),
     );
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
@@ -6991,7 +7068,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
             }
         })
         .collect();
-    let done = app.view.iter().filter(|&&i| app.reviewed[i]).count();
+    let (done, total, edges_done, edges_total) = coverage(app);
     let mut state = ListState::default();
     let sel_row = display_row_of(
         &app.view,
@@ -7005,8 +7082,14 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     let list = List::new(rows)
         .block(pane_block(
             format!(
-                " {rev} — {done}/{} reviewed{} · {} ",
-                app.view.len(),
+                " {rev} — {done}/{total} reviewed{}{} · {} ",
+                // edge coverage is the number that tracks understanding; it is
+                // omitted when the review has no def→use links to cover
+                if edges_total > 0 {
+                    format!(" · {edges_done}/{edges_total} edges")
+                } else {
+                    String::new()
+                },
                 if filtered { " (filtered)" } else { "" },
                 app.keys.name
             ),
@@ -7084,7 +7167,13 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         format!(" {}{clip}  ({}) ", it.path, app.keys.hint)
     };
 
-    let why_content = why_rows(it, &app.view, &app.theme, note_for(app, app.sel));
+    let why_content = why_rows(
+        it,
+        &app.view,
+        &app.theme,
+        note_for(app, app.sel),
+        &out_of_order_labels(app, app.sel),
+    );
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code_total;
     app.why_len = why_content.len();
@@ -9385,6 +9474,9 @@ mod tests {
         EdgeRef {
             label: label.to_string(),
             target,
+            // `←` is the direction that means "this hunk uses what the target
+            // defines", which is what makes the target a dependency
+            dependency: label.starts_with('←'),
         }
     }
 
@@ -9730,7 +9822,13 @@ mod tests {
         ];
         // target 3 must be in `view` to resolve — same as being part of the
         // review at all; a 4-item view (0..=3) covers it here
-        let rows = why_rows(&it, &[0, 1, 2, 3], &Theme::terminal("dark", false), None);
+        let rows = why_rows(
+            &it,
+            &[0, 1, 2, 3],
+            &Theme::terminal("dark", false),
+            None,
+            &[],
+        );
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9745,7 +9843,7 @@ mod tests {
         let mut it = test_item("a.rs");
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
         // target 3 exists (it's a valid item index) but isn't in `view`
-        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false), None);
+        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false), None, &[]);
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9859,6 +9957,62 @@ mod tests {
         let mut it = test_item(path);
         it.symbols = vec![sym(name, "function_definition", None)];
         it
+    }
+
+    /// Two items where 1 uses what 0 defines: `1 ← 0`.
+    fn dependent_pair() -> App {
+        let mut app = test_app(1);
+        app.items = vec![test_item("a.py"), test_item("b.py")];
+        app.items[1].edges = vec![edge("← a.py:L1   def→use: f", Some(0))];
+        app.items[0].edges = vec![edge("→ b.py:L1   def→use: f", Some(1))];
+        app.view = vec![0, 1];
+        app.reviewed = vec![false, false];
+        app
+    }
+
+    #[test]
+    fn approving_a_use_before_its_definition_is_reported() {
+        let mut app = dependent_pair();
+        app.reviewed[1] = true; // the caller, not the callee
+        let out = out_of_order_labels(&app, 1);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].starts_with("a.py:"), "{out:?}");
+    }
+
+    #[test]
+    fn reviewing_the_definition_first_says_nothing() {
+        let mut app = dependent_pair();
+        app.reviewed[0] = true;
+        app.reviewed[1] = true;
+        assert!(out_of_order_labels(&app, 1).is_empty());
+    }
+
+    #[test]
+    fn an_unreviewed_hunk_is_not_out_of_order() {
+        // the warning is about the order things were approved in, not about
+        // work still to do
+        let app = dependent_pair();
+        assert!(out_of_order_labels(&app, 1).is_empty());
+    }
+
+    #[test]
+    fn edge_coverage_needs_both_ends_reviewed() {
+        let mut app = dependent_pair();
+        assert_eq!(coverage(&app), (0, 2, 0, 1));
+        app.reviewed[1] = true;
+        // one hunk done, but the link between them is still unchecked
+        assert_eq!(coverage(&app), (1, 2, 0, 1));
+        app.reviewed[0] = true;
+        assert_eq!(coverage(&app), (2, 2, 1, 1));
+    }
+
+    #[test]
+    fn an_edge_leaving_the_view_is_not_counted_against_it() {
+        // filtering the review must not make coverage look better than it is
+        let mut app = dependent_pair();
+        app.view = vec![1];
+        let (_, _, _, edges) = coverage(&app);
+        assert_eq!(edges, 0);
     }
 
     #[test]
