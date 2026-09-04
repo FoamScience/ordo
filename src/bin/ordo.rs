@@ -1437,6 +1437,62 @@ fn note_key(item: &Item) -> Option<u64> {
     Some(fnv1a(symbols_identity(&item.symbols).as_bytes()))
 }
 
+/// Everything that would lose its footing if item `i` were rejected — the
+/// hunks that depend on it, and the hunks that depend on those.
+///
+/// The transitive closure matters more than the direct dependents: pushing
+/// back on a leaf when the root is the problem sends the author round the loop
+/// twice. Cycles (mutual recursion is a real def→use cycle) terminate on the
+/// visited set rather than hanging.
+fn cascade(app: &App, i: usize) -> Vec<usize> {
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut queue = vec![i];
+    while let Some(cur) = queue.pop() {
+        for (j, it) in app.items.iter().enumerate() {
+            if seen.contains(&j) || j == i {
+                continue;
+            }
+            let depends = it
+                .edges
+                .iter()
+                .any(|e| e.dependency && e.target == Some(cur));
+            if depends {
+                seen.insert(j);
+                queue.push(j);
+            }
+        }
+    }
+    // report in reading order, which is the order the author would fix them in
+    let mut out: Vec<usize> = seen.into_iter().filter(|j| app.view.contains(j)).collect();
+    out.sort_by_key(|&j| view_pos(&app.view, j));
+    out
+}
+
+/// The cascade as one why-pane line, or `None` when rejecting this hunk would
+/// strand nothing.
+fn cascade_line(app: &App, i: usize) -> Option<String> {
+    let hit = cascade(app, i);
+    if hit.is_empty() {
+        return None;
+    }
+    let where_ = hit
+        .iter()
+        .take(3)
+        .map(|&j| format!("{}:L{}", app.items[j].path, app.items[j].new_range[0]))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = if hit.len() > 3 {
+        format!(" and {} more", hit.len() - 3)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "rejecting this strands {} hunk{} ({where_}{more})",
+        hit.len(),
+        if hit.len() == 1 { "" } else { "s" }
+    ))
+}
+
 /// The one-line delta for item `i`, or `None` when it reads exactly as it did
 /// last time — and when there was no last time, since "everything is new" on a
 /// first run is noise rather than information.
@@ -6935,8 +6991,16 @@ fn why_rows(
     note: Option<&str>,
     out_of_order: &[String],
     delta: Option<&str>,
+    cascade: Option<&str>,
 ) -> Vec<WhyRow> {
     let mut rows = vec![];
+    if let Some(c) = cascade {
+        rows.push(WhyRow {
+            text: format!("· {c}"),
+            style: Style::default().fg(theme.accent),
+            kind: WhyKind::Text,
+        });
+    }
     if let Some(d) = delta {
         rows.push(WhyRow {
             text: format!("· {d}"),
@@ -7038,6 +7102,7 @@ fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
         note_for(app, app.sel),
         &out_of_order_labels(app, app.sel),
         delta_line(app, app.sel),
+        cascade_line(app, app.sel).as_deref(),
     );
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
@@ -7332,6 +7397,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         note_for(app, app.sel),
         &out_of_order_labels(app, app.sel),
         delta_line(app, app.sel),
+        cascade_line(app, app.sel).as_deref(),
     );
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code_total;
@@ -10028,6 +10094,7 @@ mod tests {
             None,
             &[],
             None,
+            None,
         );
         let edges: Vec<&WhyKind> = rows
             .iter()
@@ -10049,6 +10116,7 @@ mod tests {
             &Theme::terminal("dark", false),
             None,
             &[],
+            None,
             None,
         );
         let edges: Vec<&WhyKind> = rows
@@ -10182,6 +10250,50 @@ mod tests {
     fn snaps_of(app: &App, sources: &Sources) -> HashMap<String, Snap> {
         let order: Vec<usize> = (0..app.items.len()).collect();
         compare_runs(&app.items, &order, sources, &HashMap::new()).0
+    }
+
+    /// 0 defines what 1 uses; 1 defines what 2 uses. Rejecting 0 strands both.
+    fn dependency_chain() -> App {
+        let mut app = test_app(1);
+        app.items = vec![test_item("a.py"), test_item("b.py"), test_item("c.py")];
+        app.items[1].edges = vec![edge("← a.py:L1   def→use: f", Some(0))];
+        app.items[2].edges = vec![edge("← b.py:L1   def→use: g", Some(1))];
+        app.view = vec![0, 1, 2];
+        app.reviewed = vec![false, false, false];
+        app
+    }
+
+    #[test]
+    fn a_cascade_is_transitive_not_just_the_direct_dependents() {
+        // pushing back on a leaf when the root is the problem sends the author
+        // round the loop twice
+        let app = dependency_chain();
+        assert_eq!(cascade(&app, 0), vec![1, 2]);
+        assert_eq!(cascade(&app, 1), vec![2]);
+        assert!(cascade(&app, 2).is_empty());
+    }
+
+    #[test]
+    fn a_cascade_terminates_on_a_dependency_cycle() {
+        // mutual recursion is a real def→use cycle
+        let mut app = dependency_chain();
+        app.items[0].edges = vec![edge("← c.py:L1   def→use: h", Some(2))];
+        let hit = cascade(&app, 0);
+        assert_eq!(hit, vec![1, 2], "{hit:?}");
+    }
+
+    #[test]
+    fn a_cascade_ignores_hunks_filtered_out_of_the_view() {
+        let mut app = dependency_chain();
+        app.view = vec![0, 1];
+        assert_eq!(cascade(&app, 0), vec![1]);
+    }
+
+    #[test]
+    fn a_leaf_strands_nothing_and_says_nothing() {
+        let app = dependency_chain();
+        assert!(cascade_line(&app, 2).is_none());
+        assert!(cascade_line(&app, 0).is_some());
     }
 
     #[test]

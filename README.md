@@ -496,6 +496,21 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+### What a rejection would strand
+
+Before pushing back on a hunk, the graph can say what else loses its footing:
+
+```
+· rejecting this strands 3 hunks (b.py:L4, c.py:L9, d.py:L2)
+```
+
+Transitive, not just the direct dependents — that is the whole point. Pushing
+back on a leaf when the root is the problem sends the author round the loop
+twice, so this changes how feedback gets sequenced: reject the root, and say so.
+Reported in reading order, which is the order the fixes would be made in.
+Dependency cycles are real (mutual recursion is one), and terminate on the
+visited set rather than hanging.
+
 ### Since you last looked
 
 After a force-push every tool replays the whole diff. ordo instead diffs two of
