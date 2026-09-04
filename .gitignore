@@ -6,3 +6,7 @@ __pycache__/
 dist/
 build/
 almanac/
+
+# the working tasklist stays local — it is scratch, not a deliverable,
+# and its churn is noise in every diff and PR. History keeps what it was.
+TASKS.md
