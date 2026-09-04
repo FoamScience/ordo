@@ -169,7 +169,12 @@ a downgrade **verdict** only where a body-inspection signal backs it.
 - [x] git layer (shell) → `ordo::run` → ratatui review in comprehension order
 - [x] reading-order list (⚠ advisories, dimmed noise) + detail pane (rationale, notes, def→use edges, advisory ladders); j/k/g/G/q nav
 - [x] diff-body view (colored old→new, capped) + mark-reviewed (x, ✓, n/N progress)
-- [ ] follow-ups: jump-along-edge (gd), detail-pane scroll, working-tree/range revs
+- [x] follow-ups: jump-along-edge (`gd`/`Enter`/`C-Enter` → `jump_to_edge`, with
+      `JumpBack` on `C-o`/`Alt-Left` and a position stack), detail-pane scroll
+      (`why_cursor_move` for j/k, `page` for the why pane's own scroll),
+      working-tree/range revs (`<rev>` takes any commit-ish, `a..b`, `a...b`,
+      `zz` for the uncommitted area, and `base..zz`). Boxes were left unticked
+      after the work landed.
 
 ## P16 — relocation / extraction detection  ✅
 - [x] `symbol_bodies` also returns each def's substantial body lines
@@ -342,8 +347,9 @@ fall back to file order. The first two items are what change that.
       fork with no track record. The grammar itself is fine — it parses a
       multi-stage file cleanly and gives `from_instruction` / `image_alias` /
       `copy_instruction (param)` — so the work is ~40 lines whenever a
-      maintained crate exists, or via the vendoring route P22.3 already parks
-      for Go templates. Note a stage is *not* a container in the tree: the
+      maintained crate exists. **Decision: wait for the crate** — the in-tree
+      grammar route works (go-template proved it) but is not worth repeating
+      per language; ssh_config and nginx are parked on the same terms. Note a stage is *not* a container in the tree: the
       instructions after a `FROM` are its siblings, so its extent has to be
       read off the sibling chain in `end_row`
 
@@ -376,7 +382,9 @@ says is not literal text. Make that explicit, then point it at more grammars.
       upstream's own Rust binding still names; and **Helm carries no template
       extension at all** — `templates/deployment.yaml` is yaml — so extension
       stripping had to be split from "is this templated at all". The same
-      vendoring route now stands ready for ssh_config, nginx and dockerfile
+      vendoring route stands ready for ssh_config, nginx and dockerfile, but
+      is deliberately not being repeated: those three wait for a crate on a
+      current tree-sitter rather than carrying more generated C in-tree
 
 ### P22.4 — different-shape languages  (design first)
 
