@@ -496,6 +496,32 @@ counterpart.
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
 
+### Notes that survive a rebase
+
+A review note is anchored to a **symbol** — name, tree-sitter kind and
+enclosing scope — not to `path:line`:
+
+```
+:note the retry path here needs a bounded backoff
+```
+
+A line anchor rots on the first rebase. This one survives a rebase, a move to
+another file, an edit to the body, *and* a rename — the change ledger already
+carries the name a symbol had before, so the note is migrated onto the new
+identity when the rename is detected. This is the piece of infrastructure ordo
+has that a line-oriented forge structurally cannot build.
+
+The key is deliberately the exact opposite of a reviewed mark's. A mark folds
+in the revision, the path and a hash of both sides of the hunk, because a stale
+"already reviewed" is worse than a lost one. A note folds in none of them,
+because it is a thought about the symbol rather than about one version of it.
+A hunk that declares no symbol cannot be annotated at all — anchoring to the
+enclosing name would silently drift onto whatever moved there next.
+
+Notes live beside the marks, in
+`${XDG_CACHE_HOME:-~/.cache}/ordo/notes/<repo>.json`, and `:note` with no text
+clears the one on the selected symbol.
+
 ### The change ledger
 
 One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk

@@ -581,6 +581,8 @@ struct LoadResult {
     /// the engine's change ledger (P23.1) — what the list defaults to being a
     /// list of; distinct from `ledger`, which is the `:audit` one
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
+    notes: HashMap<u64, String>,
+    notes_path: Option<PathBuf>,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -704,6 +706,39 @@ fn load(
         .flatten();
     let mut marks = marks_path.as_deref().map(load_marks).unwrap_or_default();
     prune_marks(&mut marks, now_unix());
+    let notes_path = (!repo_root.is_empty())
+        .then(|| notes_file_path(repo_root))
+        .flatten();
+    let mut notes = notes_path.as_deref().map(load_notes).unwrap_or_default();
+    // carry a note across a rename: the ledger knows the name the symbol had,
+    // so the note written against the old identity finds its way to the new one
+    let mut migrated = false;
+    for e in out.ledger.iter().filter(|e| e.from.is_some()) {
+        let Some(old) = e.from.as_deref() else {
+            continue;
+        };
+        let Some(it) = items.iter().find(|i| {
+            i.new_range[0] > 0
+                && !i.symbols.is_empty()
+                && i.symbols.iter().any(|s| s.name == e.name)
+        }) else {
+            continue;
+        };
+        let (Some(from_key), Some(to_key)) = (note_key_named(it, old), note_key(it)) else {
+            continue;
+        };
+        if from_key != to_key {
+            if let Some(text) = notes.remove(&from_key) {
+                notes.insert(to_key, text);
+                migrated = true;
+            }
+        }
+    }
+    if migrated {
+        if let Some(p) = notes_path.as_deref() {
+            save_notes(p, &notes);
+        }
+    }
     let reviewed: Vec<bool> = items
         .iter()
         .map(|it| mark_key(&rev, it, &sources).is_some_and(|k| marks.contains_key(&k)))
@@ -721,6 +756,8 @@ fn load(
         groups,
         ledger,
         symbol_ledger: out.ledger.clone(),
+        notes,
+        notes_path,
     })));
 }
 
@@ -1300,22 +1337,28 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// together at once) rather than silent.
 fn symbol_identity_key(item: &Item) -> String {
     if !item.symbols.is_empty() {
-        let mut syms = item.symbols.clone();
-        syms.sort();
-        syms.iter()
-            .map(|s| {
-                format!(
-                    "{}\u{1f}{}\u{1f}{}",
-                    s.name,
-                    s.kind,
-                    s.scope.as_deref().unwrap_or("")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\u{1e}")
+        symbols_identity(&item.symbols)
     } else {
         item.enclosing.clone().unwrap_or_default()
     }
+}
+
+/// name + kind + scope for each symbol, order-independent — the identity both
+/// `mark_key` and `note_key` are built on.
+fn symbols_identity(symbols: &[ordo::model::Symbol]) -> String {
+    let mut syms = symbols.to_vec();
+    syms.sort();
+    syms.iter()
+        .map(|s| {
+            format!(
+                "{}\u{1f}{}\u{1f}{}",
+                s.name,
+                s.kind,
+                s.scope.as_deref().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\u{1e}")
 }
 
 /// Hashes both sides of the hunk's content — old lines, then new — so any
@@ -1355,6 +1398,44 @@ fn mark_key(rev: &str, item: &Item, sources: &Sources) -> Option<u64> {
     Some(fnv1a(combined.as_bytes()))
 }
 
+/// A review note's key: the symbol's identity and **nothing else**.
+///
+/// The exact opposite of `mark_key`, and deliberately so. A mark folds in the
+/// revision, the path and a hash of both sides of the hunk, because a stale
+/// "already reviewed" is worse than a lost one. A note is a thought about a
+/// *symbol* — it must outlive a rebase (no revision), a move to another file
+/// (no path) and an edit to the body (no content hash). Renames are handled by
+/// migrating the old identity's key when the ledger reports one, so the note
+/// follows the symbol through its new name too.
+///
+/// `None` when the hunk declares no symbol: there is nothing stable to anchor
+/// to, and anchoring to the enclosing name would silently drift.
+fn note_key(item: &Item) -> Option<u64> {
+    if item.symbols.is_empty() {
+        return None;
+    }
+    Some(fnv1a(symbols_identity(&item.symbols).as_bytes()))
+}
+
+/// The note anchored to item `i`'s symbol, if any.
+fn note_for(app: &App, i: usize) -> Option<&str> {
+    let key = note_key(&app.items[i])?;
+    app.notes.get(&key).map(String::as_str)
+}
+
+/// The key a symbol *would* have had under its previous name, so a note
+/// written before a rename can be carried across to it.
+fn note_key_named(item: &Item, old_name: &str) -> Option<u64> {
+    if item.symbols.is_empty() {
+        return None;
+    }
+    let mut renamed = item.symbols.clone();
+    for sym in &mut renamed {
+        sym.name = old_name.to_string();
+    }
+    Some(fnv1a(symbols_identity(&renamed).as_bytes()))
+}
+
 const MARK_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 
 fn now_unix() -> u64 {
@@ -1382,6 +1463,43 @@ fn cache_home() -> Option<PathBuf> {
 fn marks_file_path(repo_root: &str) -> Option<PathBuf> {
     let dir = cache_home()?.join("ordo").join("reviewed");
     Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+/// `${XDG_CACHE_HOME:-$HOME/.cache}/ordo/notes/<repo>.json` — beside the marks,
+/// same reasoning about the cache and the hashed repo name. Kept in its own
+/// file because a note outlives the mark on the same hunk: marks expire with
+/// the content, notes follow the symbol.
+fn notes_file_path(repo_root: &str) -> Option<PathBuf> {
+    let dir = cache_home()?.join("ordo").join("notes");
+    Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+/// Reads the note file: hex key -> note text. Degrades to "no notes" on any
+/// failure, exactly as the marks do — the cache is a convenience.
+fn load_notes(path: &Path) -> HashMap<u64, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let Ok(raw) = serde_json::from_str::<HashMap<String, String>>(&text) else {
+        return HashMap::new();
+    };
+    raw.into_iter()
+        .filter_map(|(k, v)| u64::from_str_radix(&k, 16).ok().map(|k| (k, v)))
+        .collect()
+}
+
+fn save_notes(path: &Path, notes: &HashMap<u64, String>) {
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let body: HashMap<String, String> = notes
+        .iter()
+        .map(|(k, v)| (format!("{k:016x}"), v.clone()))
+        .collect();
+    if let Ok(text) = serde_json::to_string(&body) {
+        let _ = std::fs::write(path, text);
+    }
 }
 
 /// Reads the mark file: hex key -> unix-seconds written. Any failure at all —
@@ -3079,6 +3197,10 @@ struct App {
     group_reasons: HashMap<String, String>,
     /// what the reading-order list is a list of — ledger by default
     mode: ViewMode,
+    /// symbol-anchored review notes, key -> text (see `note_key`)
+    notes: HashMap<u64, String>,
+    /// where notes get persisted; `None` when the cache dir can't be resolved
+    notes_path: Option<PathBuf>,
     /// the engine's change ledger, kept so `:mode` can rebuild the headers.
     /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
@@ -6072,6 +6194,8 @@ fn run(
                         groups,
                         ledger,
                         symbol_ledger,
+                        notes,
+                        notes_path,
                     } = *r;
                     let sel0 = view[0];
                     let scroll = auto_scroll(&items[sel0]);
@@ -6120,6 +6244,8 @@ fn run(
                         groups,
                         mode: ViewMode::default(),
                         symbol_ledger,
+                        notes,
+                        notes_path,
                         collapsed: HashSet::new(),
                         ledger,
                         rules: rules.clone(),
@@ -6595,8 +6721,17 @@ fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
 /// a dep line whose target is currently filtered out renders — and resolves
 /// — the same as one that was never part of the review) so it doubles as the
 /// source of truth for what `why_sel` is currently sitting on.
-fn why_rows(it: &Item, view: &[usize], theme: &Theme) -> Vec<WhyRow> {
+fn why_rows(it: &Item, view: &[usize], theme: &Theme, note: Option<&str>) -> Vec<WhyRow> {
     let mut rows = vec![];
+    // a review note leads: it is the reviewer's own words about this symbol,
+    // and it outranks anything the engine derived
+    if let Some(n) = note {
+        rows.push(WhyRow {
+            text: format!("note: {n}"),
+            style: Style::default().fg(theme.warn),
+            kind: WhyKind::Text,
+        });
+    }
     // The engine's terminal fallback rationale: it found nothing to say about
     // the hunk, so a "reason: change" line says nothing either — leave it out.
     if it.rationale != "change" {
@@ -6663,7 +6798,12 @@ fn why_rows(it: &Item, view: &[usize], theme: &Theme) -> Vec<WhyRow> {
 
 // the dep-line target at `app.why_sel`, if the cursor is on one at all
 fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
-    let rows = why_rows(&app.items[app.sel], &app.view, &app.theme);
+    let rows = why_rows(
+        &app.items[app.sel],
+        &app.view,
+        &app.theme,
+        note_for(app, app.sel),
+    );
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
         WhyKind::Text => None,
@@ -6944,7 +7084,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         format!(" {}{clip}  ({}) ", it.path, app.keys.hint)
     };
 
-    let why_content = why_rows(it, &app.view, &app.theme);
+    let why_content = why_rows(it, &app.view, &app.theme, note_for(app, app.sel));
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code_total;
     app.why_len = why_content.len();
@@ -7207,6 +7347,11 @@ const COMMANDS: &[Cmd] = &[
         name: "group",
         args: "",
         help: "toggle group-reason headers in the reading-order list",
+    },
+    Cmd {
+        name: "note",
+        args: "[text]",
+        help: "anchor a note to the selected hunk's symbol; no text clears it",
     },
     Cmd {
         name: "mode",
@@ -7883,6 +8028,25 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         }
         "group" => {
             app.show_groups = !app.show_groups;
+            Ok(CommandOutcome::None)
+        }
+        "note" => {
+            let it = &app.items[app.sel];
+            let Some(key) = note_key(it) else {
+                return Err(
+                    "this hunk declares no symbol to anchor a note to (try one that defines something)"
+                        .to_string(),
+                );
+            };
+            let text = arg.trim();
+            if text.is_empty() {
+                app.notes.remove(&key);
+            } else {
+                app.notes.insert(key, text.to_string());
+            }
+            if let Some(p) = app.notes_path.as_deref() {
+                save_notes(p, &app.notes);
+            }
             Ok(CommandOutcome::None)
         }
         "mode" => {
@@ -9566,7 +9730,7 @@ mod tests {
         ];
         // target 3 must be in `view` to resolve — same as being part of the
         // review at all; a 4-item view (0..=3) covers it here
-        let rows = why_rows(&it, &[0, 1, 2, 3], &Theme::terminal("dark", false));
+        let rows = why_rows(&it, &[0, 1, 2, 3], &Theme::terminal("dark", false), None);
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9581,7 +9745,7 @@ mod tests {
         let mut it = test_item("a.rs");
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
         // target 3 exists (it's a valid item index) but isn't in `view`
-        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false));
+        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false), None);
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9632,6 +9796,8 @@ mod tests {
             group_reasons: HashMap::new(),
             mode: ViewMode::Hunks,
             symbol_ledger: vec![],
+            notes: HashMap::new(),
+            notes_path: None,
             collapsed: HashSet::new(),
             ledger: Ledger::default(),
             rules: vec![],
@@ -9687,6 +9853,69 @@ mod tests {
         // "g0" means nothing in ledger mode; keeping it would fold a bucket
         // that no longer exists
         assert!(app.collapsed.is_empty());
+    }
+
+    fn item_with_symbol(path: &str, name: &str) -> Item {
+        let mut it = test_item(path);
+        it.symbols = vec![sym(name, "function_definition", None)];
+        it
+    }
+
+    #[test]
+    fn a_note_key_ignores_everything_a_rebase_can_move() {
+        // same symbol, different file, different lines, different content —
+        // a line anchor would be lost, the note must not be
+        let mut a = item_with_symbol("api.py", "fetch");
+        a.new_range = [10, 12];
+        let mut b = item_with_symbol("moved/elsewhere.py", "fetch");
+        b.new_range = [900, 902];
+        b.rationale = "totally different".to_string();
+        assert_eq!(note_key(&a), note_key(&b));
+    }
+
+    #[test]
+    fn a_note_key_separates_two_symbols_that_share_a_name() {
+        // name alone is not identity: kind and scope are part of it
+        let mut a = item_with_symbol("a.py", "run");
+        a.symbols = vec![sym("run", "function_definition", None)];
+        let mut b = item_with_symbol("a.py", "run");
+        b.symbols = vec![sym("run", "function_definition", Some("Worker"))];
+        assert_ne!(note_key(&a), note_key(&b));
+    }
+
+    #[test]
+    fn a_hunk_with_no_symbol_cannot_be_anchored_to() {
+        // anchoring to the enclosing name would silently drift
+        let it = test_item("a.py");
+        assert!(it.symbols.is_empty());
+        assert!(note_key(&it).is_none());
+    }
+
+    #[test]
+    fn a_rename_maps_the_old_identity_onto_the_new_one() {
+        // what `load` uses to carry a note across `renames parse_cfg → load_cfg`
+        let new = item_with_symbol("cfg.py", "load_cfg");
+        let old = item_with_symbol("cfg.py", "parse_cfg");
+        assert_eq!(note_key_named(&new, "parse_cfg"), note_key(&old));
+        assert_ne!(note_key_named(&new, "parse_cfg"), note_key(&new));
+    }
+
+    #[test]
+    fn notes_round_trip_through_the_cache_file() {
+        let dir = std::env::temp_dir().join(format!("ordo-notes-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("n.json");
+        let mut notes = HashMap::new();
+        notes.insert(42u64, "check the retry path".to_string());
+        save_notes(&path, &notes);
+        assert_eq!(load_notes(&path), notes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_note_file_is_not_an_error() {
+        let missing = std::env::temp_dir().join("ordo-notes-does-not-exist.json");
+        assert!(load_notes(&missing).is_empty());
     }
 
     #[test]
