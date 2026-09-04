@@ -563,6 +563,27 @@ arity). An optional parameter widens the accepted range rather than narrowing
 it. Arity only, never types — and only callers *in the change*, which is the
 honest scope: those are the ones the author touched.
 
+### The rename that did not finish
+
+Rename detection already says `renames parse_cfg → load_cfg`. The question it
+leaves open is whether the old name still appears anywhere:
+
+```
+cfg.py:L1  renames parse_cfg → load_cfg
+  parse_cfg still used at main.py:L6 after the rename to load_cfg
+```
+
+Searched across the **whole new content** of every changed file, not just its
+hunks — a reference on a line nobody touched is exactly the one that gets
+missed. Only identifiers count, so the old name surviving in a string or a
+comment says nothing, and it stays silent when the old name still defines
+something in the change, since then it is a name that legitimately still exists
+rather than an orphaned reference.
+
+**Ceiling:** files *in the change* only. A caller in a file the author never
+opened is invisible to the pure engine — finding that one needs repo access,
+which is the reviewer's job rather than the engine's.
+
 The changeset as a whole carries `notes` too — facts about the shape of the
 change, never judgments about it:
 

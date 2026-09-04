@@ -598,6 +598,7 @@ pub fn run(input: Input) -> Output {
     let notes = changeset_notes(&files);
     let ledger = build_ledger(&files, &order, &facts, &new_defs_v, &old_rows);
     arity_check(&mut files, &ledger, &input.changes);
+    incomplete_rename(&mut files, &ledger, &input.changes, &new_defs_v);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -685,6 +686,62 @@ fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]
         );
         // the note belongs on the hunk that changed the signature — that is
         // where a reviewer is standing when the question arises
+        for f in files.iter_mut() {
+            if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
+                h.notes.push(note);
+                break;
+            }
+        }
+    }
+}
+
+/// P23.2: a rename that did not finish. Rename detection already says
+/// `renames parse_cfg → load_cfg`; the question it leaves open is whether the
+/// old name still appears anywhere. Searched across the *whole new content* of
+/// every changed file, not just its hunks — a reference on a line nobody
+/// touched is exactly the one that gets missed.
+///
+/// Silent when the old name is still defined somewhere in the change: then it
+/// is a name that legitimately still exists, not an orphaned reference. Only
+/// identifiers count, so the name surviving in a string or a comment says
+/// nothing. **Ceiling:** files *in the change* only — a caller in a file the
+/// author never opened is invisible to the pure engine, and finding it needs
+/// the repo access the `ordo` reviewer has.
+fn incomplete_rename(
+    files: &mut [FileOut],
+    ledger: &[LedgerEntry],
+    changes: &[Change],
+    new_defs: &[HashSet<String>],
+) {
+    for e in ledger.iter().filter(|e| e.change == SymbolChange::Renamed) {
+        let Some(old) = e.from.as_deref() else {
+            continue;
+        };
+        if new_defs.iter().any(|d| d.contains(old)) {
+            continue; // the old name still defines something; not an orphan
+        }
+        let mut left: Vec<String> = vec![];
+        for c in changes.iter() {
+            let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
+                continue;
+            };
+            for row in extract::identifier_rows(spec, new, old) {
+                left.push(format!("{}:L{}", c.path, row + 1));
+            }
+        }
+        if left.is_empty() {
+            continue;
+        }
+        let more = if left.len() > 3 {
+            format!(" and {} more", left.len() - 3)
+        } else {
+            String::new()
+        };
+        let note = format!(
+            "{old} still used at {}{more} after the rename to {}",
+            left.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
+            e.name
+        );
         for f in files.iter_mut() {
             if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
                 h.notes.push(note);

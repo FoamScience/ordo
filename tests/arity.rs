@@ -100,3 +100,77 @@ fn it_works_for_rust_too() {
        "new": "fn g(a: u32, b: u32) -> u32 { a }\nfn main() { g(1); }\n"}]}));
     assert_eq!(arity(&n).len(), 1, "{n:?}");
 }
+
+// ---- P23.2: the rename that did not finish ----
+
+/// A body long enough for rename detection to match it by content.
+fn body() -> &'static str {
+    "    a = 1\n    b = 2\n    c = 3\n    d = 4\n    e = 5\n    f = 6\n    g = 7\n    return p\n"
+}
+
+fn renames(n: &[String]) -> Vec<&String> {
+    n.iter().filter(|s| s.contains("still used at")).collect()
+}
+
+#[test]
+fn a_reference_the_rename_missed_is_named() {
+    // the surviving use is on a line nobody touched — the one that gets missed
+    let n = notes(
+        serde_json::json!({"options": {"cross_file": true}, "changes": [
+      {"path": "cfg.py",
+       "old": format!("def parse_cfg(p):\n{}", body()),
+       "new": format!("def load_cfg(p):\n{}", body())},
+      {"path": "main.py",
+       "old": "import cfg\n\nx = 1\n\ndef go():\n    return cfg.parse_cfg('a')\n",
+       "new": "import cfg\n\nx = 2\n\ndef go():\n    return cfg.parse_cfg('a')\n"}]}),
+    );
+    let r = renames(&n);
+    assert_eq!(r.len(), 1, "{n:?}");
+    assert!(r[0].contains("main.py:L6"), "{r:?}");
+    assert!(r[0].contains("load_cfg"), "{r:?}");
+}
+
+#[test]
+fn a_rename_every_caller_followed_says_nothing() {
+    let n = notes(
+        serde_json::json!({"options": {"cross_file": true}, "changes": [
+      {"path": "cfg.py",
+       "old": format!("def parse_cfg(p):\n{}", body()),
+       "new": format!("def load_cfg(p):\n{}", body())},
+      {"path": "main.py",
+       "old": "import cfg\n\ndef go():\n    return cfg.parse_cfg('a')\n",
+       "new": "import cfg\n\ndef go():\n    return cfg.load_cfg('a')\n"}]}),
+    );
+    assert!(renames(&n).is_empty(), "{n:?}");
+}
+
+#[test]
+fn a_name_that_still_defines_something_is_not_an_orphan() {
+    // another file legitimately defines its own `parse_cfg`; the surviving
+    // references are to that, not to the renamed one
+    let n = notes(
+        serde_json::json!({"options": {"cross_file": true}, "changes": [
+      {"path": "cfg.py",
+       "old": format!("def parse_cfg(p):\n{}", body()),
+       "new": format!("def load_cfg(p):\n{}", body())},
+      {"path": "other.py",
+       "old": "x = 1\n",
+       "new": "x = 2\n\ndef parse_cfg(p):\n    return p\n"}]}),
+    );
+    assert!(renames(&n).is_empty(), "{n:?}");
+}
+
+#[test]
+fn the_old_name_surviving_in_a_string_says_nothing() {
+    // only identifiers are references; a string or a comment is not
+    let n = notes(
+        serde_json::json!({"options": {"cross_file": true}, "changes": [
+      {"path": "cfg.py",
+       "old": format!("def parse_cfg(p):\n{}", body()),
+       "new": format!("def load_cfg(p):\n{}", body())},
+      {"path": "main.py",
+       "old": "x = 1\n",
+       "new": "x = 2\nmsg = 'parse_cfg is gone'  # parse_cfg\n"}]}),
+    );
+    assert!(renames(&n).is_empty(), "{n:?}");
+}

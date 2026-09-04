@@ -2075,6 +2075,30 @@ pub fn call_sites(spec: &LangSpec, content: &str) -> Vec<CallSite> {
     out
 }
 
+/// Every 0-based row where `name` appears as an *identifier* in `content` —
+/// not in a string, not in a comment, because those are not references.
+/// Used by the incomplete-rename check (P23.2) to find a name that should have
+/// stopped existing.
+pub fn identifier_rows(spec: &LangSpec, content: &str, name: &str) -> Vec<usize> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    fn walk(node: Node, src: &[u8], name: &str, out: &mut Vec<usize>) {
+        if lang::is_ident(node.kind()) && node.utf8_text(src).map(str::trim) == Ok(name) {
+            out.push(node.start_position().row);
+        }
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            walk(ch, src, name, out);
+        }
+    }
+    walk(tree.root_node(), src, name, &mut out);
+    out.dedup();
+    out
+}
+
 /// A code identifier with any internal whitespace removed. C++ (OpenFOAM's
 /// house style especially) wraps a qualified name across lines —
 /// `Foam::frictionalStressModels::\nJohnsonJacksonSchaeffer::nu` — and that
