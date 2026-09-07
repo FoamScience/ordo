@@ -877,6 +877,12 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
 /// spec — the language *injected* into a prose file. Only names this crate has
 /// a grammar for resolve; a `console` or `diff` fence has no structure to read
 /// and returns None rather than being guessed at.
+/// Every registered language, in registry order — the docs generator's view
+/// of this table (see `languages()` in the crate root).
+pub fn all() -> &'static [LangSpec] {
+    SPECS
+}
+
 pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
     // an info string may carry attributes after the language (```py title=x)
     let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();

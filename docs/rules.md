@@ -61,6 +61,30 @@ where the active rules came from, what was replaced, what was disabled — a
 silenced rule looks exactly like a convention nobody breaks, so the silencing is
 never silent.
 
+## Shipped rulesets
+
+Published guideline sets, as rules, under [`../rulesets/`](../rulesets/) — each
+one verified against a sample in which every rule fires. They are bundled into
+the `ordo` binary and **off by default**; `include = ["<name>"]` opts in.
+
+<!-- ordo:begin rulesets -->
+| preset | source |
+| --- | --- |
+| `c-power-of-ten` | NASA/JPL "The Power of 10: Rules for Developing Safety-Critical Code" |
+| `cpp-default-guidelines` | Jan Wilmans' C++ Default Guidelines — https://github.com/janwilmans/guidelines |
+| `go-uber-guide` | Uber Go Style Guide — https://github.com/uber-go/guide (style.md) |
+| `java-effective-java` | Effective Java (Joshua Bloch), 3rd edition — the construct-level items |
+| `javascript-airbnb` | airbnb/javascript — https://github.com/airbnb/javascript |
+| `lua-style-guide` | Lua style — Olivine Labs (https://github.com/Olivine-Labs/lua-style-guide) |
+| `markdown` | Markdown — two rules pulled from markdownlint's list |
+| `python-google-style` | Google Python Style Guide — https://google.github.io/styleguide/pyguide.html |
+| `rust-api-guidelines` | Rust API Guidelines checklist — https://rust-lang.github.io/api-guidelines/checklist.html |
+| `typescript-clean-code` | labs42io/clean-code-typescript — https://github.com/labs42io/clean-code-typescript |
+<!-- ordo:end rulesets -->
+
+Each file's header says what it deliberately leaves out — style that belongs to
+a formatter, lints a linter already owns, and anything needing dataflow.
+
 ## A rule
 
 ```toml
@@ -76,30 +100,47 @@ priority = 100                   # and where to put it
 Every condition given must hold. A rule with no conditions matches every hunk —
 occasionally what you want, otherwise a mistake its name should make obvious.
 
+<!-- ordo:begin rule-conditions -->
 | key | matches |
 | --- | --- |
 | `path` | glob against the file path |
+| `path-not` | glob the file path must *not* match — third-party code, a framework carve-out |
 | `lang` | `python`, `cpp`, `markdown`, … as `src/lang.rs` names them |
 | `category` | `import` · `definition` · `other` |
-| `enclosing-kind` | `definition` · `test` · `region` · `binding` · `call` · `preamble` · `front-matter` · `document` |
-| `defines` / `uses` / `imports` | glob against any name the hunk defines, uses or imports |
-| `noise-when` / `comment` | the engine's own classification |
-| `query` / `query-file` | a tree-sitter query (below) |
-| `kind` / `with` / `without` / `text` / `text-not` | a node shape the hunk introduces (below) |
-| `path-not` | glob the file path must *not* match — third-party code, a framework carve-out |
-| `max-params` / `max-lines` / `max-nesting` / `max-file-lines` | a limit something the hunk introduces exceeds (below) |
+| `enclosing-kind` | what holds the hunk — see the table in [cli.md](cli.md) |
+| `defines` | glob against any name the hunk defines |
+| `uses` | glob against any name the hunk uses |
+| `imports` | glob against any name the hunk imports |
+| `noise-when` | the engine's own noise classification (`true` / `false`) |
+| `comment` | the hunk is comment/docstring-only |
+| `query` | a tree-sitter query, inline (below) |
+| `query-file` | a tree-sitter query, read from a file relative to the rules file |
+| `kind` | a node kind the hunk introduces (below) |
+| `with` | …whose direct children include each of these |
+| `without` | …and none of these — absence, as a table entry |
+| `text` | …and whose text matches this regex |
+| `text-not` | …and whose text does not match this regex |
+| `max-params` | a definition the hunk introduces takes more parameters (below) |
+| `max-lines` | …is longer than this |
+| `max-nesting` | …sits deeper in control flow than this |
+| `max-file-lines` | this change pushed the file past this many lines |
 | `recursive` | a definition starting in the hunk calls itself |
-| `container-with` / `container-without` | glob against the members of the container the hunk defines into (below) |
-| `member-uninitialized` | the hunk adds a data member nothing in the change initializes |
+| `container-with` | glob against the members of the container the hunk defines into (below) |
+| `container-without` | …the same, negated |
+| `member-uninitialized` | the hunk adds a data member nothing in this change initializes |
+<!-- ordo:end rule-conditions -->
 
 ### Actions
 
+<!-- ordo:begin rule-actions -->
 | key | does |
 | --- | --- |
+| `name` | how the rule identifies itself in the review — required |
 | `note` | says something on the hunk |
 | `warn` | says it at warning level — `⚠` in the reading order |
 | `noise` | marks the hunk skippable, like generated code |
 | `priority` | sorts it earlier (see the guarantee below) |
+<!-- ordo:end rule-actions -->
 
 ## Ordering influence, and its limit
 

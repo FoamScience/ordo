@@ -33,3 +33,19 @@ stack.yaml.lock         linguist-generated=true
 cabal.project.freeze    linguist-generated=true
 conan.lock              linguist-generated=true
 .terraform.lock.hcl     linguist-generated=true
+
+# Documents that carry generated blocks — the tables between an
+# `ordo:begin <key>` / `ordo:end <key>` comment pair are rendered from the code
+# that owns them and rewritten by `UPDATE_DOCS=1 cargo test`; the prose around
+# them is hand-written. `ordo-generated` is a marker for people and for the
+# test that keeps this list honest, and deliberately NOT `linguist-generated`:
+# these files are mostly prose, and flagging them would collapse their diffs on
+# GitHub and drop them from ordo's own review.
+
+README.md               ordo-generated=true
+docs/cli.md             ordo-generated=true
+docs/languages.md       ordo-generated=true
+docs/reviewing.md       ordo-generated=true
+docs/rules.md           ordo-generated=true
+docs/tui.md             ordo-generated=true
+docs/*.md               linguist-documentation=true

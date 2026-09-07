@@ -17,6 +17,13 @@ use tree_sitter::Node;
 
 pub use lang::is_generated_path;
 
+/// Every registered language as (name, member node kinds) — the language
+/// registry as the generated docs read it, so `docs/languages.md` and the
+/// detail-layer table cannot name a language the engine does not support.
+pub fn languages() -> Vec<(&'static str, &'static [&'static str])> {
+    lang::all().iter().map(|s| (s.name, s.members)).collect()
+}
+
 /// The language name `src/lang.rs` knows a path by (`python`, `cpp`, `yaml`, …)
 /// — the same string a rule's `lang` condition is written against. `None` when
 /// the path has no grammar.
