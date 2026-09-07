@@ -3703,6 +3703,22 @@ fn build_items(out: &Output) -> Vec<Item> {
         .enumerate()
         .map(|(i, e)| (e.at.as_str(), i))
         .collect();
+    // (path, name) -> the ledger entry for that symbol, under both the bare
+    // name and the scope-qualified form a hunk's `enclosing` uses. A symbol's
+    // entry anchors to the first hunk that touches it, so the rest of its
+    // hunks find it here instead of falling into the "no definition changed"
+    // bucket — they *are* that symbol's change, just not its first hunk.
+    let mut ledger_named: HashMap<(&str, String), usize> = HashMap::new();
+    for (i, e) in out.ledger.iter().enumerate() {
+        ledger_named
+            .entry((e.path.as_str(), e.name.clone()))
+            .or_insert(i);
+        if let Some(scope) = &e.scope {
+            ledger_named
+                .entry((e.path.as_str(), format!("{scope}.{}", e.name)))
+                .or_insert(i);
+        }
+    }
     let by_id: HashMap<&str, (&str, &ordo::model::HunkOut)> = out
         .files
         .iter()
@@ -3772,7 +3788,20 @@ fn build_items(out: &Output) -> Vec<Item> {
                     }
                 })
                 .collect();
-            let ledger = ledger_at.get(h.id.as_str()).copied();
+            // the entry anchored here, else the one for the definition holding
+            // this hunk — only a *definition* container, since a test block or
+            // a region names no symbol
+            let ledger = ledger_at.get(h.id.as_str()).copied().or_else(|| {
+                let name = h
+                    .enclosing
+                    .as_deref()
+                    .filter(|_| h.enclosing_kind.is_none())?;
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                ledger_named
+                    .get(&(*path, name.to_string()))
+                    .or_else(|| ledger_named.get(&(*path, bare.to_string())))
+                    .copied()
+            });
             Some(Item {
                 path: path.to_string(),
                 bucket: bucket_key(ViewMode::Ledger, ledger, &h.group),
@@ -3973,7 +4002,7 @@ fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo::model::LedgerEntry]) 
             .enumerate()
             .map(|(i, e)| (format!("L{i}"), ledger_label(e)))
             .collect();
-        labels.insert("L-".to_string(), "no symbol changed".to_string());
+        labels.insert("L-".to_string(), "no definition changed".to_string());
         app.groups = labels;
         app.show_groups = true;
     } else {
@@ -10392,7 +10421,7 @@ mod tests {
         );
         assert_eq!(
             app.groups.get("L-").map(String::as_str),
-            Some("no symbol changed")
+            Some("no definition changed")
         );
 
         set_mode(&mut app, ViewMode::Hunks, &led);
