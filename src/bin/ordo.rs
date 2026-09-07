@@ -31,7 +31,7 @@ ordo — interactive review of a commit, ordered for comprehension.
 usage:
   ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
   ordo --init-config [--force]
-  ordo --help
+  ordo help [<topic>]
   ordo --version
 
 <rev> is any git commit-ish (a sha, HEAD~2, a tag), a commit range (main..branch,
@@ -338,6 +338,102 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
 /// rev, keymap, path filter, --only-comments, theme, --rules files
 type ParsedArgs = (String, Keymap, Filter, bool, Theme, Vec<String>);
 
+/// The user-facing documentation, embedded in the binary so `ordo help
+/// <topic>` works with no network, no install layout to find, and no chance of
+/// showing a page from a different version than the one running. The `docs/`
+/// files are the same ones GitHub renders; a test keeps this list and that
+/// directory in step.
+const TOPICS: &[(&str, &str, &str)] = &[
+    (
+        "cli",
+        "the engine CLI, schema v1, and the library API",
+        include_str!("../../docs/cli.md"),
+    ),
+    (
+        "tui",
+        "this reviewer: revisions, filters, keys, command bar, themes",
+        include_str!("../../docs/tui.md"),
+    ),
+    (
+        "reviewing",
+        "the detail layer, rationale patterns, advisories, the ledger",
+        include_str!("../../docs/reviewing.md"),
+    ),
+    (
+        "rules",
+        "conventions as data, and the rulesets that ship with ordo",
+        include_str!("../../docs/rules.md"),
+    ),
+    (
+        "languages",
+        "every supported language, and the shape it is read in",
+        include_str!("../../docs/languages.md"),
+    ),
+    (
+        "ceilings",
+        "what ordo deliberately does not do",
+        include_str!("../../docs/ceilings.md"),
+    ),
+];
+
+/// The topic list appended to `--help`, and printed on its own by `ordo help`.
+fn topic_list() -> String {
+    let mut out = String::from("topics (`ordo help <topic>`):\n");
+    for (name, blurb, _) in TOPICS {
+        out.push_str(&format!("  {name:<11} {blurb}\n"));
+    }
+    out
+}
+
+/// Sends long output through `$PAGER` when there is a terminal to page for.
+/// Falls back to plain stdout whenever that isn't true or the pager won't
+/// start, so `ordo help rules | grep max-` behaves like any other command.
+fn page_out(text: &str) {
+    use std::io::{IsTerminal, Write};
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+    if std::io::stdout().is_terminal() && !pager.is_empty() {
+        let mut parts = pager.split_whitespace();
+        let Some(program) = parts.next() else {
+            return print!("{text}");
+        };
+        let mut cmd = Command::new(program);
+        cmd.args(parts).stdin(std::process::Stdio::piped());
+        // `less` without these quits on short input and eats the colours of
+        // whatever the user's LESS already sets; -R -F -X is the conventional
+        // "act like git" set
+        if program == "less" && std::env::var("LESS").is_err() {
+            cmd.env("LESS", "-RFX");
+        }
+        if let Ok(mut child) = cmd.spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+    }
+    print!("{text}");
+}
+
+/// `ordo help [<topic>]`. Returns the exit code: an unknown topic is a usage
+/// error, not an empty page.
+fn help_topic(topic: Option<&str>) -> i32 {
+    let Some(topic) = topic else {
+        page_out(&format!("{USAGE}\n{}", topic_list()));
+        return 0;
+    };
+    match TOPICS.iter().find(|(name, _, _)| *name == topic) {
+        Some((_, _, body)) => {
+            page_out(body);
+            0
+        }
+        None => {
+            eprintln!("ordo: no help topic '{topic}'\n\n{}", topic_list());
+            2
+        }
+    }
+}
+
 fn parse_args() -> Result<ParsedArgs, i32> {
     let mut rev: Option<String> = None;
     let mut globs: Vec<String> = vec![];
@@ -355,7 +451,15 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     let mut extra_rules: Vec<String> = vec![];
     let mut want_init = false;
     let mut force = false;
-    for a in std::env::args().skip(1) {
+    // `ordo help [<topic>]` short-circuits everything else: it takes an
+    // argument the flag loop below would otherwise read as a revision.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(first) = argv.first() {
+        if first == "help" || first == "--help" || first == "-h" {
+            return Err(help_topic(argv.get(1).map(String::as_str)));
+        }
+    }
+    for a in argv {
         if want_preset {
             preset = a;
             preset_given = true;
@@ -390,10 +494,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
             "--force" => force = true,
-            "-h" | "--help" | "help" => {
-                print!("{USAGE}");
-                return Err(0);
-            }
+            "-h" | "--help" | "help" => return Err(help_topic(None)),
             "-V" | "--version" | "version" => {
                 println!(
                     "ordo {} (ordo schema {})",
@@ -12372,6 +12473,45 @@ mod docs {
                 "`{key}` is documented twice"
             );
         }
+    }
+
+    /// `ordo help <topic>` is only useful if it can reach every page, and only
+    /// honest if every page it names exists. Design notes (`*-design.md`) are
+    /// deliberately not topics: they record how a decision was reached, which
+    /// is not what someone at a prompt is asking for.
+    #[test]
+    fn every_documentation_page_is_a_help_topic() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut pages: Vec<String> = std::fs::read_dir(root.join("docs"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".md") && !n.ends_with("-design.md"))
+            .map(|n| n.trim_end_matches(".md").to_string())
+            .collect();
+        pages.sort();
+        let mut topics: Vec<String> = TOPICS.iter().map(|(n, _, _)| n.to_string()).collect();
+        topics.sort();
+        assert_eq!(
+            pages, topics,
+            "docs/ and TOPICS disagree — a page nobody can reach, or a topic with no page"
+        );
+        for (name, blurb, body) in TOPICS {
+            assert!(!blurb.is_empty(), "{name} has no one-line description");
+            assert!(
+                body.starts_with("# "),
+                "{name} does not open with a heading"
+            );
+            assert!(
+                topic_list().contains(name),
+                "{name} is missing from the topic list"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_help_topic_is_a_usage_error() {
+        assert_eq!(help_topic(Some("no-such-topic")), 2);
     }
 
     /// The `.gitattributes` list and `FILES` are two statements of the same

@@ -89,6 +89,10 @@ git diff | ordo-engine review               # the JSON contract, from a patch
 ordo-engine pack --json < input.json        # compact LLM-ready review context
 ```
 
+`ordo help` lists the documentation topics and `ordo help <topic>` prints one —
+the pages below, embedded in the binary, so they always match the version you
+are running.
+
 `ordo` is the interactive reviewer; `ordo-engine` is the pure JSON CLI every
 other consumer speaks to. Neither is required by the other.
 

@@ -6,7 +6,12 @@ out of the pure default build behind the `tui` feature:
 
 ```sh
 cargo run --bin ordo -- <rev> [<glob>...]   # rev defaults to HEAD
+ordo help [<topic>]                         # this page, and the others, offline
 ```
+
+`ordo help` lists the topics; `ordo help <topic>` prints one, paged through
+`$PAGER` when there is a terminal to page for. The pages are compiled into the
+binary, so they can never describe a different version than the one running.
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
 the change **in comprehension order**: a reading-order list (advisories `⚠`,
