@@ -16,6 +16,20 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 pub use lang::is_generated_path;
+
+/// Every registered language as (name, member node kinds) — the language
+/// registry as the generated docs read it, so `docs/languages.md` and the
+/// detail-layer table cannot name a language the engine does not support.
+pub fn languages() -> Vec<(&'static str, &'static [&'static str])> {
+    lang::all().iter().map(|s| (s.name, s.members)).collect()
+}
+
+/// The language name `src/lang.rs` knows a path by (`python`, `cpp`, `yaml`, …)
+/// — the same string a rule's `lang` condition is written against. `None` when
+/// the path has no grammar.
+pub fn lang_name_for_path(path: &str) -> Option<&'static str> {
+    lang::for_path(path).map(|s| s.name)
+}
 pub use patch::split_patch;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -530,7 +544,7 @@ pub fn run(input: Input) -> Output {
         .collect();
 
     // per-file hunk metadata
-    let mut files = vec![];
+    let mut files: Vec<FileOut> = vec![];
     for (fi, change) in input.changes.iter().enumerate() {
         let mut hunks = vec![];
         for li in 0..raws[fi].len() {
@@ -595,7 +609,10 @@ pub fn run(input: Input) -> Output {
         .map(|c| c.iter().map(|&i| hid(i)).collect())
         .collect();
 
-    let notes = changeset_notes(&files);
+    let ledger = build_ledger(&files, &order, &facts, &new_defs_v, &old_rows);
+    let notes = changeset_notes(&files, &ledger);
+    arity_check(&mut files, &ledger, &input.changes);
+    incomplete_rename(&mut files, &ledger, &input.changes, &new_defs_v);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -611,7 +628,325 @@ pub fn run(input: Input) -> Output {
             p
         },
         notes,
+        ledger,
     }
+}
+
+/// P23.2: a definition whose signature changed, against the calls to it in
+/// this same change. The most common way an edit goes wrong is that the
+/// function moved and one caller did not follow.
+///
+/// Deliberately narrow — a false "wrong number of arguments" is worse than a
+/// missed one, so this only speaks when it can be exact. See `signatures` and
+/// `call_sites` for what is skipped (variadics, methods, keyword arguments,
+/// qualified callees). Only callers *in the change* are considered, which is
+/// the honest scope: those are the ones the author touched.
+fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]) {
+    let changed: Vec<&LedgerEntry> = ledger
+        .iter()
+        .filter(|e| e.change == SymbolChange::Signature)
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    // the new arity of everything in the change, and every call to anything
+    let mut sigs: HashMap<String, extract::SigInfo> = HashMap::new();
+    let mut calls: Vec<(usize, extract::CallSite)> = vec![];
+    for (fi, c) in changes.iter().enumerate() {
+        let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
+            continue;
+        };
+        for s in extract::signatures(spec, new) {
+            sigs.insert(s.name.clone(), s);
+        }
+        for cs in extract::call_sites(spec, new) {
+            calls.push((fi, cs));
+        }
+    }
+
+    for e in changed {
+        let Some(sig) = sigs.get(&e.name) else {
+            continue; // its arity could not be stated exactly
+        };
+        let bad: Vec<(usize, &extract::CallSite)> = calls
+            .iter()
+            .filter(|(_, c)| c.name == e.name && (c.argc < sig.required || c.argc > sig.total))
+            .map(|(fi, c)| (*fi, c))
+            .collect();
+        let total_calls = calls.iter().filter(|(_, c)| c.name == e.name).count();
+        if bad.is_empty() {
+            continue;
+        }
+        let where_ = bad
+            .iter()
+            .take(3)
+            .map(|(fi, c)| format!("{}:L{}", changes[*fi].path, c.row + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if bad.len() > 3 {
+            format!(" and {} more", bad.len() - 3)
+        } else {
+            String::new()
+        };
+        let expected = if sig.required == sig.total {
+            format!("{}", sig.required)
+        } else {
+            format!("{}–{}", sig.required, sig.total)
+        };
+        let note = format!(
+            "{} of {total_calls} call sites in this change do not pass {expected} arguments to {} ({where_}{more})",
+            bad.len(),
+            e.name
+        );
+        // the note belongs on the hunk that changed the signature — that is
+        // where a reviewer is standing when the question arises
+        for f in files.iter_mut() {
+            if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
+                h.notes.push(note);
+                break;
+            }
+        }
+    }
+}
+
+/// P23.2: a rename that did not finish. Rename detection already says
+/// `renames parse_cfg → load_cfg`; the question it leaves open is whether the
+/// old name still appears anywhere. Searched across the *whole new content* of
+/// every changed file, not just its hunks — a reference on a line nobody
+/// touched is exactly the one that gets missed.
+///
+/// Silent when the old name is still defined somewhere in the change: then it
+/// is a name that legitimately still exists, not an orphaned reference. Only
+/// identifiers count, so the name surviving in a string or a comment says
+/// nothing. **Ceiling:** files *in the change* only — a caller in a file the
+/// author never opened is invisible to the pure engine, and finding it needs
+/// the repo access the `ordo` reviewer has.
+fn incomplete_rename(
+    files: &mut [FileOut],
+    ledger: &[LedgerEntry],
+    changes: &[Change],
+    new_defs: &[HashSet<String>],
+) {
+    for e in ledger.iter().filter(|e| e.change == SymbolChange::Renamed) {
+        let Some(old) = e.from.as_deref() else {
+            continue;
+        };
+        if new_defs.iter().any(|d| d.contains(old)) {
+            continue; // the old name still defines something; not an orphan
+        }
+        let mut left: Vec<String> = vec![];
+        for c in changes.iter() {
+            let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
+                continue;
+            };
+            for row in extract::identifier_rows(spec, new, old) {
+                left.push(format!("{}:L{}", c.path, row + 1));
+            }
+        }
+        if left.is_empty() {
+            continue;
+        }
+        let more = if left.len() > 3 {
+            format!(" and {} more", left.len() - 3)
+        } else {
+            String::new()
+        };
+        let note = format!(
+            "{old} still used at {}{more} after the rename to {}",
+            left.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
+            e.name
+        );
+        for f in files.iter_mut() {
+            if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
+                h.notes.push(note);
+                break;
+            }
+        }
+    }
+}
+
+/// P23.1: what happened to each *symbol*, rather than to each hunk. Every field
+/// is already computed — this is a second projection of `symbols`, the status
+/// maps in `FileFacts` and the `uses` on every hunk, not new analysis.
+///
+/// Entries follow the reading order of the hunk that defines them, so the
+/// ledger and the hunk list tell the same story in the same sequence.
+fn build_ledger(
+    files: &[FileOut],
+    order: &[OrderItem],
+    facts: &order::FileFacts,
+    new_defs: &[HashSet<String>],
+    old_rows: &[extract::SymbolRows],
+) -> Vec<LedgerEntry> {
+    // global reading position of every hunk, so the ledger can be sorted the
+    // way the review is
+    let pos: HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, o)| (o.hunk.as_str(), i))
+        .collect();
+    // fan-in: which hunks use a given name, anywhere in the change
+    let mut users: HashMap<&str, Vec<&str>> = HashMap::new();
+    for f in files {
+        for h in &f.hunks {
+            for u in &h.uses {
+                users.entry(u.as_str()).or_default().push(h.id.as_str());
+            }
+        }
+    }
+
+    // a symbol that left file A and arrived in B is recorded on B's `moved_in`
+    // with A as its source; A must not also report it as a removal
+    let moved_away: HashSet<(&str, &str)> = (0..files.len())
+        .flat_map(|ti| {
+            facts.moved_in[ti]
+                .iter()
+                .map(|(name, src)| (src.as_str(), name.as_str()))
+        })
+        .collect();
+
+    let mut out: Vec<(usize, LedgerEntry)> = vec![];
+    let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
+    for (fi, f) in files.iter().enumerate() {
+        for h in &f.hunks {
+            for sym in &h.symbols {
+                let key = (f.path.clone(), sym.name.clone(), sym.scope.clone());
+                if !seen.insert(key) {
+                    continue; // one line per symbol, not per hunk that touches it
+                }
+                let n = sym.name.as_str();
+                let get = |m: &[HashMap<String, String>]| m[fi].get(n).cloned();
+                let (change, from) = if let Some(src) = get(facts.relocated) {
+                    (SymbolChange::Extracted, Some(src))
+                } else if let Some(src) = get(facts.moved_in) {
+                    (SymbolChange::Moved, Some(src))
+                } else if let Some(old) = get(facts.rename) {
+                    (SymbolChange::Renamed, Some(old))
+                } else if !facts.old_defs[fi].contains(n) {
+                    (SymbolChange::Added, None)
+                } else if facts.body_only[fi].contains(n) {
+                    (SymbolChange::Body, None)
+                } else {
+                    (SymbolChange::Signature, None)
+                };
+                // a symbol never counts as using itself
+                let used_by: Vec<String> = users
+                    .get(n)
+                    .map(|v| {
+                        v.iter()
+                            .filter(|id| **id != h.id.as_str())
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push((
+                    pos.get(h.id.as_str()).copied().unwrap_or(usize::MAX),
+                    LedgerEntry {
+                        name: sym.name.clone(),
+                        kind: Some(sym.kind.clone()),
+                        scope: sym.scope.clone(),
+                        path: f.path.clone(),
+                        at: h.id.clone(),
+                        change,
+                        from,
+                        used_by,
+                    },
+                ));
+            }
+        }
+        // A body-only edit introduces no symbol — the def's declaration line is
+        // not in the hunk — so it is found through the container instead: a
+        // hunk whose enclosing is a plain definition (`enclosing_kind` is None)
+        // and which declares nothing of its own edited that definition's body.
+        for h in &f.hunks {
+            if !h.symbols.is_empty() || h.enclosing_kind.is_some() {
+                continue;
+            }
+            let Some(name) = h.enclosing.as_deref() else {
+                continue;
+            };
+            if !seen.insert((f.path.clone(), name.to_string(), None)) {
+                continue;
+            }
+            // `body_only` is keyed by bare name; `enclosing` is qualified
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            let change = if facts.body_only[fi].contains(bare) {
+                SymbolChange::Body
+            } else {
+                SymbolChange::Signature
+            };
+            let used_by: Vec<String> = users
+                .get(bare)
+                .map(|v| {
+                    v.iter()
+                        .filter(|id| **id != h.id.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push((
+                pos.get(h.id.as_str()).copied().unwrap_or(usize::MAX),
+                LedgerEntry {
+                    name: name.to_string(),
+                    kind: None,
+                    scope: None,
+                    path: f.path.clone(),
+                    at: h.id.clone(),
+                    change,
+                    from: None,
+                    used_by,
+                },
+            ));
+        }
+        // A removed symbol has no defining node left to read a kind off, and
+        // `facts.removals` is a list of rendered rationale phrases rather than
+        // names — so it is computed from the def sets directly. A name that
+        // left because it was renamed, or moved to another file, is already
+        // reported as that and must not appear again as a removal.
+        for (name, row) in &old_rows[fi].0 {
+            if new_defs[fi].contains(name)
+                || facts.rename[fi].values().any(|old| old == name)
+                || moved_away.contains(&(f.path.as_str(), name.as_str()))
+            {
+                continue;
+            }
+            // Only a symbol some hunk actually deletes is reported gone. The
+            // set difference alone is not enough: when the caller sends
+            // `old` + `diff` rather than `old` + `new` there is no new-side
+            // symbol set to compare against, and every untouched definition
+            // in the file would read as removed. The deleting hunk is also
+            // where the entry belongs in the reading order.
+            let Some(at) = f
+                .hunks
+                .iter()
+                .find(|h| h.old_range[0] <= *row && *row <= h.old_range[1])
+            else {
+                continue;
+            };
+            if !seen.insert((f.path.clone(), name.clone(), None)) {
+                continue;
+            }
+            let used_by: Vec<String> = users
+                .get(name.as_str())
+                .map(|v| v.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            out.push((
+                pos.get(at.id.as_str()).copied().unwrap_or(usize::MAX),
+                LedgerEntry {
+                    name: name.clone(),
+                    kind: None,
+                    scope: None,
+                    path: f.path.clone(),
+                    at: at.id.clone(),
+                    change: SymbolChange::Removed,
+                    from: None,
+                    used_by,
+                },
+            ));
+        }
+    }
+    out.sort_by_key(|(p, _)| *p);
+    out.into_iter().map(|(_, e)| e).collect()
 }
 
 /// A path with this many hunks is churning rather than being edited.
@@ -625,7 +960,7 @@ const HIGH_CHURN: usize = 10;
 /// also reports an untouched test suite; tightening it would need a notion of
 /// "language people write tests for" that the registry does not have and that
 /// nothing has yet asked for.
-fn changeset_notes(files: &[FileOut]) -> Vec<String> {
+fn changeset_notes(files: &[FileOut], ledger: &[LedgerEntry]) -> Vec<String> {
     let mut notes = vec![];
     let is_code =
         |p: &str| lang::for_path(p).is_some_and(|s| !s.prose && !s.data && s.template.is_none());
@@ -640,6 +975,31 @@ fn changeset_notes(files: &[FileOut]) -> Vec<String> {
     for f in &touched {
         if f.hunks.len() >= HIGH_CHURN {
             notes.push(format!("{}: {} hunks (high churn)", f.path, f.hunks.len()));
+        }
+    }
+
+    // Sharper than "no test touched": a test file *was* touched, but what the
+    // change wrote there references none of the definitions the change altered.
+    // The failure it catches is a test that exercises something adjacent to the
+    // thing that moved.
+    let changed: HashSet<&str> = ledger
+        .iter()
+        .filter(|e| !lang::is_test_path(&e.path))
+        .map(|e| e.name.as_str())
+        .collect();
+    if !changed.is_empty() {
+        for f in touched.iter().filter(|f| lang::is_test_path(&f.path)) {
+            // what the change wrote in this test file, not what the file
+            // already contained — untouched tests are existing coverage
+            let mut refs = f.hunks.iter().flat_map(|h| h.uses.iter());
+            if !refs.any(|u| changed.contains(u.as_str())) {
+                notes.push(format!(
+                    "{} touched, but none of its uses reference the {} changed def{}",
+                    f.path,
+                    changed.len(),
+                    if changed.len() == 1 { "" } else { "s" }
+                ));
+            }
         }
     }
     notes
@@ -680,6 +1040,27 @@ pub fn pack(out: &Output) -> String {
         let _ = writeln!(s, "\n## notes");
         for n in &out.notes {
             let _ = writeln!(s, "- {n}");
+        }
+    }
+    // the ledger is what the change *did*, one line per symbol; it is read
+    // before any hunk, so it sits between the changeset notes and the order
+    if !out.ledger.is_empty() {
+        let _ = writeln!(s, "\n## ledger — {} symbol(s)", out.ledger.len());
+        for e in &out.ledger {
+            let change = format!("{:?}", e.change).to_lowercase();
+            let from = match (&e.from, e.change) {
+                (Some(f), model::SymbolChange::Renamed) => format!(" from {f}"),
+                (Some(f), model::SymbolChange::Moved) => format!(" from {f}"),
+                (Some(f), model::SymbolChange::Extracted) => format!(" from {f}"),
+                _ => String::new(),
+            };
+            // fan-in is the number a reviewer acts on; the ids are in the JSON
+            let fan = match e.used_by.len() {
+                0 => String::new(),
+                1 => ", used by 1 hunk".to_string(),
+                n => format!(", used by {n} hunks"),
+            };
+            let _ = writeln!(s, "{} {} — {change}{from}{fan}", loc(&e.at), e.name);
         }
     }
     let _ = writeln!(s, "\n## reading order");

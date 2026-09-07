@@ -877,6 +877,12 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
 /// spec — the language *injected* into a prose file. Only names this crate has
 /// a grammar for resolve; a `console` or `diff` fence has no structure to read
 /// and returns None rather than being guessed at.
+/// Every registered language, in registry order — the docs generator's view
+/// of this table (see `languages()` in the crate root).
+pub fn all() -> &'static [LangSpec] {
+    SPECS
+}
+
 pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
     // an info string may carry attributes after the language (```py title=x)
     let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();
@@ -996,6 +1002,39 @@ pub fn is_generated_path(p: &str) -> bool {
         || p.contains("/generated/")
         || p.contains("/vendor/")
         || p.contains("/node_modules/")
+}
+
+/// What a parameter contributes to a definition's arity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    /// must be passed
+    Required,
+    /// carries a default, so it may be omitted
+    Optional,
+    /// `*args`, `**kw`, `...rest` — makes the upper bound unbounded, and is
+    /// why a definition holding one is not arity-checked at all
+    Variadic,
+}
+
+/// Classify one parameter node. A positive list per non-required kind, so an
+/// unfamiliar kind reads as `Required` — which is the *conservative* direction
+/// only for the lower bound, and is why `signatures` refuses any definition
+/// carrying a kind it does not recognise as variadic.
+pub fn param_kind(kind: &str) -> ParamKind {
+    match kind {
+        "list_splat_pattern"
+        | "dictionary_splat_pattern"
+        | "variadic_parameter"
+        | "rest_pattern"
+        | "rest_parameter"
+        | "spread_parameter" => ParamKind::Variadic,
+        "default_parameter"
+        | "typed_default_parameter"
+        | "assignment_pattern"
+        | "optional_parameter"
+        | "optional_typed_parameter" => ParamKind::Optional,
+        _ => ParamKind::Required,
+    }
 }
 
 /// Does a definition of this kind *have* a signature — is it callable, with a

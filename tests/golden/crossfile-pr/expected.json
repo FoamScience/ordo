@@ -99,6 +99,18 @@
       "h1"
     ]
   ],
+  "ledger": [
+    {
+      "name": "helper",
+      "kind": "function_definition",
+      "path": "util.py",
+      "at": "h1",
+      "change": "added",
+      "used_by": [
+        "h0"
+      ]
+    }
+  ],
   "notes": [
     "code changed but no test touched"
   ]

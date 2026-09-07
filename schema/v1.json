@@ -573,6 +573,64 @@
             "type": "string"
           },
           "description": "P13.2 changeset notes: change-shape signals about the change as a whole, as facts rather than judgments — `code changed but no test touched`, `a.py: 14 hunks (high churn)`. Omitted when empty. Per-hunk signals live on hunks[].notes."
+        },
+        "ledger": {
+          "type": "array",
+          "description": "P23.1 change ledger: one entry per symbol the change touches, in reading order, rather than per hunk. A projection of data already present elsewhere in this output. Omitted when empty.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "path",
+              "at",
+              "change",
+              "used_by"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "description": "tree-sitter kind of the defining node; absent for a removed symbol, whose node no longer exists"
+              },
+              "scope": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "change": {
+                "enum": [
+                  "added",
+                  "moved",
+                  "extracted",
+                  "renamed",
+                  "signature",
+                  "body",
+                  "removed"
+                ]
+              },
+              "from": {
+                "type": "string",
+                "description": "the old name (renamed), the source path (moved), or the definition it came out of (extracted)"
+              },
+              "used_by": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "ids of hunks in this change that use it — the fan-in; empty is itself a signal"
+              },
+              "at": {
+                "type": "string",
+                "description": "id of the hunk this entry is anchored to — the one that defines it, or deletes it"
+              }
+            }
+          }
         }
       }
     }

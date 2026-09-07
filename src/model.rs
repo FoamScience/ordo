@@ -107,6 +107,11 @@ pub struct Output {
     /// never matching. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+    /// P23.1: one entry per *symbol* the change touches, rather than per hunk
+    /// — what a reviewer reasons about. A projection of data the engine already
+    /// has; see `Output.files` for the hunks each entry's `used_by` names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ledger: Vec<LedgerEntry>,
     /// P13.2: change-shape signals about the changeset as a whole, as facts
     /// rather than judgments — `code changed but no test touched`,
     /// `a.py: 14 hunks (high churn)`. Per-hunk signals live on `hunks[].notes`.
@@ -318,6 +323,52 @@ pub enum ContainerKind {
     Binding,
     /// a top-level call whose multi-line arguments hold the hunk
     Call,
+}
+
+/// What happened to a symbol across the whole change. Ordered from "this is
+/// new code" to "this already existed and only its body moved", which is also
+/// roughly the order a reviewer cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SymbolChange {
+    Added,
+    /// arrived from another file — `from` is that path
+    Moved,
+    /// pulled out of a definition that is still present — `from` is that name
+    Extracted,
+    /// `from` is the name it had before
+    Renamed,
+    /// existed already; its declaration line changed
+    Signature,
+    /// existed already; only its body did
+    Body,
+    Removed,
+}
+
+/// One symbol's line in the change ledger (P23.1). A forty-hunk diff has a
+/// twelve-line ledger, read before any hunk.
+#[derive(Debug, Clone, Serialize)]
+pub struct LedgerEntry {
+    pub name: String,
+    /// raw tree-sitter kind of the defining node; absent for a removed symbol,
+    /// whose defining node no longer exists to be asked
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    pub path: String,
+    /// id of the hunk this entry is anchored to — the one that defines it, or
+    /// deletes it. A ledger line that cannot point at a hunk is not actionable,
+    /// so every entry has one.
+    pub at: String,
+    pub change: SymbolChange,
+    /// the old name, or the file/definition it came from — meaning depends on
+    /// `change`, and it is absent for the kinds that have no source
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// ids of the hunks in this change that *use* it — the fan-in. Empty is
+    /// itself a signal: a symbol added and used nowhere in the change.
+    pub used_by: Vec<String>,
 }
 
 /// A defined symbol's identity: name + tree-sitter node kind + enclosing

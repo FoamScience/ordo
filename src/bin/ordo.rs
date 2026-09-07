@@ -31,7 +31,7 @@ ordo — interactive review of a commit, ordered for comprehension.
 usage:
   ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
   ordo --init-config [--force]
-  ordo --help
+  ordo help [<topic>]
   ordo --version
 
 <rev> is any git commit-ish (a sha, HEAD~2, a tag), a commit range (main..branch,
@@ -338,6 +338,102 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
 /// rev, keymap, path filter, --only-comments, theme, --rules files
 type ParsedArgs = (String, Keymap, Filter, bool, Theme, Vec<String>);
 
+/// The user-facing documentation, embedded in the binary so `ordo help
+/// <topic>` works with no network, no install layout to find, and no chance of
+/// showing a page from a different version than the one running. The `docs/`
+/// files are the same ones GitHub renders; a test keeps this list and that
+/// directory in step.
+const TOPICS: &[(&str, &str, &str)] = &[
+    (
+        "cli",
+        "the engine CLI, schema v1, and the library API",
+        include_str!("../../docs/cli.md"),
+    ),
+    (
+        "tui",
+        "this reviewer: revisions, filters, keys, command bar, themes",
+        include_str!("../../docs/tui.md"),
+    ),
+    (
+        "reviewing",
+        "the detail layer, rationale patterns, advisories, the ledger",
+        include_str!("../../docs/reviewing.md"),
+    ),
+    (
+        "rules",
+        "conventions as data, and the rulesets that ship with ordo",
+        include_str!("../../docs/rules.md"),
+    ),
+    (
+        "languages",
+        "every supported language, and the shape it is read in",
+        include_str!("../../docs/languages.md"),
+    ),
+    (
+        "ceilings",
+        "what ordo deliberately does not do",
+        include_str!("../../docs/ceilings.md"),
+    ),
+];
+
+/// The topic list appended to `--help`, and printed on its own by `ordo help`.
+fn topic_list() -> String {
+    let mut out = String::from("topics (`ordo help <topic>`):\n");
+    for (name, blurb, _) in TOPICS {
+        out.push_str(&format!("  {name:<11} {blurb}\n"));
+    }
+    out
+}
+
+/// Sends long output through `$PAGER` when there is a terminal to page for.
+/// Falls back to plain stdout whenever that isn't true or the pager won't
+/// start, so `ordo help rules | grep max-` behaves like any other command.
+fn page_out(text: &str) {
+    use std::io::{IsTerminal, Write};
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+    if std::io::stdout().is_terminal() && !pager.is_empty() {
+        let mut parts = pager.split_whitespace();
+        let Some(program) = parts.next() else {
+            return print!("{text}");
+        };
+        let mut cmd = Command::new(program);
+        cmd.args(parts).stdin(std::process::Stdio::piped());
+        // `less` without these quits on short input and eats the colours of
+        // whatever the user's LESS already sets; -R -F -X is the conventional
+        // "act like git" set
+        if program == "less" && std::env::var("LESS").is_err() {
+            cmd.env("LESS", "-RFX");
+        }
+        if let Ok(mut child) = cmd.spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+    }
+    print!("{text}");
+}
+
+/// `ordo help [<topic>]`. Returns the exit code: an unknown topic is a usage
+/// error, not an empty page.
+fn help_topic(topic: Option<&str>) -> i32 {
+    let Some(topic) = topic else {
+        page_out(&format!("{USAGE}\n{}", topic_list()));
+        return 0;
+    };
+    match TOPICS.iter().find(|(name, _, _)| *name == topic) {
+        Some((_, _, body)) => {
+            page_out(body);
+            0
+        }
+        None => {
+            eprintln!("ordo: no help topic '{topic}'\n\n{}", topic_list());
+            2
+        }
+    }
+}
+
 fn parse_args() -> Result<ParsedArgs, i32> {
     let mut rev: Option<String> = None;
     let mut globs: Vec<String> = vec![];
@@ -355,7 +451,15 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     let mut extra_rules: Vec<String> = vec![];
     let mut want_init = false;
     let mut force = false;
-    for a in std::env::args().skip(1) {
+    // `ordo help [<topic>]` short-circuits everything else: it takes an
+    // argument the flag loop below would otherwise read as a revision.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(first) = argv.first() {
+        if first == "help" || first == "--help" || first == "-h" {
+            return Err(help_topic(argv.get(1).map(String::as_str)));
+        }
+    }
+    for a in argv {
         if want_preset {
             preset = a;
             preset_given = true;
@@ -390,10 +494,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
             "--force" => force = true,
-            "-h" | "--help" | "help" => {
-                print!("{USAGE}");
-                return Err(0);
-            }
+            "-h" | "--help" | "help" => return Err(help_topic(None)),
             "-V" | "--version" | "version" => {
                 println!(
                     "ordo {} (ordo schema {})",
@@ -578,6 +679,13 @@ struct LoadResult {
     groups: HashMap<String, String>,
     /// what was dropped on the way here, for `:audit`
     ledger: Ledger,
+    /// the engine's change ledger (P23.1) — what the list defaults to being a
+    /// list of; distinct from `ledger`, which is the `:audit` one
+    symbol_ledger: Vec<ordo::model::LedgerEntry>,
+    notes: HashMap<u64, String>,
+    notes_path: Option<PathBuf>,
+    deltas: Vec<Delta>,
+    delta_gone: usize,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -701,10 +809,55 @@ fn load(
         .flatten();
     let mut marks = marks_path.as_deref().map(load_marks).unwrap_or_default();
     prune_marks(&mut marks, now_unix());
+    let notes_path = (!repo_root.is_empty())
+        .then(|| notes_file_path(repo_root))
+        .flatten();
+    let mut notes = notes_path.as_deref().map(load_notes).unwrap_or_default();
+    // carry a note across a rename: the ledger knows the name the symbol had,
+    // so the note written against the old identity finds its way to the new one
+    let mut migrated = false;
+    for e in out.ledger.iter().filter(|e| e.from.is_some()) {
+        let Some(old) = e.from.as_deref() else {
+            continue;
+        };
+        let Some(it) = items.iter().find(|i| {
+            i.new_range[0] > 0
+                && !i.symbols.is_empty()
+                && i.symbols.iter().any(|s| s.name == e.name)
+        }) else {
+            continue;
+        };
+        let (Some(from_key), Some(to_key)) = (note_key_named(it, old), note_key(it)) else {
+            continue;
+        };
+        if from_key != to_key {
+            if let Some(text) = notes.remove(&from_key) {
+                notes.insert(to_key, text);
+                migrated = true;
+            }
+        }
+    }
+    if migrated {
+        if let Some(p) = notes_path.as_deref() {
+            save_notes(p, &notes);
+        }
+    }
     let reviewed: Vec<bool> = items
         .iter()
         .map(|it| mark_key(&rev, it, &sources).is_some_and(|k| marks.contains_key(&k)))
         .collect();
+    // what changed since this review was last opened, then overwrite the
+    // snapshot so the next run answers the same question about this one
+    let runs_path = (!repo_root.is_empty())
+        .then(|| runs_file_path(repo_root))
+        .flatten();
+    let prev = runs_path.as_deref().map(load_snaps).unwrap_or_default();
+    let order: Vec<usize> = (0..items.len()).collect();
+    let (snaps, deltas) = compare_runs(&items, &order, &sources, &prev);
+    let delta_gone = prev.keys().filter(|k| !snaps.contains_key(*k)).count();
+    if let Some(p) = runs_path.as_deref() {
+        save_snaps(p, &snaps);
+    }
     let _ = tx.send(LoadMsg::Done(Box::new(LoadResult {
         items,
         view,
@@ -717,6 +870,11 @@ fn load(
         marks,
         groups,
         ledger,
+        symbol_ledger: out.ledger.clone(),
+        notes,
+        notes_path,
+        deltas,
+        delta_gone,
     })));
 }
 
@@ -1219,6 +1377,14 @@ struct Item {
     details: Vec<String>,
     notes: Vec<String>,
     edges: Vec<EdgeRef>,
+    /// the key the list groups and folds by — a ledger symbol or a group id,
+    /// depending on `App::mode`. Swapped in place by `set_mode`, so the two
+    /// display functions never need to know which mode is active.
+    bucket: String,
+    /// this hunk's entry in `Output::ledger`, when a symbol change is anchored
+    /// to it — `None` for an import, a region, or a hunk that changed nothing
+    /// nameable
+    ledger: Option<usize>,
     advisories: Vec<(String, String, bool)>,
     noise: bool,
     /// every changed line is a comment or docstring — drives `:only-comments`
@@ -1253,6 +1419,10 @@ struct Item {
 struct EdgeRef {
     label: String,
     target: Option<usize>,
+    /// this hunk *uses* what the target defines — so the target is something
+    /// this hunk depends on, and reviewing this one first is reviewing a call
+    /// before its callee
+    dependency: bool,
 }
 
 // ---------------------------------------------------------- reviewed-mark persistence
@@ -1288,22 +1458,28 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// together at once) rather than silent.
 fn symbol_identity_key(item: &Item) -> String {
     if !item.symbols.is_empty() {
-        let mut syms = item.symbols.clone();
-        syms.sort();
-        syms.iter()
-            .map(|s| {
-                format!(
-                    "{}\u{1f}{}\u{1f}{}",
-                    s.name,
-                    s.kind,
-                    s.scope.as_deref().unwrap_or("")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\u{1e}")
+        symbols_identity(&item.symbols)
     } else {
         item.enclosing.clone().unwrap_or_default()
     }
+}
+
+/// name + kind + scope for each symbol, order-independent — the identity both
+/// `mark_key` and `note_key` are built on.
+fn symbols_identity(symbols: &[ordo::model::Symbol]) -> String {
+    let mut syms = symbols.to_vec();
+    syms.sort();
+    syms.iter()
+        .map(|s| {
+            format!(
+                "{}\u{1f}{}\u{1f}{}",
+                s.name,
+                s.kind,
+                s.scope.as_deref().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\u{1e}")
 }
 
 /// Hashes both sides of the hunk's content — old lines, then new — so any
@@ -1343,6 +1519,237 @@ fn mark_key(rev: &str, item: &Item, sources: &Sources) -> Option<u64> {
     Some(fnv1a(combined.as_bytes()))
 }
 
+/// A review note's key: the symbol's identity and **nothing else**.
+///
+/// The exact opposite of `mark_key`, and deliberately so. A mark folds in the
+/// revision, the path and a hash of both sides of the hunk, because a stale
+/// "already reviewed" is worse than a lost one. A note is a thought about a
+/// *symbol* — it must outlive a rebase (no revision), a move to another file
+/// (no path) and an edit to the body (no content hash). Renames are handled by
+/// migrating the old identity's key when the ledger reports one, so the note
+/// follows the symbol through its new name too.
+///
+/// `None` when the hunk declares no symbol: there is nothing stable to anchor
+/// to, and anchoring to the enclosing name would silently drift.
+fn note_key(item: &Item) -> Option<u64> {
+    if item.symbols.is_empty() {
+        return None;
+    }
+    Some(fnv1a(symbols_identity(&item.symbols).as_bytes()))
+}
+
+/// A draft rule matching the shape of item `i`, as TOML the reviewer can paste
+/// into `.ordo/rules.toml` (P23.6).
+///
+/// Every condition comes from a structural fact the engine already recorded
+/// about this hunk — no LLM, no guessing, and the same facts the rules engine
+/// will evaluate it against. It is deliberately a *draft*: the conditions are
+/// as specific as the evidence allows, so the reviewer's job is to delete the
+/// ones that were incidental rather than to invent the ones that matter.
+///
+/// The limits are emitted one below what this hunk actually measured, so the
+/// rule fires on the hunk that prompted it.
+fn draft_rule(app: &App, i: usize) -> Vec<String> {
+    let it = &app.items[i];
+    let mut when: Vec<String> = vec![];
+
+    if let Some(spec) = ordo::lang_name_for_path(&it.path) {
+        when.push(format!("lang = \"{spec}\""));
+    }
+    let mut kinds: Vec<String> = it.symbols.iter().map(|s| s.kind.clone()).collect();
+    kinds.sort();
+    kinds.dedup();
+    if !kinds.is_empty() {
+        let list = kinds
+            .iter()
+            .map(|k| format!("\"{k}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        when.push(format!("kind = [{list}]"));
+    }
+    // the structural notes are already measurements; turn each into the limit
+    // it just exceeded
+    for n in &it.notes {
+        let num = |prefix: &str, suffix: &str| -> Option<usize> {
+            let rest = n.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            rest.trim().parse().ok()
+        };
+        if let Some(p) = n
+            .strip_suffix(" params")
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            when.push(format!("max-params = {}", p.saturating_sub(1)));
+        } else if let Some(l) = num("large definition (", " lines)") {
+            when.push(format!("max-lines = {}", l.saturating_sub(1)));
+        } else if let Some(d) = num("deeply nested (depth ", ")") {
+            when.push(format!("max-nesting = {}", d.saturating_sub(1)));
+        }
+    }
+    let name = kinds
+        .first()
+        .map(|k| format!("no-{}", k.replace('_', "-")))
+        .unwrap_or_else(|| "unnamed-rule".to_string());
+    let mut out = vec![
+        "# paste into .ordo/rules.toml, then delete the conditions that were".to_string(),
+        "# incidental — every line below is a fact about the hunk you flagged.".to_string(),
+        String::new(),
+        "[[rule]]".to_string(),
+        format!("name = \"{name}\""),
+    ];
+    out.extend(when);
+    out.push("warn = \"TODO: say why this shape is unwanted\"".to_string());
+    if it.symbols.is_empty() {
+        out.push(String::new());
+        out.push("# this hunk declares no symbol, so the draft has no `kind` to".to_string());
+        out.push("# match on — it will be broader than you probably want.".to_string());
+    }
+    out
+}
+
+/// Everything that would lose its footing if item `i` were rejected — the
+/// hunks that depend on it, and the hunks that depend on those.
+///
+/// The transitive closure matters more than the direct dependents: pushing
+/// back on a leaf when the root is the problem sends the author round the loop
+/// twice. Cycles (mutual recursion is a real def→use cycle) terminate on the
+/// visited set rather than hanging.
+fn cascade(app: &App, i: usize) -> Vec<usize> {
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut queue = vec![i];
+    while let Some(cur) = queue.pop() {
+        for (j, it) in app.items.iter().enumerate() {
+            if seen.contains(&j) || j == i {
+                continue;
+            }
+            let depends = it
+                .edges
+                .iter()
+                .any(|e| e.dependency && e.target == Some(cur));
+            if depends {
+                seen.insert(j);
+                queue.push(j);
+            }
+        }
+    }
+    // report in reading order, which is the order the author would fix them in
+    let mut out: Vec<usize> = seen.into_iter().filter(|j| app.view.contains(j)).collect();
+    out.sort_by_key(|&j| view_pos(&app.view, j));
+    out
+}
+
+/// The cascade as one why-pane line, or `None` when rejecting this hunk would
+/// strand nothing.
+fn cascade_line(app: &App, i: usize) -> Option<String> {
+    let hit = cascade(app, i);
+    if hit.is_empty() {
+        return None;
+    }
+    let where_ = hit
+        .iter()
+        .take(3)
+        .map(|&j| format!("{}:L{}", app.items[j].path, app.items[j].new_range[0]))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = if hit.len() > 3 {
+        format!(" and {} more", hit.len() - 3)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "rejecting this strands {} hunk{} ({where_}{more})",
+        hit.len(),
+        if hit.len() == 1 { "" } else { "s" }
+    ))
+}
+
+/// The one-line delta for item `i`, or `None` when it reads exactly as it did
+/// last time — and when there was no last time, since "everything is new" on a
+/// first run is noise rather than information.
+fn delta_line(app: &App, i: usize) -> Option<&'static str> {
+    if app.deltas.iter().all(|d| *d == Delta::New) {
+        return None; // no previous run to compare against
+    }
+    match app.deltas.get(i)? {
+        Delta::New => Some("new since you last looked"),
+        Delta::Changed => Some("changed since you last looked"),
+        Delta::Moved => {
+            Some("unchanged, but it reads in a different place now — its dependencies moved")
+        }
+        Delta::Same => None,
+    }
+}
+
+/// The locations of `i`'s unreviewed dependencies, for the why pane — empty
+/// unless `i` is itself marked reviewed, since the warning is about the *order*
+/// things were approved in, not about work still to do.
+fn out_of_order_labels(app: &App, i: usize) -> Vec<String> {
+    if !app.reviewed[i] {
+        return vec![];
+    }
+    unreviewed_deps(app, i)
+        .into_iter()
+        .map(|t| format!("{}:L{}", app.items[t].path, app.items[t].new_range[0]))
+        .collect()
+}
+
+/// Dependencies of item `i` that are part of this review but not yet reviewed
+/// — the hunks defining what `i` uses. Marking `i` reviewed while any of these
+/// are outstanding means a call was approved before its callee.
+fn unreviewed_deps(app: &App, i: usize) -> Vec<usize> {
+    app.items[i]
+        .edges
+        .iter()
+        .filter(|e| e.dependency)
+        .filter_map(|e| e.target)
+        .filter(|&t| !app.reviewed[t])
+        .collect()
+}
+
+/// How much of the review is actually understood, as two numbers.
+///
+/// Hunk coverage is what every tool reports. Edge coverage — a def→use link
+/// with *both* ends reviewed — is the one that tracks whether the relationship
+/// between two places was checked, which is the thing a reading order exists to
+/// make possible. Only edges whose ends are both in the current view count, so
+/// filtering the review does not make the number look better than it is.
+fn coverage(app: &App) -> (usize, usize, usize, usize) {
+    let done = app.view.iter().filter(|&&i| app.reviewed[i]).count();
+    let mut edges = 0;
+    let mut both = 0;
+    for &i in &app.view {
+        for e in app.items[i].edges.iter().filter(|e| e.dependency) {
+            let Some(t) = e.target else { continue };
+            if !app.view.contains(&t) {
+                continue;
+            }
+            edges += 1;
+            if app.reviewed[i] && app.reviewed[t] {
+                both += 1;
+            }
+        }
+    }
+    (done, app.view.len(), both, edges)
+}
+
+/// The note anchored to item `i`'s symbol, if any.
+fn note_for(app: &App, i: usize) -> Option<&str> {
+    let key = note_key(&app.items[i])?;
+    app.notes.get(&key).map(String::as_str)
+}
+
+/// The key a symbol *would* have had under its previous name, so a note
+/// written before a rename can be carried across to it.
+fn note_key_named(item: &Item, old_name: &str) -> Option<u64> {
+    if item.symbols.is_empty() {
+        return None;
+    }
+    let mut renamed = item.symbols.clone();
+    for sym in &mut renamed {
+        sym.name = old_name.to_string();
+    }
+    Some(fnv1a(symbols_identity(&renamed).as_bytes()))
+}
+
 const MARK_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 
 fn now_unix() -> u64 {
@@ -1370,6 +1777,151 @@ fn cache_home() -> Option<PathBuf> {
 fn marks_file_path(repo_root: &str) -> Option<PathBuf> {
     let dir = cache_home()?.join("ordo").join("reviewed");
     Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+/// What one hunk looked like the last time this review was opened: what it
+/// contained, where it sat in the reading order, and what it depended on.
+#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct Snap {
+    /// hex hash of both sides of the hunk
+    c: String,
+    /// its position in the reading order
+    p: usize,
+    /// keys of the hunks defining what it uses
+    d: Vec<String>,
+}
+
+/// How a hunk differs from the last time this review was opened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Delta {
+    /// not in the previous run at all
+    New,
+    /// same symbol, different content
+    Changed,
+    /// **byte-identical, but it reads in a different place now** — because
+    /// what it depends on changed. No other tool reports this: a diff sees
+    /// nothing, so the hunk looks untouched while the reason to read it moved.
+    Moved,
+    /// same content, same position, same dependencies
+    Same,
+}
+
+/// A hunk's identity across runs: its symbol, and the file it lives in. Not
+/// the content and not the revision — those are what the delta is measuring.
+fn snap_key(item: &Item) -> String {
+    format!(
+        "{:016x}",
+        fnv1a(format!("{}\u{0}{}", item.path, symbol_identity_key(item)).as_bytes())
+    )
+}
+
+/// `${XDG_CACHE_HOME:-$HOME/.cache}/ordo/runs/<repo>.json` — the previous run,
+/// so the next one can say what moved. Overwritten each time the review is
+/// opened, so a delta always answers "since I last looked".
+fn runs_file_path(repo_root: &str) -> Option<PathBuf> {
+    let dir = cache_home()?.join("ordo").join("runs");
+    Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+fn load_snaps(path: &Path) -> HashMap<String, Snap> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_snaps(path: &Path, snaps: &HashMap<String, Snap>) {
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(snaps) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// This run's snapshot, and how each item differs from the stored one.
+fn compare_runs(
+    items: &[Item],
+    order: &[usize],
+    sources: &Sources,
+    prev: &HashMap<String, Snap>,
+) -> (HashMap<String, Snap>, Vec<Delta>) {
+    let key_of: Vec<String> = items.iter().map(snap_key).collect();
+    let pos_of: HashMap<usize, usize> = order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
+    let mut now: HashMap<String, Snap> = HashMap::new();
+    for (i, it) in items.iter().enumerate() {
+        let deps: Vec<String> = it
+            .edges
+            .iter()
+            .filter(|e| e.dependency)
+            .filter_map(|e| e.target)
+            .map(|t| key_of[t].clone())
+            .collect();
+        now.insert(
+            key_of[i].clone(),
+            Snap {
+                c: format!("{:016x}", hunk_content_hash(it, sources).unwrap_or(0)),
+                p: pos_of.get(&i).copied().unwrap_or(usize::MAX),
+                d: deps,
+            },
+        );
+    }
+    let deltas = items
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let k = &key_of[i];
+            let (Some(was), Some(is)) = (prev.get(k), now.get(k)) else {
+                return Delta::New;
+            };
+            if was.c != is.c {
+                Delta::Changed
+            } else if was.p != is.p || was.d != is.d {
+                Delta::Moved
+            } else {
+                Delta::Same
+            }
+        })
+        .collect();
+    (now, deltas)
+}
+
+/// `${XDG_CACHE_HOME:-$HOME/.cache}/ordo/notes/<repo>.json` — beside the marks,
+/// same reasoning about the cache and the hashed repo name. Kept in its own
+/// file because a note outlives the mark on the same hunk: marks expire with
+/// the content, notes follow the symbol.
+fn notes_file_path(repo_root: &str) -> Option<PathBuf> {
+    let dir = cache_home()?.join("ordo").join("notes");
+    Some(dir.join(format!("{:016x}.json", fnv1a(repo_root.as_bytes()))))
+}
+
+/// Reads the note file: hex key -> note text. Degrades to "no notes" on any
+/// failure, exactly as the marks do — the cache is a convenience.
+fn load_notes(path: &Path) -> HashMap<u64, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let Ok(raw) = serde_json::from_str::<HashMap<String, String>>(&text) else {
+        return HashMap::new();
+    };
+    raw.into_iter()
+        .filter_map(|(k, v)| u64::from_str_radix(&k, 16).ok().map(|k| (k, v)))
+        .collect()
+}
+
+fn save_notes(path: &Path, notes: &HashMap<u64, String>) {
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let body: HashMap<String, String> = notes
+        .iter()
+        .map(|(k, v)| (format!("{k:016x}"), v.clone()))
+        .collect();
+    if let Ok(text) = serde_json::to_string(&body) {
+        let _ = std::fs::write(path, text);
+    }
 }
 
 /// Reads the mark file: hex key -> unix-seconds written. Any failure at all —
@@ -1503,6 +2055,17 @@ enum Action {
     /// pane's horizontal window without moving the cursor
     ScrollLeft,
     ScrollRight,
+}
+
+/// What the reading-order list is a list *of*. The ledger is the default: a
+/// hunk is an artifact of `diff`, a symbol is what a reviewer reasons about.
+/// `:mode` switches. Both render through the same header/item machinery — the
+/// mode only decides which key `Item::bucket` carries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum ViewMode {
+    #[default]
+    Ledger,
+    Hunks,
 }
 
 /// Which way a fold key moves the group under the selection.
@@ -1824,7 +2387,7 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::Help => (Category::Help, "show this keybinding help"),
         Action::CommandOpen => (
             Category::General,
-            "open the command bar (:only-comments, :all, :filter, :keys, :strategy, :goto, :quickfix, :help, :q)",
+            "open the command bar (`:help` lists every command)",
         ),
         Action::CommandGoto => (Category::General, "open the command bar pre-filled with `goto `"),
     }
@@ -3048,9 +3611,25 @@ struct App {
     /// `:group` — show a non-selectable group-reason header before each run
     /// of the reading-order list that shares a group id
     show_groups: bool,
-    /// group id -> the engine's `Group::reason`, carried out of `load()`
-    /// alongside `items` so headers can show it without re-touching the engine
+    /// bucket key -> the header text for it. What the keys *are* depends on
+    /// `mode`: group ids in hunk mode, `L<n>` ledger keys in ledger mode.
     groups: HashMap<String, String>,
+    /// the engine's `Group::reason` map, kept unchanged so `:mode hunks` can
+    /// restore it without re-touching the engine
+    group_reasons: HashMap<String, String>,
+    /// what the reading-order list is a list of — ledger by default
+    mode: ViewMode,
+    /// how each item differs from the previous run of this review
+    deltas: Vec<Delta>,
+    /// keys present last run but gone now, for the `:delta` summary
+    delta_gone: usize,
+    /// symbol-anchored review notes, key -> text (see `note_key`)
+    notes: HashMap<u64, String>,
+    /// where notes get persisted; `None` when the cache dir can't be resolved
+    notes_path: Option<PathBuf>,
+    /// the engine's change ledger, kept so `:mode` can rebuild the headers.
+    /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
+    symbol_ledger: Vec<ordo::model::LedgerEntry>,
     /// group ids whose hunks are folded away under their header (`za` and
     /// friends); empty means everything is expanded
     collapsed: HashSet<String>,
@@ -3100,7 +3679,46 @@ fn stack_pop_valid(stack: &mut Vec<(usize, Cursor)>, n_items: usize) -> Option<(
     None
 }
 
+/// The header a ledger entry shows in the list — the same sentence `pack`
+/// prints, minus the location the row already carries.
+fn ledger_label(e: &ordo::model::LedgerEntry) -> String {
+    let change = format!("{:?}", e.change).to_lowercase();
+    let from = match e.from.as_deref() {
+        Some(f) => format!(" from {f}"),
+        None => String::new(),
+    };
+    let fan = match e.used_by.len() {
+        0 => String::new(),
+        1 => ", used by 1 hunk".to_string(),
+        n => format!(", used by {n} hunks"),
+    };
+    format!("{} — {change}{from}{fan}", e.name)
+}
+
 fn build_items(out: &Output) -> Vec<Item> {
+    // hunk id -> the ledger entry anchored to it
+    let ledger_at: HashMap<&str, usize> = out
+        .ledger
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.at.as_str(), i))
+        .collect();
+    // (path, name) -> the ledger entry for that symbol, under both the bare
+    // name and the scope-qualified form a hunk's `enclosing` uses. A symbol's
+    // entry anchors to the first hunk that touches it, so the rest of its
+    // hunks find it here instead of falling into the "no definition changed"
+    // bucket — they *are* that symbol's change, just not its first hunk.
+    let mut ledger_named: HashMap<(&str, String), usize> = HashMap::new();
+    for (i, e) in out.ledger.iter().enumerate() {
+        ledger_named
+            .entry((e.path.as_str(), e.name.clone()))
+            .or_insert(i);
+        if let Some(scope) = &e.scope {
+            ledger_named
+                .entry((e.path.as_str(), format!("{scope}.{}", e.name)))
+                .or_insert(i);
+        }
+    }
     let by_id: HashMap<&str, (&str, &ordo::model::HunkOut)> = out
         .files
         .iter()
@@ -3157,7 +3775,8 @@ fn build_items(out: &Output) -> Vec<Item> {
                 .iter()
                 .filter(|e| e.from == h.id || e.to == h.id)
                 .map(|e| {
-                    let (label, target_id) = if e.from == h.id {
+                    let defines_it = e.from == h.id;
+                    let (label, target_id) = if defines_it {
                         (format!("→ {}   {}", loc(&e.to), e.why), e.to.as_str())
                     } else {
                         (format!("← {}   {}", loc(&e.from), e.why), e.from.as_str())
@@ -3165,11 +3784,28 @@ fn build_items(out: &Output) -> Vec<Item> {
                     EdgeRef {
                         label,
                         target: item_index.get(target_id).copied(),
+                        dependency: !defines_it,
                     }
                 })
                 .collect();
+            // the entry anchored here, else the one for the definition holding
+            // this hunk — only a *definition* container, since a test block or
+            // a region names no symbol
+            let ledger = ledger_at.get(h.id.as_str()).copied().or_else(|| {
+                let name = h
+                    .enclosing
+                    .as_deref()
+                    .filter(|_| h.enclosing_kind.is_none())?;
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                ledger_named
+                    .get(&(*path, name.to_string()))
+                    .or_else(|| ledger_named.get(&(*path, bare.to_string())))
+                    .copied()
+            });
             Some(Item {
                 path: path.to_string(),
+                bucket: bucket_key(ViewMode::Ledger, ledger, &h.group),
+                ledger,
                 old_range: h.old_range,
                 new_range: h.new_range,
                 mark: mark.to_string(),
@@ -3297,12 +3933,12 @@ fn display_rows(
     }
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for &i in view {
-        *counts.entry(items[i].group.as_str()).or_insert(0) += 1;
+        *counts.entry(items[i].bucket.as_str()).or_insert(0) += 1;
     }
     let mut rows = Vec::with_capacity(view.len());
     let mut last: Option<&str> = None;
     for &i in view {
-        let gid = items[i].group.as_str();
+        let gid = items[i].bucket.as_str();
         let folded = collapsed.contains(gid);
         if last != Some(gid) {
             let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
@@ -3332,13 +3968,47 @@ fn folded_view(app: &App) -> Vec<usize> {
         .view
         .iter()
         .copied()
-        .filter(|&i| !app.collapsed.contains(&app.items[i].group))
+        .filter(|&i| !app.collapsed.contains(&app.items[i].bucket))
         .collect();
     if visible.is_empty() {
         app.view.clone()
     } else {
         visible
     }
+}
+
+/// The key a hunk groups under in a given mode. In ledger mode a hunk with no
+/// symbol change anchored to it falls into one shared bucket rather than
+/// vanishing — an import or a formatting hunk is still part of the review.
+fn bucket_key(mode: ViewMode, ledger: Option<usize>, group: &str) -> String {
+    match (mode, ledger) {
+        (ViewMode::Hunks, _) => group.to_string(),
+        (ViewMode::Ledger, Some(i)) => format!("L{i}"),
+        (ViewMode::Ledger, None) => "L-".to_string(),
+    }
+}
+
+/// Switch what the list is a list of. Re-keys every item and rebuilds the
+/// header labels; headers are forced on in ledger mode, where they *are* the
+/// ledger. Fold state is dropped because its keys belonged to the old mode.
+fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo::model::LedgerEntry]) {
+    app.mode = mode;
+    for it in &mut app.items {
+        it.bucket = bucket_key(mode, it.ledger, &it.group);
+    }
+    if mode == ViewMode::Ledger {
+        let mut labels: HashMap<String, String> = ledger
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (format!("L{i}"), ledger_label(e)))
+            .collect();
+        labels.insert("L-".to_string(), "no definition changed".to_string());
+        app.groups = labels;
+        app.show_groups = true;
+    } else {
+        app.groups = app.group_reasons.clone();
+    }
+    app.collapsed.clear();
 }
 
 /// Fold state change for the group holding the selected hunk (or every group).
@@ -3395,7 +4065,7 @@ fn display_row_of(
     let mut row: usize = 0;
     let mut last: Option<&str> = None;
     for (i, &vi) in view.iter().enumerate() {
-        let gid = items[vi].group.as_str();
+        let gid = items[vi].bucket.as_str();
         let mut header_row = None;
         if last != Some(gid) {
             header_row = Some(row);
@@ -5980,12 +6650,17 @@ fn run(
                         marks,
                         groups,
                         ledger,
+                        symbol_ledger,
+                        notes,
+                        notes_path,
+                        deltas,
+                        delta_gone,
                     } = *r;
                     let sel0 = view[0];
                     let scroll = auto_scroll(&items[sel0]);
                     let cursor = cursor_for(&items[sel0], &sources);
                     timing = Some(t);
-                    state = State::Ready(Box::new(App {
+                    let mut fresh = App {
                         reviewed,
                         items,
                         view,
@@ -6024,14 +6699,26 @@ fn run(
                         marks,
                         theme,
                         show_groups: false,
+                        group_reasons: groups.clone(),
                         groups,
+                        mode: ViewMode::default(),
+                        symbol_ledger,
+                        notes,
+                        notes_path,
+                        deltas,
+                        delta_gone,
                         collapsed: HashSet::new(),
                         ledger,
                         rules: rules.clone(),
                         strategy: "comprehension".to_string(),
                         rules_report: rules_report.clone(),
                         max_col: HashMap::new(),
-                    }));
+                    };
+                    // the list is a list of *symbols* by default; `:mode`
+                    // switches it back to hunks
+                    let led = fresh.symbol_ledger.clone();
+                    set_mode(&mut fresh, ViewMode::Ledger, &led);
+                    state = State::Ready(Box::new(fresh));
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -6495,8 +7182,51 @@ fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
 /// a dep line whose target is currently filtered out renders — and resolves
 /// — the same as one that was never part of the review) so it doubles as the
 /// source of truth for what `why_sel` is currently sitting on.
-fn why_rows(it: &Item, view: &[usize], theme: &Theme) -> Vec<WhyRow> {
+fn why_rows(
+    it: &Item,
+    view: &[usize],
+    theme: &Theme,
+    note: Option<&str>,
+    out_of_order: &[String],
+    delta: Option<&str>,
+    cascade: Option<&str>,
+) -> Vec<WhyRow> {
     let mut rows = vec![];
+    if let Some(c) = cascade {
+        rows.push(WhyRow {
+            text: format!("· {c}"),
+            style: Style::default().fg(theme.accent),
+            kind: WhyKind::Text,
+        });
+    }
+    if let Some(d) = delta {
+        rows.push(WhyRow {
+            text: format!("· {d}"),
+            style: Style::default().fg(theme.accent),
+            kind: WhyKind::Text,
+        });
+    }
+    // approving a call before its callee is the one review-order mistake the
+    // graph can actually prove
+    if !out_of_order.is_empty() {
+        rows.push(WhyRow {
+            text: format!(
+                "⚠ marked reviewed, but depends on unreviewed {}",
+                out_of_order.join(", ")
+            ),
+            style: Style::default().fg(theme.warn),
+            kind: WhyKind::Text,
+        });
+    }
+    // a review note leads: it is the reviewer's own words about this symbol,
+    // and it outranks anything the engine derived
+    if let Some(n) = note {
+        rows.push(WhyRow {
+            text: format!("note: {n}"),
+            style: Style::default().fg(theme.warn),
+            kind: WhyKind::Text,
+        });
+    }
     // The engine's terminal fallback rationale: it found nothing to say about
     // the hunk, so a "reason: change" line says nothing either — leave it out.
     if it.rationale != "change" {
@@ -6563,7 +7293,15 @@ fn why_rows(it: &Item, view: &[usize], theme: &Theme) -> Vec<WhyRow> {
 
 // the dep-line target at `app.why_sel`, if the cursor is on one at all
 fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
-    let rows = why_rows(&app.items[app.sel], &app.view, &app.theme);
+    let rows = why_rows(
+        &app.items[app.sel],
+        &app.view,
+        &app.theme,
+        note_for(app, app.sel),
+        &out_of_order_labels(app, app.sel),
+        delta_line(app, app.sel),
+        cascade_line(app, app.sel).as_deref(),
+    );
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
         WhyKind::Text => None,
@@ -6751,7 +7489,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
             }
         })
         .collect();
-    let done = app.view.iter().filter(|&&i| app.reviewed[i]).count();
+    let (done, total, edges_done, edges_total) = coverage(app);
     let mut state = ListState::default();
     let sel_row = display_row_of(
         &app.view,
@@ -6765,8 +7503,14 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     let list = List::new(rows)
         .block(pane_block(
             format!(
-                " {rev} — {done}/{} reviewed{} · {} ",
-                app.view.len(),
+                " {rev} — {done}/{total} reviewed{}{} · {} ",
+                // edge coverage is the number that tracks understanding; it is
+                // omitted when the review has no def→use links to cover
+                if edges_total > 0 {
+                    format!(" · {edges_done}/{edges_total} edges")
+                } else {
+                    String::new()
+                },
                 if filtered { " (filtered)" } else { "" },
                 app.keys.name
             ),
@@ -6844,7 +7588,15 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         format!(" {}{clip}  ({}) ", it.path, app.keys.hint)
     };
 
-    let why_content = why_rows(it, &app.view, &app.theme);
+    let why_content = why_rows(
+        it,
+        &app.view,
+        &app.theme,
+        note_for(app, app.sel),
+        &out_of_order_labels(app, app.sel),
+        delta_line(app, app.sel),
+        cascade_line(app, app.sel).as_deref(),
+    );
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code_total;
     app.why_len = why_content.len();
@@ -7107,6 +7859,26 @@ const COMMANDS: &[Cmd] = &[
         name: "group",
         args: "",
         help: "toggle group-reason headers in the reading-order list",
+    },
+    Cmd {
+        name: "rule",
+        args: "",
+        help: "draft a rule matching the selected hunk's shape",
+    },
+    Cmd {
+        name: "delta",
+        args: "",
+        help: "what changed since this review was last opened",
+    },
+    Cmd {
+        name: "note",
+        args: "[text]",
+        help: "anchor a note to the selected hunk's symbol; no text clears it",
+    },
+    Cmd {
+        name: "mode",
+        args: "[ledger|hunks]",
+        help: "list by symbol (default) or by hunk; no argument toggles",
     },
     Cmd {
         name: "goto",
@@ -7778,6 +8550,81 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
         }
         "group" => {
             app.show_groups = !app.show_groups;
+            Ok(CommandOutcome::None)
+        }
+        "rule" => {
+            app.popup = Some(Popup::new(
+                "draft rule".to_string(),
+                draft_rule(app, app.sel).into_iter().map(prose).collect(),
+            ));
+            Ok(CommandOutcome::None)
+        }
+        "delta" => {
+            if app.deltas.iter().all(|d| *d == Delta::New) {
+                return Err("no previous run of this review to compare against".to_string());
+            }
+            let count = |k: Delta| app.deltas.iter().filter(|d| **d == k).count();
+            let (new, changed, moved) = (
+                count(Delta::New),
+                count(Delta::Changed),
+                count(Delta::Moved),
+            );
+            let mut lines = vec![
+                format!("{new} new"),
+                format!("{changed} changed"),
+                // the one no other tool reports
+                format!("{moved} unchanged but reordered"),
+                format!("{} gone", app.delta_gone),
+            ];
+            lines.push(String::new());
+            lines.extend(
+                app.view
+                    .iter()
+                    .filter(|&&i| matches!(app.deltas.get(i), Some(Delta::Moved)))
+                    .map(|&i| {
+                        format!(
+                            "  moved: {}:L{}  {}",
+                            app.items[i].path, app.items[i].new_range[0], app.items[i].rationale
+                        )
+                    }),
+            );
+            app.popup = Some(Popup::new(
+                "since you last looked".to_string(),
+                lines.into_iter().map(prose).collect(),
+            ));
+            Ok(CommandOutcome::None)
+        }
+        "note" => {
+            let it = &app.items[app.sel];
+            let Some(key) = note_key(it) else {
+                return Err(
+                    "this hunk declares no symbol to anchor a note to (try one that defines something)"
+                        .to_string(),
+                );
+            };
+            let text = arg.trim();
+            if text.is_empty() {
+                app.notes.remove(&key);
+            } else {
+                app.notes.insert(key, text.to_string());
+            }
+            if let Some(p) = app.notes_path.as_deref() {
+                save_notes(p, &app.notes);
+            }
+            Ok(CommandOutcome::None)
+        }
+        "mode" => {
+            let to = match arg.trim() {
+                "" => match app.mode {
+                    ViewMode::Ledger => ViewMode::Hunks,
+                    ViewMode::Hunks => ViewMode::Ledger,
+                },
+                "ledger" | "symbols" | "symbol" => ViewMode::Ledger,
+                "hunks" | "hunk" => ViewMode::Hunks,
+                other => return Err(format!("unknown mode: {other} (ledger, hunks)")),
+            };
+            let led = app.symbol_ledger.clone();
+            set_mode(app, to, &led);
             Ok(CommandOutcome::None)
         }
         "goto" => {
@@ -9075,6 +9922,8 @@ mod tests {
 
     fn test_item(path: &str) -> Item {
         Item {
+            bucket: "g0".to_string(),
+            ledger: None,
             path: path.to_string(),
             old_range: [0, 0],
             new_range: [0, 0],
@@ -9100,6 +9949,9 @@ mod tests {
         EdgeRef {
             label: label.to_string(),
             target,
+            // `←` is the direction that means "this hunk uses what the target
+            // defines", which is what makes the target a dependency
+            dependency: label.starts_with('←'),
         }
     }
 
@@ -9381,6 +10233,7 @@ mod tests {
             clusters: vec![],
             problems: vec![],
             notes: vec![],
+            ledger: vec![],
         };
         let items = build_items(&out);
         assert_eq!(items.len(), 2);
@@ -9444,7 +10297,15 @@ mod tests {
         ];
         // target 3 must be in `view` to resolve — same as being part of the
         // review at all; a 4-item view (0..=3) covers it here
-        let rows = why_rows(&it, &[0, 1, 2, 3], &Theme::terminal("dark", false));
+        let rows = why_rows(
+            &it,
+            &[0, 1, 2, 3],
+            &Theme::terminal("dark", false),
+            None,
+            &[],
+            None,
+            None,
+        );
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9459,7 +10320,15 @@ mod tests {
         let mut it = test_item("a.rs");
         it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
         // target 3 exists (it's a valid item index) but isn't in `view`
-        let rows = why_rows(&it, &[0, 1, 2], &Theme::terminal("dark", false));
+        let rows = why_rows(
+            &it,
+            &[0, 1, 2],
+            &Theme::terminal("dark", false),
+            None,
+            &[],
+            None,
+            None,
+        );
         let edges: Vec<&WhyKind> = rows
             .iter()
             .map(|r| &r.kind)
@@ -9507,6 +10376,13 @@ mod tests {
             theme: theme("dark").unwrap(),
             show_groups: false,
             groups: HashMap::new(),
+            group_reasons: HashMap::new(),
+            mode: ViewMode::Hunks,
+            symbol_ledger: vec![],
+            notes: HashMap::new(),
+            notes_path: None,
+            deltas: vec![],
+            delta_gone: 0,
             collapsed: HashSet::new(),
             ledger: Ledger::default(),
             rules: vec![],
@@ -9514,6 +10390,316 @@ mod tests {
             rules_report: vec![],
             max_col: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn the_list_defaults_to_symbols_and_mode_switches_it_back() {
+        let mut app = test_app(1);
+        app.items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
+        app.items[0].ledger = Some(0);
+        let led = vec![ordo::model::LedgerEntry {
+            name: "fetch".to_string(),
+            kind: Some("function_definition".to_string()),
+            scope: None,
+            path: "a.rs".to_string(),
+            at: "h0".to_string(),
+            change: ordo::model::SymbolChange::Signature,
+            from: None,
+            used_by: vec!["h1".to_string()],
+        }];
+
+        set_mode(&mut app, ViewMode::Ledger, &led);
+        // the symbol with a ledger entry buckets under it; the one without
+        // falls into the shared bucket rather than vanishing
+        assert_eq!(app.items[0].bucket, "L0");
+        assert_eq!(app.items[1].bucket, "L-");
+        // headers *are* the ledger in this mode, so they are forced on
+        assert!(app.show_groups);
+        assert_eq!(
+            app.groups.get("L0").map(String::as_str),
+            Some("fetch — signature, used by 1 hunk")
+        );
+        assert_eq!(
+            app.groups.get("L-").map(String::as_str),
+            Some("no definition changed")
+        );
+
+        set_mode(&mut app, ViewMode::Hunks, &led);
+        assert_eq!(app.items[0].bucket, "g0");
+        assert_eq!(app.items[1].bucket, "g1");
+    }
+
+    #[test]
+    fn switching_mode_drops_fold_state_keyed_to_the_old_one() {
+        let mut app = test_app(1);
+        app.items = vec![grouped_item("a.rs", "g0")];
+        app.collapsed.insert("g0".to_string());
+        set_mode(&mut app, ViewMode::Ledger, &[]);
+        // "g0" means nothing in ledger mode; keeping it would fold a bucket
+        // that no longer exists
+        assert!(app.collapsed.is_empty());
+    }
+
+    fn item_with_symbol(path: &str, name: &str) -> Item {
+        let mut it = test_item(path);
+        it.symbols = vec![sym(name, "function_definition", None)];
+        it
+    }
+
+    /// Two items where 1 uses what 0 defines: `1 ← 0`.
+    fn dependent_pair() -> App {
+        let mut app = test_app(1);
+        app.items = vec![test_item("a.py"), test_item("b.py")];
+        app.items[1].edges = vec![edge("← a.py:L1   def→use: f", Some(0))];
+        app.items[0].edges = vec![edge("→ b.py:L1   def→use: f", Some(1))];
+        app.view = vec![0, 1];
+        app.reviewed = vec![false, false];
+        app
+    }
+
+    fn snaps_of(app: &App, sources: &Sources) -> HashMap<String, Snap> {
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        compare_runs(&app.items, &order, sources, &HashMap::new()).0
+    }
+
+    /// 0 defines what 1 uses; 1 defines what 2 uses. Rejecting 0 strands both.
+    fn dependency_chain() -> App {
+        let mut app = test_app(1);
+        app.items = vec![test_item("a.py"), test_item("b.py"), test_item("c.py")];
+        app.items[1].edges = vec![edge("← a.py:L1   def→use: f", Some(0))];
+        app.items[2].edges = vec![edge("← b.py:L1   def→use: g", Some(1))];
+        app.view = vec![0, 1, 2];
+        app.reviewed = vec![false, false, false];
+        app
+    }
+
+    #[test]
+    fn a_draft_rule_states_the_hunk_it_came_from() {
+        let mut app = test_app(1);
+        app.items = vec![item_with_symbol("a.py", "fetch")];
+        app.items[0].notes = vec!["7 params".to_string()];
+        let d = draft_rule(&app, 0).join("\n");
+        assert!(d.contains("[[rule]]"), "{d}");
+        assert!(d.contains("lang = \"python\""), "{d}");
+        assert!(d.contains("kind = [\"function_definition\"]"), "{d}");
+        // one below what this hunk measured, so the rule fires on it
+        assert!(d.contains("max-params = 6"), "{d}");
+        assert!(d.contains("warn ="), "{d}");
+    }
+
+    #[test]
+    fn a_draft_turns_each_structural_note_into_its_limit() {
+        let mut app = test_app(1);
+        app.items = vec![item_with_symbol("a.py", "f")];
+        app.items[0].notes = vec![
+            "large definition (120 lines)".to_string(),
+            "deeply nested (depth 4)".to_string(),
+        ];
+        let d = draft_rule(&app, 0).join("\n");
+        assert!(d.contains("max-lines = 119"), "{d}");
+        assert!(d.contains("max-nesting = 3"), "{d}");
+    }
+
+    #[test]
+    fn a_draft_from_a_hunk_with_no_symbol_says_it_is_broad() {
+        let mut app = test_app(1);
+        app.items = vec![test_item("a.py")];
+        let d = draft_rule(&app, 0).join("\n");
+        assert!(!d.contains("kind = ["), "{d}");
+        assert!(d.contains("no symbol"), "{d}");
+    }
+
+    #[test]
+    fn a_cascade_is_transitive_not_just_the_direct_dependents() {
+        // pushing back on a leaf when the root is the problem sends the author
+        // round the loop twice
+        let app = dependency_chain();
+        assert_eq!(cascade(&app, 0), vec![1, 2]);
+        assert_eq!(cascade(&app, 1), vec![2]);
+        assert!(cascade(&app, 2).is_empty());
+    }
+
+    #[test]
+    fn a_cascade_terminates_on_a_dependency_cycle() {
+        // mutual recursion is a real def→use cycle
+        let mut app = dependency_chain();
+        app.items[0].edges = vec![edge("← c.py:L1   def→use: h", Some(2))];
+        let hit = cascade(&app, 0);
+        assert_eq!(hit, vec![1, 2], "{hit:?}");
+    }
+
+    #[test]
+    fn a_cascade_ignores_hunks_filtered_out_of_the_view() {
+        let mut app = dependency_chain();
+        app.view = vec![0, 1];
+        assert_eq!(cascade(&app, 0), vec![1]);
+    }
+
+    #[test]
+    fn a_leaf_strands_nothing_and_says_nothing() {
+        let app = dependency_chain();
+        assert!(cascade_line(&app, 2).is_none());
+        assert!(cascade_line(&app, 0).is_some());
+    }
+
+    #[test]
+    fn a_hunk_that_only_moved_in_the_reading_order_is_reported_as_such() {
+        // the case no other tool reports: byte-identical, but it reads
+        // somewhere else now because what it depends on changed
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let mut prev = snaps_of(&app, &sources);
+        // same content, different position last time
+        for v in prev.values_mut() {
+            v.p += 5;
+        }
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &prev);
+        assert!(deltas.iter().all(|d| *d == Delta::Moved), "{deltas:?}");
+    }
+
+    #[test]
+    fn a_run_identical_to_the_last_one_reports_nothing() {
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let prev = snaps_of(&app, &sources);
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &prev);
+        assert!(deltas.iter().all(|d| *d == Delta::Same), "{deltas:?}");
+    }
+
+    #[test]
+    fn a_hunk_with_no_previous_snapshot_is_new() {
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &HashMap::new());
+        assert!(deltas.iter().all(|d| *d == Delta::New), "{deltas:?}");
+    }
+
+    #[test]
+    fn a_first_run_says_nothing_rather_than_calling_everything_new() {
+        let mut app = dependent_pair();
+        app.deltas = vec![Delta::New, Delta::New];
+        assert!(delta_line(&app, 0).is_none());
+        // but once there is a real comparison, New is worth saying
+        app.deltas = vec![Delta::New, Delta::Same];
+        assert!(delta_line(&app, 0).is_some());
+    }
+
+    #[test]
+    fn a_changed_dependency_set_counts_as_moved() {
+        let app = dependent_pair();
+        let sources = Sources::new();
+        let mut prev = snaps_of(&app, &sources);
+        for v in prev.values_mut() {
+            v.d = vec!["something-else".to_string()];
+        }
+        let order: Vec<usize> = (0..app.items.len()).collect();
+        let (_, deltas) = compare_runs(&app.items, &order, &sources, &prev);
+        assert!(deltas.contains(&Delta::Moved), "{deltas:?}");
+    }
+
+    #[test]
+    fn approving_a_use_before_its_definition_is_reported() {
+        let mut app = dependent_pair();
+        app.reviewed[1] = true; // the caller, not the callee
+        let out = out_of_order_labels(&app, 1);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].starts_with("a.py:"), "{out:?}");
+    }
+
+    #[test]
+    fn reviewing_the_definition_first_says_nothing() {
+        let mut app = dependent_pair();
+        app.reviewed[0] = true;
+        app.reviewed[1] = true;
+        assert!(out_of_order_labels(&app, 1).is_empty());
+    }
+
+    #[test]
+    fn an_unreviewed_hunk_is_not_out_of_order() {
+        // the warning is about the order things were approved in, not about
+        // work still to do
+        let app = dependent_pair();
+        assert!(out_of_order_labels(&app, 1).is_empty());
+    }
+
+    #[test]
+    fn edge_coverage_needs_both_ends_reviewed() {
+        let mut app = dependent_pair();
+        assert_eq!(coverage(&app), (0, 2, 0, 1));
+        app.reviewed[1] = true;
+        // one hunk done, but the link between them is still unchecked
+        assert_eq!(coverage(&app), (1, 2, 0, 1));
+        app.reviewed[0] = true;
+        assert_eq!(coverage(&app), (2, 2, 1, 1));
+    }
+
+    #[test]
+    fn an_edge_leaving_the_view_is_not_counted_against_it() {
+        // filtering the review must not make coverage look better than it is
+        let mut app = dependent_pair();
+        app.view = vec![1];
+        let (_, _, _, edges) = coverage(&app);
+        assert_eq!(edges, 0);
+    }
+
+    #[test]
+    fn a_note_key_ignores_everything_a_rebase_can_move() {
+        // same symbol, different file, different lines, different content —
+        // a line anchor would be lost, the note must not be
+        let mut a = item_with_symbol("api.py", "fetch");
+        a.new_range = [10, 12];
+        let mut b = item_with_symbol("moved/elsewhere.py", "fetch");
+        b.new_range = [900, 902];
+        b.rationale = "totally different".to_string();
+        assert_eq!(note_key(&a), note_key(&b));
+    }
+
+    #[test]
+    fn a_note_key_separates_two_symbols_that_share_a_name() {
+        // name alone is not identity: kind and scope are part of it
+        let mut a = item_with_symbol("a.py", "run");
+        a.symbols = vec![sym("run", "function_definition", None)];
+        let mut b = item_with_symbol("a.py", "run");
+        b.symbols = vec![sym("run", "function_definition", Some("Worker"))];
+        assert_ne!(note_key(&a), note_key(&b));
+    }
+
+    #[test]
+    fn a_hunk_with_no_symbol_cannot_be_anchored_to() {
+        // anchoring to the enclosing name would silently drift
+        let it = test_item("a.py");
+        assert!(it.symbols.is_empty());
+        assert!(note_key(&it).is_none());
+    }
+
+    #[test]
+    fn a_rename_maps_the_old_identity_onto_the_new_one() {
+        // what `load` uses to carry a note across `renames parse_cfg → load_cfg`
+        let new = item_with_symbol("cfg.py", "load_cfg");
+        let old = item_with_symbol("cfg.py", "parse_cfg");
+        assert_eq!(note_key_named(&new, "parse_cfg"), note_key(&old));
+        assert_ne!(note_key_named(&new, "parse_cfg"), note_key(&new));
+    }
+
+    #[test]
+    fn notes_round_trip_through_the_cache_file() {
+        let dir = std::env::temp_dir().join(format!("ordo-notes-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("n.json");
+        let mut notes = HashMap::new();
+        notes.insert(42u64, "check the retry path".to_string());
+        save_notes(&path, &notes);
+        assert_eq!(load_notes(&path), notes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_note_file_is_not_an_error() {
+        let missing = std::env::temp_dir().join("ordo-notes-does-not-exist.json");
+        assert!(load_notes(&missing).is_empty());
     }
 
     #[test]
@@ -9835,6 +11021,8 @@ mod tests {
     fn grouped_item(path: &str, group: &str) -> Item {
         let mut it = test_item(path);
         it.group = group.to_string();
+        // hunk mode: the list buckets by group id
+        it.bucket = group.to_string();
         it
     }
 
@@ -10780,6 +11968,604 @@ mod tests {
                 assert_eq!(tip, head.trim());
             }
             _ => panic!("expected a plain commit Range"),
+        }
+    }
+}
+
+// ------------------------------------------------------- generated doc blocks
+
+/// Renders the parts of `README.md` and `docs/` that the code owns, and checks
+/// the committed text still matches. A block is delimited by an
+/// `ordo:begin <key>` / `ordo:end <key>` HTML comment pair; `UPDATE_DOCS=1
+/// cargo test` rewrites them in place, the same contract `UPDATE_GOLDEN=1` has
+/// for the golden fixtures.
+///
+/// The point is not to save typing. It is that the language list, the command
+/// bar, the keymaps, the theme list, the bundled rulesets, the `[[rule]]` keys
+/// and the container kinds all had a hand-written copy in the README that had
+/// already drifted from the tables the program actually reads.
+#[cfg(test)]
+mod docs {
+    use super::*;
+
+    /// Every file that carries generated blocks, relative to the crate root.
+    /// Kept in step with `.gitattributes` by a test below.
+    const FILES: &[&str] = &[
+        "README.md",
+        "docs/cli.md",
+        "docs/languages.md",
+        "docs/reviewing.md",
+        "docs/rules.md",
+        "docs/tui.md",
+    ];
+
+    /// Wraps a comma-separated list at `width` columns, so a regenerated list
+    /// is stable rather than one very long line.
+    fn wrap(items: &[String], width: usize) -> String {
+        let mut lines: Vec<String> = vec![String::new()];
+        for (i, item) in items.iter().enumerate() {
+            let sep = if i + 1 == items.len() { "" } else { "," };
+            let last = lines.last_mut().unwrap();
+            if last.is_empty() {
+                *last = format!("{item}{sep}");
+            } else if last.chars().count() + 1 + item.len() + sep.len() > width {
+                lines.push(format!("{item}{sep}"));
+            } else {
+                last.push_str(&format!(" {item}{sep}"));
+            }
+        }
+        lines.join("\n")
+    }
+
+    /// Escapes a generated table cell: `<glob>` is an HTML tag to a markdown
+    /// renderer, and a bare `|` ends the cell.
+    fn cell(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('|', "\\|")
+    }
+
+    fn langs() -> Vec<&'static str> {
+        ordo::languages().into_iter().map(|(n, _)| n).collect()
+    }
+
+    /// The `| | vim | vscode |` table: one row per action, grouped by the same
+    /// categories the `?` popup uses, with each preset's keys for it. Built
+    /// from `Keymap.binds`, so it cannot name a key the table doesn't bind.
+    fn keys_table() -> String {
+        let maps: Vec<Keymap> = ["vim", "vscode"]
+            .iter()
+            .map(|n| keymap(n).unwrap())
+            .collect();
+        // (category, desc) in first-seen order, vim first so the common
+        // reading order is the default preset's
+        let mut rows: Vec<(Category, &'static str)> = vec![];
+        for m in &maps {
+            for &(_, _, action) in &m.binds {
+                let row = action_help(action);
+                if !rows.contains(&row) {
+                    rows.push(row);
+                }
+            }
+        }
+        let keys_for = |m: &Keymap, desc: &str| {
+            let mut out: Vec<String> = vec![];
+            for &(prefix, key, action) in &m.binds {
+                if action_help(action).1 != desc {
+                    continue;
+                }
+                let label = format!("`{}`", chord_label(prefix, key));
+                if !out.contains(&label) {
+                    out.push(label);
+                }
+            }
+            out.join(", ")
+        };
+        let order = [
+            Category::General,
+            Category::Navigation,
+            Category::Panes,
+            Category::Search,
+            Category::Review,
+            Category::Editor,
+            Category::Help,
+        ];
+        let mut out = vec![
+            "| | `vim` (default) | `vscode` |".to_string(),
+            "| --- | --- | --- |".to_string(),
+        ];
+        for cat in order {
+            let group: Vec<_> = rows.iter().filter(|(c, _)| *c == cat).collect();
+            if group.is_empty() {
+                continue;
+            }
+            out.push(format!("| **{}** | | |", category_label(cat)));
+            for (_, desc) in group {
+                let cells: Vec<String> = maps.iter().map(|m| keys_for(m, desc)).collect();
+                out.push(format!("| {} | {} |", cell(desc), cells.join(" | ")));
+            }
+        }
+        out.join("\n")
+    }
+
+    /// The detail layer's member node kinds, one row per distinct member set —
+    /// the languages that read members the same way share a row, as they did
+    /// when this table was written by hand.
+    fn members_table() -> String {
+        let mut groups: Vec<(Vec<&'static str>, &'static [&'static str])> = vec![];
+        for (name, members) in ordo::languages() {
+            if members.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|(_, m)| *m == members) {
+                Some((names, _)) => names.push(name),
+                None => groups.push((vec![name], members)),
+            }
+        }
+        let mut out = vec![
+            "| language | member node kinds |".to_string(),
+            "| --- | --- |".to_string(),
+        ];
+        for (names, members) in groups {
+            let kinds: Vec<String> = members.iter().map(|k| format!("`{k}`")).collect();
+            out.push(format!("| {} | {} |", names.join(" / "), kinds.join(", ")));
+        }
+        out.join("\n")
+    }
+
+    /// The bundled rulesets, sourced from `PRESETS` — the name a config file
+    /// writes in `include`, and the first comment line of the file itself,
+    /// which is where each ruleset already states what it is. That first line
+    /// is therefore a contract: it has to stand on its own.
+    fn rulesets_table() -> String {
+        let mut out = vec![
+            "| preset | source |".to_string(),
+            "| --- | --- |".to_string(),
+        ];
+        for (name, text) in PRESETS {
+            let source = text
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim_start_matches('#')
+                .trim();
+            out.push(format!("| `{name}` | {} |", cell(source)));
+        }
+        out.join("\n")
+    }
+
+    fn commands_table() -> String {
+        let mut out = vec![
+            "| command | does |".to_string(),
+            "| --- | --- |".to_string(),
+        ];
+        for c in COMMANDS {
+            let head = if c.args.is_empty() {
+                format!(":{}", c.name)
+            } else {
+                format!(":{} {}", c.name, c.args)
+            };
+            out.push(format!("| `{head}` | {} |", cell(c.help)));
+        }
+        out.join("\n")
+    }
+
+    /// The `[[rule]]` keys the TOML surface actually accepts, kebab-cased.
+    /// Read out of `RuleToml` itself: `deny_unknown_fields` makes serde list
+    /// every expected field when it rejects one, which is a cheaper source of
+    /// truth than a second hand-kept list.
+    fn rule_toml_keys() -> Vec<String> {
+        let err = match toml::from_str::<RuleToml>("name = 'x'\nordo-not-a-key = 1") {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("RuleToml no longer rejects an unknown key"),
+        };
+        let (_, list) = err
+            .split_once("expected one of ")
+            .expect("serde no longer lists the expected fields — teach this fn the new wording");
+        let keys: Vec<String> = list
+            .split(", ")
+            .filter_map(|s| s.trim().trim_start_matches('`').split('`').next())
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+            .map(str::to_string)
+            .collect();
+        assert!(
+            keys.contains(&"name".to_string()),
+            "parsed nothing useful from: {err}"
+        );
+        keys
+    }
+
+    /// What each `[[rule]]` key means, and whether it is a condition (the
+    /// first table in `docs/rules.md`) or an action (the second). The prose is
+    /// hand-written; the *set* of keys is checked against `RuleToml`, so a
+    /// condition added to the rules engine and left undocumented fails a test.
+    const RULE_DOC: &[(&str, bool, &str)] = &[
+        ("path", true, "glob against the file path"),
+        (
+            "path-not",
+            true,
+            "glob the file path must *not* match — third-party code, a framework carve-out",
+        ),
+        (
+            "lang",
+            true,
+            "`python`, `cpp`, `markdown`, … as `src/lang.rs` names them",
+        ),
+        ("category", true, "`import` · `definition` · `other`"),
+        (
+            "enclosing-kind",
+            true,
+            "what holds the hunk — see the table in [cli.md](cli.md)",
+        ),
+        ("defines", true, "glob against any name the hunk defines"),
+        ("uses", true, "glob against any name the hunk uses"),
+        ("imports", true, "glob against any name the hunk imports"),
+        (
+            "noise-when",
+            true,
+            "the engine's own noise classification (`true` / `false`)",
+        ),
+        ("comment", true, "the hunk is comment/docstring-only"),
+        ("query", true, "a tree-sitter query, inline (below)"),
+        (
+            "query-file",
+            true,
+            "a tree-sitter query, read from a file relative to the rules file",
+        ),
+        ("kind", true, "a node kind the hunk introduces (below)"),
+        ("with", true, "…whose direct children include each of these"),
+        (
+            "without",
+            true,
+            "…and none of these — absence, as a table entry",
+        ),
+        ("text", true, "…and whose text matches this regex"),
+        (
+            "text-not",
+            true,
+            "…and whose text does not match this regex",
+        ),
+        (
+            "max-params",
+            true,
+            "a definition the hunk introduces takes more parameters (below)",
+        ),
+        ("max-lines", true, "…is longer than this"),
+        (
+            "max-nesting",
+            true,
+            "…sits deeper in control flow than this",
+        ),
+        (
+            "max-file-lines",
+            true,
+            "this change pushed the file past this many lines",
+        ),
+        (
+            "recursive",
+            true,
+            "a definition starting in the hunk calls itself",
+        ),
+        (
+            "container-with",
+            true,
+            "glob against the members of the container the hunk defines into (below)",
+        ),
+        ("container-without", true, "…the same, negated"),
+        (
+            "member-uninitialized",
+            true,
+            "the hunk adds a data member nothing in this change initializes",
+        ),
+        (
+            "name",
+            false,
+            "how the rule identifies itself in the review — required",
+        ),
+        ("note", false, "says something on the hunk"),
+        (
+            "warn",
+            false,
+            "says it at warning level — `⚠` in the reading order",
+        ),
+        (
+            "noise",
+            false,
+            "marks the hunk skippable, like generated code",
+        ),
+        (
+            "priority",
+            false,
+            "sorts it earlier (see the guarantee below)",
+        ),
+    ];
+
+    fn rule_table(conditions: bool) -> String {
+        let mut out = vec![
+            format!("| key | {} |", if conditions { "matches" } else { "does" }),
+            "| --- | --- |".to_string(),
+        ];
+        for (key, is_cond, meaning) in RULE_DOC {
+            if *is_cond == conditions {
+                out.push(format!("| `{key}` | {meaning} |"));
+            }
+        }
+        out.join("\n")
+    }
+
+    /// The `enclosing_kind` table. The key is `ContainerKind`'s own serde name
+    /// and the match is exhaustive, so a new container kind cannot be added
+    /// without this table gaining a row.
+    fn container_kinds_table() -> String {
+        use ordo::model::ContainerKind::{self, *};
+        // `Definition` first: it is the omitted case, and the only kind that
+        // is a symbol. The rest follow the enum's own order.
+        const ALL: &[ContainerKind] = &[
+            Definition,
+            Test,
+            Region,
+            Preamble,
+            FrontMatter,
+            Document,
+            Binding,
+            Call,
+        ];
+        let describe = |k: ContainerKind| -> (&'static str, &'static str) {
+            match k {
+                Definition => ("a definition — a function, class, macro, …", "`parse_cfg`"),
+                Test => (
+                    "a named block: `describe`/`it`/`test`, or a rust test macro",
+                    "`describe \"cli\" > it \"parses flags\"`",
+                ),
+                Region => ("conditional compilation", "`#ifdef CURL_DISABLE_HTTP`"),
+                Preamble => ("prose before a document's first heading", "`preamble`"),
+                FrontMatter => ("a document's `---` metadata block", "`front matter`"),
+                Document => (
+                    "one `---` document of a multi-document yaml file",
+                    "`document 2`",
+                ),
+                Binding => (
+                    "a file-scope binding whose multi-line value holds the hunk",
+                    "`ALLOWED_IMPORTS`",
+                ),
+                Call => (
+                    "a file-scope call whose multi-line arguments hold it",
+                    "`execa('unicorns')`",
+                ),
+            }
+        };
+        let mut out = vec![
+            "| `enclosing_kind` | what holds the hunk | example `enclosing` |".to_string(),
+            "| --- | --- | --- |".to_string(),
+        ];
+        for &k in ALL {
+            let key = match serde_json::to_value(k).unwrap() {
+                serde_json::Value::String(s) => s,
+                v => panic!("ContainerKind serialized as {v:?}"),
+            };
+            // omitted on the wire for a plain definition — the common case
+            let shown = if k == Definition {
+                "*(omitted)*".to_string()
+            } else {
+                format!("`{key}`")
+            };
+            let (what, example) = describe(k);
+            out.push(format!("| {shown} | {what} | {example} |"));
+        }
+        out.join("\n")
+    }
+
+    /// The body for one block key, or `None` when the key isn't one we render
+    /// — an unknown key in a document is a typo, and fails the check rather
+    /// than silently leaving stale text in place.
+    fn render(key: &str) -> Option<String> {
+        Some(match key {
+            "langs" => {
+                let names: Vec<String> = langs().iter().map(|n| n.to_string()).collect();
+                wrap(&names, 76)
+            }
+            "langs-badge" => format!(
+                "<img src=\"https://img.shields.io/badge/languages-{n}-5fd4c0\" \
+                 alt=\"{n} supported languages\">",
+                n = langs().len()
+            ),
+            "members" => members_table(),
+            "keys" => keys_table(),
+            "commands" => commands_table(),
+            "themes" => {
+                let names: Vec<String> = theme_names().iter().map(|n| format!("`{n}`")).collect();
+                wrap(&names, 76)
+            }
+            "theme-roles" => {
+                let names: Vec<String> = THEME_ROLES.iter().map(|r| format!("`{r}`")).collect();
+                wrap(&names, 76)
+            }
+            "rulesets" => rulesets_table(),
+            "rule-conditions" => rule_table(true),
+            "rule-actions" => rule_table(false),
+            "container-kinds" => container_kinds_table(),
+            _ => return None,
+        })
+    }
+
+    /// Every key `render` knows, so an orphaned generator — one no document
+    /// still asks for — is caught too.
+    const KEYS: &[&str] = &[
+        "langs",
+        "langs-badge",
+        "members",
+        "keys",
+        "commands",
+        "themes",
+        "theme-roles",
+        "rulesets",
+        "rule-conditions",
+        "rule-actions",
+        "container-kinds",
+    ];
+
+    /// Rewrites every marked block of `text`, returning the new text and the
+    /// keys it filled. The indent of the opening marker is applied to each
+    /// generated line, so a block inside indented HTML stays aligned.
+    fn splice(text: &str, path: &str) -> (String, Vec<String>) {
+        let mut out = String::new();
+        let mut rest = text;
+        let mut seen = vec![];
+        while let Some(i) = rest.find("<!-- ordo:begin ") {
+            let line_start = rest[..i].rfind('\n').map(|n| n + 1).unwrap_or(0);
+            let indent = &rest[line_start..i];
+            let after = &rest[i..];
+            let key = after["<!-- ordo:begin ".len()..]
+                .split(' ')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let open_end = i + after.find("-->").expect("unterminated begin marker") + 3;
+            let close = format!("{indent}<!-- ordo:end {key} -->");
+            let close_at = rest[open_end..]
+                .find(&close)
+                .unwrap_or_else(|| panic!("{path}: no matching end marker for '{key}'"))
+                + open_end;
+            let body = render(&key).unwrap_or_else(|| panic!("{path}: unknown block '{key}'"));
+            out.push_str(&rest[..open_end]);
+            out.push('\n');
+            for line in body.lines() {
+                if line.is_empty() {
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("{indent}{line}\n"));
+                }
+            }
+            out.push_str(indent);
+            seen.push(key);
+            rest = &rest[close_at + indent.len()..];
+        }
+        out.push_str(rest);
+        (out, seen)
+    }
+
+    #[test]
+    fn generated_blocks_match_the_code_that_owns_them() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let update = std::env::var("UPDATE_DOCS").is_ok();
+        let mut stale = vec![];
+        let mut seen: Vec<String> = vec![];
+        for rel in FILES {
+            let path = root.join(rel);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            let (new, keys) = splice(&text, rel);
+            seen.extend(keys);
+            if new == text {
+                continue;
+            }
+            if update {
+                std::fs::write(&path, new).unwrap();
+            } else {
+                stale.push(*rel);
+            }
+        }
+        for key in KEYS {
+            assert!(
+                seen.iter().any(|k| k == key),
+                "block '{key}' is generated but no document asks for it"
+            );
+        }
+        assert!(
+            stale.is_empty(),
+            "generated doc blocks are stale in {stale:?} — run `UPDATE_DOCS=1 cargo test`"
+        );
+    }
+
+    /// `RULE_DOC` is prose, but its *keys* are not allowed to be an opinion: a
+    /// condition the rules engine accepts and this table omits is a feature
+    /// nobody can find, and a key here that `RuleToml` rejects is a documented
+    /// option that silently fails to parse.
+    #[test]
+    fn every_rule_key_is_documented_exactly_once() {
+        let real = rule_toml_keys();
+        let documented: Vec<&str> = RULE_DOC.iter().map(|(k, _, _)| *k).collect();
+        for key in &real {
+            assert!(
+                documented.contains(&key.as_str()),
+                "`{key}` is a [[rule]] key but no row in RULE_DOC describes it"
+            );
+        }
+        for key in &documented {
+            assert!(
+                real.contains(&key.to_string()),
+                "RULE_DOC documents `{key}`, which RuleToml does not accept"
+            );
+            assert_eq!(
+                documented.iter().filter(|k| k == &key).count(),
+                1,
+                "`{key}` is documented twice"
+            );
+        }
+    }
+
+    /// `ordo help <topic>` is only useful if it can reach every page, and only
+    /// honest if every page it names exists. Design notes (`*-design.md`) are
+    /// deliberately not topics: they record how a decision was reached, which
+    /// is not what someone at a prompt is asking for.
+    #[test]
+    fn every_documentation_page_is_a_help_topic() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut pages: Vec<String> = std::fs::read_dir(root.join("docs"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".md") && !n.ends_with("-design.md"))
+            .map(|n| n.trim_end_matches(".md").to_string())
+            .collect();
+        pages.sort();
+        let mut topics: Vec<String> = TOPICS.iter().map(|(n, _, _)| n.to_string()).collect();
+        topics.sort();
+        assert_eq!(
+            pages, topics,
+            "docs/ and TOPICS disagree — a page nobody can reach, or a topic with no page"
+        );
+        for (name, blurb, body) in TOPICS {
+            assert!(!blurb.is_empty(), "{name} has no one-line description");
+            assert!(
+                body.starts_with("# "),
+                "{name} does not open with a heading"
+            );
+            assert!(
+                topic_list().contains(name),
+                "{name} is missing from the topic list"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_help_topic_is_a_usage_error() {
+        assert_eq!(help_topic(Some("no-such-topic")), 2);
+    }
+
+    /// The `.gitattributes` list and `FILES` are two statements of the same
+    /// fact; a document that gains a generated block and is not marked, or is
+    /// marked and no longer has one, is a drift of its own.
+    #[test]
+    fn gitattributes_marks_every_generated_document() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let attrs = std::fs::read_to_string(root.join(".gitattributes")).unwrap();
+        let marked: Vec<&str> = attrs
+            .lines()
+            .filter(|l| l.contains("ordo-generated=true"))
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        for f in FILES {
+            assert!(
+                marked.contains(f),
+                "{f} carries generated blocks but .gitattributes does not mark it"
+            );
+        }
+        for m in &marked {
+            assert!(
+                FILES.contains(m),
+                ".gitattributes marks {m} as generated, but it carries no blocks"
+            );
         }
     }
 }

@@ -1,5 +1,6 @@
-# Effective Java (Joshua Bloch) — item numbers per the 3rd edition, wording
-# from https://github.com/HugoMatilla/Effective-JAVA-Summary
+# Effective Java (Joshua Bloch), 3rd edition — the construct-level items
+# (item numbers per that edition; wording from
+# https://github.com/HugoMatilla/Effective-JAVA-Summary)
 #
 # Use: `ordo --rules rulesets/java-effective-java.toml`, or copy the rules
 # you want into <repo>/.ordo/rules.toml.

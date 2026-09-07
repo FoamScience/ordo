@@ -23,9 +23,13 @@ fn code_without_a_test_is_reported() {
 
 #[test]
 fn a_touched_test_silences_it() {
-    let n = notes(serde_json::json!({"changes": [code_change(),
+    // the test must actually reference the changed def — a touched test that
+    // exercises something else is its own note (see the P23.2 cases below)
+    let n = notes(
+        serde_json::json!({"options": {"cross_file": true}, "changes": [code_change(),
         {"path": "tests/test_app.py",
-         "old": "def test_f():\n    pass\n", "new": "def test_f():\n    assert 1\n"}]}));
+         "old": "def test_f():\n    pass\n", "new": "def test_f():\n    assert f()\n"}]}),
+    );
     assert!(n.is_empty(), "{n:?}");
 }
 
@@ -75,4 +79,59 @@ fn the_review_pack_leads_with_them() {
         "notes must precede the reading order:\n{p}"
     );
     assert!(p.contains("- code changed but no test touched"), "{p}");
+}
+
+// ---- P23.2: the test that exercises something else ----
+
+fn code_and_test(test_old: &str, test_new: &str) -> serde_json::Value {
+    serde_json::json!({"options": {"cross_file": true}, "changes": [
+        {"path": "api.py", "old": "def fetch(u):\n    return u\n",
+         "new": "def fetch(u, r):\n    return u\n"},
+        {"path": "tests/test_api.py", "old": test_old, "new": test_new}]})
+}
+
+#[test]
+fn a_test_that_references_nothing_changed_is_reported() {
+    let n = notes(code_and_test(
+        "def test_other():\n    assert helper()\n",
+        "def test_other():\n    assert helper()\n    assert 1\n",
+    ));
+    assert!(
+        n.iter().any(|s| s.contains("none of its uses reference")),
+        "{n:?}"
+    );
+    // and it names the file, so the reviewer knows which one
+    assert!(n.iter().any(|s| s.contains("tests/test_api.py")), "{n:?}");
+}
+
+#[test]
+fn a_test_that_exercises_the_change_says_nothing() {
+    let n = notes(code_and_test(
+        "def test_f():\n    assert 1\n",
+        "def test_f():\n    assert fetch('a', 2)\n",
+    ));
+    assert!(
+        !n.iter().any(|s| s.contains("none of its uses reference")),
+        "{n:?}"
+    );
+}
+
+#[test]
+fn the_two_test_notes_never_both_fire() {
+    // "no test touched" and "the test references nothing" are different
+    // failures; a changeset is in at most one of them
+    for v in [
+        code_and_test(
+            "def t():\n    assert helper()\n",
+            "def t():\n    assert helper()\n    assert 1\n",
+        ),
+        serde_json::json!({"changes": [
+            {"path": "api.py", "old": "def fetch(u):\n    return u\n",
+             "new": "def fetch(u, r):\n    return u\n"}]}),
+    ] {
+        let n = notes(v);
+        let untouched = n.iter().filter(|s| s.contains("no test touched")).count();
+        let theatre = n.iter().filter(|s| s.contains("none of its uses")).count();
+        assert!(untouched + theatre <= 1, "{n:?}");
+    }
 }
