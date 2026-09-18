@@ -769,3 +769,34 @@ fn a_misspelled_condition_is_reported_not_dropped() {
     assert!(p.contains("unknown condition `enclosing_knd`"), "{p}");
     assert!(p.contains("unknown key `nte`"), "{p}");
 }
+
+#[test]
+fn one_class_initializing_a_member_does_not_answer_for_another() {
+    // the initializer set was keyed by bare name across the whole changeset,
+    // so B's `count(0)` in b.cpp silenced A's uninitialized `count` too
+    let out = run(serde_json::json!({
+        "changes": [
+            { "path": "a.hpp", "old": "class A {\n  int x;\n};\n",
+              "new": "class A {\n  int x;\n  int count;\n};\n" },
+            { "path": "b.hpp", "old": "class B {\n  int y;\n};\n",
+              "new": "class B {\n  int y;\n  int count;\n};\n" },
+            { "path": "b.cpp", "old": "B::B() : y(0) {}\n",
+              "new": "B::B() : y(0), count(0) {}\n" }
+        ]
+    }));
+    let note_paths: Vec<&str> = out
+        .files
+        .iter()
+        .filter(|f| {
+            f.hunks
+                .iter()
+                .any(|h| h.notes.iter().any(|n| n == "uninitialized member count"))
+        })
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(
+        note_paths,
+        vec!["a.hpp"],
+        "only the class with no initializer is named"
+    );
+}

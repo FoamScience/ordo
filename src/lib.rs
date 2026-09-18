@@ -411,11 +411,9 @@ pub fn run(input: Input) -> Output {
     // decidable from the change alone, header and `.cpp` together. A member
     // the old side already had is not this change's to answer for.
     //
-    // **Ceiling:** member names here are bare, not qualified by their class, so
-    // one class initializing `count` silences the note for every other `count`
-    // in the changeset. That direction is the safe one — a missed warning, not
-    // a false one — and qualifying it needs class-qualified names out of
-    // `field_initializers` and `uninit_members` both.
+    // Keyed by `Class.member`, so one class's initializer cannot answer for
+    // another's same-named member while the header/`.cpp` pair still meets —
+    // see `extract::owned_member`.
     let mut inits: HashSet<String> = HashSet::new();
     for change in &input.changes {
         if let (Some(spec), Some(new)) = (lang::for_path(&change.path), change.new.as_deref()) {
@@ -437,7 +435,10 @@ pub fn run(input: Input) -> Output {
             .map(|o| {
                 extract::member_rows(spec, o)
                     .into_iter()
-                    .map(|(_, n, _, _)| n)
+                    .map(|(_, n, _, ctr)| match ctr {
+                        Some(c) => format!("{c}.{n}"),
+                        None => n,
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -445,7 +446,11 @@ pub fn run(input: Input) -> Output {
             sem.uninit_members
                 .retain(|n| !inits.contains(n) && !old_names.contains(n));
             for n in &sem.uninit_members {
-                sem.notes.push(format!("uninitialized member {n}"));
+                // the key is qualified so header and `.cpp` match; the note
+                // sits on the hunk that declares the member, where the class
+                // is already on screen, so it reads the bare name
+                let bare = n.rsplit('.').next().unwrap_or(n);
+                sem.notes.push(format!("uninitialized member {bare}"));
             }
         }
     }
