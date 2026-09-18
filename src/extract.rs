@@ -2589,14 +2589,6 @@ fn collect_local_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut HashSe
     }
 }
 
-/// All def names and import names present in `content` (whole file). Used for
-/// old-side comparison: add-vs-edit (#3), import removal (#5), rename (#7).
-pub fn symbol_sets(spec: &LangSpec, content: &str) -> (HashSet<String>, HashSet<String>) {
-    let (defs, imports) = symbol_rows(spec, content);
-    let set = |v: Vec<(String, usize)>| v.into_iter().map(|(n, _)| n).collect();
-    (set(defs), set(imports))
-}
-
 /// Like `symbol_sets` but with each symbol's 1-based start row, for locating a
 /// removed symbol against a deletion hunk's old range (#5 remove / #7 delete).
 /// A container member: `(0-based row, name, normalized text, container key)`.
@@ -2663,22 +2655,6 @@ fn collect_top_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(Str
 /// Declared names with their 1-based rows: `(definitions, imports)`.
 pub type SymbolRows = (Vec<(String, usize)>, Vec<(String, usize)>);
 
-pub fn symbol_rows(spec: &LangSpec, content: &str) -> SymbolRows {
-    let mut defs = vec![];
-    let mut imports = vec![];
-    let Some(tree) = lang::parse(spec, content) else {
-        return (defs, imports);
-    };
-    collect_rows(
-        tree.root_node(),
-        content.as_bytes(),
-        spec,
-        &mut defs,
-        &mut imports,
-    );
-    (defs, imports)
-}
-
 /// Each def's `(name, normalized signature/header, normalized whole body,
 /// substantial body lines)`. The header (node text before the `body` field)
 /// drives signature-change vs body-only-edit wording (#4). The whole body drives
@@ -2686,94 +2662,99 @@ pub fn symbol_rows(spec: &LangSpec, content: &str) -> SymbolRows {
 /// relocation detection (P16). Body = the def's `body` field, else the node text.
 pub type Body = (String, String, String, Vec<String>);
 
-pub fn symbol_bodies(spec: &LangSpec, content: &str) -> Vec<Body> {
-    let mut out = vec![];
-    let Some(tree) = lang::parse(spec, content) else {
-        return out;
-    };
-    collect_bodies(tree.root_node(), content.as_bytes(), spec, &mut out);
-    out
+/// What one descent of a file's tree collects: definition rows, import rows and
+/// every definition's header and body.
+#[derive(Default)]
+struct DefOut {
+    defs: Vec<(String, usize)>,
+    imports: Vec<(String, usize)>,
+    bodies: Vec<Body>,
 }
 
-fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) {
-    let kind = node.kind();
-    if spec.is_def(kind) {
-        if let Some(name) = node_name(node, src) {
-            let full = node.utf8_text(src).unwrap_or("");
-            // `value` is the body under another name: a macro (`preproc_def`,
-            // `preproc_function_def`) and a rust `const_item`/`static_item`
-            // hold theirs there, and without this every change to one reads as
-            // a signature change because the header would be the whole node.
-            let body = node
-                .child_by_field_name("body")
-                .or_else(|| node.child_by_field_name("value"))
-                // css labels no field: a `rule_set`'s declarations are a
-                // `block` child. Without this the header is the whole rule, so
-                // every declaration edit reads as a change to the selector
-                // itself and a renamed selector never matches its old body.
-                // Gated to css so no shipped language moves — cmake's
-                // `function_def` has an unlabelled `body` child too.
-                .or_else(|| {
-                    if spec.name != "css" {
-                        return None;
-                    }
-                    let mut cur = node.walk();
-                    let found = node.named_children(&mut cur).find(|c| c.kind() == "block");
-                    found
-                });
-            // header = everything before the body (the signature); body text drives
-            // rename/relocation matching. Fall back to the whole node when unsplit.
-            let header = match body {
-                Some(b) => &full[..(b.start_byte() - node.start_byte()).min(full.len())],
-                None => full,
-            };
-            let text = body.and_then(|b| b.utf8_text(src).ok()).unwrap_or(full);
-            let header = squeeze(header);
-            let whole = squeeze(text);
-            let lines = text
-                .lines()
-                .map(squeeze)
-                .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
-                .collect();
-            out.push((name, header, whole, lines));
-        }
-    }
-    let mut cur = node.walk();
-    for ch in node.named_children(&mut cur) {
-        collect_bodies(ch, src, spec, out);
-    }
-}
-
-fn collect_rows(
-    node: Node,
-    src: &[u8],
-    spec: &LangSpec,
-    defs: &mut Vec<(String, usize)>,
-    imports: &mut Vec<(String, usize)>,
-) {
+/// One descent doing the work `collect_rows` and `collect_bodies` used to do in
+/// two, over the same tree, for both sides of every file.
+///
+/// The two had different stopping rules, and this keeps both exactly: rows stop
+/// at an import (an import statement's insides are not definitions, and its
+/// names are already recorded), while bodies carry on descending, which is what
+/// `collect_bodies` did when it ran separately. `in_import` is what tells the
+/// row half it is under one; it is not a shortcut for "skip this subtree".
+fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_import: bool) {
     let kind = node.kind();
     let row = node.start_position().row + 1; // 1-based
-    if import_like(node, src, spec) {
+    let import = !in_import && import_like(node, src, spec);
+    if import {
         match import_bound_names(node, src, spec) {
-            Some(names) => imports.extend(names.into_iter().map(|(_, n)| (n, row))),
-            None => imports.extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
+            Some(names) => o.imports.extend(names.into_iter().map(|(_, n)| (n, row))),
+            None => o
+                .imports
+                .extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
         }
-        return;
     }
     if spec.is_def(kind) {
-        if let Some(n) = node_name(node, src) {
-            defs.push((n, row));
+        // `collect_rows` returned before its own def check when the node was an
+        // import, so a definition under one was never a row
+        if !in_import && !import {
+            if let Some(n) = node_name(node, src) {
+                o.defs.push((n, row));
+            }
         }
-        let mut cur = node.walk();
-        for ch in node.named_children(&mut cur) {
-            collect_rows(ch, src, spec, defs, imports);
+        {
+            if let Some(name) = node_name(node, src) {
+                let full = node.utf8_text(src).unwrap_or("");
+                // `value` is the body under another name: a macro (`preproc_def`,
+                // `preproc_function_def`) and a rust `const_item`/`static_item`
+                // hold theirs there, and without this every change to one reads as
+                // a signature change because the header would be the whole node.
+                let body = node
+                    .child_by_field_name("body")
+                    .or_else(|| node.child_by_field_name("value"))
+                    // css labels no field: a `rule_set`'s declarations are a
+                    // `block` child. Without this the header is the whole rule, so
+                    // every declaration edit reads as a change to the selector
+                    // itself and a renamed selector never matches its old body.
+                    // Gated to css so no shipped language moves — cmake's
+                    // `function_def` has an unlabelled `body` child too.
+                    .or_else(|| {
+                        if spec.name != "css" {
+                            return None;
+                        }
+                        let mut cur = node.walk();
+                        let found = node.named_children(&mut cur).find(|c| c.kind() == "block");
+                        found
+                    });
+                // header = everything before the body (the signature); body text drives
+                // rename/relocation matching. Fall back to the whole node when unsplit.
+                let header = match body {
+                    Some(b) => &full[..(b.start_byte() - node.start_byte()).min(full.len())],
+                    None => full,
+                };
+                let text = body.and_then(|b| b.utf8_text(src).ok()).unwrap_or(full);
+                let header = squeeze(header);
+                let whole = squeeze(text);
+                let lines = text
+                    .lines()
+                    .map(squeeze)
+                    .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
+                    .collect();
+                o.bodies.push((name, header, whole, lines));
+            }
         }
-        return;
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        collect_rows(ch, src, spec, defs, imports);
+        collect_defs(ch, src, spec, o, in_import || import);
     }
+}
+
+/// Definition and import rows, and every definition's header and body, from one
+/// descent — what `FileSymbols` needs per side.
+pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>) {
+    let mut o = DefOut::default();
+    if let Some(tree) = lang::parse(spec, content) {
+        collect_defs(tree.root_node(), content.as_bytes(), spec, &mut o, false);
+    }
+    ((o.defs, o.imports), o.bodies)
 }
 
 fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
@@ -3095,7 +3076,50 @@ fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::squeeze;
+    use super::{squeeze, symbol_facts};
+
+    /// `symbol_facts` is one descent doing what two used to. The halves have
+    /// different stopping rules — rows stop at an import, bodies do not — so
+    /// the risk of merging them is that one half quietly stops contributing.
+    #[test]
+    fn one_descent_still_returns_both_halves() {
+        let spec = crate::lang::for_path("a.py").expect("python");
+        let src = "import os\nfrom sys import argv\n\ndef parse(p):\n    return os.path.join(p)\n\ndef main():\n    return parse(argv[1])\n";
+        let ((defs, imports), bodies) = symbol_facts(spec, src);
+
+        let names: Vec<&str> = defs.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"parse") && names.contains(&"main"),
+            "{names:?}"
+        );
+        assert!(
+            imports.iter().any(|(n, _)| n == "os"),
+            "imports still collected: {imports:?}"
+        );
+        // and the bodies half of the same descent
+        let bodied: Vec<&str> = bodies.iter().map(|(n, _, _, _)| n.as_str()).collect();
+        assert!(
+            bodied.contains(&"parse") && bodied.contains(&"main"),
+            "{bodied:?}"
+        );
+        let parse = bodies.iter().find(|(n, _, _, _)| n == "parse").unwrap();
+        assert!(parse.1.contains("def parse"), "header: {:?}", parse.1);
+        assert!(parse.2.contains("os.path.join"), "body: {:?}", parse.2);
+    }
+
+    /// An import statement's insides are not definitions. `collect_rows` used
+    /// to return at an import so nothing under one became a row; the merged
+    /// descent has to carry on for the bodies half without losing that.
+    #[test]
+    fn nothing_under_an_import_becomes_a_definition_row() {
+        let spec = crate::lang::for_path("a.py").expect("python");
+        let ((defs, imports), _) = symbol_facts(spec, "from a import (b, c)\n");
+        assert!(
+            defs.is_empty(),
+            "an import declares no definitions: {defs:?}"
+        );
+        assert!(!imports.is_empty(), "but it does declare imports");
+    }
 
     /// `squeeze` replaced `split_whitespace().collect::<Vec<_>>().join(" ")` at
     /// fourteen sites; it has to mean exactly that, including at the edges.
