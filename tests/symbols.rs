@@ -86,31 +86,31 @@ fn imported_names_are_excluded_from_symbols() {
         syms.iter().all(|s| s.name != "os" && s.name != "path"),
         "imports must not appear in symbols: {syms:?}"
     );
-    assert!(
-        syms.iter()
-            .any(|s| s.name == "helper" && s.kind == "function_definition"),
-        "{syms:?}"
-    );
+    let got: Vec<(&str, &str)> = syms
+        .iter()
+        .map(|s| (s.name.as_str(), s.kind.as_str()))
+        .collect();
+    assert_eq!(got, vec![("helper", "function_definition")]);
 }
 
 #[test]
 fn named_arrow_function_is_a_definition() {
     let syms = one("a.js", "", "export const run = () => {\n  return 1;\n};\n");
-    assert!(
-        syms.iter()
-            .any(|s| s.name == "run" && s.kind == "arrow_function"),
-        "{syms:?}"
-    );
+    let got: Vec<(&str, &str)> = syms
+        .iter()
+        .map(|s| (s.name.as_str(), s.kind.as_str()))
+        .collect();
+    assert_eq!(got, vec![("run", "arrow_function")]);
 }
 
 #[test]
 fn named_function_expression_is_a_definition() {
     let syms = one("a.js", "", "const inner = function () {\n  return 1;\n};\n");
-    assert!(
-        syms.iter()
-            .any(|s| s.name == "inner" && s.kind == "function_expression"),
-        "{syms:?}"
-    );
+    let got: Vec<(&str, &str)> = syms
+        .iter()
+        .map(|s| (s.name.as_str(), s.kind.as_str()))
+        .collect();
+    assert_eq!(got, vec![("inner", "function_expression")]);
 }
 
 #[test]

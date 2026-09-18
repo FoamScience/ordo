@@ -76,15 +76,8 @@ fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
     // markup outside any block attributes to the element id; markup inside a
     // `{#if}` attributes to that block instead, which is the tighter answer
-    assert!(
-        hs.iter().any(|h| h.enclosing.as_deref() == Some("#root")),
-        "{hs:?}"
-    );
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("{#if n > 1}")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![Some("#root"), Some("{#if n > 1}")]);
 }
 
 #[test]
@@ -173,10 +166,8 @@ fn a_snippet_defines_and_render_uses_it() {
         .unwrap(),
     );
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
-    assert!(
-        hs.iter().any(|h| h.defines.contains(&"row".to_string())),
-        "{hs:?}"
-    );
+    let defs: Vec<&[String]> = hs.iter().map(|h| h.defines.as_slice()).collect();
+    assert_eq!(defs, vec![["row".to_string()].as_slice(), [].as_slice()]);
     let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
     assert_eq!(why, vec!["def→use: row"]);
 }

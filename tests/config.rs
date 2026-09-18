@@ -88,17 +88,9 @@ fn gitconfig_is_ini_and_keeps_its_subsection_quotes() {
     let old = "[user]\n\tname = A\n[remote \"origin\"]\n\turl = git@old\n";
     let new = "[user]\n\tname = A\n\temail = a@b.c\n[remote \"origin\"]\n\turl = git@new\n";
     let hs = one(".gitconfig", old, new);
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("user.email")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![Some("user.email"), Some("remote \"origin\".url")]);
     // the quotes are part of git's subsection name, not a quoted key
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("remote \"origin\".url")),
-        "{hs:?}"
-    );
 }
 
 #[test]
@@ -183,11 +175,8 @@ fn multi_document_yaml_scopes_each_document() {
 #[test]
 fn a_single_document_file_keeps_its_bare_paths() {
     let hs = one("one.yaml", "spec:\n  port: 80\n", "spec:\n  port: 8080\n");
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("spec.port")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![Some("spec.port")]);
 }
 
 #[test]
@@ -205,7 +194,7 @@ fn a_sibling_key_is_not_reported_as_a_member_of_its_neighbour() {
         let hs = one(path, old, new);
         let d: Vec<&String> = hs.iter().flat_map(|h| h.details.iter()).collect();
         assert!(!d.iter().any(|s| s.contains(" to one")), "{path}: {d:?}");
-        assert!(d.iter().any(|s| s.as_str() == "adds two"), "{path}: {d:?}");
+        assert_eq!(d, vec!["adds two", "changes one"], "{path}");
     }
 }
 
