@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -778,7 +778,7 @@ fn load(
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None);
     if view.is_empty() {
-        let msg = if only_comments {
+        let mut msg = if only_comments {
             format!(
                 "ordo: nothing to review in {rev} — no comment changes{}",
                 filter.note()
@@ -786,6 +786,11 @@ fn load(
         } else {
             format!("ordo: nothing to review in {rev}{}", filter.note())
         };
+        // an empty review and a failed git call look identical from here, so
+        // when one happened it is the more likely explanation and leads
+        for f in command_failures() {
+            msg.push_str(&format!("\nordo: {f}"));
+        }
         let _ = tx.send(LoadMsg::Empty(msg));
         return;
     }
@@ -896,12 +901,54 @@ fn git(args: &[&str]) -> String {
 // review" with no reason attached. Reporting it needs a channel from the
 // worker thread to the screen, since the TUI owns the terminal by then.
 fn run_cmd(bin: &str, args: &[&str]) -> String {
-    Command::new(bin)
-        .args(args)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    let Ok(out) = Command::new(bin).args(args).output() else {
+        note_command_failure(bin, args, "could not be run");
+        return String::new();
+    };
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        note_command_failure(bin, args, first);
+        return String::new();
+    }
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Commands that failed, so a review that came back empty can say why.
+///
+/// `run_cmd` returns an empty string on failure and always has: the load runs
+/// on a worker thread with the TUI already holding the terminal, so it cannot
+/// print, and threading a Result through twenty-odd call sites buys nothing
+/// the caller would act on differently. What was missing is that the failure
+/// left no trace at all, so a bad revision or an unreadable object arrived as
+/// "nothing to review". Collected here and drained into the empty-review
+/// message and `:audit`.
+static COMMAND_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn note_command_failure(bin: &str, args: &[&str], why: &str) {
+    // `but` is optional by design — its absence is the normal case on a repo
+    // that is not GitButler-managed and says nothing about the review
+    if bin == "but" {
+        return;
+    }
+    let cmd = format!("{bin} {}", args.join(" "));
+    let line = if why.is_empty() {
+        cmd
+    } else {
+        format!("{cmd}: {why}")
+    };
+    if let Ok(mut v) = COMMAND_FAILURES.lock() {
+        if !v.contains(&line) {
+            v.push(line);
+        }
+    }
+}
+
+/// Every distinct command failure so far, in the order they happened.
+fn command_failures() -> Vec<String> {
+    COMMAND_FAILURES
+        .lock()
+        .map(|v| v.clone())
         .unwrap_or_default()
 }
 
@@ -7931,11 +7978,19 @@ fn build_audit(
     ledger: &Ledger,
     path_filter: Option<&str>,
 ) -> Vec<String> {
-    let mut out = vec![
-        format!("{view_len} of {} hunks shown", items.len()),
-        String::new(),
-        "hidden in the view".to_string(),
-    ];
+    let mut out = vec![format!("{view_len} of {} hunks shown", items.len())];
+    // a command that failed is the one explanation this report cannot derive
+    // from its own counts, so it goes first
+    let failures = command_failures();
+    if !failures.is_empty() {
+        out.push(String::new());
+        out.push("commands that failed".to_string());
+        for f in &failures {
+            out.push(format!("  {f}"));
+        }
+    }
+    out.push(String::new());
+    out.push("hidden in the view".to_string());
     let row = |n: usize, what: &str| format!("  {n:>4}  {what}");
     out.push(row(
         hidden.noise,
@@ -8705,6 +8760,27 @@ mod tests {
         assert_ne!(list_marker.1, Color::Reset);
         let fence_open = h[4].iter().find(|(t, _)| t == "```").unwrap();
         assert_ne!(fence_open.1, Color::Reset);
+    }
+
+    /// A failed command used to leave no trace at all, so an unreadable object
+    /// mid-load reached the reviewer as "nothing to review".
+    #[test]
+    fn a_failed_command_is_recorded_once_and_git_only() {
+        note_command_failure("git", &["cat-file", "-p", "deadbeef"], "bad object");
+        note_command_failure("git", &["cat-file", "-p", "deadbeef"], "bad object");
+        note_command_failure("but", &["--json", "status"], "not installed");
+
+        let got = command_failures();
+        let mine: Vec<&String> = got.iter().filter(|l| l.contains("deadbeef")).collect();
+        assert_eq!(mine.len(), 1, "recorded more than once: {got:?}");
+        assert_eq!(
+            mine[0], "git cat-file -p deadbeef: bad object",
+            "command and reason both belong in the line"
+        );
+        assert!(
+            !got.iter().any(|l| l.starts_with("but ")),
+            "`but` is optional; its absence is not a failure to report: {got:?}"
+        );
     }
 
     /// Every language the engine resolves is either painted here or listed as
