@@ -1,22 +1,9 @@
 //! Hunks that sit outside any definition — the single structural cause of a
 //! bare "change" rationale. Each test here pins one container the engine now
 //! recognises.
-use ordo::model::{Category, Input, Output};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
-
-fn one(path: &str, old: &str, new: &str) -> Output {
-    run(serde_json::json!({ "changes": [{ "path": path, "old": old, "new": new }] }))
-}
-
-fn rationales(out: &Output) -> Vec<String> {
-    out.files
-        .iter()
-        .flat_map(|f| f.hunks.iter().map(|h| h.rationale.clone()))
-        .collect()
-}
+use ordo::model::Category;
+mod fixture;
+use fixture::{rationales_of as rationales, run_file as one, run_json as run};
 
 #[test]
 fn a_c_macro_is_a_definition_its_body_belongs_to() {

@@ -2,19 +2,9 @@
 //! nested through a dotted path, and a member of the key above it. Covers key
 //! naming per grammar, the nested path, the "changes k" wording (a key has no
 //! signature), and the P15 detail layer naming the container key.
-use ordo::model::{HunkOut, Input};
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    let inp: Input = serde_json::from_value(serde_json::json!({
-        "changes": [{ "path": path, "old": old, "new": new }]
-    }))
-    .unwrap();
-    ordo::run(inp)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks)
-        .collect()
-}
+use ordo::model::Input;
+mod fixture;
+use fixture::hunks as one;
 
 fn supported(path: &str, old: &str, new: &str) -> bool {
     let inp: Input = serde_json::from_value(serde_json::json!({

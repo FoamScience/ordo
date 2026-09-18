@@ -2,24 +2,9 @@
 //! and `source x.sh` is an import spelled as a command rather than a keyword.
 //! Command and function names are bare `word` nodes — a kind make also uses —
 //! so they are read explicitly rather than through IDENT_KINDS.
-use ordo::model::{HunkOut, Input, Output};
-
-fn run(path: &str, old: &str, new: &str) -> Output {
-    ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({
-            "changes": [{ "path": path, "old": old, "new": new }]
-        }))
-        .unwrap(),
-    )
-}
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    run(path, old, new)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks)
-        .collect()
-}
+use ordo::model::Input;
+mod fixture;
+use fixture::{hunks as one, run_file as run};
 
 #[test]
 fn a_function_links_to_the_command_that_calls_it() {

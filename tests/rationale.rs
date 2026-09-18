@@ -1,14 +1,7 @@
 //! P10 rationale-pattern tests.
 use ordo::model::Input;
-
-fn rationales(v: serde_json::Value) -> Vec<String> {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    ordo::run(inp)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks.into_iter().map(|h| h.rationale))
-        .collect()
-}
+mod fixture;
+use fixture::rationales_json as rationales;
 
 #[test]
 fn p3_adds_new_def_vs_edits_existing_body() {

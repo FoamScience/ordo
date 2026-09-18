@@ -1,22 +1,9 @@
 //! Markdown v1: a def is a section (heading + its content). Covers section
 //! naming, the nested section path, prose wording ("adds section X"), and the
 //! P15 detail layer reporting a subsection added to its parent.
-use ordo::model::{HunkOut, Input};
-
-fn hunks(v: serde_json::Value) -> Vec<HunkOut> {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    ordo::run(inp)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks)
-        .collect()
-}
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    hunks(serde_json::json!({
-        "changes": [{ "path": path, "old": old, "new": new }]
-    }))
-}
+use ordo::model::Input;
+mod fixture;
+use fixture::hunks as one;
 
 #[test]
 fn unsupported_is_false_for_markdown() {

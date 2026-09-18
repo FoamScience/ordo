@@ -2,21 +2,8 @@
 //! kept — that punctuation is what makes a css symbol unable to collide with a
 //! code one in the cross-file union. A `--custom-property` and its `var(--x)`
 //! are the one def→use pair a stylesheet has.
-use ordo::model::{HunkOut, Input, Output};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    run(serde_json::json!({
-        "changes": [{ "path": path, "old": old, "new": new }]
-    }))
-    .files
-    .into_iter()
-    .flat_map(|f| f.hunks)
-    .collect()
-}
+mod fixture;
+use fixture::{hunks as one, run_json as run};
 
 #[test]
 fn a_rule_set_is_named_by_its_whole_selector_list() {

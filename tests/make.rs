@@ -2,24 +2,8 @@
 //! use of another target, so a makefile's own dependency graph becomes the
 //! reading order. Targets, prerequisites and variable names are all bare
 //! `word` nodes, so uses are read from the parents that make one a reference.
-use ordo::model::{HunkOut, Input, Output};
-
-fn run(path: &str, old: &str, new: &str) -> Output {
-    ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({
-            "changes": [{ "path": path, "old": old, "new": new }]
-        }))
-        .unwrap(),
-    )
-}
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    run(path, old, new)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks)
-        .collect()
-}
+mod fixture;
+use fixture::{hunks as one, run_file as run};
 
 #[test]
 fn a_makefile_is_matched_by_name_and_by_extension() {

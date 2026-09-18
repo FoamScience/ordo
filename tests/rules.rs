@@ -1,10 +1,8 @@
 //! Reviewing rules: the caller's own conventions, matched against the facts the
 //! engine computes. Data in, deterministic annotations and ordering out.
-use ordo::model::{Input, Output};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
+use ordo::model::Output;
+mod fixture;
+use fixture::run_json as run;
 
 fn order_of(out: &Output) -> Vec<&str> {
     out.order.iter().map(|o| o.path.as_str()).collect()
