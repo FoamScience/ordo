@@ -379,7 +379,7 @@ fn classify_imports(
             // already had; one new line among them makes this an arrival
             let mut lines = (r0..=r1)
                 .filter_map(|r| new_lines.get(r - 1))
-                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .map(|l| extract::squeeze(l))
                 .filter(|l| !l.is_empty())
                 .peekable();
             sem.import_moved = lines.peek().is_some() && lines.all(|l| before.contains(&l));
@@ -1617,7 +1617,7 @@ fn side_shift(h: &RawHunk, old_lines: &[&str], new_lines: &[&str], ext: &str) ->
             .iter()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
-            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .map(extract::squeeze)
             .collect();
         (!v.is_empty()).then_some(v)
     };
