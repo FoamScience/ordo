@@ -215,7 +215,14 @@ pub fn run(input: Input) -> Output {
                 .filter(|r| !ren.values().any(|v| v == *r))
                 .collect();
             let add_left: Vec<&String> = added_d.iter().filter(|a| !ren.contains_key(*a)).collect();
-            if rem_left.len() == 1 && add_left.len() == 1 {
+            // The bodies did not match exactly, so the pair is a rename only if
+            // the two are recognisably the same code. Without this, deleting
+            // `foo` and adding an unrelated `bar` in one file reads as
+            // "renames foo → bar" and then earns a bogus incomplete-rename note.
+            if rem_left.len() == 1
+                && add_left.len() == 1
+                && similar(ob, rem_left[0], nb, add_left[0])
+            {
                 ren.insert(add_left[0].clone(), rem_left[0].clone());
             }
         }
@@ -403,6 +410,12 @@ pub fn run(input: Input) -> Output {
     // file is in the diff. So "no initializer anywhere in the change" is
     // decidable from the change alone, header and `.cpp` together. A member
     // the old side already had is not this change's to answer for.
+    //
+    // **Ceiling:** member names here are bare, not qualified by their class, so
+    // one class initializing `count` silences the note for every other `count`
+    // in the changeset. That direction is the safe one — a missed warning, not
+    // a false one — and qualifying it needs class-qualified names out of
+    // `field_initializers` and `uninit_members` both.
     let mut inits: HashSet<String> = HashSet::new();
     for change in &input.changes {
         if let (Some(spec), Some(new)) = (lang::for_path(&change.path), change.new.as_deref()) {
@@ -624,6 +637,7 @@ pub fn run(input: Input) -> Output {
             // one file kind repeats across a changeset; a broken rule should
             // be reported once, not once per file
             let mut p = rule_engine.problems.clone();
+            p.sort();
             p.dedup();
             p
         },
@@ -650,14 +664,32 @@ fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]
         return;
     }
     // the new arity of everything in the change, and every call to anything
-    let mut sigs: HashMap<String, extract::SigInfo> = HashMap::new();
+    let mut sigs: HashMap<String, Option<extract::SigInfo>> = HashMap::new();
     let mut calls: Vec<(usize, extract::CallSite)> = vec![];
     for (fi, c) in changes.iter().enumerate() {
         let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
             continue;
         };
         for s in extract::signatures(spec, new) {
-            sigs.insert(s.name.clone(), s);
+            // A bare name is the only key the call sites can be matched on, so
+            // two files defining the same name are indistinguishable here. The
+            // last one used to win and its arity was then checked against the
+            // other's callers; an ambiguous name is dropped instead, which is
+            // what "only speaks when it can be exact" has to mean.
+            match sigs.entry(s.name.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let differs = e
+                        .get()
+                        .as_ref()
+                        .is_some_and(|p| (p.required, p.total) != (s.required, s.total));
+                    if differs {
+                        e.insert(None);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(Some(s));
+                }
+            }
         }
         for cs in extract::call_sites(spec, new) {
             calls.push((fi, cs));
@@ -665,8 +697,8 @@ fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]
     }
 
     for e in changed {
-        let Some(sig) = sigs.get(&e.name) else {
-            continue; // its arity could not be stated exactly
+        let Some(Some(sig)) = sigs.get(&e.name) else {
+            continue; // its arity could not be stated exactly, or is ambiguous
         };
         let bad: Vec<(usize, &extract::CallSite)> = calls
             .iter()
@@ -949,6 +981,27 @@ fn build_ledger(
     out.into_iter().map(|(_, e)| e).collect()
 }
 
+/// Two definitions on opposite sides of a change are the same code under a new
+/// name when their body lines overlap: every line the shorter of the two has,
+/// up to a third of them, has to appear in the other. A one-line body matching
+/// one line passes — that is all the evidence a one-liner can offer — while two
+/// unrelated definitions share nothing and are rejected.
+fn similar(old: &[extract::Body], from: &str, new: &[extract::Body], to: &str) -> bool {
+    let lines = |list: &[extract::Body], name: &str| {
+        list.iter()
+            .find(|(nm, _, _, _)| nm == name)
+            .map(|(_, _, _, l)| l.clone())
+            .unwrap_or_default()
+    };
+    let (o, n) = (lines(old, from), lines(new, to));
+    if o.is_empty() || n.is_empty() {
+        return false;
+    }
+    let os: HashSet<&String> = o.iter().collect();
+    let shared = n.iter().filter(|l| os.contains(*l)).count();
+    shared > 0 && shared * 3 >= o.len().min(n.len())
+}
+
 /// A path with this many hunks is churning rather than being edited.
 const HIGH_CHURN: usize = 10;
 
@@ -1171,7 +1224,7 @@ fn mask_templates(mut input: Input) -> (Input, Vec<TemplateFacts>) {
         // already reads its variables, its macro names and its parameters
         // properly. Harvesting them a second time here would re-add a macro's
         // own name and parameters as uses of themselves.
-        if lang::for_path(&c.path).is_some_and(|s| std::ptr::eq(s, tspec)) {
+        if lang::for_path(&c.path).is_some_and(|s| s.name == tspec.name) {
             facts.push(TemplateFacts::default());
             continue;
         }
@@ -1412,8 +1465,26 @@ fn collect_comment_lines(node: Node, lang_name: &str, out: &mut HashSet<usize>) 
     }
 }
 
-// Comment-line syntax by file extension. `#` is python-only (a C/C++
-// preprocessor directive also starts with `#` but isn't a comment).
+/// The comment markers of one file extension, longest first so stripping takes
+/// the specific form (`///`, `---`) before the general one it starts with.
+///
+/// One table for both `is_comment_line` and `strip_comment_marker`: a marker
+/// that opened a comment for one and not the other made `CommentedOut` degrade
+/// to `CodeToComment` on every xonsh file. `#` is not listed for the C-family
+/// default — a preprocessor directive also starts with `#` and is not a comment.
+fn comment_markers(ext: &str) -> &'static [&'static str] {
+    match ext {
+        "py" | "pyi" | "xsh" | "xonsh" | "xonshrc" => &["\"\"\"", "'''", "#"],
+        "lua" => &["---", "--"],
+        // `#`-comment formats the C-family default would otherwise misread
+        "sh" | "bash" | "zsh" | "rb" | "yaml" | "yml" | "toml" | "j2" | "jinja" | "jinja2"
+        | "tf" | "tfvars" | "conf" | "cfg" | "ini" | "pl" | "r" | "jl" | "nix" | "mk"
+        | "dockerfile" | "gitignore" | "gitattributes" => &["#"],
+        _ => &["///", "//", "/*", "*"],
+    }
+}
+
+// Whether a line opens (or continues) a comment in a file of this extension.
 fn is_comment_line(trimmed: &str, ext: &str) -> bool {
     if trimmed.is_empty() {
         return true;
@@ -1423,13 +1494,7 @@ fn is_comment_line(trimmed: &str, ext: &str) -> bool {
     if trimmed.starts_with("#!") {
         return true;
     }
-    match ext {
-        "py" | "pyi" | "xsh" | "xonsh" | "xonshrc" => {
-            trimmed.starts_with('#') || trimmed.starts_with("\"\"\"") || trimmed.starts_with("'''")
-        }
-        "lua" => trimmed.starts_with("--"),
-        _ => trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*'),
-    }
+    comment_markers(ext).iter().any(|m| trimmed.starts_with(m))
 }
 
 /// How a hunk moved code across the comment boundary.
@@ -1484,20 +1549,18 @@ fn side_shift(h: &RawHunk, old_lines: &[&str], new_lines: &[&str], ext: &str) ->
     }
 }
 
-/// The text of a comment line without its marker. Only the markers
-/// `is_comment_line` recognises, so the two stay in step.
+/// The text of a comment line without its marker. Reads the same table
+/// `is_comment_line` does, so the two cannot drift apart.
 fn strip_comment_marker<'a>(line: &'a str, ext: &str) -> &'a str {
     let t = line.trim();
-    let out = match ext {
-        "py" | "pyi" => t.strip_prefix('#'),
-        "lua" => t.strip_prefix("---").or_else(|| t.strip_prefix("--")),
-        _ => t
-            .strip_prefix("///")
-            .or_else(|| t.strip_prefix("//"))
-            .or_else(|| t.strip_prefix("/*"))
-            .or_else(|| t.strip_prefix('*')),
-    };
-    out.unwrap_or(t).trim_end_matches("*/").trim()
+    let out = comment_markers(ext)
+        .iter()
+        .find_map(|m| t.strip_prefix(m))
+        .unwrap_or(t);
+    out.trim_end_matches("*/")
+        .trim_end_matches("\"\"\"")
+        .trim_end_matches("'''")
+        .trim()
 }
 
 /// What a hunk did to the named members of its container(s). New-side members

@@ -148,3 +148,24 @@ fn a_command_inside_a_with_block_still_names_the_command() {
     );
     assert_eq!(rationales(&out), vec!["edits make"]);
 }
+
+#[test]
+fn commenting_xonsh_code_out_reads_as_that() {
+    // the comment-marker table used to know `#` for `is_comment_line` on .xsh
+    // but not for stripping it, so this degraded to "code replaced by comments"
+    let inp: ordo::model::Input = serde_json::from_value(serde_json::json!({
+        "changes": [ { "path": "a.xsh",
+            "old": "def f():\n    run_it()\n    return 1\n",
+            "new": "def f():\n    # run_it()\n    return 1\n" } ]
+    }))
+    .unwrap();
+    let rats: Vec<String> = ordo::run(inp)
+        .files
+        .into_iter()
+        .flat_map(|f| f.hunks.into_iter().map(|h| h.rationale))
+        .collect();
+    assert!(
+        rats.iter().any(|r| r.contains("comments out")),
+        "xonsh code commented out: {rats:?}"
+    );
+}

@@ -278,3 +278,21 @@ fn a_callable_still_changes_its_signature() {
         "{hs:?}"
     );
 }
+
+#[test]
+fn a_hash_comment_in_yaml_is_a_comment() {
+    // the extension table used to fall through to the C-family default for
+    // yaml, so `#` lines were not comments and the hunk was not comment-only
+    let inp: ordo::model::Input = serde_json::from_value(serde_json::json!({
+        "changes": [ { "path": "a.yaml",
+            "old": "svc:\n  # old note\n  port: 80\n",
+            "new": "svc:\n  # new note\n  port: 80\n" } ]
+    }))
+    .unwrap();
+    let out = ordo::run(inp);
+    assert!(
+        out.files[0].hunks.iter().all(|h| h.comment),
+        "yaml # line is a comment: {:?}",
+        out.files[0].hunks
+    );
+}
