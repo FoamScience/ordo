@@ -105,174 +105,10 @@ pub fn run(input: Input) -> Output {
     let n = input.changes.len();
     // per-file old/new symbol data (rows for positions, sets for membership,
     // bodies for rename/move matching) — drives #3/#5/#7 and P12.1 moves.
-    let body_of = |list: &[extract::Body], name: &str| {
-        list.iter()
-            .find(|(nm, _, _, _)| nm == name)
-            .map(|(_, _, b, _)| b.clone())
-    };
-    let header_of = |list: &[extract::Body], name: &str| {
-        list.iter()
-            .find(|(nm, _, _, _)| nm == name)
-            .map(|(_, h, _, _)| h.clone())
-    };
     let symbols: Vec<FileSymbols> = input.changes.iter().map(FileSymbols::of).collect();
 
-    // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
-    let mut appeared: HashMap<(String, String), usize> = HashMap::new();
-    for (fi, fs) in symbols.iter().enumerate() {
-        for (name, _, body, _) in &fs.new_body {
-            if body.len() >= 8 && !fs.old_defs.contains(name) {
-                appeared.entry((name.clone(), body.clone())).or_insert(fi);
-            }
-        }
-    }
+    let changed = detect_changes(&symbols, &paths);
 
-    let mut changed: Vec<FileChanges> = (0..n).map(|_| FileChanges::default()).collect();
-    for fi in 0..n {
-        let fs = &symbols[fi];
-        let (nd, ni) = (&fs.new_defs, &fs.new_imports);
-        let od = &fs.old_defs;
-        let (odr, oir) = &fs.old_rows;
-        let (ob, nb) = (&fs.old_body, &fs.new_body);
-        let mut removed_d: Vec<String> = od.difference(nd).cloned().collect();
-        let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
-        removed_d.sort();
-        added_d.sort();
-
-        // #7 rename (same file): body match, then lone-pair fallback
-        let mut ren = HashMap::new();
-        if !removed_d.is_empty() && !added_d.is_empty() {
-            for r in &removed_d {
-                let rb = match body_of(ob, r) {
-                    Some(b) if b.len() >= 8 => b,
-                    _ => continue,
-                };
-                if let Some(a) = added_d.iter().find(|a| {
-                    !ren.contains_key(*a) && body_of(nb, a).as_deref() == Some(rb.as_str())
-                }) {
-                    ren.insert(a.clone(), r.clone());
-                }
-            }
-            let rem_left: Vec<&String> = removed_d
-                .iter()
-                .filter(|r| !ren.values().any(|v| v == *r))
-                .collect();
-            let add_left: Vec<&String> = added_d.iter().filter(|a| !ren.contains_key(*a)).collect();
-            // The bodies did not match exactly, so the pair is a rename only if
-            // the two are recognisably the same code. Without this, deleting
-            // `foo` and adding an unrelated `bar` in one file reads as
-            // "renames foo → bar" and then earns a bogus incomplete-rename note.
-            if rem_left.len() == 1
-                && add_left.len() == 1
-                && similar(ob, rem_left[0], nb, add_left[0])
-            {
-                ren.insert(add_left[0].clone(), rem_left[0].clone());
-            }
-        }
-        let renamed_old: HashSet<String> = ren.values().cloned().collect();
-
-        // P12.1 moves: a removed (non-renamed) def whose body reappears same-name in another file
-        let mut moved_out: HashMap<String, usize> = HashMap::new();
-        for r in &removed_d {
-            if renamed_old.contains(r) {
-                continue;
-            }
-            let rb = match body_of(ob, r) {
-                Some(b) if b.len() >= 8 => b,
-                _ => continue,
-            };
-            if let Some(&tgt) = appeared.get(&(r.clone(), rb)) {
-                if tgt != fi {
-                    moved_out.insert(r.clone(), tgt);
-                    changed[tgt].moved_in.insert(r.clone(), paths[fi].clone());
-                }
-            }
-        }
-
-        // P16 relocation: an added def whose body-lines overlap a still-present
-        // old def → it was extracted/relocated out of that def (body may differ).
-        let mut reloc = HashMap::new();
-        for a in &added_d {
-            if ren.contains_key(a) {
-                continue;
-            }
-            let al = match nb
-                .iter()
-                .find(|(nm, _, _, _)| nm == a)
-                .map(|(_, _, _, l)| l)
-            {
-                Some(l) if l.len() >= 3 => l,
-                _ => continue,
-            };
-            let aset: HashSet<&String> = al.iter().collect();
-            let mut best: Option<(&String, usize)> = None;
-            for (x, _, _, xl) in ob {
-                if x == a || !nd.contains(x) {
-                    continue;
-                }
-                let shared = xl.iter().filter(|l| aset.contains(*l)).count();
-                if shared >= 3 && shared * 2 >= al.len() && best.is_none_or(|(_, s)| shared > s) {
-                    best = Some((x, shared));
-                }
-            }
-            if let Some((x, _)) = best {
-                reloc.insert(a.clone(), x.clone());
-            }
-        }
-        changed[fi].relocated = reloc;
-
-        // #4: an existing def whose signature is unchanged → body-only edit, not
-        // a signature change. Positive-only: unknown headers keep "changes signature of".
-        for name in od.intersection(nd) {
-            match (header_of(ob, name), header_of(nb, name)) {
-                (Some(o), Some(m)) if o == m => {
-                    changed[fi].body_only.insert(name.clone());
-                }
-                _ => {}
-            }
-        }
-
-        // #7 delete / #5 import remove / P12.1 move-out (else "removes")
-        let mut rem = vec![];
-        for (name, row) in odr {
-            if nd.contains(name) || renamed_old.contains(name) {
-                continue;
-            }
-            let prose = lang::for_path(&paths[fi]).is_some_and(|s| s.prose);
-            let kind = match moved_out.get(name) {
-                Some(&tgt) => RemovalKind::MovedTo(paths[tgt].clone()),
-                None if prose => RemovalKind::Section,
-                None => RemovalKind::Def,
-            };
-            rem.push(Removal {
-                row: *row,
-                name: name.clone(),
-                kind,
-            });
-        }
-        for (name, row) in oir {
-            if !ni.contains(name) {
-                rem.push(Removal {
-                    row: *row,
-                    name: name.clone(),
-                    kind: RemovalKind::Import,
-                });
-            }
-        }
-        // a removed file-scope binding: not a definition, but naming it beats
-        // the "removes N lines" fallback a module constant would get otherwise
-        for (name, row) in &fs.old_binds {
-            if !fs.new_binds.contains(name) && !nd.contains(name) && !od.contains(name) {
-                rem.push(Removal {
-                    row: *row,
-                    name: name.clone(),
-                    kind: RemovalKind::Def,
-                });
-            }
-        }
-        changed[fi].rename = ren;
-        changed[fi].removals = rem;
-    }
     // A hunk that only deletes has no new side to classify from, so a removed
     // import used to read as a plain `other` hunk while an added one was an
     // import. Classify a pure deletion from the side it actually has.
@@ -605,6 +441,183 @@ pub fn run(input: Input) -> Output {
         notes,
         ledger,
     }
+}
+
+/// Rename, move, extraction, body-only edits and removals, per file.
+///
+/// Everything here is decided from the two sides' symbol tables alone — one
+/// pass over `symbols`, producing one `FileChanges` per file. It was 156 lines
+/// inline in `run`, between the pass that built the symbol tables and the one
+/// that classified imports, sharing five mutable vectors with both.
+fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges> {
+    let n = symbols.len();
+    let mut changed: Vec<FileChanges> = (0..n).map(|_| FileChanges::default()).collect();
+    let body_of = |list: &[extract::Body], name: &str| {
+        list.iter()
+            .find(|(nm, _, _, _)| nm == name)
+            .map(|(_, _, b, _)| b.clone())
+    };
+    let header_of = |list: &[extract::Body], name: &str| {
+        list.iter()
+            .find(|(nm, _, _, _)| nm == name)
+            .map(|(_, h, _, _)| h.clone())
+    };
+    // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
+    let mut appeared: HashMap<(String, String), usize> = HashMap::new();
+    for (fi, fs) in symbols.iter().enumerate() {
+        for (name, _, body, _) in &fs.new_body {
+            if body.len() >= 8 && !fs.old_defs.contains(name) {
+                appeared.entry((name.clone(), body.clone())).or_insert(fi);
+            }
+        }
+    }
+
+    for fi in 0..n {
+        let fs = &symbols[fi];
+        let (nd, ni) = (&fs.new_defs, &fs.new_imports);
+        let od = &fs.old_defs;
+        let (odr, oir) = &fs.old_rows;
+        let (ob, nb) = (&fs.old_body, &fs.new_body);
+        let mut removed_d: Vec<String> = od.difference(nd).cloned().collect();
+        let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
+        removed_d.sort();
+        added_d.sort();
+
+        // #7 rename (same file): body match, then lone-pair fallback
+        let mut ren = HashMap::new();
+        if !removed_d.is_empty() && !added_d.is_empty() {
+            for r in &removed_d {
+                let rb = match body_of(ob, r) {
+                    Some(b) if b.len() >= 8 => b,
+                    _ => continue,
+                };
+                if let Some(a) = added_d.iter().find(|a| {
+                    !ren.contains_key(*a) && body_of(nb, a).as_deref() == Some(rb.as_str())
+                }) {
+                    ren.insert(a.clone(), r.clone());
+                }
+            }
+            let rem_left: Vec<&String> = removed_d
+                .iter()
+                .filter(|r| !ren.values().any(|v| v == *r))
+                .collect();
+            let add_left: Vec<&String> = added_d.iter().filter(|a| !ren.contains_key(*a)).collect();
+            // The bodies did not match exactly, so the pair is a rename only if
+            // the two are recognisably the same code. Without this, deleting
+            // `foo` and adding an unrelated `bar` in one file reads as
+            // "renames foo → bar" and then earns a bogus incomplete-rename note.
+            if rem_left.len() == 1
+                && add_left.len() == 1
+                && similar(ob, rem_left[0], nb, add_left[0])
+            {
+                ren.insert(add_left[0].clone(), rem_left[0].clone());
+            }
+        }
+        let renamed_old: HashSet<String> = ren.values().cloned().collect();
+
+        // P12.1 moves: a removed (non-renamed) def whose body reappears same-name in another file
+        let mut moved_out: HashMap<String, usize> = HashMap::new();
+        for r in &removed_d {
+            if renamed_old.contains(r) {
+                continue;
+            }
+            let rb = match body_of(ob, r) {
+                Some(b) if b.len() >= 8 => b,
+                _ => continue,
+            };
+            if let Some(&tgt) = appeared.get(&(r.clone(), rb)) {
+                if tgt != fi {
+                    moved_out.insert(r.clone(), tgt);
+                    changed[tgt].moved_in.insert(r.clone(), paths[fi].clone());
+                }
+            }
+        }
+
+        // P16 relocation: an added def whose body-lines overlap a still-present
+        // old def → it was extracted/relocated out of that def (body may differ).
+        let mut reloc = HashMap::new();
+        for a in &added_d {
+            if ren.contains_key(a) {
+                continue;
+            }
+            let al = match nb
+                .iter()
+                .find(|(nm, _, _, _)| nm == a)
+                .map(|(_, _, _, l)| l)
+            {
+                Some(l) if l.len() >= 3 => l,
+                _ => continue,
+            };
+            let aset: HashSet<&String> = al.iter().collect();
+            let mut best: Option<(&String, usize)> = None;
+            for (x, _, _, xl) in ob {
+                if x == a || !nd.contains(x) {
+                    continue;
+                }
+                let shared = xl.iter().filter(|l| aset.contains(*l)).count();
+                if shared >= 3 && shared * 2 >= al.len() && best.is_none_or(|(_, s)| shared > s) {
+                    best = Some((x, shared));
+                }
+            }
+            if let Some((x, _)) = best {
+                reloc.insert(a.clone(), x.clone());
+            }
+        }
+        changed[fi].relocated = reloc;
+
+        // #4: an existing def whose signature is unchanged → body-only edit, not
+        // a signature change. Positive-only: unknown headers keep "changes signature of".
+        for name in od.intersection(nd) {
+            match (header_of(ob, name), header_of(nb, name)) {
+                (Some(o), Some(m)) if o == m => {
+                    changed[fi].body_only.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+
+        // #7 delete / #5 import remove / P12.1 move-out (else "removes")
+        let mut rem = vec![];
+        for (name, row) in odr {
+            if nd.contains(name) || renamed_old.contains(name) {
+                continue;
+            }
+            let prose = lang::for_path(&paths[fi]).is_some_and(|s| s.prose);
+            let kind = match moved_out.get(name) {
+                Some(&tgt) => RemovalKind::MovedTo(paths[tgt].clone()),
+                None if prose => RemovalKind::Section,
+                None => RemovalKind::Def,
+            };
+            rem.push(Removal {
+                row: *row,
+                name: name.clone(),
+                kind,
+            });
+        }
+        for (name, row) in oir {
+            if !ni.contains(name) {
+                rem.push(Removal {
+                    row: *row,
+                    name: name.clone(),
+                    kind: RemovalKind::Import,
+                });
+            }
+        }
+        // a removed file-scope binding: not a definition, but naming it beats
+        // the "removes N lines" fallback a module constant would get otherwise
+        for (name, row) in &fs.old_binds {
+            if !fs.new_binds.contains(name) && !nd.contains(name) && !od.contains(name) {
+                rem.push(Removal {
+                    row: *row,
+                    name: name.clone(),
+                    kind: RemovalKind::Def,
+                });
+            }
+        }
+        changed[fi].rename = ren;
+        changed[fi].removals = rem;
+    }
+    changed
 }
 
 /// P23.2: a definition whose signature changed, against the calls to it in
