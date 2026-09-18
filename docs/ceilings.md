@@ -41,7 +41,7 @@
 
   One deliberate exception: `options.only_comments` (`--only-comments`) *is*
   honoured by the engine, dropping non-comment hunks **before** grouping, the
-  the one thing the engine drops — filtering the finished `Output`
+  the one thing the engine drops. Filtering the finished `Output`
   would leave `order`/`groups`/`edges`/`clusters` referring to hunks no longer
   in `files`. So the engine applies a selection the caller *states*; it never
   invents one.
@@ -57,4 +57,20 @@
 - **Rationale heuristics** — rename detection is 1:1 per file (a file that
   renames *and* adds/removes other defs falls back to `adds`/`removes`);
   removals attach by old-line overlap (precise for isolated deletions).
+- **"Still used after the rename" sees only the change** — the note that a
+  renamed symbol's old name survives is searched across the whole new content
+  of every file *in the change*, which is where a missed caller usually hides.
+  A caller in a file the author never opened is invisible to the engine, which
+  reads no repository; the `ordo` client, which does, is where that would live.
+- **A multi-file patch is split on `diff --git`** — `ordo review` is written
+  for `git diff`, which always emits those lines. A plain `diff -u` over
+  several files carries none, so it arrives as a single chunk named after its
+  first `+++`.
+- **A reviewed mark identifies a hunk by content and symbol, not position** —
+  so it survives edits elsewhere in the file, and two *byte-identical* hunks
+  under the same symbol in the same file share one mark: ticking either ticks
+  both. The trade is deliberate. A position-based key would be exact here and
+  would drop marks every time anything above a hunk moved, which is the far
+  more common case; this failure is at least visible, as two rows ticking at
+  once.
 
