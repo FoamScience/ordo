@@ -108,11 +108,8 @@ fn a_local_variant_resolves_like_the_file_it_overrides() {
     let new = "[core]\n    remote = a\n['remote \"a\"']\n    url = s3://new\n";
     for path in [".dvc/config", ".dvc/config.local"] {
         let hs = one(path, old, new);
-        assert!(
-            hs.iter()
-                .any(|h| h.enclosing.as_deref() == Some("remote \"a\".url")),
-            "{path}: {hs:?}"
-        );
+        let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+        assert_eq!(enc, vec![Some("remote \"a\".url")], "{path}");
     }
 }
 
@@ -120,11 +117,8 @@ fn a_local_variant_resolves_like_the_file_it_overrides() {
 fn ini_by_extension() {
     for path in ["setup.cfg", "tox.ini", "pytest.ini"] {
         let hs = one(path, "[m]\nname = a\n", "[m]\nname = a\nversion = 1\n");
-        assert!(
-            hs.iter()
-                .any(|h| h.enclosing.as_deref() == Some("m.version")),
-            "{path}: {hs:?}"
-        );
+        let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+        assert_eq!(enc, vec![Some("m.version")], "{path}");
     }
 }
 
@@ -138,14 +132,16 @@ fn a_yaml_anchor_is_defined_and_its_alias_uses_it() {
     .unwrap();
     let out = ordo::run(inp);
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
-    assert!(
-        hs.iter().any(|h| h.defines.contains(&"base".to_string())),
-        "{hs:?}"
+    let defines: Vec<&[String]> = hs.iter().map(|h| h.defines.as_slice()).collect();
+    let uses: Vec<&[String]> = hs.iter().map(|h| h.uses.as_slice()).collect();
+    assert_eq!(
+        defines,
+        vec![
+            ["adapter".to_string(), "base".to_string()].as_slice(),
+            ["dev".to_string()].as_slice()
+        ]
     );
-    assert!(
-        hs.iter().any(|h| h.uses.contains(&"base".to_string())),
-        "{hs:?}"
-    );
+    assert_eq!(uses, vec![[].as_slice(), ["base".to_string()].as_slice()]);
     // the only def→use edge a config format can produce
     let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
     assert_eq!(why, vec!["def→use: base"]);
@@ -174,15 +170,13 @@ fn multi_document_yaml_scopes_each_document() {
     };
     let hs = one("k8s.yaml", &doc("80", "1"), &doc("8080", "3"));
     // both objects own a `spec`; the path has to say which
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("document 1.spec.port")),
-        "{hs:?}"
-    );
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("document 2.spec.replicas")),
-        "{hs:?}"
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(
+        enc,
+        vec![
+            Some("document 1.spec.port"),
+            Some("document 2.spec.replicas")
+        ]
     );
 }
 
