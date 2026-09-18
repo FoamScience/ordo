@@ -138,6 +138,7 @@ occasionally what you want, otherwise a mistake its name should make obvious.
 | `name` | how the rule identifies itself in the review — required |
 | `note` | says something on the hunk |
 | `warn` | says it at warning level — `⚠` in the reading order |
+| `verdict` | asserts a concrete downgrade rather than an FYI — the level the construct catalog uses when a signal backs the call |
 | `noise` | marks the hunk skippable, like generated code |
 | `priority` | sorts it earlier (see the guarantee below) |
 <!-- ordo:end rule-actions -->

@@ -15,7 +15,7 @@ if len(sys.argv) < 3:
 rules_path, sample_path = sys.argv[1], sys.argv[2]
 ordo = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ORDO_BIN", "target/debug/ordo-engine")
 
-ACTIONS = ("name", "note", "warn", "noise", "priority")
+ACTIONS = ("name", "note", "warn", "verdict", "noise", "priority")
 rules = []
 for r in tomllib.load(open(rules_path, "rb")).get("rule", []):
     when = {k.replace("-", "_"): v for k, v in r.items() if k not in ACTIONS}
@@ -31,7 +31,7 @@ res = subprocess.run([ordo, "order", "--json"], input=inp, capture_output=True, 
 if res.returncode:
     sys.exit(res.stderr)
 out = json.loads(res.stdout)
-fired = {x["rule"] for f in out["files"] for h in f["hunks"] for x in (h.get("rules") or [])}
+fired = {x["name"] for f in out["files"] for h in f["hunks"] for x in (h.get("findings") or []) if x["source"] == "rule"}
 # a file-size limit cannot be exercised by a sample short enough to read
 names = [r["name"] for r in rules if "max_file_lines" not in r["when"]]
 silent = [n for n in names if n not in fired]

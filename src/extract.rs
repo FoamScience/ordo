@@ -2,7 +2,7 @@
 //! enclosing definition, defines/uses. Parses the *new* content once with
 //! tree-sitter, exactly as gitplay's `order.lua` does.
 use crate::lang::{self, LangSpec};
-use crate::model::{Advisory, Category, ContainerKind, Symbol};
+use crate::model::{Category, ContainerKind, Finding, Symbol};
 use similar::TextDiff;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
@@ -39,7 +39,7 @@ pub struct HunkSem {
     /// structural smells for a def introduced here (P13.1)
     pub notes: Vec<String>,
     /// advanced-construct advisories in this hunk (P14)
-    pub advisories: Vec<Advisory>,
+    pub advisories: Vec<Finding>,
     /// symbol identity (name + tree-sitter kind + scope) for each def this
     /// hunk introduces — matches `defines`, minus imports
     pub symbols: Vec<Symbol>,
@@ -427,7 +427,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                 m
             }
         };
-        let advisories: Vec<Advisory> = adv
+        let advisories: Vec<Finding> = adv
             .iter()
             .filter(|(row, _)| r0 <= *row && *row <= r1)
             .map(|(_, a)| a.clone())

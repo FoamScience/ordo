@@ -1018,9 +1018,9 @@ struct Finding {
     tool: String,
     /// `result.ruleId`, the analyzer's own name for the check
     rule: String,
-    /// `warn` for error/warning, `note` for note/none — the split `RuleHit`
-    /// already uses, so the two read the same way in the why pane
-    level: &'static str,
+    /// `Warn` for error/warning, `Note` for note/none, so an analyzer result
+    /// presses exactly as hard as a rule hit saying the same thing
+    level: ordo::model::Level,
     message: String,
     path: String,
     /// 1-based, as SARIF writes it and as hunk ranges are kept
@@ -1045,8 +1045,8 @@ fn parse_sarif(text: &str) -> Vec<Finding> {
             .to_string();
         for r in run["results"].as_array().into_iter().flatten() {
             let level = match r["level"].as_str().unwrap_or("warning") {
-                "error" | "warning" => "warn",
-                _ => "note",
+                "error" | "warning" => ordo::model::Level::Warn,
+                _ => ordo::model::Level::Note,
             };
             let rule = r["ruleId"].as_str().unwrap_or("").to_string();
             let message = r["message"]["text"].as_str().unwrap_or("").to_string();
@@ -1107,10 +1107,19 @@ fn place_findings(items: &mut [Item], findings: &[Finding]) -> usize {
                 // exist; a warning-level finding earns the same ⚠ a warn rule
                 // or an advisory does, or the reviewer has to open the hunk to
                 // discover there is anything to see
-                if f.level == "warn" {
+                if f.level != ordo::model::Level::Note {
                     it.mark = "⚠ ".to_string();
                 }
-                it.findings.push(f.clone());
+                it.findings.push(ordo::model::Finding {
+                    source: ordo::model::FindingSource::Analyzer,
+                    name: if f.rule.is_empty() {
+                        f.tool.clone()
+                    } else {
+                        format!("{} {}", f.tool, f.rule)
+                    },
+                    message: f.message.clone(),
+                    level: f.level,
+                });
             }
             None => unplaced += 1,
         }
@@ -1762,7 +1771,6 @@ struct Item {
     /// to it — `None` for an import, a region, or a hunk that changed nothing
     /// nameable
     ledger: Option<usize>,
-    advisories: Vec<ordo::model::Advisory>,
     noise: bool,
     /// every changed line is a comment or docstring — drives `:only-comments`
     /// (the engine's own field of the same name, see `HunkOut::comment`)
@@ -1776,10 +1784,13 @@ struct Item {
     /// the engine's `HunkOut::group` id — drives `:group`'s header rows (see
     /// `App::groups` for the id -> reason lookup)
     group: String,
-    /// reviewing rules that matched this hunk (`ordo::model::Rule`)
-    rules: Vec<ordo::model::RuleHit>,
-    /// analyzer findings whose line falls inside this hunk (see `Finding`)
-    findings: Vec<Finding>,
+    /// everything anyone noticed about this hunk: the engine's catalog
+    /// advisories and rule hits, plus any analyzer result placed here
+    findings: Vec<ordo::model::Finding>,
+    /// where the names this hunk introduces are used — marked in the code
+    /// gutter and stepped through with `]`/`[`, rather than listed as line
+    /// numbers in the why pane
+    uses_at: Vec<ordo::model::UseSite>,
     /// (executed, executable) counts for the lines this hunk changed, when a
     /// coverage tracefile covers them
     executed: Option<(usize, usize)>,
@@ -2438,6 +2449,8 @@ enum Action {
     LineEnd,
     ParaPrev,
     ParaNext,
+    MarkPrev,
+    MarkNext,
     /// symbol under the cursor, in a floating popup
     Hover,
     /// `/` — open the text-search prompt
@@ -2615,6 +2628,8 @@ fn keymap(name: &str) -> Option<Keymap> {
                 (None, ch('$'), Action::LineEnd),
                 (None, ch('{'), Action::ParaPrev),
                 (None, ch('}'), Action::ParaNext),
+                (None, ch('['), Action::MarkPrev),
+                (None, ch(']'), Action::MarkNext),
                 // `z` prefix (vim's own convention for view-scrolling
                 // commands, e.g. zh/zl to scroll a `nowrap` window sideways)
                 (Some(ch('z')), ch('h'), Action::ScrollLeft),
@@ -2794,6 +2809,8 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::LineEnd => (Category::Navigation, "move to line end / pane bottom"),
         Action::ParaPrev => (Category::Navigation, "jump to the previous blank line"),
         Action::ParaNext => (Category::Navigation, "jump to the next blank line"),
+        Action::MarkPrev => (Category::Navigation, "jump to the previous use of a name added here"),
+        Action::MarkNext => (Category::Navigation, "jump to the next use of a name added here"),
         Action::Fold(Fold::Toggle) => (Category::Review, "fold/unfold the selected hunk's group"),
         Action::Fold(Fold::Open) => (Category::Review, "unfold the selected hunk's group"),
         Action::Fold(Fold::Close) => (Category::Review, "fold the selected hunk's group"),
@@ -2863,6 +2880,8 @@ const ACTION_NAMES: &[(&str, Action)] = &[
     ("line-end", Action::LineEnd),
     ("para-prev", Action::ParaPrev),
     ("para-next", Action::ParaNext),
+    ("mark-prev", Action::MarkPrev),
+    ("mark-next", Action::MarkNext),
     ("hover", Action::Hover),
     ("search", Action::SearchOpen),
     ("symbol-next", Action::SymbolNext),
@@ -3357,6 +3376,8 @@ struct RuleToml {
     #[serde(default)]
     warn: Option<String>,
     #[serde(default)]
+    verdict: Option<String>,
+    #[serde(default)]
     noise: bool,
     #[serde(default)]
     priority: i64,
@@ -3477,6 +3498,7 @@ fn rule_from_toml(
         when,
         note: parsed.note,
         warn: parsed.warn,
+        verdict: parsed.verdict,
         noise: parsed.noise,
         priority: parsed.priority,
     })
@@ -4253,8 +4275,13 @@ fn build_items(out: &Output) -> Vec<Item> {
         .iter()
         .filter_map(|o| {
             let (path, h) = by_id.get(o.hunk.as_str())?;
-            let warned = h.rules.iter().any(|r| r.level == "warn");
-            let mark = if !h.advisories.is_empty() || warned {
+            // a catalog entry is worth the mark at any level — v1 marked every
+            // advisory — while a rule only earns it at `warn` or above
+            let flagged = h.findings.iter().any(|f| {
+                f.source == ordo::model::FindingSource::Catalog
+                    || f.level != ordo::model::Level::Note
+            });
+            let mark = if flagged {
                 "⚠ "
             } else if h.noise {
                 "· "
@@ -4305,14 +4332,13 @@ fn build_items(out: &Output) -> Vec<Item> {
                 details: h.details.clone(),
                 notes: h.notes.clone(),
                 edges,
-                advisories: h.advisories.clone(),
                 noise: h.noise,
                 comment: h.comment,
                 symbols: h.symbols.clone(),
                 enclosing: h.enclosing.clone(),
                 group: h.group.clone(),
-                rules: h.rules.clone(),
-                findings: vec![],
+                findings: h.findings.clone(),
+                uses_at: h.uses_at.clone(),
                 executed: None,
                 refined: ordo::refine::Refined::default(),
                 cluster: cluster_of.get(h.id.as_str()).copied(),
@@ -5796,6 +5822,8 @@ fn overlay_cursor(spans: Vec<Span<'static>>, target: usize) -> Vec<Span<'static>
 // the rest plain context. Code is syntax-highlighted via tree-sitter.
 // prefix width: 1-char sign bar + 4-digit line number + 1 space
 const GUTTER_W: usize = 1 + 5;
+/// gutter glyph on a row `uses_at` names
+const MARK: &str = "▸";
 
 // rendering knobs (pane width, scroll offsets, cursor, active search) rather
 // than a natural struct's worth of related data — bundling them wouldn't
@@ -5827,6 +5855,13 @@ fn code_view(
         vec![]
     };
     let num = Style::default().fg(theme.dim);
+    // the rows `uses_at` names, marked in the gutter's last column so the
+    // reviewer reads positions in the code rather than as prose in the why pane
+    let use_rows: HashSet<usize> = it
+        .uses_at
+        .iter()
+        .flat_map(|u| u.rows.iter().copied())
+        .collect();
     let avail = width.saturating_sub(GUTTER_W);
     // Every row this view would hold, counted rather than built: the pane shows
     // `rows` of them, so building the whole file to throw all but a screenful
@@ -5924,7 +5959,12 @@ fn code_view(
                 if added { BAR } else { " " },
                 Style::default().fg(theme.add_fg),
             ),
-            Span::styled(format!("{ln:>4} "), num.bg(bg)),
+            Span::styled(format!("{ln:>4}"), num.bg(bg)),
+            if use_rows.contains(&ln) {
+                Span::styled(MARK, Style::default().fg(theme.accent).bg(bg))
+            } else {
+                Span::styled(" ".to_string(), num.bg(bg))
+            },
         ];
         // syntax-colored code segments (fall back to the raw line if unhighlighted)
         let content: Vec<Span<'static>> = match hl.and_then(|h| h.get(i)) {
@@ -7473,13 +7513,17 @@ fn apply(app: &mut App, a: Action) -> bool {
         Action::WordEnd if app.focus == Pane::Code => cursor_move(app, word_end),
         Action::ParaPrev if app.focus == Pane::Code => cursor_move(app, para_prev),
         Action::ParaNext if app.focus == Pane::Code => cursor_move(app, para_next),
+        Action::MarkPrev if app.focus == Pane::Code => mark_move(app, false),
+        Action::MarkNext if app.focus == Pane::Code => mark_move(app, true),
         Action::CursorLeft
         | Action::CursorRight
         | Action::WordNext
         | Action::WordPrev
         | Action::WordEnd
         | Action::ParaPrev
-        | Action::ParaNext => {} // only meaningful with the code pane focused
+        | Action::ParaNext
+        | Action::MarkPrev
+        | Action::MarkNext => {} // only meaningful with the code pane focused
         // `K`/`F12` dispatches on the focused pane rather than adding a
         // second key: the code pane's symbol hover and the why pane's dep
         // preview are the same "show me more about what's under the cursor"
@@ -7581,6 +7625,28 @@ fn popup_hscroll(app: &mut App, by: isize) {
 fn popup_scroll(app: &mut App, by: isize) {
     if let Some(p) = app.popup.as_mut() {
         p.scroll = (p.scroll as isize + by).clamp(0, last_line(p.lines.len()) as isize) as u16;
+    }
+}
+
+/// Step the cursor to the next (or previous) row `uses_at` marks — the same
+/// rows the code gutter glyphs. Nothing marked, or nothing left in that
+/// direction, leaves the cursor where it is.
+fn mark_move(app: &mut App, forward: bool) {
+    let mut rows: Vec<usize> = app.items[app.sel]
+        .uses_at
+        .iter()
+        .flat_map(|u| u.rows.iter().map(|r| r.saturating_sub(1)))
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+    let here = app.cursor.line;
+    let target = if forward {
+        rows.into_iter().find(|&r| r > here)
+    } else {
+        rows.into_iter().rev().find(|&r| r < here)
+    };
+    if let Some(line) = target {
+        cursor_move(app, move |_, _| Cursor { line, col: 0 });
     }
 }
 
@@ -7790,44 +7856,10 @@ fn why_rows(
             kind: WhyKind::Text,
         });
     }
-    // an analyzer's finding reads like a rule hit, because to the reviewer it
-    // is one — the only difference is who detected it
-    for f in &it.findings {
-        rows.push(WhyRow {
-            text: format!(
-                "{} {} [{}{}]",
-                if f.level == "warn" { "⚠" } else { "·" },
-                f.message,
-                f.tool,
-                if f.rule.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", f.rule)
-                }
-            ),
-            style: Style::default().fg(if f.level == "warn" {
-                theme.warn
-            } else {
-                theme.accent
-            }),
-            kind: WhyKind::Text,
-        });
-    }
     for d in &it.details {
         rows.push(WhyRow {
             text: format!("- {d}"),
             style: Style::default().fg(theme.accent),
-            kind: WhyKind::Text,
-        });
-    }
-    for r in &it.rules {
-        let (color, tag) = match r.level {
-            "warn" => (theme.warn, "⚠"),
-            _ => (theme.reviewed, "·"),
-        };
-        rows.push(WhyRow {
-            text: format!("{tag} {} — {}", r.rule, r.message),
-            style: Style::default().fg(color),
             kind: WhyKind::Text,
         });
     }
@@ -7846,23 +7878,19 @@ fn why_rows(
             kind: WhyKind::Edge(target),
         });
     }
-    for ordo::model::Advisory {
-        construct,
-        message,
-        verdict,
-    } in &it.advisories
-    {
-        let (head, color) = if *verdict {
-            (format!("⚠ {construct}"), theme.warn)
-        } else {
-            (construct.clone(), theme.category)
+    // every finding reads the same way, whoever found it: a named head line,
+    // then the message beneath it
+    for f in &it.findings {
+        let (head, color) = match f.level {
+            ordo::model::Level::Note => (f.name.clone(), theme.category),
+            _ => (format!("⚠ {}", f.name), theme.warn),
         };
         rows.push(WhyRow {
             text: head,
             style: Style::default().fg(color).add_modifier(Modifier::BOLD),
             kind: WhyKind::Text,
         });
-        for ml in message.lines() {
+        for ml in f.message.lines() {
             rows.push(WhyRow {
                 text: format!("  {ml}"),
                 style: Style::default().fg(theme.fg),
@@ -9816,8 +9844,10 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 .iter()
                 .map(|&i| {
                     let it = &app.items[i];
-                    let warn =
-                        it.rules.iter().any(|r| r.level == "warn") || !it.advisories.is_empty();
+                    let warn = it.findings.iter().any(|f| {
+                        f.source == ordo::model::FindingSource::Catalog
+                            || f.level != ordo::model::Level::Note
+                    });
                     QfHunk {
                         filename: it.path.clone(),
                         lnum: it.new_range[0],
@@ -10004,9 +10034,17 @@ DA:1,1
         assert_eq!(f.len(), 2, "{f:?}");
         assert_eq!(f[0].tool, "semgrep");
         assert_eq!(f[0].rule, "no-eval");
-        assert_eq!(f[0].level, "warn", "error maps to the warn half");
+        assert_eq!(
+            f[0].level,
+            ordo::model::Level::Warn,
+            "error maps to the warn half"
+        );
         assert_eq!((f[0].path.as_str(), f[0].line), ("src/a.py", 10));
-        assert_eq!(f[1].level, "note", "note maps to the note half");
+        assert_eq!(
+            f[1].level,
+            ordo::model::Level::Note,
+            "note maps to the note half"
+        );
         assert_eq!(f[1].path, "/repo/src/a.py", "file:// is stripped");
     }
 
@@ -10652,7 +10690,6 @@ DA:1,1
             category: ordo::model::Category::Definition,
             enclosing: enclosing.map(str::to_string),
             enclosing_kind: None,
-            rules: vec![],
             defines: vec![],
             uses: vec![],
             group: "g".to_string(),
@@ -10662,7 +10699,8 @@ DA:1,1
             comment: false,
             details: vec![],
             notes: vec![],
-            advisories: vec![],
+            findings: vec![],
+            uses_at: vec![],
             symbols,
         }
     }
@@ -11432,13 +11470,12 @@ DA:1,1
             details: vec![],
             notes: vec![],
             edges: vec![],
-            advisories: vec![],
+            uses_at: vec![],
             noise: false,
             comment: false,
             symbols: vec![],
             enclosing: None,
             group: String::new(),
-            rules: vec![],
             findings: vec![],
             executed: None,
             refined: ordo::refine::Refined::default(),
@@ -11454,6 +11491,80 @@ DA:1,1
             // defines", which is what makes the target a dependency
             dependency: label.starts_with('←'),
         }
+    }
+
+    #[test]
+    fn code_view_marks_only_the_rows_uses_at_names() {
+        let mut it = test_item("f.rs");
+        it.uses_at = vec![ordo::model::UseSite {
+            name: "x".to_string(),
+            rows: vec![1, 3],
+        }];
+        let mut sources: Sources = HashMap::new();
+        sources.insert(
+            "f.rs".to_string(),
+            (
+                vec![],
+                (1..=3).map(|i| format!("line {i}")).collect::<Vec<_>>(),
+            ),
+        );
+        let (rows, _, _) = code_view(
+            &it,
+            &sources,
+            &HashMap::new(),
+            40,
+            0,
+            None,
+            &[],
+            None,
+            &theme("dark").unwrap(),
+            0,
+            usize::MAX,
+        );
+        // the marker rides the gutter's last column, so the code never shifts
+        let marks: Vec<String> = rows
+            .iter()
+            .map(|l| l.spans[2].content.to_string())
+            .collect();
+        assert_eq!(
+            marks,
+            vec![MARK.to_string(), " ".to_string(), MARK.to_string()]
+        );
+        let widths: Vec<usize> = rows
+            .iter()
+            .map(|l| l.spans[..3].iter().map(|s| s.content.chars().count()).sum())
+            .collect();
+        assert_eq!(widths, vec![GUTTER_W; 3]);
+    }
+
+    #[test]
+    fn mark_move_steps_between_use_sites_and_stops_at_the_ends() {
+        let mut app = test_app(0);
+        app.items = vec![test_item("f.rs")];
+        app.items[0].uses_at = vec![ordo::model::UseSite {
+            name: "x".to_string(),
+            // 1-based rows; the cursor is 0-based, so these are lines 1 and 4
+            rows: vec![2, 5],
+        }];
+        app.sources.insert(
+            "f.rs".to_string(),
+            (
+                vec![],
+                (1..=8).map(|i| format!("line {i}")).collect::<Vec<_>>(),
+            ),
+        );
+        app.cursor = Cursor { line: 0, col: 3 };
+        mark_move(&mut app, true);
+        assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
+        mark_move(&mut app, true);
+        assert_eq!(app.cursor, Cursor { line: 4, col: 0 });
+        // nothing further on: the cursor stays rather than wrapping
+        mark_move(&mut app, true);
+        assert_eq!(app.cursor, Cursor { line: 4, col: 0 });
+        mark_move(&mut app, false);
+        assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
+        mark_move(&mut app, false);
+        assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
     }
 
     #[test]
@@ -11494,19 +11605,19 @@ DA:1,1
         );
         assert_eq!(unscrolled.len(), 1);
         assert_eq!(scrolled.len(), 1);
-        // the sign-bar and line-number gutter (the row's first two spans)
-        // never move, regardless of horizontal scroll
+        // the sign-bar, line number and use-site marker (the row's first three
+        // spans) never move, regardless of horizontal scroll
         let gutter = |line: &Line<'static>| -> Vec<String> {
             line.spans
                 .iter()
-                .take(2)
+                .take(3)
                 .map(|s| s.content.to_string())
                 .collect()
         };
         assert_eq!(gutter(&unscrolled[0]), gutter(&scrolled[0]));
         // but the code past the gutter does shift with hscroll
         let rest = |line: &Line<'static>| -> String {
-            line.spans[2..]
+            line.spans[3..]
                 .iter()
                 .map(|s| s.content.to_string())
                 .collect()
@@ -13800,6 +13911,11 @@ mod docs {
             "warn",
             false,
             "says it at warning level — `⚠` in the reading order",
+        ),
+        (
+            "verdict",
+            false,
+            "asserts a concrete downgrade rather than an FYI — the level the construct catalog uses when a signal backs the call",
         ),
         (
             "noise",

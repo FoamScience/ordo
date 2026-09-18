@@ -14,10 +14,14 @@ ordo help [<topic>]                         # this page, and the others, offline
 binary, so they can never describe a different version than the one running.
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
-the change **in comprehension order**: a reading-order list (advisories `⚠`,
+the change **in comprehension order**: a reading-order list (findings `⚠`,
 noise dimmed, reviewed `✓`) beside a detail pane with tree-sitter
 syntax-highlighted, Neovim-style diff rendering, over the rationale, notes,
-def→use edges and advisory ladders. The engine never learns what git is.
+def→use edges and finding messages. The engine never learns what git is.
+
+Where a name the hunk introduces is used, the code gutter carries a `▸` on that
+row (the engine's `hunks[].uses_at`), and `]`/`[` step between them — positions
+belong in the code, not as a list of line numbers in the why pane.
 
 Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
 removed line is paired with the added line it became, and only the differing
@@ -113,6 +117,8 @@ always drives the code pane.
 | move to line end / pane bottom | `$` | `End` |
 | jump to the previous blank line | `{` |  |
 | jump to the next blank line | `}` |  |
+| jump to the previous use of a name added here | `[` |  |
+| jump to the next use of a name added here | `]` |  |
 | scroll the code pane (or an open popup) left | `zh` | `S-Left` |
 | scroll the code pane (or an open popup) right | `zl` | `S-Right` |
 | why pane: jump to the current dep line's target hunk | `gd`, `Enter` | `C-Enter` |

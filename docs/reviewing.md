@@ -319,11 +319,13 @@ registry does not have. Both notes lead the `ordo-engine pack` output, ahead of
 the reading order.
 
 Hunks also carry structural `notes` (large/deeply-nested/param-heavy defs) and
-**advisories** — advanced-construct guidance with an escalation ladder, and a
-`verdict` when a downgrade is concretely warranted:
+`findings` — one list for everything anyone noticed, tagged with its `source`
+(`catalog`, `rule` or `analyzer`) and a `level` of `note`, `warn` or `verdict`.
+The catalog's own entries are advanced-construct guidance with an escalation
+ladder, at `verdict` level when a downgrade is concretely warranted:
 
 ```
-registry.py:L2  metaclass ⚠
+registry.py:L2  metaclass (catalog) ⚠
   metaclass — 90% of the time the wrong tool. Lightest sufficient step:
   1. configure one attribute → __set_name__ (descriptor)
   2. react to subclassing → __init_subclass__

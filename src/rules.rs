@@ -17,7 +17,7 @@
 //! The engine also reads no files — `Options.rules` arrives from a client that
 //! collected it (per-user and per-repo).
 use crate::lang::{self, LangSpec};
-use crate::model::{Category, ContainerKind, Rule, RuleHit};
+use crate::model::{Category, ContainerKind, Finding, FindingSource, Level, Rule};
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use std::collections::HashMap;
@@ -207,7 +207,7 @@ impl<'r> Rules<'r> {
     /// Which rules match one hunk. `pattern_rows` holds, per rule name, the
     /// rows that rule's query or kind pattern matched in this file (see
     /// `query_rows`) — computed once per file rather than per hunk.
-    pub fn hits(&self, f: &HunkFacts, pattern_rows: &HashMap<&str, Vec<usize>>) -> Vec<RuleHit> {
+    pub fn hits(&self, f: &HunkFacts, pattern_rows: &HashMap<&str, Vec<usize>>) -> Vec<Finding> {
         let lang = lang::for_path(f.path).map(|s| s.name);
         let (r0, r1) = f.rows;
         let (old_lines, new_lines) = f.file_lines;
@@ -248,17 +248,27 @@ impl<'r> Rules<'r> {
             .flat_map(|c| {
                 let mut out = vec![];
                 if let Some(m) = &c.rule.note {
-                    out.push(RuleHit {
-                        rule: c.rule.name.clone(),
+                    out.push(Finding {
+                        source: FindingSource::Rule,
+                        name: c.rule.name.clone(),
                         message: m.clone(),
-                        level: "note",
+                        level: Level::Note,
                     });
                 }
                 if let Some(m) = &c.rule.warn {
-                    out.push(RuleHit {
-                        rule: c.rule.name.clone(),
+                    out.push(Finding {
+                        source: FindingSource::Rule,
+                        name: c.rule.name.clone(),
                         message: m.clone(),
-                        level: "warn",
+                        level: Level::Warn,
+                    });
+                }
+                if let Some(m) = &c.rule.verdict {
+                    out.push(Finding {
+                        source: FindingSource::Rule,
+                        name: c.rule.name.clone(),
+                        message: m.clone(),
+                        level: Level::Verdict,
                     });
                 }
                 // a rule that only sets `noise` or `priority` still reports
@@ -269,10 +279,11 @@ impl<'r> Rules<'r> {
                         (true, p) => format!("marked skippable, priority {p}"),
                         (false, p) => format!("priority {p}"),
                     };
-                    out.push(RuleHit {
-                        rule: c.rule.name.clone(),
+                    out.push(Finding {
+                        source: FindingSource::Rule,
+                        name: c.rule.name.clone(),
                         message: what,
-                        level: "note",
+                        level: Level::Note,
                     });
                 }
                 out
@@ -281,16 +292,16 @@ impl<'r> Rules<'r> {
     }
 
     /// Whether any matching rule asks for this hunk to be treated as noise.
-    pub fn any_noise(hits: &[RuleHit], rules: &'r [Rule]) -> bool {
+    pub fn any_noise(hits: &[Finding], rules: &'r [Rule]) -> bool {
         hits.iter()
-            .filter_map(|h| rules.iter().find(|r| r.name == h.rule))
+            .filter_map(|h| rules.iter().find(|r| r.name == h.name))
             .any(|r| r.noise)
     }
 
     /// The highest priority among matching rules — 0 when none has an opinion.
-    pub fn priority(hits: &[RuleHit], rules: &'r [Rule]) -> i64 {
+    pub fn priority(hits: &[Finding], rules: &'r [Rule]) -> i64 {
         hits.iter()
-            .filter_map(|h| rules.iter().find(|r| r.name == h.rule))
+            .filter_map(|h| rules.iter().find(|r| r.name == h.name))
             .map(|r| r.priority)
             .max()
             .unwrap_or(0)

@@ -1,4 +1,4 @@
-# CLI & schema v1
+# CLI & schema v2
 
 The engine CLI (`ordo-engine`) and the frozen JSON contract every consumer
 speaks. For the interactive reviewer see [tui.md](tui.md).
@@ -12,7 +12,8 @@ git diff -U100000 | ordo-engine review --full-context  # modified files get full
 ordo-engine order --only-comments --json < input.json  # only comment/docstring hunks
 ```
 
-Input / output are frozen as **schema v1** (`schema/v1.json`):
+Input / output are declared by **schema v2** (`schema/v2.json`); v1 stays on
+disk as the frozen record of the previous contract:
 
 ```jsonc
 // input
@@ -25,8 +26,8 @@ instead carry a `diff` (unified/git) — see [Ceilings](ceilings.md).
 
 Output carries the global `order`, per-file `hunks` (with `category`,
 `enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, `details`,
-`symbols`, `noise` for skippable formatting/generated hunks, and `comment` for
-comment/docstring-only hunks), the `groups`, the def→use `edges`, and the
+`symbols`, `findings`, `uses_at`, `noise` for skippable formatting/generated
+hunks, and `comment` for comment/docstring-only hunks), the `groups`, the def→use `edges`, and the
 `clusters` shown above. `ordo-engine pack` renders all of it as compact review
 context.
 

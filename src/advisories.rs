@@ -3,11 +3,11 @@
 //! only where the pattern is deterministically wrong. A curated catalog of
 //! senior review knowledge — deliberately NOT a style linter.
 use crate::lang::{is_test_path, LangSpec};
-use crate::model::Advisory;
+use crate::model::{Finding, FindingSource, Level};
 use tree_sitter::Node;
 
 /// Detect constructs in the parsed *new* tree → (0-based start row, advisory).
-pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize, Advisory)> {
+pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize, Finding)> {
     let mut out = vec![];
     let walker: Rule = match spec.name {
         "python" | "xonsh" => walk_python,
@@ -23,7 +23,7 @@ pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize
     out
 }
 
-type Out = Vec<(usize, Advisory)>;
+type Out = Vec<(usize, Finding)>;
 type Rule = fn(Node, &[u8], &str, &mut Out);
 
 // An explicit stack, not recursion: a long chain of binary expressions — a
@@ -44,10 +44,13 @@ fn walk(node: Node, src: &[u8], path: &str, rule: Rule, out: &mut Out) {
 fn push(out: &mut Out, node: Node, construct: &str, message: &str, verdict: bool) {
     out.push((
         node.start_position().row,
-        Advisory {
-            construct: construct.into(),
+        Finding {
+            source: FindingSource::Catalog,
+            name: construct.into(),
             message: message.into(),
-            verdict,
+            // `verdict` was a bool meaning "a concrete downgrade is suggested";
+            // it is the third level now (see `model::Level`)
+            level: if verdict { Level::Verdict } else { Level::Note },
         },
     ));
 }
@@ -470,7 +473,7 @@ fn only_pass(block: Node) -> bool {
     kids.len() == 1 && kids[0].kind() == "pass_statement"
 }
 
-fn python_metaclass(class: Node, src: &[u8]) -> Option<Advisory> {
+fn python_metaclass(class: Node, src: &[u8]) -> Option<Finding> {
     let supers = class.child_by_field_name("superclasses")?;
     let (mut uses_meta, mut defines_meta) = (false, false);
     for arg in named(supers) {
@@ -490,10 +493,11 @@ fn python_metaclass(class: Node, src: &[u8]) -> Option<Advisory> {
         return None;
     }
     let mk = |message: String, verdict: bool| {
-        Some(Advisory {
-            construct: "metaclass".into(),
+        Some(Finding {
+            source: FindingSource::Catalog,
+            name: "metaclass".into(),
             message,
-            verdict,
+            level: if verdict { Level::Verdict } else { Level::Note },
         })
     };
     if defines_meta {

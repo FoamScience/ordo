@@ -2,7 +2,7 @@
 //! node kinds, so what needs pinning is that ordo *reaches* them — the spec
 //! resolves by extension, imports bind the names python binds, `#` is a
 //! comment, and `$FOO = …` names a binding python's `assignment` never sees.
-use ordo::model::Category;
+use ordo::model::{Category, FindingSource};
 mod fixture;
 use fixture::{rationales_of as rationales, run_file as one};
 
@@ -71,7 +71,7 @@ fn an_env_binding_links_to_its_use_in_a_subprocess_line() {
     assert!(
         rationales(&out)
             .iter()
-            .any(|r| r.contains("adds PROJECT_ROOT, used at")),
+            .any(|r| r == "adds PROJECT_ROOT (1 use)"),
         "{:?}",
         rationales(&out)
     );
@@ -98,9 +98,12 @@ fn a_python_advisory_still_fires_on_xonsh() {
         .files
         .iter()
         .flat_map(|f| {
-            f.hunks
-                .iter()
-                .flat_map(|h| h.advisories.iter().map(|a| a.construct.as_str()))
+            f.hunks.iter().flat_map(|h| {
+                h.findings
+                    .iter()
+                    .filter(|a| a.source == FindingSource::Catalog)
+                    .map(|a| a.name.as_str())
+            })
         })
         .collect();
     assert!(found.contains(&"shell-injection"), "{found:?}");

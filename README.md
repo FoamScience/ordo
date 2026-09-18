@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/schema-v1_frozen-5fd4c0" alt="schema v1, frozen">
+  <img src="https://img.shields.io/badge/schema-v2-5fd4c0" alt="schema v2">
   <!-- ordo:begin langs-badge -->
   <img src="https://img.shields.io/badge/languages-26-5fd4c0" alt="26 supported languages">
   <!-- ordo:end langs-badge -->
@@ -100,7 +100,7 @@ other consumer speaks to. Neither is required by the other.
 
 | | |
 | --- | --- |
-| [`docs/cli.md`](docs/cli.md) | `ordo-engine`, schema v1, the `enclosing_kind` table, the library API |
+| [`docs/cli.md`](docs/cli.md) | `ordo-engine`, schema v2, the `enclosing_kind` table, the library API |
 | [`docs/tui.md`](docs/tui.md) | the reviewer: revisions, filters, keybindings, command bar, themes |
 | [`docs/reviewing.md`](docs/reviewing.md) | the detail layer, rationale patterns, advisories, the change ledger |
 | [`docs/rules.md`](docs/rules.md) | conventions as data — conditions, limits, queries, shipped rulesets |

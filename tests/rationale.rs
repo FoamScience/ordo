@@ -6,7 +6,7 @@
 //! them is detected, so membership is the claim being made. Pinning those to a
 //! full list would make every one of them fail whenever an unrelated advisory
 //! is added — churn with no signal.
-use ordo::model::Input;
+use ordo::model::{FindingSource, Input, Level};
 mod fixture;
 use fixture::rationales_json as rationales;
 
@@ -409,9 +409,10 @@ fn p14_metaclass_advisories() {
         .iter()
         .flat_map(|f| {
             f.hunks.iter().flat_map(move |h| {
-                h.advisories
+                h.findings
                     .iter()
-                    .map(move |a| (f.path.clone(), a.construct.clone(), a.verdict))
+                    .filter(|a| a.source == FindingSource::Catalog)
+                    .map(move |a| (f.path.clone(), a.name.clone(), a.level == Level::Verdict))
             })
         })
         .collect();
@@ -445,9 +446,10 @@ fn p14_catalog() {
             .iter()
             .flat_map(|f| {
                 f.hunks.iter().flat_map(|h| {
-                    h.advisories
+                    h.findings
                         .iter()
-                        .map(|a| (a.construct.clone(), a.verdict))
+                        .filter(|a| a.source == FindingSource::Catalog)
+                        .map(|a| (a.name.clone(), a.level == Level::Verdict))
                 })
             })
             .collect()
@@ -504,9 +506,10 @@ fn p14_batch2() {
             .iter()
             .flat_map(|f| {
                 f.hunks.iter().flat_map(|h| {
-                    h.advisories
+                    h.findings
                         .iter()
-                        .map(|a| (a.construct.clone(), a.verdict))
+                        .filter(|a| a.source == FindingSource::Catalog)
+                        .map(|a| (a.name.clone(), a.level == Level::Verdict))
                 })
             })
             .collect()
@@ -627,9 +630,10 @@ fn p14_deep_python_cpp() {
             .iter()
             .flat_map(|f| {
                 f.hunks.iter().flat_map(|h| {
-                    h.advisories
+                    h.findings
                         .iter()
-                        .map(|a| (a.construct.clone(), a.verdict))
+                        .filter(|a| a.source == FindingSource::Catalog)
+                        .map(|a| (a.name.clone(), a.level == Level::Verdict))
                 })
             })
             .collect()
@@ -695,9 +699,10 @@ fn p14_derived_python_cpp() {
             .iter()
             .flat_map(|f| {
                 f.hunks.iter().flat_map(|h| {
-                    h.advisories
+                    h.findings
                         .iter()
-                        .map(|a| (a.construct.clone(), a.verdict))
+                        .filter(|a| a.source == FindingSource::Catalog)
+                        .map(|a| (a.name.clone(), a.level == Level::Verdict))
                 })
             })
             .collect()
