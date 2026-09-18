@@ -1424,7 +1424,7 @@ struct Item {
     /// the list row's parts, kept unjoined so line number and category can be
     /// coloured independently of the path
     mark: String,
-    cat: String,
+    cat: ordo::model::Category,
     rationale: String,
     details: Vec<String>,
     notes: Vec<String>,
@@ -1437,7 +1437,7 @@ struct Item {
     /// to it — `None` for an import, a region, or a hunk that changed nothing
     /// nameable
     ledger: Option<usize>,
-    advisories: Vec<(String, String, bool)>,
+    advisories: Vec<ordo::model::Advisory>,
     noise: bool,
     /// every changed line is a comment or docstring — drives `:only-comments`
     /// (the engine's own field of the same name, see `HunkOut::comment`)
@@ -3845,7 +3845,6 @@ fn build_items(out: &Output) -> Vec<Item> {
         .iter()
         .filter_map(|o| {
             let (path, h) = by_id.get(o.hunk.as_str())?;
-            let cat = format!("{:?}", h.category).to_lowercase();
             let warned = h.rules.iter().any(|r| r.level == "warn");
             let mark = if !h.advisories.is_empty() || warned {
                 "⚠ "
@@ -3893,16 +3892,12 @@ fn build_items(out: &Output) -> Vec<Item> {
                 old_range: h.old_range,
                 new_range: h.new_range,
                 mark: mark.to_string(),
-                cat: cat.clone(),
+                cat: h.category,
                 rationale: h.rationale.clone(),
                 details: h.details.clone(),
                 notes: h.notes.clone(),
                 edges,
-                advisories: h
-                    .advisories
-                    .iter()
-                    .map(|a| (a.construct.clone(), a.message.clone(), a.verdict))
-                    .collect(),
+                advisories: h.advisories.clone(),
                 noise: h.noise,
                 comment: h.comment,
                 symbols: h.symbols.clone(),
@@ -4447,6 +4442,16 @@ type Highlights = HashMap<String, Vec<LineSpans>>;
 /// here is the part that really is presentation: which query paints which
 /// language. A language with no query highlights as plain text, which is what
 /// a bare `.j2` did before and still does.
+/// A category as the list row spells it. The same lowercase spelling the wire
+/// format uses, written once rather than derived from `Debug` at each site.
+fn cat_name(c: ordo::model::Category) -> &'static str {
+    match c {
+        ordo::model::Category::Import => "import",
+        ordo::model::Category::Definition => "definition",
+        ordo::model::Category::Other => "other",
+    }
+}
+
 fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
     highlight_for_lang(ordo::lang_name_for_path(path)?)
 }
@@ -7313,7 +7318,12 @@ fn why_rows(
             kind: WhyKind::Edge(target),
         });
     }
-    for (construct, message, verdict) in &it.advisories {
+    for ordo::model::Advisory {
+        construct,
+        message,
+        verdict,
+    } in &it.advisories
+    {
         let (head, color) = if *verdict {
             (format!("⚠ {construct}"), theme.warn)
         } else {
@@ -7527,7 +7537,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                     Span::styled(it.mark.clone(), dim(app.theme.mark)),
                     Span::styled(it.path.clone(), style),
                     Span::styled(format!(":L{}", it.new_range[0]), dim(app.theme.accent)),
-                    Span::styled(format!(" [{}]", it.cat), dim(app.theme.category)),
+                    Span::styled(format!(" [{}]", cat_name(it.cat)), dim(app.theme.category)),
                 ];
                 ListItem::new(Line::from(slice_range(spans, 0, text_w)))
             }
@@ -10038,7 +10048,7 @@ mod tests {
             old_range: [0, 0],
             new_range: [0, 0],
             mark: String::new(),
-            cat: "other".to_string(),
+            cat: ordo::model::Category::Other,
             rationale: String::new(),
             details: vec![],
             notes: vec![],
