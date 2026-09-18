@@ -32,7 +32,7 @@ pub fn lang_name_for_path(path: &str) -> Option<&'static str> {
 }
 pub use patch::split_patch;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub fn run(input: Input) -> Output {
     // Templates are rewritten before anything else looks at them: every later
@@ -60,7 +60,7 @@ pub fn run(input: Input) -> Output {
     // can influence. A rule's `noise` and `priority` reach the hunk itself; its
     // notes ride along to the output.
     let mut rule_engine = rules::Rules::new(&input.options.rules);
-    let mut rule_hits: Vec<Vec<Vec<RuleHit>>> = vec![vec![]; n];
+    let mut rule_hits: Vec<Vec<Vec<Finding>>> = vec![vec![]; n];
     if !rule_engine.is_empty() {
         for (fi, change) in input.changes.iter().enumerate() {
             let path = &change.path;
@@ -178,9 +178,22 @@ pub fn run(input: Input) -> Output {
                 comment: hunks[fi].comment[li],
                 details: hunks[fi].sem[li].details.clone(),
                 notes: hunks[fi].sem[li].notes.clone(),
-                advisories: hunks[fi].sem[li].advisories.clone(),
                 symbols: hunks[fi].sem[li].symbols.clone(),
-                rules: rule_hits[fi].get(li).cloned().unwrap_or_default(),
+                // one list: the construct catalog, the caller's rules, and
+                // anything a client adds later, all say the same kind of thing
+                findings: hunks[fi].sem[li]
+                    .advisories
+                    .iter()
+                    .cloned()
+                    .chain(rule_hits[fi].get(li).into_iter().flatten().cloned())
+                    .collect(),
+                uses_at: order::introduced_bindings(&hunks[fi].sem[li], &symbols[fi].old_locals)
+                    .filter(|b| !b.uses.is_empty())
+                    .map(|b| UseSite {
+                        name: b.name.clone(),
+                        rows: b.uses.clone(),
+                    })
+                    .collect(),
             });
         }
         files.push(FileOut {
@@ -1253,23 +1266,26 @@ pub fn pack(out: &Output) -> String {
             let _ = writeln!(s, "{} → {}   {}", loc(&e.from), loc(&e.to), e.why);
         }
     }
-    // P14: advanced-construct advisories
-    let advs: Vec<(String, &crate::model::Advisory)> = out
+    // everything anyone noticed, whoever noticed it
+    let found: Vec<(String, &Finding)> = out
         .files
         .iter()
         .flat_map(|f| {
             f.hunks.iter().flat_map(move |h| {
-                h.advisories
+                h.findings
                     .iter()
                     .map(move |a| (format!("{}:L{}", f.path, h.new_range[0]), a))
             })
         })
         .collect();
-    if !advs.is_empty() {
-        let _ = writeln!(s, "\n## advisories");
-        for (at, a) in advs {
-            let mark = if a.verdict { " ⚠" } else { "" };
-            let _ = writeln!(s, "{at}  {}{mark}", a.construct);
+    if !found.is_empty() {
+        let _ = writeln!(s, "\n## findings");
+        for (at, a) in found {
+            let mark = match a.level {
+                Level::Verdict | Level::Warn => " ⚠",
+                Level::Note => "",
+            };
+            let _ = writeln!(s, "{at}  {} ({}){mark}", a.name, a.source.as_str());
             for line in a.message.lines() {
                 let _ = writeln!(s, "  {line}");
             }

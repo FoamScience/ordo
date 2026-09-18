@@ -11,7 +11,7 @@ others:
 | --- | --- | --- | --- |
 | `~/.config/ordo/tui.toml` (`preset`, `theme`, `[binds]`, `[theme]` roles) | `KeyConfig`, a hand-rolled line parser (`parse_key_config`) | `ordo` | `init_config`, hand-written prose + two tables (`keymap`, `THEME_ROLES`) |
 | `rules.toml` / presets | `ordo::model::Rule` + `RuleToml` (real TOML since P21) | `ordo` | nothing — `docs/rules.md` is hand-kept |
-| engine `Options` (`strategy`, `cross_file`, …) | `ordo::model::Options`, serde | `ordo-engine order --json`, `ordo` | `schema/v1.json`, hand-kept and frozen |
+| engine `Options` (`strategy`, `cross_file`, …) | `ordo::model::Options`, serde | `ordo-engine order --json`, `ordo` | `schema/v2.json`, hand-kept |
 
 And a fourth that isn't configurable at all: the engine's tuning constants —
 `LARGE_LINES = 60`, `DEEP_NESTING = 4`, `MANY_PARAMS = 6` (`extract.rs`),
@@ -37,7 +37,7 @@ From that single declaration, generated and *tested against it*:
 - the commented default config (`--init-config`);
 - the docs page (`docs/config.md`);
 - validation, including "unknown key `presett` — did you mean `preset`?";
-- the engine's options schema, as a drift guard on the frozen `schema/v1.json`.
+- the engine's options schema, as a drift guard on `schema/v2.json`.
 
 Layered sources with **provenance**: `:config` shows where every effective value came
 from, the way `:rules` does for rules. The engine stays pure: it receives an
@@ -130,7 +130,7 @@ pub struct Tuning {
 }
 ```
 
-Additive optional object on the frozen contract, so allowed; `schema/v1.json` gains
+Additive optional object on the published contract, so allowed; `schema/v2.json` gains
 the entry by hand as the `frozen-contract` rule demands — and a test asserts
 `schema_for!(Options)`'s property names are a subset of the frozen file's, so the two
 can't drift silently. `refine.rs`'s `PAIR_THRESHOLD`/`MAX_PAIRS` stay constants: they
@@ -171,7 +171,7 @@ no dependency.
 | --- | --- | --- |
 | `--init-config` output | walk `schema_for!(TuiConfig)`: `# description` lines, then `# key = <default>` commented, `[section]` per nested object, dynamic rows for `binds`/`colors` | the existing round-trip test, generalized: uncomment everything → parse → equals `TuiConfig::default()` and reports no problems |
 | `docs/config.md` | the same walk, markdown renderer: one table per section, key / default / description | a test that regenerates and diffs; `UPDATE_DOCS=1` rewrites, like the corpus baseline |
-| `schema/v1.json` `options` section | **not** generated — it is the frozen contract | the subset test above |
+| `schema/v2.json` `options` section | **not** generated — it is the published contract | the subset test above |
 | `docs/rules.md` condition table | same walk over `schema_for!(When)` | same diff test; the prose around it stays hand-written |
 
 The last row is the quiet payoff: the rules reference stops being something a
@@ -185,7 +185,7 @@ person forgets to update.
    already have keeps working.
 2. **Loading** — `toml` replaces `parse_key_config`; layering with provenance;
    `:config`; "did you mean".
-3. **Engine tuning** — `Options.tuning`; constants become defaults; `schema/v1.json`
+3. **Engine tuning** — `Options.tuning`; constants become defaults; `schema/v2.json`
    entry; subset test; corpus run (must be identical).
 4. **Docs** — `docs/config.md` and the `docs/rules.md` table generated; diff tests.
 5. **Repo-level `.ordo/tui.toml`** — one more source in the same loader.

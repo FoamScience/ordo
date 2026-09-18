@@ -39,15 +39,10 @@ fn discriminates_binding_from_a_name_that_merely_contains_it() {
     let rats = one("impeller.py", old, &new);
     let binding = rats
         .iter()
-        .find(|r| r.contains("adds local may_refine,"))
+        .find(|r| r.contains("adds local may_refine "))
         .unwrap_or_else(|| panic!("no binding rationale found: {rats:?}"));
-    assert!(
-        binding.starts_with("adds local may_refine, used at L"),
-        "{binding}"
-    );
     // exactly 2 uses — not the 4 occurrences a substring search would find
-    let l_count = binding.matches('L').count();
-    assert_eq!(l_count, 2, "{binding}");
+    assert_eq!(binding, "adds local may_refine (2 uses)", "{binding}");
     assert!(
         !binding.contains("may_refine_camber_span"),
         "must not count may_refine_camber_span as a use of may_refine: {binding}"
@@ -138,7 +133,7 @@ fn many_used_bindings_collapse_with_line_numbers_capped_too() {
     let rats = one("a.py", &old, &new);
     let binding = rats
         .iter()
-        .find(|r| r.contains("FACE_0 (L"))
+        .find(|r| r.contains("FACE_0 (1 use)"))
         .unwrap_or_else(|| panic!("no binding rationale found: {rats:?}"));
     assert!(binding.contains("more"), "{binding}");
     assert!(binding.len() < 150, "{} chars: {binding}", binding.len());

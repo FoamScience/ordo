@@ -981,43 +981,16 @@ fn comment_rationale(old_range: [usize; 2], new_empty: bool, enclosing: Option<&
     }
 }
 
-// P17: "where is this binding used?" wording for a hunk that introduces a
-// local-variable binding (see `lang::LangSpec::locals`). ordo parses one
-// file, so an absence of uses is scoped honestly to what it actually
-// checked — the enclosing function for a function-local, the whole file for
-// a module/script-level name — rather than an unsupportable "unused" claim
-// (that's ruff/clippy's job, with their suppression conventions).
-// Names already locally bound somewhere in the old file are excluded: a
-// hunk that only edits an existing variable's value (`x = 1` → `x = 2`)
-// isn't introducing `x` — that stays the bare "edits {enclosing}" wording.
-// One-line rendering for a "used" group of bindings: a single binding keeps
-// the original "used at L.., L.." wording; several collapse into one
-// name_list-capped fragment, same degrade-gracefully shape as `renames`
-// above (line numbers stay attached per name only while there are few
-// enough names to show — past the cap, name_list's own "and N more" already
-// drops them, so there's nothing extra to special-case).
-// `alt` reworks the single-binding wording to avoid the literal ", used at
-// L" phrase — used when a scoped fragment already used it in the same
-// rationale (see call site), so the two don't read as one repeated,
-// per-symbol fragment.
-fn used_frag(items: &[(&str, &[usize])], prefix: &str, alt: bool) -> String {
-    if let [(name, uses)] = items {
-        let lines: Vec<String> = uses.iter().map(|l| format!("L{l}")).collect();
-        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        return if alt {
-            format!("adds {prefix}{name} (used at {})", name_list(&refs))
-        } else {
-            format!("adds {prefix}{name}, used at {}", name_list(&refs))
-        };
-    }
+// One-line rendering for a "used" group of bindings. The rationale names the
+// bindings and counts their uses; the positions themselves ride on
+// `HunkOut::uses_at`, where a consumer can mark them in the code rather than
+// make the reader carry eighteen line numbers across two panes.
+fn used_frag(items: &[(&str, &[usize])], prefix: &str) -> String {
     let strs: Vec<String> = items
         .iter()
         .map(|(name, uses)| {
-            let lines: Vec<String> = uses.iter().map(|l| format!("L{l}")).collect();
-            format!(
-                "{name} ({})",
-                name_list(&lines.iter().map(String::as_str).collect::<Vec<_>>())
-            )
+            let n = uses.len();
+            format!("{name} ({n} use{})", if n == 1 { "" } else { "s" })
         })
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
@@ -1043,24 +1016,34 @@ fn used_frag(items: &[(&str, &[usize])], prefix: &str, alt: bool) -> String {
 // files" once per name. `bindings` (and therefore each group) is walked in
 // name order, so the grouping and every `name_list` it feeds are
 // deterministic without touching a HashMap.
-fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String> {
-    // A binding inside a def this same hunk introduces is that def's own
-    // implementation detail — the rationale already says "adds _wrap_fan_deg",
-    // so naming the locals it was born with adds nothing and costs the line
-    // length that the independently-interesting names need. Same rule the P15
-    // detail layer applies to the members of a wholly new container.
-    let born_here = |b: &BindingUse| {
+/// The bindings a hunk actually introduces — what both the rationale and
+/// `HunkOut::uses_at` speak about, so the gutter never marks a name the
+/// rationale refuses to name.
+///
+/// Names already locally bound somewhere in the old file are excluded: a hunk
+/// that only edits an existing variable's value (`x = 1` → `x = 2`) isn't
+/// introducing `x`. A binding inside a def this same hunk introduces is that
+/// def's own implementation detail — the rationale already says "adds
+/// _wrap_fan_deg", so naming the locals it was born with adds nothing. Same
+/// rule the P15 detail layer applies to the members of a wholly new container.
+pub(crate) fn introduced_bindings<'a>(
+    s: &'a HunkSem,
+    old_locals: &'a HashSet<String>,
+) -> impl Iterator<Item = &'a BindingUse> {
+    let born_here = move |b: &BindingUse| {
         b.scope.as_deref().is_some_and(|sc| {
             s.defines
                 .iter()
                 .any(|d| sc == d || sc.starts_with(&format!("{d}.")))
         })
     };
-    let mut items: Vec<&BindingUse> = s
-        .bindings
+    s.bindings
         .iter()
-        .filter(|b| !old_locals.contains(&b.name) && !born_here(b))
-        .collect();
+        .filter(move |b| !old_locals.contains(&b.name) && !born_here(b))
+}
+
+fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String> {
+    let mut items: Vec<&BindingUse> = introduced_bindings(s, old_locals).collect();
     if items.is_empty() {
         return None;
     }
@@ -1130,10 +1113,10 @@ fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String
         });
     }
     if !used_scoped.is_empty() {
-        frags.push(used_frag(&used_scoped, "local ", false));
+        frags.push(used_frag(&used_scoped, "local "));
     }
     if !used_file.is_empty() {
-        frags.push(used_frag(&used_file, "", !used_scoped.is_empty()));
+        frags.push(used_frag(&used_file, ""));
     }
     (!frags.is_empty()).then(|| join_frags(&frags))
 }

@@ -2,7 +2,7 @@
 //! `problems`, and every rule fires at least once. A rule that never fires
 //! looks exactly like a convention nobody breaks — this is what keeps the
 //! shipped sets honest as grammars and the engine move.
-use ordo::model::{Input, Output, Rule, When};
+use ordo::model::{FindingSource, Input, Output, Rule, When};
 use std::path::Path;
 
 /// The rules files are kebab-case and flat; the engine's `Rule` nests its
@@ -99,8 +99,9 @@ fn every_shipped_ruleset_loads_and_every_rule_fires_on_its_sample() {
             .files
             .iter()
             .flat_map(|f| f.hunks.iter())
-            .flat_map(|h| h.rules.iter())
-            .map(|r| r.rule.as_str())
+            .flat_map(|h| h.findings.iter())
+            .filter(|f| f.source == FindingSource::Rule)
+            .map(|f| f.name.as_str())
             .collect();
         // a file-size limit cannot be exercised by a sample short enough to read
         let silent: Vec<&str> = rules

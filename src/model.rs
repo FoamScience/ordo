@@ -152,15 +152,79 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// P14: an advanced-construct advisory — a powerful/overusable language
-/// construct flagged with escalation-ladder guidance. `verdict` = true when a
-/// concrete downgrade is suggested (a signal backs it), else informational.
+/// Who noticed something about a hunk.
+///
+/// The three used to be three separate collections with three shapes:
+/// `advisories` (the engine's hardcoded construct catalog), `rules` (the
+/// caller's own conventions, as data) and, client-side only, analyzer results
+/// read from SARIF. They differ in *who found it*, never in what it is, so
+/// they are one list with a source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FindingSource {
+    /// the engine's own advanced-construct catalog (P14)
+    Catalog,
+    /// one of `Options.rules` — the caller's conventions
+    Rule,
+    /// an external analyzer, read from its SARIF output by a client
+    Analyzer,
+}
+
+/// How hard a finding presses.
+///
+/// `Verdict` is what the advisory catalog's `verdict: true` meant: not "here is
+/// something to know" but "here is a concrete downgrade, and a signal backs
+/// it". Keeping it as a third level rather than a flag is what let the catalog
+/// and the rules engine become one thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    Note,
+    Warn,
+    Verdict,
+}
+
+impl FindingSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FindingSource::Catalog => "catalog",
+            FindingSource::Rule => "rule",
+            FindingSource::Analyzer => "analyzer",
+        }
+    }
+}
+
+impl Level {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Note => "note",
+            Level::Warn => "warn",
+            Level::Verdict => "verdict",
+        }
+    }
+}
+
+/// One thing worth knowing about a hunk, whoever found it.
 #[derive(Debug, Clone, Serialize)]
-pub struct Advisory {
-    pub construct: String,
+pub struct Finding {
+    pub source: FindingSource,
+    /// the construct, rule or analyzer check that fired
+    pub name: String,
     pub message: String,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub verdict: bool,
+    pub level: Level,
+}
+
+/// Where a name this hunk introduces is used, as positions rather than prose.
+///
+/// The rationale used to render these into its own sentence — "adds CFG (L30,
+/// L37, L44, and 2 more)" — which put eighteen line numbers in a pane that is
+/// not the code. They are facts; a consumer can mark them, and the rationale
+/// can go back to naming what changed.
+#[derive(Debug, Clone, Serialize)]
+pub struct UseSite {
+    pub name: String,
+    /// 1-based new-side rows, sorted
+    pub rows: Vec<usize>,
 }
 
 /// One reviewing rule: what to match, and what to say or do about it.
@@ -182,6 +246,11 @@ pub struct Rule {
     /// something worth stopping at — reported at `warn` level
     #[serde(default)]
     pub warn: Option<String>,
+    /// a concrete downgrade this rule asserts, not an FYI — reported at
+    /// `verdict` level, the same level the construct catalog uses when a
+    /// signal backs the call
+    #[serde(default)]
+    pub verdict: Option<String>,
     /// treat a matching hunk as skippable (the caller's own noise policy, on
     /// top of the engine's formatting/generated detection)
     #[serde(default)]
@@ -299,15 +368,6 @@ fn string_or_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<St
         Some(V::One(s)) => Some(vec![s]),
         Some(V::Many(v)) => Some(v),
     })
-}
-
-/// A rule that matched, on the hunk it matched.
-#[derive(Debug, Clone, Serialize)]
-pub struct RuleHit {
-    pub rule: String,
-    pub message: String,
-    /// `note` | `warn`
-    pub level: &'static str,
 }
 
 /// What kind of thing an `enclosing` name refers to. Only `Definition` is a
@@ -457,17 +517,17 @@ pub struct HunkOut {
     /// structural smells for a def introduced here (P13.1); omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
-    /// advanced-construct advisories in this hunk (P14); omitted when empty
+    /// everything anyone noticed about this hunk — the engine's construct
+    /// catalog, the caller's rules, an analyzer's results — in one list
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub advisories: Vec<Advisory>,
+    pub findings: Vec<Finding>,
+    /// where the names this hunk introduces are used (P27); omitted when empty
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses_at: Vec<UseSite>,
     /// symbol identity (name + tree-sitter kind + enclosing scope) for each
     /// definition this hunk introduces; omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<Symbol>,
-    /// reviewing rules (`Options.rules`) that matched this hunk; omitted when
-    /// none did
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RuleHit>,
 }
 
 #[derive(Debug, Serialize)]

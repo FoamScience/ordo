@@ -34,7 +34,7 @@
     "bare_change": 0,
     "degraded_files": 0,
     "hunks": 3316,
-    "longest_rationale": 226,
+    "longest_rationale": 221,
     "unsupported_files": 0,
     "with_details": 154,
     "with_symbols": 483
@@ -54,7 +54,7 @@
     "bare_change": 0,
     "degraded_files": 0,
     "hunks": 14171,
-    "longest_rationale": 239,
+    "longest_rationale": 240,
     "unsupported_files": 0,
     "with_details": 2595,
     "with_symbols": 2676
@@ -74,7 +74,7 @@
     "bare_change": 0,
     "degraded_files": 0,
     "hunks": 3461,
-    "longest_rationale": 206,
+    "longest_rationale": 201,
     "unsupported_files": 0,
     "with_details": 2194,
     "with_symbols": 195
@@ -104,7 +104,7 @@
     "bare_change": 0,
     "degraded_files": 0,
     "hunks": 1155,
-    "longest_rationale": 237,
+    "longest_rationale": 235,
     "unsupported_files": 0,
     "with_details": 49,
     "with_symbols": 156

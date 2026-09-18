@@ -23,7 +23,6 @@ const MAX_RATIONALE: usize = 240;
 const PROVENANCE: &[&str] = &[
     ", extracted from ",
     ", no uses in ",
-    ", used at L",
     ", defined in ",
     ", used in ",
     ", moves ",
@@ -78,7 +77,7 @@ fn many_module_level_bindings_with_no_uses_stay_short() {
 
 #[test]
 fn many_used_bindings_stay_short() {
-    // the 701-char case: one "used at L.." phrase per binding
+    // the 701-char case: a line-number list per binding
     let mut body = String::new();
     for i in 0..25 {
         body.push_str(&format!("VALUE_NUMBER_{i} = {i}\n"));

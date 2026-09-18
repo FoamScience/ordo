@@ -42,7 +42,6 @@ const BASELINE: &str = "corpus/baseline.json";
 const PROVENANCE: &[&str] = &[
     ", extracted from ",
     ", no uses in ",
-    ", used at L",
     ", defined in ",
     ", used in ",
 ];

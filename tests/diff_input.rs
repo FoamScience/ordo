@@ -38,7 +38,7 @@ fn l1_unapplicable_diff_degrades_gracefully() {
     )
     .unwrap();
     let out = ordo::run(inp);
-    assert_eq!(out.schema, 1);
+    assert_eq!(out.schema, 2);
     assert!(
         out.files[0]
             .hunks

@@ -1,4 +1,4 @@
-//! `schema/v1.json` against the code it describes.
+//! `schema/v2.json` against the code it describes.
 //!
 //! The schema is the v1 promise, and nothing used to read it: it had drifted in
 //! both directions at once — `hunks[].rules` was emitted but undeclared, while
@@ -9,8 +9,8 @@ use ordo::model::{Input, When};
 use serde_json::Value;
 
 fn schema() -> Value {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/v1.json");
-    serde_json::from_str(&std::fs::read_to_string(&p).expect("schema/v1.json")).expect("valid json")
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/v2.json");
+    serde_json::from_str(&std::fs::read_to_string(&p).expect("schema/v2.json")).expect("valid json")
 }
 
 /// Declared property names at a `/`-separated path, stepping through `items`
@@ -37,8 +37,9 @@ fn declared(schema: &Value, path: &str) -> Vec<String> {
 
 /// An input that reaches as many optional output fields as one fixture can: a
 /// rename whose old name survives at one call site (a `notes` entry), a
-/// cross-file use, a removal, a rule hit, and a config edit whose changed keys
-/// produce `details`.
+/// cross-file use, a removal, a rule hit, a local binding that is used again
+/// (a `uses_at` entry), and a config edit whose changed keys produce
+/// `details`.
 fn rich() -> Input {
     serde_json::from_value(serde_json::json!({
         "changes": [
@@ -48,6 +49,9 @@ fn rich() -> Input {
             { "path": "b.py",
               "old": "from a import parse_cfg\n\ndef main():\n    return parse_cfg('x')\n",
               "new": "from a import load_cfg\n\ndef main():\n    return load_cfg('x')\n\ndef legacy():\n    return parse_cfg('y')\n" },
+            { "path": "e.py",
+              "old": "def tally(xs):\n    return 0\n",
+              "new": "def tally(xs):\n    total = 0\n    for x in xs:\n        total += x\n    return total\n" },
             { "path": "c.yaml",
               "old": "svc:\n  port: 80\n  host: a\n",
               "new": "svc:\n  port: 443\n  host: a\n  tls: on\n" }
@@ -117,11 +121,11 @@ fn the_schema_declares_everything_the_engine_emits() {
                 for s in h["symbols"].as_array().into_iter().flatten() {
                     check("files/hunks/symbols", s);
                 }
-                for r in h["rules"].as_array().into_iter().flatten() {
-                    check("files/hunks/rules", r);
+                for r in h["findings"].as_array().into_iter().flatten() {
+                    check("files/hunks/findings", r);
                 }
-                for a in h["advisories"].as_array().into_iter().flatten() {
-                    check("files/hunks/advisories", a);
+                for u in h["uses_at"].as_array().into_iter().flatten() {
+                    check("files/hunks/uses_at", u);
                 }
             }
             for d in f["dropped"].as_array().into_iter().flatten() {
@@ -155,7 +159,7 @@ fn the_fixture_reaches_the_optional_output_fields() {
         .iter()
         .flat_map(|f| f["hunks"].as_array().expect("hunks"))
         .collect();
-    for field in ["rules", "symbols", "details", "notes"] {
+    for field in ["findings", "uses_at", "symbols", "details", "notes"] {
         assert!(
             hunks.iter().any(|h| h.get(field).is_some()),
             "no hunk carries `{field}`; the schema check would not cover it"
@@ -173,8 +177,10 @@ fn the_fixture_reaches_the_optional_output_fields() {
             .iter()
             .any(|f| f["hunks"]
                 .as_array()
-                .is_some_and(|hs| hs.iter().any(|h| h.get("advisories").is_some()))),
-        "advisory fixture carries no advisory: {adv}"
+                .is_some_and(|hs| hs.iter().any(|h| h["findings"]
+                    .as_array()
+                    .is_some_and(|fs| fs.iter().any(|f| f["source"] == "catalog"))))),
+        "advisory fixture carries no catalog finding: {adv}"
     );
     let drp = serde_json::to_value(ordo::run(dropped())).expect("serializes");
     assert!(

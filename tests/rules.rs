@@ -1,6 +1,6 @@
 //! Reviewing rules: the caller's own conventions, matched against the facts the
 //! engine computes. Data in, deterministic annotations and ordering out.
-use ordo::model::Output;
+use ordo::model::{FindingSource, Level, Output};
 mod fixture;
 use fixture::run_json as run;
 
@@ -13,8 +13,9 @@ fn hits(out: &Output, path: &str) -> Vec<String> {
         .iter()
         .filter(|f| f.path == path)
         .flat_map(|f| f.hunks.iter())
-        .flat_map(|h| h.rules.iter())
-        .map(|r| format!("{}:{}", r.level, r.rule))
+        .flat_map(|h| h.findings.iter())
+        .filter(|f| f.source == FindingSource::Rule)
+        .map(|f| format!("{}:{}", f.level.as_str(), f.name))
         .collect()
 }
 
@@ -90,7 +91,29 @@ fn a_rule_can_mark_a_hunk_skippable() {
     let h = &out.files[0].hunks[0];
     assert!(h.noise);
     // a rule that only sets noise still says so, or the hunk dims for no reason
-    assert_eq!(h.rules[0].message, "marked skippable");
+    assert_eq!(h.findings[0].message, "marked skippable");
+}
+
+#[test]
+fn a_rule_can_assert_a_verdict_not_only_a_note_or_a_warning() {
+    // the level the construct catalog reserves for "a signal backs this
+    // downgrade" is reachable from a data rule too — without it, a migrated
+    // advisory would lose its verdict on the way into `rulesets/`
+    let out = run(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "x = 1\n", "new": "x = 2\n" }],
+        "options": { "rules": [
+            { "name": "downgrade", "when": { "lang": "python" },
+              "verdict": "use a plain module constant" }
+        ]}
+    }));
+    let f = &out.files[0].hunks[0].findings;
+    assert_eq!(
+        f.iter()
+            .map(|f| (f.source, f.level, f.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(FindingSource::Rule, Level::Verdict, "downgrade")],
+        "{f:?}"
+    );
 }
 
 // ---- query rules: conventions about code shape ----
@@ -238,7 +261,7 @@ fn no_rules_means_no_problems_and_no_hits() {
         "changes": [{ "path": "a.py", "old": "x = 1\n", "new": "x = 2\n" }]
     }));
     assert!(out.problems.is_empty());
-    assert!(out.files[0].hunks[0].rules.is_empty());
+    assert!(out.files[0].hunks[0].findings.is_empty());
 }
 
 #[test]
@@ -742,7 +765,7 @@ fn kind_and_query_on_one_rule_must_both_point_at_the_row() {
     let marked: Vec<&str> = out.files[0]
         .hunks
         .iter()
-        .filter(|h| !h.rules.is_empty())
+        .filter(|h| h.findings.iter().any(|f| f.source == FindingSource::Rule))
         .flat_map(|h| h.defines.iter().map(|d| d.as_str()))
         .collect();
     assert!(marked.contains(&"keep"), "{marked:?}");
