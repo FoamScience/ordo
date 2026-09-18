@@ -46,6 +46,11 @@ On a GitButler-managed repo <rev> also takes the CLI IDs `but status` prints: a
 branch (by ID or name) reviews that branch's own commits, a commit ID (or a
 change-ID prefix) reviews that commit.
 
+`gD` on a hunk opens the dependency canvas: the hunk at top centre, everything
+it needs fanning left and everything that needs it fanning right, each as a card
+showing that hunk's own code. Enter goes to a card (C-o returns), Esc closes.
+The canvas takes the next free pane digit while it is open, so `4` addresses it.
+
 --sarif <file> reads analyzer results in SARIF 2.1.0 — what semgrep, CodeQL,
 ruff, eslint, shellcheck and `clippy --message-format` all emit — and attaches
 each finding to the hunk whose lines contain it, so they arrive in the reading
@@ -2379,6 +2384,9 @@ enum Pane {
     List,
     Code,
     Why,
+    /// the dependency canvas — only reachable while it is open, so the
+    /// `Tab` cycle below leaves it out
+    Deps,
 }
 
 impl Pane {
@@ -2386,14 +2394,15 @@ impl Pane {
         match self {
             Pane::List => Pane::Code,
             Pane::Code => Pane::Why,
-            Pane::Why => Pane::List,
+            // the canvas is entered by `gD` or `4`, never by cycling into it
+            Pane::Why | Pane::Deps => Pane::List,
         }
     }
     fn prev(self) -> Pane {
         match self {
             Pane::List => Pane::Why,
             Pane::Code => Pane::List,
-            Pane::Why => Pane::Code,
+            Pane::Why | Pane::Deps => Pane::Code,
         }
     }
 }
@@ -2413,6 +2422,8 @@ enum Action {
     FocusNext,
     /// fill the frame with the focused pane, or restore the split
     Zoom,
+    /// open the dependency canvas on the selected hunk
+    OpenDeps,
     FocusPrev,
     Focus(Pane),
     // code-pane cursor motions
@@ -2576,6 +2587,8 @@ fn keymap(name: &str) -> Option<Keymap> {
                 // xterm, gnome-terminal, Terminal.app and most tmux setups —
                 // only kitty-protocol terminals emit them. Pressing the digit
                 // of the pane already focused zooms it.
+                (Some(ch('g')), ch('D'), Action::OpenDeps),
+                (None, ch('4'), Action::Focus(Pane::Deps)),
                 (None, ch('1'), Action::Focus(Pane::List)),
                 (None, ch('2'), Action::Focus(Pane::Code)),
                 (None, ch('3'), Action::Focus(Pane::Why)),
@@ -2759,6 +2772,10 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::HalfDown => (Category::Navigation, "half-page down"),
         Action::HalfUp => (Category::Navigation, "half-page up"),
         Action::Zoom => (Category::Panes, "fill the frame with the focused pane"),
+        Action::OpenDeps => (
+            Category::Panes,
+            "open the dependency canvas: what this hunk needs, and what needs it",
+        ),
         Action::FocusNext => (Category::Panes, "focus the next pane"),
         Action::FocusPrev => (Category::Panes, "focus the previous pane"),
         Action::Focus(Pane::List) => (
@@ -2767,6 +2784,7 @@ fn action_help(a: Action) -> (Category, &'static str) {
         ),
         Action::Focus(Pane::Code) => (Category::Panes, "focus the code pane (again to zoom)"),
         Action::Focus(Pane::Why) => (Category::Panes, "focus the why pane"),
+        Action::Focus(Pane::Deps) => (Category::Panes, "focus the dependency canvas, when open"),
         Action::CursorLeft => (Category::Navigation, "move the code cursor left"),
         Action::CursorRight => (Category::Navigation, "move the code cursor right"),
         Action::WordNext => (Category::Navigation, "move the code cursor to the next word"),
@@ -2834,6 +2852,8 @@ const ACTION_NAMES: &[(&str, Action)] = &[
     ("focus-code", Action::Focus(Pane::Code)),
     ("focus-why", Action::Focus(Pane::Why)),
     ("zoom", Action::Zoom),
+    ("open-deps", Action::OpenDeps),
+    ("focus-deps", Action::Focus(Pane::Deps)),
     ("cursor-left", Action::CursorLeft),
     ("cursor-right", Action::CursorRight),
     ("word-next", Action::WordNext),
@@ -3906,6 +3926,29 @@ struct ParsedFile {
 
 /// The floating symbol-hover popup over the code pane: kind/signature/doc,
 /// then (when the definition resolves) a cross-commit history section.
+/// The dependency canvas: the selected hunk at top centre, everything it needs
+/// fanning out to the left and everything that needs it to the right.
+///
+/// Holds only what the layout cannot re-derive — which hunk it was opened on,
+/// which card is selected, and how far the fan is scrolled. The cards
+/// themselves are rebuilt from `Item.edges` every frame, so a reload cannot
+/// leave a stale copy on screen.
+struct Canvas {
+    /// the item the canvas was opened on
+    anchor: usize,
+    /// index into the flattened card list (left side first, then right)
+    sel: usize,
+}
+
+/// One card: a hunk this one depends on, or one that depends on it.
+struct Card {
+    /// item index the card shows
+    idx: usize,
+    /// `Needs` on the left, `NeededBy` on the right
+    needs: bool,
+    label: String,
+}
+
 struct Popup {
     title: String,
     /// styled, so a popup can carry syntax-highlighted code (the dep preview)
@@ -4058,6 +4101,8 @@ struct App {
     /// the focused pane fills the frame. A narrow terminal zooms on its own
     /// (see `SPLIT_COLS`); this is the explicit toggle on top of that.
     zoom: bool,
+    /// the dependency canvas, when open (see `Canvas`)
+    canvas: Option<Canvas>,
     /// bucket key -> the header text for it. What the keys *are* depends on
     /// `mode`: group ids in hunk mode, `L<n>` ledger keys in ledger mode.
     groups: HashMap<String, String>,
@@ -7134,6 +7179,7 @@ fn run(
                         theme,
                         show_groups: false,
                         zoom: false,
+                        canvas: None,
                         group_reasons: groups.clone(),
                         groups,
                         mode: ViewMode::default(),
@@ -7343,6 +7389,26 @@ fn apply(app: &mut App, a: Action) -> bool {
         }
         return false;
     }
+
+    // The canvas is a floating view with its own selection: j/k move between
+    // cards, Enter goes to one, Esc closes. Anything else is a no-op rather
+    // than leaking through to the pane underneath.
+    if app.canvas.is_some() && app.focus == Pane::Deps {
+        match a {
+            Action::Quit => close_deps(app),
+            Action::Next => move_card(app, 1),
+            Action::Prev => move_card(app, -1),
+            Action::First => move_card(app, isize::MIN / 2),
+            Action::Last => move_card(app, isize::MAX / 2),
+            Action::JumpToEdge => jump_to_card(app),
+            Action::Focus(p) if p != Pane::Deps => {
+                close_deps(app);
+                app.focus = p;
+            }
+            _ => {}
+        }
+        return false;
+    }
     match a {
         // an active search is showing state too: clear its highlights first,
         // the way dismissing a popup does, so Esc after a search doesn't end
@@ -7350,9 +7416,13 @@ fn apply(app: &mut App, a: Action) -> bool {
         Action::Quit if app.search.is_some() => app.search = None,
         Action::Quit => return true,
         // asking for the pane you are already in means "give me more of it"
+        // `4` addresses the canvas whether or not it exists yet, so it opens
+        // one rather than focusing a view that is not there
+        Action::Focus(Pane::Deps) => open_deps(app),
         Action::Focus(p) if app.focus == p => app.zoom = !app.zoom,
         Action::Focus(p) => app.focus = p,
         Action::Zoom => app.zoom = !app.zoom,
+        Action::OpenDeps => open_deps(app),
         Action::FocusNext => app.focus = app.focus.next(),
         Action::FocusPrev => app.focus = app.focus.prev(),
         Action::ToggleReviewed => {
@@ -7373,24 +7443,24 @@ fn apply(app: &mut App, a: Action) -> bool {
         Action::First => match app.focus {
             Pane::List => select(app, first_visible(app)),
             Pane::Code => app.scroll = 0,
-            Pane::Why => app.why_scroll = 0,
+            Pane::Why | Pane::Deps => app.why_scroll = 0,
         },
         Action::Last => match app.focus {
             Pane::List => select(app, last_visible(app)),
             Pane::Code => app.scroll = last_line(app.code_len),
-            Pane::Why => app.why_scroll = last_line(app.why_len),
+            Pane::Why | Pane::Deps => app.why_scroll = last_line(app.why_len),
         },
         // column line-end motion: cursor in the code pane, list/why fall back
         // to `First`/`Last`'s meaning so vscode's Home/End still works there
         Action::LineStart => match app.focus {
             Pane::List => select(app, first_visible(app)),
             Pane::Code => cursor_move(app, line_start),
-            Pane::Why => app.why_scroll = 0,
+            Pane::Why | Pane::Deps => app.why_scroll = 0,
         },
         Action::LineEnd => match app.focus {
             Pane::List => select(app, last_visible(app)),
             Pane::Code => cursor_move(app, line_end),
-            Pane::Why => app.why_scroll = last_line(app.why_len),
+            Pane::Why | Pane::Deps => app.why_scroll = last_line(app.why_len),
         },
         Action::CursorLeft if app.focus == Pane::Code => {
             cursor_move(app, |c, lines| move_col(c, lines, -1))
@@ -7416,7 +7486,7 @@ fn apply(app: &mut App, a: Action) -> bool {
         // gesture, just aimed at a different cursor.
         Action::Hover => match app.focus {
             Pane::Code => hover(app),
-            Pane::Why => preview_edge(app),
+            Pane::Why | Pane::Deps => preview_edge(app),
             Pane::List => {}
         },
         Action::SearchOpen if app.focus == Pane::Code => {
@@ -7544,7 +7614,7 @@ fn step(app: &mut App, by: isize) {
             let to = (pos as isize + by).clamp(0, view.len() as isize - 1) as usize;
             select(app, view[to]);
         }
-        Pane::Code => cursor_move(app, |c, lines| move_line(c, lines, by)),
+        Pane::Code | Pane::Deps => cursor_move(app, |c, lines| move_line(c, lines, by)),
         Pane::Why => why_cursor_move(app, by),
     }
 }
@@ -7576,7 +7646,7 @@ fn why_cursor_move(app: &mut App, by: isize) {
 /// line each, so paging them is useless while the code is what needs scrolling.
 fn page(app: &mut App, by: isize) {
     match app.focus {
-        Pane::Why => app.why_scroll = scrolled(app.why_scroll, by, app.why_len),
+        Pane::Why | Pane::Deps => app.why_scroll = scrolled(app.why_scroll, by, app.why_len),
         _ => app.scroll = scrolled(app.scroll, by, app.code_len),
     }
 }
@@ -7895,6 +7965,95 @@ fn preview_edge(app: &mut App) {
 /// current position first so `JumpBack` can return. No-op — never a guess —
 /// when `why_sel` isn't on a dep line, or its target isn't part of this
 /// review; `preview_edge` (`K`/`F12`) is what explains why in that case.
+/// The cards the canvas shows for one hunk: what it needs on the left, what
+/// needs it on the right, each an edge whose target is a hunk in this review.
+///
+/// Rebuilt every frame rather than stored, so a reload or a filter change can
+/// never leave the canvas showing a hunk that is no longer there.
+fn cards_for(app: &App, anchor: usize) -> Vec<Card> {
+    let Some(it) = app.items.get(anchor) else {
+        return vec![];
+    };
+    let mut out: Vec<Card> = vec![];
+    for side in [true, false] {
+        for e in it.edges.iter().filter(|e| e.dependency == side) {
+            let Some(idx) = e.target else { continue };
+            if idx >= app.items.len() {
+                continue;
+            }
+            let t = &app.items[idx];
+            // basename, not the full path: a card is 42 columns wide and the
+            // full path pushed the line number — the part a reviewer needs to
+            // find it — off the end of the title
+            let file = t.path.rsplit('/').next().unwrap_or(&t.path);
+            out.push(Card {
+                idx,
+                needs: side,
+                label: format!("{} · {file}:L{}", card_name(t), t.new_range[0]),
+            });
+        }
+    }
+    out
+}
+
+/// What to call a card: the symbol it defines, else the definition holding it,
+/// else the file. A card is identified by what a reviewer would say out loud.
+fn card_name(it: &Item) -> String {
+    it.symbols
+        .first()
+        .map(|s| s.name.clone())
+        .or_else(|| it.enclosing.clone())
+        .unwrap_or_else(|| it.path.clone())
+}
+
+/// `gD`: open the canvas on the selected hunk. A hunk with no edges opens
+/// nothing — an empty canvas says less than staying put does.
+fn open_deps(app: &mut App) {
+    if cards_for(app, app.sel).is_empty() {
+        return;
+    }
+    app.canvas = Some(Canvas {
+        anchor: app.sel,
+        sel: 0,
+    });
+    app.focus = Pane::Deps;
+}
+
+fn close_deps(app: &mut App) {
+    app.canvas = None;
+    if app.focus == Pane::Deps {
+        app.focus = Pane::Code;
+    }
+}
+
+/// Enter on a card: go there, and close the canvas. The jump is pushed the
+/// same way `gd` pushes it, so `C-o` returns — and returns to the hunk, not to
+/// the canvas, which has served its purpose once a destination is chosen.
+fn jump_to_card(app: &mut App) {
+    let Some(c) = app.canvas.as_ref() else { return };
+    let cards = cards_for(app, c.anchor);
+    let Some(card) = cards.get(c.sel) else { return };
+    let idx = card.idx;
+    stack_push(&mut app.jumps, (app.sel, app.cursor));
+    close_deps(app);
+    select(app, idx);
+    app.focus = Pane::Code;
+}
+
+/// Move the card selection, clamped. `delta` is signed so one function serves
+/// `j` and `k`.
+fn move_card(app: &mut App, delta: isize) {
+    let Some(c) = app.canvas.as_ref() else { return };
+    let n = cards_for(app, c.anchor).len();
+    if n == 0 {
+        return;
+    }
+    let next = (c.sel as isize + delta).clamp(0, n as isize - 1) as usize;
+    if let Some(c) = app.canvas.as_mut() {
+        c.sel = next;
+    }
+}
+
 fn jump_to_edge(app: &mut App) {
     let Some(Some(idx)) = edge_at_cursor(app) else {
         return;
@@ -7937,11 +8096,16 @@ fn jump_back(app: &mut App) {
 fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out = vec![];
-    for (n, pane, label) in [
+    let mut panes: Vec<(u8, Pane, &str)> = vec![
         (1, Pane::List, "list"),
         (2, Pane::Code, "code"),
         (3, Pane::Why, "why"),
-    ] {
+    ];
+    if app.canvas.is_some() {
+        // a floating view takes the next free digit while it exists
+        panes.push((4, Pane::Deps, "deps"));
+    }
+    for (n, pane, label) in panes {
         let on = app.focus == pane;
         let style = if on {
             Style::default()
@@ -8016,6 +8180,251 @@ fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
     app.why_height = panes.why.unwrap_or(body).height.saturating_sub(2);
 }
 
+/// How wide a card is, and how far each later card steps outward from the
+/// centre. The step is what makes the two sides read as a fan rather than as
+/// two columns.
+const CARD_W: u16 = 42;
+const CARD_STEP: u16 = 3;
+/// A card shows its definition's extent, clamped — past this nobody reads it
+/// in a glance, which is the whole point of the canvas.
+const CARD_ROWS: usize = 12;
+
+/// Where every piece of the canvas goes.
+///
+/// The anchor box sits at top centre. Cards this hunk NEEDS fan down-left,
+/// cards that NEED IT fan down-right, and neither side crosses the centre.
+/// When one side is empty it yields its width and the other centres, because a
+/// half-empty split reads worse than no split at all.
+struct CanvasLayout {
+    area: Rect,
+    anchor: Rect,
+    /// one rect per card, parallel to the `Card` list it was built from
+    cards: Vec<Rect>,
+    /// false when the frame is too narrow to fan, so the cards stack instead
+    fanned: bool,
+}
+
+fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
+    // inset from the frame so the canvas reads as floating over the panes
+    let area = Rect {
+        x: body.x + 1,
+        y: body.y + 1,
+        width: body.width.saturating_sub(2),
+        height: body.height.saturating_sub(2),
+    };
+    let inner_w = area.width.saturating_sub(2);
+    let anchor_w = CARD_W.min(inner_w);
+    let anchor = Rect {
+        x: area.x + 1 + (inner_w.saturating_sub(anchor_w)) / 2,
+        y: area.y + 1,
+        width: anchor_w,
+        height: 5,
+    };
+    // Below the split threshold each half would be under 48 columns, too
+    // narrow for code: stack instead, same fallback a zoomed pane gets.
+    let fanned = area.width >= SPLIT_COLS;
+    let top = anchor.y + anchor.height + 1; // the rule under the anchor
+    let mut rects = Vec::with_capacity(cards.len());
+    if !fanned {
+        let w = inner_w.min(CARD_W.max(inner_w));
+        for (i, _) in cards.iter().enumerate() {
+            rects.push(Rect {
+                x: area.x + 1,
+                y: top + (i as u16) * 4,
+                width: w,
+                height: 4,
+            });
+        }
+        return CanvasLayout {
+            area,
+            anchor,
+            cards: rects,
+            fanned,
+        };
+    }
+    let centre = area.x + area.width / 2;
+    let any_needs = cards.iter().any(|c| c.needs);
+    let any_needed = cards.iter().any(|c| !c.needs);
+    let one_sided = !(any_needs && any_needed);
+    let (mut li, mut ri) = (0u16, 0u16);
+    for c in cards {
+        let rows = (CARD_ROWS.min(6) + 2) as u16;
+        let (i, x) = if one_sided {
+            // nothing on the other side: centre the fan instead of leaving a void
+            let i = li;
+            li += 1;
+            (i, area.x + 1 + (area.width.saturating_sub(2 + CARD_W)) / 2)
+        } else if c.needs {
+            let i = li;
+            li += 1;
+            let off = CARD_W + 2 + i * CARD_STEP;
+            (i, centre.saturating_sub(off).max(area.x + 1))
+        } else {
+            let i = ri;
+            ri += 1;
+            (
+                i,
+                (centre + 2 + i * CARD_STEP).min(area.x + area.width - CARD_W - 1),
+            )
+        };
+        rects.push(Rect {
+            x,
+            y: top + i * rows,
+            width: CARD_W.min(area.width.saturating_sub(2)),
+            height: rows,
+        });
+    }
+    CanvasLayout {
+        area,
+        anchor,
+        cards: rects,
+        fanned,
+    }
+}
+
+/// Render the dependency canvas over the panes.
+fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
+    let Some(c) = app.canvas.as_ref() else { return };
+    let cards = cards_for(app, c.anchor);
+    if cards.is_empty() {
+        return;
+    }
+    let l = canvas_layout(body, &cards);
+    let theme = &app.theme;
+    // cards that will not fit are counted, not silently dropped
+    let hidden = l
+        .cards
+        .iter()
+        .filter(|r| r.y + r.height >= l.area.y + l.area.height)
+        .count();
+    f.render_widget(Clear, l.area);
+    let anchor_it = &app.items[c.anchor];
+    let title = format!(
+        " 4 deps — {} · {} needs, {} needed by{} ",
+        card_name(anchor_it),
+        cards.iter().filter(|c| c.needs).count(),
+        cards.iter().filter(|c| !c.needs).count(),
+        if hidden > 0 {
+            format!(" · {hidden} not shown")
+        } else {
+            String::new()
+        }
+    );
+    f.render_widget(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_focus))
+            .title(Span::styled(title, Style::default().fg(theme.border_focus))),
+        l.area,
+    );
+
+    // the anchor: the hunk every card is relative to
+    card_widget(
+        f,
+        app,
+        l.anchor,
+        c.anchor,
+        &card_name(anchor_it),
+        true,
+        false,
+    );
+
+    if l.fanned {
+        // the rule under the anchor, labelling which way each side runs
+        let rule_y = l.anchor.y + l.anchor.height;
+        let rule = Rect {
+            x: l.area.x + 1,
+            y: rule_y,
+            width: l.area.width.saturating_sub(2),
+            height: 1,
+        };
+        let w = rule.width as usize;
+        let any_needs = cards.iter().any(|c| c.needs);
+        let any_needed = cards.iter().any(|c| !c.needs);
+        // a side with nothing on it is not advertised — an arrow pointing at
+        // empty space reads as a missing card rather than as an absent one
+        let left = if any_needs { "◀── needs" } else { "" };
+        let right = if any_needed {
+            "needed by ──▶"
+        } else {
+            ""
+        };
+        let mut line = String::from(left);
+        let pad = w.saturating_sub(left.chars().count() + right.chars().count());
+        line.push_str(&"─".repeat(pad));
+        line.push_str(right);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                line,
+                Style::default().fg(theme.dim),
+            ))),
+            rule,
+        );
+    }
+
+    for (i, (card, rect)) in cards.iter().zip(l.cards.iter()).enumerate() {
+        if rect.y + rect.height >= l.area.y + l.area.height {
+            continue; // would overrun the frame's own border; counted above
+        }
+        card_widget(f, app, *rect, card.idx, &card.label, false, i == c.sel);
+    }
+}
+
+/// One framed card: a few rows of the target hunk, rendered by the same
+/// `code_view` the code pane uses, so syntax and diff tint are identical.
+fn card_widget(
+    f: &mut Frame,
+    app: &App,
+    rect: Rect,
+    idx: usize,
+    label: &str,
+    anchor: bool,
+    selected: bool,
+) {
+    if rect.width < 8 || rect.height < 3 {
+        return;
+    }
+    let theme = &app.theme;
+    let border = if selected {
+        theme.border_focus
+    } else if anchor {
+        theme.accent
+    } else {
+        theme.border
+    };
+    let rows = rect.height.saturating_sub(2) as usize;
+    let it = &app.items[idx];
+    // start at the hunk, not at the top of its file: `code_view`'s `start` is
+    // an offset into the whole file, and passing 0 showed every card the
+    // module docstring instead of the code the card is about
+    let start = it.new_range[0].saturating_sub(1);
+    let (lines, _, _) = code_view(
+        it,
+        &app.sources,
+        &app.highlights,
+        rect.width.saturating_sub(2) as usize,
+        0,
+        None,
+        &[],
+        None,
+        theme,
+        start,
+        rows,
+    );
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border))
+        .title(Span::styled(
+            format!(" {label} "),
+            Style::default().fg(if selected {
+                theme.border_focus
+            } else {
+                theme.dim
+            }),
+        ));
+    f.render_widget(Paragraph::new(Text::from(lines)).block(block), rect);
+}
+
 /// Where each pane sits this frame. Pure in the terminal size, the focus and
 /// the zoom flag, so the event loop can ask the same question the renderer
 /// does instead of reading what the last frame happened to leave behind.
@@ -8035,7 +8444,9 @@ fn pane_rects(body: Rect, focus: Pane, zoom: bool, why_widths: &[usize]) -> Pane
     if zoomed {
         let (list, code, why) = match focus {
             Pane::List => (Some(body), None, None),
-            Pane::Code => (None, Some(body), None),
+            // the canvas floats over whatever is underneath, so while it has
+            // focus the panes keep the layout they had
+            Pane::Code | Pane::Deps => (None, Some(body), None),
             Pane::Why => (None, None, Some(body)),
         };
         return Panes {
@@ -8370,6 +8781,8 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         Paragraph::new(Line::from(footer_spans(app, zoomed))),
         footer_area,
     );
+
+    draw_canvas(f, app, body);
 
     if let Some(popup) = app.popup.as_mut() {
         popup.scroll = popup.scroll.min(last_line(popup.lines.len()));
@@ -9636,6 +10049,68 @@ DA:1,1
         // both findings sit outside it; neither may vanish silently
         assert_eq!(place_findings(&mut items, &parse_sarif(SARIF)), 2);
         assert!(items[0].findings.is_empty());
+    }
+
+    fn card(needs: bool) -> Card {
+        Card {
+            idx: 0,
+            needs,
+            label: "x".to_string(),
+        }
+    }
+
+    /// The fan's defining property: neither side crosses the centre line.
+    #[test]
+    fn no_card_crosses_the_centre() {
+        let body = Rect::new(0, 0, 140, 40);
+        let cards: Vec<Card> = vec![card(true), card(true), card(false), card(false)];
+        let l = canvas_layout(body, &cards);
+        assert!(l.fanned);
+        let centre = l.area.x + l.area.width / 2;
+        for (c, r) in cards.iter().zip(l.cards.iter()) {
+            if c.needs {
+                assert!(r.x + r.width <= centre, "a `needs` card crossed: {r:?}");
+            } else {
+                assert!(r.x >= centre, "a `needed by` card crossed: {r:?}");
+            }
+        }
+    }
+
+    /// Each later card on a side steps outward, which is what makes it a fan
+    /// rather than two columns.
+    #[test]
+    fn later_cards_step_outward() {
+        let body = Rect::new(0, 0, 140, 40);
+        let cards: Vec<Card> = vec![card(true), card(true), card(false), card(false)];
+        let l = canvas_layout(body, &cards);
+        assert!(l.cards[1].x < l.cards[0].x, "left side steps left");
+        assert!(l.cards[3].x > l.cards[2].x, "right side steps right");
+    }
+
+    /// One empty side is the common case, not an edge case: the other side
+    /// centres instead of leaving half the canvas void.
+    #[test]
+    fn a_one_sided_canvas_centres_instead_of_leaving_a_void() {
+        let body = Rect::new(0, 0, 140, 40);
+        let l = canvas_layout(body, &[card(false), card(false)]);
+        let centre = l.area.x + l.area.width / 2;
+        for r in &l.cards {
+            let mid = r.x + r.width / 2;
+            assert!(
+                mid.abs_diff(centre) <= 2,
+                "a lone side should centre, got {r:?} against centre {centre}"
+            );
+        }
+    }
+
+    /// Below the split threshold each half is too narrow for code, so the
+    /// cards stack in one column — the same fallback a zoomed pane gets.
+    #[test]
+    fn a_narrow_canvas_stacks_instead_of_fanning() {
+        let body = Rect::new(0, 0, SPLIT_COLS - 1, 40);
+        let l = canvas_layout(body, &[card(true), card(false)]);
+        assert!(!l.fanned);
+        assert_eq!(l.cards[0].x, l.cards[1].x, "stacked cards share a column");
     }
 
     /// The layout is a pure function of the size, so it can be asserted without
@@ -11402,6 +11877,7 @@ DA:1,1
             theme: theme("dark").unwrap(),
             show_groups: false,
             zoom: false,
+            canvas: None,
             groups: HashMap::new(),
             group_reasons: HashMap::new(),
             mode: ViewMode::Hunks,
