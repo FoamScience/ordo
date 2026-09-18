@@ -25,10 +25,8 @@ fn a_statement_does_not_break_the_underlying_format() {
 fn template_extensions_resolve_to_the_inner_format() {
     for path in ["a.toml.j2", "a.toml.jinja", "a.toml.jinja2", "a.toml.tmpl"] {
         let hs = one(path, "[s]\nport = 80\n", "[s]\nport = 8080\n");
-        assert!(
-            hs.iter().any(|h| h.enclosing.as_deref() == Some("s.port")),
-            "{path}: {hs:?}"
-        );
+        let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+        assert_eq!(enc, vec![Some("s.port")], "{path}");
     }
 }
 
@@ -57,14 +55,13 @@ fn a_bare_template_is_parsed_as_jinja() {
     let new = "{% include 'tls.j2' %}\n{% block server %}\nlisten 443;\n{% endblock %}\n\
                {% macro upstream(name) %}{{ name }}{% endmacro %}\n";
     let hs = one("templates/nginx.conf.j2", old, new);
-    assert!(
-        hs.iter().any(|h| h.rationale == "adds import tls.j2"),
-        "{hs:?}"
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(
+        rats,
+        vec!["adds import tls.j2", "edits server", "adds upstream"]
     );
-    assert!(
-        hs.iter().any(|h| h.enclosing.as_deref() == Some("server")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![None, Some("server"), Some("upstream")]);
     let mac = hs
         .iter()
         .find(|h| h.defines.contains(&"upstream".to_string()));
@@ -85,11 +82,8 @@ fn a_template_over_a_filename_matched_format_still_resolves() {
         "setup.cfg.j2",
     ] {
         let hs = one(path, old, new);
-        assert!(
-            hs.iter()
-                .any(|h| h.enclosing.as_deref() == Some("remote \"a\".url")),
-            "{path}: {hs:?}"
-        );
+        let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+        assert_eq!(enc, vec![None, Some("remote \"a\".url")], "{path}");
     }
 }
 
@@ -112,24 +106,16 @@ fn erb_masks_its_directives_and_keeps_its_output_tags() {
     let new =
         "development:\n<% hosts.each do |h| %>\n  port: <%= h.port %>\n  pool: 5\n<% end %>\n";
     let hs = one("database.yml.erb", old, new);
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("development.port")),
-        "{hs:?}"
-    );
-    assert!(
-        hs.iter().any(|h| h.defines.contains(&"pool".to_string())),
-        "{hs:?}"
-    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].enclosing.as_deref(), Some("development.port"));
+    assert_eq!(hs[0].defines, vec!["pool".to_string(), "port".to_string()]);
 }
 
 #[test]
 fn ejs_resolves_the_same_way() {
     let hs = one("cfg.json.ejs", "{\n  \"a\": 1\n}\n", "{\n  \"a\": 2\n}\n");
-    assert!(
-        hs.iter().any(|h| h.enclosing.as_deref() == Some("a")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![Some("a")]);
 }
 
 #[test]
@@ -166,15 +152,11 @@ fn a_helm_chart_template_is_yaml_with_go_actions() {
     let new = "spec:\n  replicas: {{ .Values.replicaCount }}\n  strategy: rolling\n\
                {{- if .Values.tls }}\n  tls: on\n{{- end }}\n";
     let hs = one("mychart/templates/deployment.yaml", old, new);
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("spec.replicas")),
-        "{hs:?}"
-    );
-    assert!(
-        hs.iter()
-            .any(|h| h.defines.contains(&"strategy".to_string())),
-        "{hs:?}"
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].enclosing.as_deref(), Some("spec.replicas"));
+    assert_eq!(
+        hs[0].defines,
+        vec!["replicas".to_string(), "strategy".to_string()]
     );
 }
 
