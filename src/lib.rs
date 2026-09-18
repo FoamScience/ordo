@@ -1479,8 +1479,10 @@ fn comment_markers(ext: &str) -> &'static [&'static str] {
         "lua" => &["---", "--"],
         // `#`-comment formats the C-family default would otherwise misread
         "sh" | "bash" | "zsh" | "rb" | "yaml" | "yml" | "toml" | "j2" | "jinja" | "jinja2"
-        | "tf" | "tfvars" | "conf" | "cfg" | "ini" | "pl" | "r" | "jl" | "nix" | "mk"
-        | "dockerfile" | "gitignore" | "gitattributes" => &["#"],
+        | "tf" | "tfvars" | "conf" | "pl" | "r" | "jl" | "nix" | "mk" | "dockerfile"
+        | "gitignore" | "gitattributes" => &["#"],
+        // ini accepts both spellings
+        "ini" | "cfg" => &["#", ";"],
         _ => &["///", "//", "/*", "*"],
     }
 }

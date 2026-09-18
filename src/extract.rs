@@ -770,7 +770,11 @@ pub fn mask_template(spec: &LangSpec, content: &str) -> Option<(String, HashSet<
     if rows.is_empty() {
         return None;
     }
-    let text = String::from_utf8(out).expect("blanking ASCII keeps UTF-8 valid");
+    // Every blanked region is a whole tree-sitter node, so a multi-byte
+    // character is never cut in half and the bytes stay valid UTF-8. That is an
+    // invariant across two functions and a grammar, though, and this runs on
+    // whatever text the caller sent: masking nothing beats aborting `run`.
+    let text = String::from_utf8(out).ok()?;
     Some((text, rows))
 }
 

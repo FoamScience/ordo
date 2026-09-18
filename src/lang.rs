@@ -864,7 +864,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "cmake" => "cmake",
         "mk" | "mak" | "make" => "make",
         "nix" => "nix",
-        "sh" | "bash" => "bash",
+        "sh" | "bash" | "zsh" => "bash",
         "css" => "css",
         "html" | "htm" | "vue" => "html",
         "svelte" => "svelte",
@@ -873,16 +873,16 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
     SPECS.iter().find(|s| s.name == name)
 }
 
-/// Resolve a markdown fence's info string (```python, ```rs, ```C++) to a
-/// spec — the language *injected* into a prose file. Only names this crate has
-/// a grammar for resolve; a `console` or `diff` fence has no structure to read
-/// and returns None rather than being guessed at.
 /// Every registered language, in registry order — the docs generator's view
 /// of this table (see `languages()` in the crate root).
 pub fn all() -> &'static [LangSpec] {
     SPECS
 }
 
+/// Resolve a markdown fence's info string (```python, ```rs, ```C++) to a
+/// spec — the language *injected* into a prose file. Only names this crate has
+/// a grammar for resolve; a `console` or `diff` fence has no structure to read
+/// and returns None rather than being guessed at.
 pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
     // an info string may carry attributes after the language (```py title=x)
     let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();
@@ -903,6 +903,9 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "json" => "json",
         "yml" | "yaml" => "yaml",
         "toml" => "toml",
+        // `conf` only as a fence: an author who writes ```conf means an
+        // ini-shaped file, while a `.conf` *path* is as often nginx or systemd,
+        // and resolving it would also steal `nginx.conf.j2` from jinja
         "ini" | "cfg" | "conf" | "dosini" => "ini",
         "cmake" => "cmake",
         "make" | "makefile" | "mk" => "make",
@@ -910,7 +913,11 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         // not `console`: that fence is a shell *session* (`$ cmd` and its
         // output), not a script — see tests/injection.rs
         "sh" | "bash" | "shell" | "zsh" => "bash",
-        _ => return None,
+        // Anything else is tried as a file extension. The two tables used to be
+        // written out separately and had drifted: `conf` and `zsh` resolved
+        // from a fence but not from a path, and `html`, `css`, `vue` and
+        // `svelte` the other way round, each grammar present the whole time.
+        _ => return for_path_plain(&format!("x.{lower}")),
     };
     SPECS.iter().find(|s| s.name == canonical)
 }
