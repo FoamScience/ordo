@@ -164,10 +164,6 @@ impl PathGlobs {
     }
 }
 
-// Which changed files reach the engine. Generated and lock files are dropped
-// before their blobs are even read — parsing a lock file costs more than the
-// review it would add. Globs, when given, keep a path that matches at least
-// one positive pattern (or there are none) and no negative one.
 /// What never reached the screen, and why — the numbers `:audit` reports.
 /// File-level counts are filled in by `Filter::apply` and the gather functions;
 /// hunk-level ones come from the engine's own `dropped` record. Anything hidden
@@ -192,6 +188,10 @@ struct Ledger {
     hunks_non_comment: usize,
 }
 
+/// Which changed files reach the engine. Generated and lock files are dropped
+/// before their blobs are even read — parsing a lock file costs more than the
+/// review it would add. Globs, when given, keep a path that matches at least
+/// one positive pattern (or there are none) and no negative one.
 #[derive(Clone)]
 struct Filter {
     globs: PathGlobs,
@@ -889,6 +889,12 @@ fn git(args: &[&str]) -> String {
 
 // Runs a binary, returning its stdout as a string or empty on any failure to
 // launch or a nonzero exit — the shared body behind `git` and `but`.
+//
+// **Ceiling:** a failure is indistinguishable from empty output, and stderr is
+// discarded. That is right for `but`, which is optional, but it means a git
+// error mid-load (a bad object, a corrupt index) surfaces as "nothing to
+// review" with no reason attached. Reporting it needs a channel from the
+// worker thread to the screen, since the TUI owns the terminal by then.
 fn run_cmd(bin: &str, args: &[&str]) -> String {
     Command::new(bin)
         .args(args)
@@ -1491,20 +1497,25 @@ fn hunk_content_hash(item: &Item, sources: &Sources) -> Option<u64> {
     let (ol, nl) = sources.get(&item.path)?;
     let [o0, o1] = item.old_range;
     let [n0, n1] = item.new_range;
-    let mut buf = String::new();
-    if o0 >= 1 && o0 <= o1 && o1 <= ol.len() {
-        for l in &ol[o0 - 1..o1] {
-            buf.push_str(l);
-            buf.push('\n');
+    // A side is legitimately empty when its end precedes its start (a pure
+    // insert or delete). A *non-empty* side that falls outside the loaded
+    // content is stale data, not empty text: hashing it as empty would let two
+    // unrelated hunks agree, and a false "already reviewed" is exactly what
+    // this hash exists to prevent.
+    let side = |lines: &[String], r: [usize; 2]| -> Option<String> {
+        let [a, b] = r;
+        if a > b {
+            return Some(String::new());
         }
-    }
+        if a < 1 || b > lines.len() {
+            return None;
+        }
+        Some(lines[a - 1..b].iter().map(|l| format!("{l}\n")).collect())
+    };
+    let (old, new) = (side(ol, [o0, o1])?, side(nl, [n0, n1])?);
+    let mut buf = old;
     buf.push('\u{0}');
-    if n0 >= 1 && n0 <= n1 && n1 <= nl.len() {
-        for l in &nl[n0 - 1..n1] {
-            buf.push_str(l);
-            buf.push('\n');
-        }
-    }
+    buf.push_str(&new);
     Some(fnv1a(buf.as_bytes()))
 }
 
@@ -1761,8 +1772,11 @@ fn now_unix() -> u64 {
 
 fn cache_home() -> Option<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
-        if !x.trim().is_empty() {
-            return Some(PathBuf::from(x));
+        let p = PathBuf::from(x.trim());
+        // the XDG spec says a relative value is invalid and must be ignored;
+        // honouring one would scatter cache directories through the cwd
+        if p.is_absolute() {
+            return Some(p);
         }
     }
     let home = std::env::var("HOME").ok()?;
@@ -1831,12 +1845,39 @@ fn load_snaps(path: &Path) -> HashMap<String, Snap> {
 }
 
 fn save_snaps(path: &Path, snaps: &HashMap<String, Snap>) {
+    if let Ok(text) = serde_json::to_string(snaps) {
+        write_atomic(path, &text);
+    }
+}
+
+/// Write through a temporary file in the same directory and rename it over the
+/// target, so the file on disk is always either the previous contents or the
+/// new ones. `std::fs::write` truncates in place: a process killed mid-write
+/// leaves an empty or half-written file, which for marks means losing every
+/// mark ever made rather than the ones from this session. These are written on
+/// every toggle, so that window is open constantly.
+///
+/// Best-effort throughout — a read-only filesystem, a missing `$HOME` or a
+/// failed rename all just mean the state is not persisted. A lost mark is the
+/// accepted cost; a blocked review is not.
+fn write_atomic(path: &Path, text: &str) {
     let Some(parent) = path.parent() else { return };
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
-    if let Ok(text) = serde_json::to_string(snaps) {
-        let _ = std::fs::write(path, text);
+    // same directory, so the rename stays within one filesystem; the pid keeps
+    // two ordo processes on one repo from writing the same temporary
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("state"),
+        std::process::id()
+    ));
+    if std::fs::write(&tmp, text).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -1946,23 +1987,16 @@ fn prune_marks(marks: &mut HashMap<u64, u64>, now: u64) {
     marks.retain(|_, ts| now.saturating_sub(*ts) <= MARK_TTL_SECS);
 }
 
-/// Best-effort write: creates the parent directory if needed, and silently
-/// gives up on any failure (read-only filesystem, permission, missing
-/// `$HOME`) rather than surfacing it — a lost mark is the accepted cost, a
-/// crash or a blocked review is not. The files are tiny, so this runs on
-/// every toggle rather than only at quit, and a panic or killed terminal
-/// never loses the session's marks.
+/// The files are tiny, so this runs on every toggle rather than only at quit,
+/// and a panic or killed terminal never loses the session's marks — which is
+/// only true because the write is atomic (see `write_atomic`).
 fn save_marks(path: &Path, marks: &HashMap<u64, u64>) {
-    let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
     let body: HashMap<String, u64> = marks
         .iter()
         .map(|(k, v)| (format!("{k:016x}"), *v))
         .collect();
     if let Ok(text) = serde_json::to_string(&body) {
-        let _ = std::fs::write(path, text);
+        write_atomic(path, &text);
     }
 }
 
@@ -10857,6 +10891,28 @@ mod tests {
         assert!(marks.contains_key(&2));
         assert!(!marks.contains_key(&3));
         assert!(!marks.contains_key(&4));
+    }
+
+    #[test]
+    fn a_save_never_leaves_the_file_half_written() {
+        // `fs::write` truncates in place; a process killed mid-write left an
+        // empty marks file, losing every mark ever made
+        let dir = std::env::temp_dir().join(format!("ordo-atomic-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("m.json");
+        let mut marks: HashMap<u64, u64> = HashMap::new();
+        marks.insert(7, 1234);
+        save_marks(&path, &marks);
+        assert_eq!(load_marks(&path), marks);
+        // the temporary is renamed, never left behind
+        let strays: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "{strays:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
