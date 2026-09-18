@@ -31,11 +31,8 @@ fn a_function_links_to_the_command_that_calls_it() {
         hs.iter().any(|h| h.defines.contains(&"deploy".to_string())),
         "{hs:?}"
     );
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("deploy")),
-        "{:?}",
-        out.edges
-    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: deploy"]);
 }
 
 #[test]

@@ -47,11 +47,8 @@ fn a_function_defines_and_a_call_uses_it() {
         hs.iter().any(|h| h.defines.contains(&"helper".to_string())),
         "{hs:?}"
     );
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("helper")),
-        "{:?}",
-        out.edges
-    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: helper"]);
     // a parameter is a binding, not a use of whatever else is called `a`
     assert!(
         !hs.iter().any(|h| h.uses.contains(&"a".to_string())),

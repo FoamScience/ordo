@@ -157,11 +157,8 @@ fn a_yaml_anchor_is_defined_and_its_alias_uses_it() {
         "{hs:?}"
     );
     // the only def→use edge a config format can produce
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("base")),
-        "{:?}",
-        out.edges
-    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: base"]);
 }
 
 #[test]

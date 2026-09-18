@@ -26,10 +26,8 @@ fn cross_file_orders_def_before_use() {
         "with cross_file, util.py's helper definition must precede its use in main.py; order: {:?}",
         out.order
     );
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("helper")),
-        "cross-file def→use edge expected"
-    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: helper"], "exactly one cross-file edge");
 }
 
 #[test]
@@ -41,8 +39,9 @@ fn cross_file_off_keeps_input_file_order() {
         out.order
     );
     assert!(
-        !out.edges.iter().any(|e| e.why.contains("helper")),
-        "no cross-file edge when cross_file is off"
+        out.edges.is_empty(),
+        "cross_file off means no edges at all, not merely none naming helper: {:?}",
+        out.edges
     );
 }
 
@@ -54,12 +53,13 @@ fn cross_file_rationale_names_the_other_file() {
         .iter()
         .flat_map(|f| f.hunks.iter().map(|h| h.rationale.as_str()))
         .collect();
-    assert!(
-        rats.iter().any(|r| r.contains("used in main.py")),
-        "def side names the user file: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.contains("defined in util.py")),
-        "use side names the definer file: {rats:?}"
+    // both sides, exactly: `any` would have passed with one of the two missing
+    assert_eq!(
+        rats,
+        vec![
+            "uses helper, defined in util.py",
+            "adds helper, used in main.py"
+        ],
+        "each side names the other file"
     );
 }
