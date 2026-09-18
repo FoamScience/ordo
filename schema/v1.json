@@ -62,7 +62,7 @@
             },
             "rules": {
               "type": "array",
-              "description": "reviewing rules: the caller's own conventions, matched against the facts the engine computes. The engine reads no rule files — a client collects them (per-user, per-repo) and passes them here, so `ordo order` stays a function of its arguments",
+              "description": "reviewing rules: the caller's own conventions, matched against the facts the engine computes. The engine reads no rule files \u2014 a client collects them (per-user, per-repo) and passes them here, so `ordo order` stays a function of its arguments",
               "items": {
                 "type": "object",
                 "required": [
@@ -89,32 +89,6 @@
                           "definition",
                           "other"
                         ]
-                      },
-                      "rules": {
-                        "type": "array",
-                        "description": "reviewing rules that matched this hunk; omitted when none did",
-                        "items": {
-                          "type": "object",
-                          "required": [
-                            "rule",
-                            "message",
-                            "level"
-                          ],
-                          "properties": {
-                            "rule": {
-                              "type": "string"
-                            },
-                            "message": {
-                              "type": "string"
-                            },
-                            "level": {
-                              "enum": [
-                                "note",
-                                "warn"
-                              ]
-                            }
-                          }
-                        }
                       },
                       "enclosing_kind": {
                         "enum": [
@@ -144,7 +118,7 @@
                         "type": "boolean"
                       },
                       "kind": {
-                        "description": "node kind(s) the hunk introduces — a string or a list",
+                        "description": "node kind(s) the hunk introduces \u2014 a string or a list",
                         "oneOf": [
                           {
                             "type": "string"
@@ -247,7 +221,7 @@
                   },
                   "priority": {
                     "type": "integer",
-                    "description": "ordering influence: higher sorts earlier, but only among hunks the dependency graph has already freed — a preference can never reorder a definition after its use"
+                    "description": "ordering influence: higher sorts earlier, but only among hunks the dependency graph has already freed \u2014 a preference can never reorder a definition after its use"
                   }
                 }
               }
@@ -400,7 +374,7 @@
                         "binding",
                         "call"
                       ],
-                      "description": "what `enclosing` names when it is not a plain definition: a named block (a test suite) or a region that holds the hunk but declares nothing (a conditional-compilation block, a document preamble or its front matter, a top-level binding or call whose multi-line value or arguments hold the hunk). A region name is never a symbol and never seeds a def→use edge; omitted for a definition"
+                      "description": "what `enclosing` names when it is not a plain definition: a named block (a test suite) or a region that holds the hunk but declares nothing (a conditional-compilation block, a document preamble or its front matter, a top-level binding or call whose multi-line value or arguments hold the hunk). A region name is never a symbol and never seeds a def\u2192use edge; omitted for a definition"
                     },
                     "defines": {
                       "type": "array",
@@ -496,6 +470,32 @@
                           }
                         }
                       }
+                    },
+                    "rules": {
+                      "type": "array",
+                      "description": "reviewing rules that matched this hunk; omitted when none did",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "rule",
+                          "message",
+                          "level"
+                        ],
+                        "properties": {
+                          "rule": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "level": {
+                            "enum": [
+                              "note",
+                              "warn"
+                            ]
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -555,11 +555,11 @@
           "items": {
             "type": "string"
           },
-          "description": "what the engine could not make sense of in the caller's own input — a rule whose glob or query does not compile. Reported rather than silently never matching; omitted when empty"
+          "description": "what the engine could not make sense of in the caller's own input \u2014 a rule whose glob or query does not compile. Reported rather than silently never matching; omitted when empty"
         },
         "clusters": {
           "type": "array",
-          "description": "independent parts of the change (connected components of the group def→use graph); each is an array of hunk ids. One cluster = atomic; multiple = candidate PR split.",
+          "description": "independent parts of the change (connected components of the group def\u2192use graph); each is an array of hunk ids. One cluster = atomic; multiple = candidate PR split.",
           "items": {
             "type": "array",
             "items": {
@@ -572,7 +572,7 @@
           "items": {
             "type": "string"
           },
-          "description": "P13.2 changeset notes: change-shape signals about the change as a whole, as facts rather than judgments — `code changed but no test touched`, `a.py: 14 hunks (high churn)`. Omitted when empty. Per-hunk signals live on hunks[].notes."
+          "description": "P13.2 changeset notes: change-shape signals about the change as a whole, as facts rather than judgments \u2014 `code changed but no test touched`, `a.py: 14 hunks (high churn)`. Omitted when empty. Per-hunk signals live on hunks[].notes."
         },
         "ledger": {
           "type": "array",
@@ -623,11 +623,11 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "ids of hunks in this change that use it — the fan-in; empty is itself a signal"
+                "description": "ids of hunks in this change that use it \u2014 the fan-in; empty is itself a signal"
               },
               "at": {
                 "type": "string",
-                "description": "id of the hunk this entry is anchored to — the one that defines it, or deletes it"
+                "description": "id of the hunk this entry is anchored to \u2014 the one that defines it, or deletes it"
               }
             }
           }

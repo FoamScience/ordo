@@ -148,6 +148,12 @@ impl<'r> Rules<'r> {
                     problems.push(format!("rule `{}`: unknown lang `{l}`", rule.name));
                 }
             }
+            for k in rule.unknown.keys() {
+                problems.push(format!("rule `{}`: unknown key `{k}`", rule.name));
+            }
+            for k in rule.when.unknown.keys() {
+                problems.push(format!("rule `{}`: unknown condition `{k}`", rule.name));
+            }
             if let Some(k) = &rule.when.enclosing_kind {
                 if !KIND_NAMES.contains(&k.as_str()) {
                     problems.push(format!(

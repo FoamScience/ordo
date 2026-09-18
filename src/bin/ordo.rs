@@ -3030,6 +3030,9 @@ fn rule_from_toml(
         }
     };
     let mut when = ordo::model::When {
+        // the TOML layer reports its own unknown keys (see `RuleToml`), so
+        // nothing reaches the engine's catch-all from here
+        unknown: Default::default(),
         path: parsed.path,
         path_not: parsed.path_not,
         lang: parsed.lang,
@@ -3062,6 +3065,7 @@ fn rule_from_toml(
         }
     }
     Some(ordo::model::Rule {
+        unknown: Default::default(),
         name: parsed.name,
         when,
         note: parsed.note,
