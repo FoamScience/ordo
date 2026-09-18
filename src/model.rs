@@ -1,5 +1,6 @@
 //! Serde types for the v1 data contract (see `schema/v1.json`).
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct Input {
@@ -191,6 +192,12 @@ pub struct Rule {
     /// cannot break P2.
     #[serde(default)]
     pub priority: i64,
+    /// Keys that are not fields of this struct. A misspelled one is a rule that
+    /// silently never does what its author meant, so it is collected rather
+    /// than dropped and reported through `Output.problems` — the same treatment
+    /// an uncompilable glob or an unknown `lang` already gets.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, serde_json::Value>,
 }
 
 /// A rule's conditions. Every field given must hold (they are ANDed); a rule
@@ -273,6 +280,9 @@ pub struct When {
     /// the hunk adds a data member that nothing in this change initializes
     #[serde(default)]
     pub member_uninitialized: Option<bool>,
+    /// Conditions that are not fields of this struct — see `Rule::unknown`.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, serde_json::Value>,
 }
 
 /// `kind = "x"` and `kind = ["x", "y"]` both read; a one-entry list is the

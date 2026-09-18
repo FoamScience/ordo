@@ -753,3 +753,19 @@ fn kind_and_query_on_one_rule_must_both_point_at_the_row() {
         "kind alone must not fire: {marked:?}"
     );
 }
+
+#[test]
+fn a_misspelled_condition_is_reported_not_dropped() {
+    // serde ignores a key no field claims, so `enclosing_knd` used to be a
+    // rule that quietly matched everything instead of nothing
+    let out = run(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "x = 1\n", "new": "x = 2\n" }],
+        "options": { "rules": [
+            { "name": "typo", "when": { "enclosing_knd": "definition" }, "note": "n" },
+            { "name": "top-typo", "when": {}, "nte": "n", "note": "n" }
+        ]}
+    }));
+    let p = out.problems.join("\n");
+    assert!(p.contains("unknown condition `enclosing_knd`"), "{p}");
+    assert!(p.contains("unknown key `nte`"), "{p}");
+}
