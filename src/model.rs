@@ -384,6 +384,33 @@ pub struct LedgerEntry {
     pub used_by: Vec<String>,
 }
 
+/// What a file no longer has, at the old-side row where it used to be.
+///
+/// Facts, not wording. These used to be built as finished English inside the
+/// pipeline and handed to the narration layer as opaque strings, which cost
+/// twice: the rationale layer could only echo them, and the ledger — which
+/// needs the *name* — had to re-derive every removal from the symbol sets
+/// because the set it wanted had already been rendered into prose.
+#[derive(Debug, Clone)]
+pub struct Removal {
+    /// 1-based old-side row the symbol was declared on
+    pub row: usize,
+    pub name: String,
+    pub kind: RemovalKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemovalKind {
+    /// a definition, gone
+    Def,
+    /// a prose section, gone — a heading is not a function
+    Section,
+    /// an import, gone
+    Import,
+    /// not gone: it turned up in another file, which is named here
+    MovedTo(String),
+}
+
 /// A defined symbol's identity: name + tree-sitter node kind + enclosing
 /// scope. Lets a consumer tell apart same-named symbols across commits (e.g.
 /// a method `run` on class `A` vs a module-level function `run`), per the
