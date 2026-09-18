@@ -13,18 +13,7 @@ fn p3_adds_new_def_vs_edits_existing_body() {
             { "path": "b.py", "old": "", "new": "def g():\n    return 3\n" }
         ]
     }));
-    assert!(
-        rats.iter().any(|r| r.contains("edits f")),
-        "existing body edit → edits: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.starts_with("adds g")),
-        "new definition → adds: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r.contains("adds f")),
-        "a pre-existing def must not be called 'adds': {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits f", "adds g"]);
 }
 
 #[test]
@@ -36,17 +25,9 @@ fn p4_signature_and_type_changes() {
             { "path": "c.py", "old": "", "new": "class D:\n    pass\n" }
         ]
     }));
-    assert!(
-        rats.iter().any(|r| r.contains("changes signature of f")),
-        "existing fn header change: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.contains("changes type C")),
-        "existing type header change: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.contains("adds type D")),
-        "new type: {rats:?}"
+    assert_eq!(
+        rats,
+        vec!["changes signature of f", "changes type C", "adds type D"]
     );
 }
 
@@ -68,9 +49,12 @@ fn p6_test_links_to_code() {
             { "path": "a.py", "old": "", "new": "def helper():\n    return 1\n" }
         ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "tests helper (a.py)"),
-        "test file links to code: {rats:?}"
+    assert_eq!(
+        rats,
+        vec![
+            "tests helper (a.py)",
+            "adds helper, used in tests/test_a.py"
+        ]
     );
 }
 
@@ -79,14 +63,7 @@ fn p7_rename() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": "def foo():\n    return 1\n", "new": "def bar():\n    return 1\n" } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "renames foo → bar"),
-        "1:1 def rename: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r.contains("adds bar")),
-        "a rename is not an add: {rats:?}"
-    );
+    assert_eq!(rats, vec!["renames foo → bar"]);
 }
 
 #[test]
@@ -97,14 +74,7 @@ fn p5_p7_removals() {
             { "path": "b.py", "old": "import os\nimport sys\nx = 1\n", "new": "import os\nx = 1\n" }
         ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "removes b"),
-        "deleted def: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r == "removes import sys"),
-        "deleted import: {rats:?}"
-    );
+    assert_eq!(rats, vec!["removes b", "removes import sys"]);
 }
 
 #[test]
@@ -196,17 +166,13 @@ fn p11_multi_rename_by_body() {
     let new = "def gamma():\n    return 111\ndef delta():\n    return 222\ndef epsilon():\n    return 999\n";
     let rats =
         rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
-    assert!(
-        rats.iter().any(|r| r == "renames alpha → gamma"),
-        "rename 1: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r == "renames beta → delta"),
-        "rename 2: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.starts_with("adds epsilon")),
-        "genuine new def: {rats:?}"
+    assert_eq!(
+        rats,
+        vec![
+            "renames alpha → gamma",
+            "renames beta → delta",
+            "adds epsilon"
+        ]
     );
 }
 
@@ -219,20 +185,7 @@ fn p12_move_detection() {
             { "path": "b.py", "old": "# b\n", "new": "# b\ndef helper():\n    return 42\n" }
         ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "moves helper from a.py"),
-        "move-in on target: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r == "moves helper to b.py"),
-        "move-out on source: {rats:?}"
-    );
-    assert!(
-        !rats
-            .iter()
-            .any(|r| r.contains("removes helper") || r.starts_with("adds helper")),
-        "not add+remove: {rats:?}"
-    );
+    assert_eq!(rats, vec!["moves helper to b.py", "moves helper from a.py"]);
 }
 
 #[test]
@@ -638,14 +591,9 @@ fn p16_extraction_from_present_def() {
     let new = "fn read_input() -> Input {\n    let mut buf = String::new();\n    io::stdin().read_to_string(&mut buf).unwrap();\n    log::debug!(\"got input\");\n    serde_json::from_str(&buf).unwrap()\n}\nfn order() {\n    emit(run(read_input()));\n}\n";
     let rats =
         rationales(serde_json::json!({ "changes": [{ "path": "m.rs", "old": old, "new": new }] }));
-    assert!(
-        rats.iter()
-            .any(|r| r == "adds read_input, extracted from order"),
-        "extraction detected: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r == "adds read_input"),
-        "must not read as a plain add: {rats:?}"
+    assert_eq!(
+        rats,
+        vec!["adds read_input, extracted from order", "edits order"]
     );
 }
 
@@ -661,16 +609,9 @@ fn p16_multi_extraction_from_same_source_is_grouped() {
     let new = "def read_input():\n    buf = read_stdin()\n    log_debug(buf)\n    parsed = parse(buf)\n    return parsed\n\ndef check_input():\n    validate(parsed)\n    emit(run(parsed))\n    finalize(parsed)\n\ndef order():  # dispatch\n    parsed = read_input()\n    check_input()\n";
     let rats =
         rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
-    assert!(
-        rats.iter()
-            .any(|r| r.contains("adds check_input, read_input, extracted from order")),
-        "grouped extraction: {rats:?}"
-    );
-    assert!(
-        !rats
-            .iter()
-            .any(|r| r.matches("extracted from order").count() > 1),
-        "provenance must not repeat: {rats:?}"
+    assert_eq!(
+        rats,
+        vec!["adds check_input, read_input, extracted from order; changes signature of order"]
     );
 }
 
@@ -685,16 +626,7 @@ fn placeholder_defs_suppressed() {
     // P17 composes binding wording with def-side wording (see order.rs
     // rationale_for): `t` is a genuine new local binding alongside `run`, so
     // it's named too, not just "adds run" in isolation.
-    assert!(
-        rats.iter().any(|r| r.starts_with("adds run")),
-        "named def kept: {rats:?}"
-    );
-    assert!(
-        !rats
-            .iter()
-            .any(|r| r.contains("adds _") || r.contains("<anonymous>")),
-        "placeholders dropped: {rats:?}"
-    );
+    assert_eq!(rats, vec!["adds run"]);
 }
 
 #[test]
@@ -927,18 +859,7 @@ fn comment_only_gets_comment_wording_code_edit_unaffected() {
             "old": "def f():\n    return 1\n\ndef g():\n    return 2\n",
             "new": "# note about f\ndef f():\n    return 1\n\ndef g():\n    return 3\n" } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "adds comment"),
-        "top-level comment insert → adds comment: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r == "edits g"),
-        "ordinary body edit inside g is unaffected: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r == "change"),
-        "no hunk should fall back to the bare 'change': {rats:?}"
-    );
+    assert_eq!(rats, vec!["adds comment", "edits g"]);
 }
 
 #[test]
@@ -950,14 +871,7 @@ fn comment_only_inside_definition_names_container() {
             "old": "def f():\n    # note\n    return 1\n",
             "new": "def f():\n    # updated note\n    return 1\n" } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "edits comment in f"),
-        "comment-only edit inside a def names it: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r == "edits f"),
-        "must not be worded as a code edit: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits comment in f"]);
 }
 
 #[test]
@@ -969,14 +883,7 @@ fn comment_and_code_together_is_not_comment_wording() {
             "old": "def f():\n    # note\n    return 1\n",
             "new": "def f():\n    # updated note\n    return 2\n" } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "edits f"),
-        "mixed comment+code hunk keeps ordinary code-edit wording: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r.contains("comment")),
-        "must not be described as a comment change: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits f"]);
 }
 
 #[test]
@@ -992,14 +899,7 @@ fn python_multiline_docstring_only_change_is_a_comment_change() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "edits comment in f"),
-        "multi-line docstring edit is a comment change: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r == "edits f"),
-        "must not be worded as a code edit: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits comment in f"]);
 }
 
 #[test]
@@ -1011,14 +911,7 @@ fn python_docstring_and_code_together_is_not_comment_wording() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "edits f"),
-        "mixed docstring+code hunk keeps ordinary code-edit wording: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r.contains("comment")),
-        "must not be described as a comment change: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits f"]);
 }
 
 #[test]
@@ -1103,18 +996,7 @@ fn rust_impl_blocks_name_their_type_not_a_lifetime_or_trait() {
               "new": "struct W;\nimpl Display for Work {\n    fn fmt(&self) -> u8 { 2 }\n}\n" }
         ]
     }));
-    assert!(
-        !rats.iter().any(|r| r.contains("<anonymous>")),
-        "impl with generics must not be anonymous: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.contains("Worker")),
-        "generic impl names its type: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.contains("Work")) && !rats.iter().any(|r| r.contains("Display")),
-        "trait impl names the type, not the trait: {rats:?}"
-    );
+    assert_eq!(rats, vec!["adds Worker, go", "adds Work, fmt"]);
 }
 
 #[test]
@@ -1127,14 +1009,7 @@ fn a_qualified_name_split_across_lines_is_joined() {
             "old": "namespace Foam { namespace kt { } }\n",
             "new": "namespace Foam { namespace kt {\nFoam::scalar Foam::kt::\nSchaeffer::nu\n(\n    int a\n) const\n{\n    return 1;\n}\n} }\n" }]
     }));
-    assert!(
-        !rats.iter().any(|r| r.contains('\n')),
-        "a rationale must never span lines: {rats:?}"
-    );
-    assert!(
-        rats.iter().any(|r| r.contains("kt::Schaeffer::nu")),
-        "the wrapped name is joined, not truncated: {rats:?}"
-    );
+    assert_eq!(rats, vec!["adds kt::Schaeffer::nu; edits Foam, kt"]);
 }
 
 #[test]
@@ -1231,14 +1106,7 @@ fn python_block_comment_string_outside_first_statement_position_is_a_comment() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    assert!(
-        rats.iter().any(|r| r.contains("comment")),
-        "a trailing attribute docstring reads as a comment change: {rats:?}"
-    );
-    assert!(
-        !rats.iter().any(|r| r == "change"),
-        "must not fall through to the bare fallback: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits comment"]);
 }
 
 #[test]
@@ -1252,10 +1120,7 @@ fn multiline_data_string_assigned_to_a_variable_is_not_a_comment() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    assert!(
-        !rats.iter().any(|r| r.contains("comment")),
-        "a data string assigned to a variable must not be called a comment: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits QUERY"]);
 }
 
 #[test]
@@ -1267,10 +1132,7 @@ fn a_lone_unrelated_pair_is_not_a_rename() {
             "old": "def foo():\n    total = 0\n    for r in rows:\n        total += r\n    return total\n",
             "new": "def bar():\n    conn = connect()\n    conn.send(payload)\n    conn.close()\n" } ]
     }));
-    assert!(
-        !rats.iter().any(|r| r.contains("renames")),
-        "unrelated pair is not a rename: {rats:?}"
-    );
+    assert_eq!(rats, vec!["adds bar"]);
 }
 
 #[test]
@@ -1281,8 +1143,5 @@ fn a_lone_pair_that_shares_its_body_is_a_rename() {
             "old": "def foo():\n    total = 0\n    for r in rows:\n        total += r\n    return total\n",
             "new": "def bar():\n    total = 1\n    for r in rows:\n        total += r\n    return total\n" } ]
     }));
-    assert!(
-        rats.iter().any(|r| r == "renames foo → bar"),
-        "edited rename: {rats:?}"
-    );
+    assert_eq!(rats, vec!["renames foo → bar"]);
 }
