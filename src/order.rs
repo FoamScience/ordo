@@ -2,9 +2,8 @@
 //! (P1), def→use edges between groups (P2) — cross-file when enabled (P4),
 //! topological sort (Kahn) with deterministic (import, file, position) tiebreak.
 //! Single-file is just the one-file case of this.
-use crate::extract::{BindingUse, HunkSem};
-use crate::model::{Category, Strategy};
-use crate::name_list;
+use crate::extract::{self, BindingUse, HunkSem, RawHunk};
+use crate::model::{Category, Removal, RemovalKind, Strategy};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub struct GroupInfo {
@@ -160,6 +159,17 @@ fn src_frags(pairs: &[(&str, &str)], verb: &str, sep: &str, rel: &str) -> Vec<St
 /// them doubles as the ready queue in the topological sort.
 type GroupKey = (std::cmp::Reverse<i64>, usize, usize, usize);
 
+/// How a removal reads. The pipeline decides *what* left; this decides how to
+/// say it, which is the only place wording belongs.
+fn removal_phrase(r: &Removal) -> String {
+    match &r.kind {
+        RemovalKind::MovedTo(path) => format!("moves {} to {path}", r.name),
+        RemovalKind::Section => format!("removes section {}", r.name),
+        RemovalKind::Import => format!("removes import {}", r.name),
+        RemovalKind::Def => format!("removes {}", r.name),
+    }
+}
+
 fn cat_rank(c: Category) -> u8 {
     match c {
         Category::Import => 0,
@@ -185,8 +195,9 @@ pub struct FileFacts<'a> {
     pub relocated: &'a [HashMap<String, String>],
     /// defs whose signature is unchanged, so a hunk in them is a body edit (#4)
     pub body_only: &'a [HashSet<String>],
-    /// (old row, phrase) for everything the file no longer has (#5/#7)
-    pub removals: &'a [Vec<(usize, String)>],
+    /// everything the file no longer has (#5/#7), as facts — the wording is
+    /// this module's, see `removal_phrase`
+    pub removals: &'a [Vec<Removal>],
     /// per hunk: every changed line is a comment
     pub comment_only: &'a [Vec<bool>],
     /// per hunk: how it moved code across the comment boundary, if it did
@@ -580,7 +591,7 @@ struct RatCtx<'a> {
     moved_in: &'a [HashMap<String, String>],
     relocated: &'a [HashMap<String, String>],
     body_only: &'a [HashSet<String>],
-    removals: &'a [Vec<(usize, String)>],
+    removals: &'a [Vec<Removal>],
     comment: &'a [bool],
     /// how the hunk moved code across the comment boundary, if it did
     switched: &'a [Option<crate::SideShift>],
@@ -673,7 +684,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         && (!s.new_empty
             || ctx.removals.get(my_file).is_some_and(|v| {
                 v.iter()
-                    .any(|(row, _)| *row >= s.old_range[0] && *row <= s.old_range[1])
+                    .any(|r| r.row >= s.old_range[0] && r.row <= s.old_range[1])
             }));
     if s.noise && !import_speaks {
         return if crate::lang::is_generated_path(&ctx.paths[my_file]) {
@@ -956,8 +967,8 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     let [o0, o1] = s.old_range;
     if let Some(label) = ctx.removals.get(my_file).and_then(|v| {
         v.iter()
-            .find(|(row, _)| *row >= o0 && *row <= o1)
-            .map(|(_, l)| l.clone())
+            .find(|r| r.row >= o0 && r.row <= o1)
+            .map(removal_phrase)
     }) {
         return label;
     }
@@ -1156,4 +1167,154 @@ fn group_name(g: &GroupInfo, sem: &[&HunkSem]) -> Option<String> {
                 .iter()
                 .find_map(|&i| sem[i].defines.first().cloned())
         })
+}
+
+// ---------------------------------------------------------- detail layer
+
+/// What a hunk did to the named members of its container(s). New-side members
+/// come from `analyze`, each already carrying its own container (P15's
+/// attribution fix — see `extract::member_container`); the old side is
+/// matched by the hunk's old line range. A name present on both sides of the
+/// *same* container was edited; on one side only, added or removed. Members
+/// under different containers (e.g. two distinct `add_argument(...)` calls
+/// touched by one hunk) are never compared against each other.
+pub(crate) fn detail_phrases(
+    s: &HunkSem,
+    h: &RawHunk,
+    old_members: &[extract::MemberRow],
+    prose: bool,
+    nests: bool,
+) -> Vec<String> {
+    let [o0, o1] = h.old_range;
+    // Anything the hunk introduces wholesale is already named by the rationale
+    // ("adds type Fresh") — relisting the members it was born with says nothing
+    // more. An empty old side is what makes it new; a container merely *edited*
+    // on the line that declares it (a one-line enum) still earns its details.
+    // Prose is the exception: a def (section) is also its parent's member, so
+    // a brand-new subsection needs this layer to say which section it landed
+    // in — but only when it HAS a parent; a wholly new top-level section still
+    // stays silent here, same as every other language.
+    if o0 > o1 && !s.defines.is_empty() && !(prose && s.enclosing.is_some()) {
+        return vec![];
+    }
+    // A member with no identifiable container of its own (not in a call, no
+    // enclosing definition) falls back to the hunk's enclosing definition,
+    // same as before this member-level attribution existed. Placeholder
+    // segments never reach the wording (as in the rationale itself).
+    //
+    // Not for a language where a definition is *also* a member of the one
+    // above it — a prose section, a config key. There `None` means top level,
+    // and the fallback reports a **sibling** as the parent: two keys side by
+    // side read as `adds two to one`.
+    let clean =
+        |c: String| (!c.split('.').any(|seg| seg == "<anonymous>" || seg == "_")).then_some(c);
+    let fallback = if nests { None } else { s.enclosing.clone() };
+    let resolve = |c: &Option<String>| c.clone().or_else(|| fallback.clone()).and_then(clean);
+
+    let mut old_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();
+    for (_row, n, t, ctr) in old_members
+        .iter()
+        .filter(|(row, ..)| o0 <= row + 1 && *row < o1)
+    {
+        old_by
+            .entry(resolve(ctr))
+            .or_default()
+            .insert(n.as_str(), t.as_str());
+    }
+    let mut new_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();
+    for (n, t, ctr) in &s.members {
+        new_by
+            .entry(resolve(ctr))
+            .or_default()
+            .insert(n.as_str(), t.as_str());
+    }
+
+    let mut containers: Vec<Option<String>> = old_by.keys().chain(new_by.keys()).cloned().collect();
+    containers.sort();
+    containers.dedup();
+
+    fn sorted(mut v: Vec<&str>) -> Vec<&str> {
+        v.sort();
+        v
+    }
+
+    let mut out = vec![];
+    let empty = HashMap::new();
+    for container in containers {
+        let old = old_by.get(&container).unwrap_or(&empty);
+        let new = new_by.get(&container).unwrap_or(&empty);
+        // A member that IS its own container names nothing new: a js
+        // `{ run: () => {} }` makes `run` both the member and — once the
+        // arrow is a definition — the enclosing def, which would read "adds
+        // run to run". Attributing a member to `stack` before its own def is
+        // pushed (see `member_container`) already keeps this from happening
+        // for the def-container case; kept as a defensive backstop and to
+        // cover a call whose callee or literal happens to equal a member name.
+        let self_named = |name: &str| {
+            container
+                .as_deref()
+                .is_some_and(|c| c == name || c.rsplit('.').next() == Some(name))
+        };
+        let added = sorted(
+            new.keys()
+                .filter(|n| !old.contains_key(*n) && !self_named(n))
+                .copied()
+                .collect(),
+        );
+        let removed = sorted(
+            old.keys()
+                .filter(|n| !new.contains_key(*n) && !self_named(n))
+                .copied()
+                .collect(),
+        );
+        // present on both sides: changed only when its own text moved, so a
+        // member that merely shares a line with the real change isn't named
+        let changed = sorted(
+            new.iter()
+                .filter(|(n, t)| old.get(*n).is_some_and(|o| o != *t) && !self_named(n))
+                .map(|(n, _)| *n)
+                .collect(),
+        );
+        for (verb, prep, names) in [
+            ("adds", "to", added),
+            ("removes", "from", removed),
+            ("changes", "in", changed),
+        ] {
+            if names.is_empty() {
+                continue;
+            }
+            let list = name_list(&names);
+            let list = if prose && verb != "changes" {
+                let noun = if names.len() == 1 {
+                    "section"
+                } else {
+                    "sections"
+                };
+                format!("{noun} {list}")
+            } else {
+                list
+            };
+            out.push(match &container {
+                Some(c) => format!("{verb} {list} {prep} {c}"),
+                None => format!("{verb} {list}"),
+            });
+        }
+    }
+    out
+}
+
+// At most three names, then a count — a detail line is a glance, not a listing.
+fn name_list(names: &[&str]) -> String {
+    const SHOWN: usize = 3;
+    // names can be container labels as well as symbols (a test block's label is
+    // a sentence), so each one is shortened to what a rationale can afford
+    let short: Vec<String> = names.iter().map(|n| short_container(n)).collect();
+    if short.len() <= SHOWN {
+        return short.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        short[..SHOWN].join(", "),
+        short.len() - SHOWN
+    )
 }

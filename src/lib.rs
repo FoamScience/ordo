@@ -185,7 +185,7 @@ pub fn run(input: Input) -> Output {
     let mut moved_in: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → source path
     let mut relocated: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → old def it was extracted from
     let mut body_only: Vec<HashSet<String>> = vec![HashSet::new(); n]; // existing def, unchanged signature → body-only edit
-    let mut removals: Vec<Vec<(usize, String)>> = vec![vec![]; n];
+    let mut removals: Vec<Vec<Removal>> = vec![vec![]; n];
     for fi in 0..n {
         let (nd, ni) = (&new_defs_v[fi], &new_imports_v[fi]);
         let od = &old_defs[fi];
@@ -296,22 +296,35 @@ pub fn run(input: Input) -> Output {
                 continue;
             }
             let prose = lang::for_path(&paths[fi]).is_some_and(|s| s.prose);
-            match moved_out.get(name) {
-                Some(&tgt) => rem.push((*row, format!("moves {name} to {}", paths[tgt]))),
-                None if prose => rem.push((*row, format!("removes section {name}"))),
-                None => rem.push((*row, format!("removes {name}"))),
-            }
+            let kind = match moved_out.get(name) {
+                Some(&tgt) => RemovalKind::MovedTo(paths[tgt].clone()),
+                None if prose => RemovalKind::Section,
+                None => RemovalKind::Def,
+            };
+            rem.push(Removal {
+                row: *row,
+                name: name.clone(),
+                kind,
+            });
         }
         for (name, row) in oir {
             if !ni.contains(name) {
-                rem.push((*row, format!("removes import {name}")));
+                rem.push(Removal {
+                    row: *row,
+                    name: name.clone(),
+                    kind: RemovalKind::Import,
+                });
             }
         }
         // a removed file-scope binding: not a definition, but naming it beats
         // the "removes N lines" fallback a module constant would get otherwise
         for (name, row) in &old_binds[fi] {
             if !new_binds[fi].contains(name) && !nd.contains(name) && !od.contains(name) {
-                rem.push((*row, format!("removes {name}")));
+                rem.push(Removal {
+                    row: *row,
+                    name: name.clone(),
+                    kind: RemovalKind::Def,
+                });
             }
         }
         rename[fi] = ren;
@@ -397,7 +410,7 @@ pub fn run(input: Input) -> Output {
                 || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
             // a *deleted* import is a real removal and is named as such; this
             // is only the residue of one that moved, where nothing was removed
-            let named = removals[fi].iter().any(|(r, _)| *r >= o0 && *r <= o1);
+            let named = removals[fi].iter().any(|r| r.row >= o0 && r.row <= o1);
             if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
                 sem.noise = true;
             }
@@ -628,7 +641,7 @@ pub fn run(input: Input) -> Output {
         .map(|c| c.iter().map(|&i| hid(i)).collect())
         .collect();
 
-    let ledger = build_ledger(&files, &order, &facts, &new_defs_v, &old_rows);
+    let ledger = build_ledger(&files, &order, &facts);
     let notes = changeset_notes(&files, &ledger);
     arity_check(&mut files, &ledger, &input.changes);
     incomplete_rename(&mut files, &ledger, &input.changes, &new_defs_v);
@@ -813,8 +826,6 @@ fn build_ledger(
     files: &[FileOut],
     order: &[OrderItem],
     facts: &order::FileFacts,
-    new_defs: &[HashSet<String>],
-    old_rows: &[extract::SymbolRows],
 ) -> Vec<LedgerEntry> {
     // global reading position of every hunk, so the ledger can be sorted the
     // way the review is
@@ -832,16 +843,6 @@ fn build_ledger(
             }
         }
     }
-
-    // a symbol that left file A and arrived in B is recorded on B's `moved_in`
-    // with A as its source; A must not also report it as a removal
-    let moved_away: HashSet<(&str, &str)> = (0..files.len())
-        .flat_map(|ti| {
-            facts.moved_in[ti]
-                .iter()
-                .map(|(name, src)| (src.as_str(), name.as_str()))
-        })
-        .collect();
 
     let mut out: Vec<(usize, LedgerEntry)> = vec![];
     let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
@@ -936,16 +937,14 @@ fn build_ledger(
                 },
             ));
         }
-        // A removed symbol has no defining node left to read a kind off, and
-        // `facts.removals` is a list of rendered rationale phrases rather than
-        // names — so it is computed from the def sets directly. A name that
-        // left because it was renamed, or moved to another file, is already
-        // reported as that and must not appear again as a removal.
-        for (name, row) in &old_rows[fi].0 {
-            if new_defs[fi].contains(name)
-                || facts.rename[fi].values().any(|old| old == name)
-                || moved_away.contains(&(f.path.as_str(), name.as_str()))
-            {
+        // A removed symbol has no defining node left to read a kind off, so
+        // the entry is built from `facts.removals` — the same set the
+        // rationale layer names, which already excludes a symbol that left
+        // because it was renamed or moved to another file. An import is not a
+        // symbol the ledger tracks, and a move is reported as `Moved` from
+        // the arriving side.
+        for r in &facts.removals[fi] {
+            if !matches!(r.kind, RemovalKind::Def | RemovalKind::Section) {
                 continue;
             }
             // Only a symbol some hunk actually deletes is reported gone. The
@@ -957,21 +956,21 @@ fn build_ledger(
             let Some(at) = f
                 .hunks
                 .iter()
-                .find(|h| h.old_range[0] <= *row && *row <= h.old_range[1])
+                .find(|h| h.old_range[0] <= r.row && r.row <= h.old_range[1])
             else {
                 continue;
             };
-            if !seen.insert((f.path.clone(), name.clone(), None)) {
+            if !seen.insert((f.path.clone(), r.name.clone(), None)) {
                 continue;
             }
             let used_by: Vec<String> = users
-                .get(name.as_str())
+                .get(r.name.as_str())
                 .map(|v| v.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default();
             out.push((
                 pos.get(at.id.as_str()).copied().unwrap_or(usize::MAX),
                 LedgerEntry {
-                    name: name.clone(),
+                    name: r.name.clone(),
                     kind: None,
                     scope: None,
                     path: f.path.clone(),
@@ -1341,7 +1340,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
             .iter()
             .enumerate()
             .map(|(i, h)| {
-                detail_phrases(
+                order::detail_phrases(
                     &sems[i],
                     h,
                     &old_members,
@@ -1569,154 +1568,6 @@ fn strip_comment_marker<'a>(line: &'a str, ext: &str) -> &'a str {
         .trim_end_matches("\"\"\"")
         .trim_end_matches("'''")
         .trim()
-}
-
-/// What a hunk did to the named members of its container(s). New-side members
-/// come from `analyze`, each already carrying its own container (P15's
-/// attribution fix — see `extract::member_container`); the old side is
-/// matched by the hunk's old line range. A name present on both sides of the
-/// *same* container was edited; on one side only, added or removed. Members
-/// under different containers (e.g. two distinct `add_argument(...)` calls
-/// touched by one hunk) are never compared against each other.
-fn detail_phrases(
-    s: &HunkSem,
-    h: &RawHunk,
-    old_members: &[extract::MemberRow],
-    prose: bool,
-    nests: bool,
-) -> Vec<String> {
-    let [o0, o1] = h.old_range;
-    // Anything the hunk introduces wholesale is already named by the rationale
-    // ("adds type Fresh") — relisting the members it was born with says nothing
-    // more. An empty old side is what makes it new; a container merely *edited*
-    // on the line that declares it (a one-line enum) still earns its details.
-    // Prose is the exception: a def (section) is also its parent's member, so
-    // a brand-new subsection needs this layer to say which section it landed
-    // in — but only when it HAS a parent; a wholly new top-level section still
-    // stays silent here, same as every other language.
-    if o0 > o1 && !s.defines.is_empty() && !(prose && s.enclosing.is_some()) {
-        return vec![];
-    }
-    // A member with no identifiable container of its own (not in a call, no
-    // enclosing definition) falls back to the hunk's enclosing definition,
-    // same as before this member-level attribution existed. Placeholder
-    // segments never reach the wording (as in the rationale itself).
-    //
-    // Not for a language where a definition is *also* a member of the one
-    // above it — a prose section, a config key. There `None` means top level,
-    // and the fallback reports a **sibling** as the parent: two keys side by
-    // side read as `adds two to one`.
-    let clean =
-        |c: String| (!c.split('.').any(|seg| seg == "<anonymous>" || seg == "_")).then_some(c);
-    let fallback = if nests { None } else { s.enclosing.clone() };
-    let resolve = |c: &Option<String>| c.clone().or_else(|| fallback.clone()).and_then(clean);
-
-    let mut old_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();
-    for (_row, n, t, ctr) in old_members
-        .iter()
-        .filter(|(row, ..)| o0 <= row + 1 && *row < o1)
-    {
-        old_by
-            .entry(resolve(ctr))
-            .or_default()
-            .insert(n.as_str(), t.as_str());
-    }
-    let mut new_by: HashMap<Option<String>, HashMap<&str, &str>> = HashMap::new();
-    for (n, t, ctr) in &s.members {
-        new_by
-            .entry(resolve(ctr))
-            .or_default()
-            .insert(n.as_str(), t.as_str());
-    }
-
-    let mut containers: Vec<Option<String>> = old_by.keys().chain(new_by.keys()).cloned().collect();
-    containers.sort();
-    containers.dedup();
-
-    fn sorted(mut v: Vec<&str>) -> Vec<&str> {
-        v.sort();
-        v
-    }
-
-    let mut out = vec![];
-    let empty = HashMap::new();
-    for container in containers {
-        let old = old_by.get(&container).unwrap_or(&empty);
-        let new = new_by.get(&container).unwrap_or(&empty);
-        // A member that IS its own container names nothing new: a js
-        // `{ run: () => {} }` makes `run` both the member and — once the
-        // arrow is a definition — the enclosing def, which would read "adds
-        // run to run". Attributing a member to `stack` before its own def is
-        // pushed (see `member_container`) already keeps this from happening
-        // for the def-container case; kept as a defensive backstop and to
-        // cover a call whose callee or literal happens to equal a member name.
-        let self_named = |name: &str| {
-            container
-                .as_deref()
-                .is_some_and(|c| c == name || c.rsplit('.').next() == Some(name))
-        };
-        let added = sorted(
-            new.keys()
-                .filter(|n| !old.contains_key(*n) && !self_named(n))
-                .copied()
-                .collect(),
-        );
-        let removed = sorted(
-            old.keys()
-                .filter(|n| !new.contains_key(*n) && !self_named(n))
-                .copied()
-                .collect(),
-        );
-        // present on both sides: changed only when its own text moved, so a
-        // member that merely shares a line with the real change isn't named
-        let changed = sorted(
-            new.iter()
-                .filter(|(n, t)| old.get(*n).is_some_and(|o| o != *t) && !self_named(n))
-                .map(|(n, _)| *n)
-                .collect(),
-        );
-        for (verb, prep, names) in [
-            ("adds", "to", added),
-            ("removes", "from", removed),
-            ("changes", "in", changed),
-        ] {
-            if names.is_empty() {
-                continue;
-            }
-            let list = name_list(&names);
-            let list = if prose && verb != "changes" {
-                let noun = if names.len() == 1 {
-                    "section"
-                } else {
-                    "sections"
-                };
-                format!("{noun} {list}")
-            } else {
-                list
-            };
-            out.push(match &container {
-                Some(c) => format!("{verb} {list} {prep} {c}"),
-                None => format!("{verb} {list}"),
-            });
-        }
-    }
-    out
-}
-
-// At most three names, then a count — a detail line is a glance, not a listing.
-fn name_list(names: &[&str]) -> String {
-    const SHOWN: usize = 3;
-    // names can be container labels as well as symbols (a test block's label is
-    // a sentence), so each one is shortened to what a rationale can afford
-    let short: Vec<String> = names.iter().map(|n| order::short_container(n)).collect();
-    if short.len() <= SHOWN {
-        return short.join(", ");
-    }
-    format!(
-        "{}, and {} more",
-        short[..SHOWN].join(", "),
-        short.len() - SHOWN
-    )
 }
 
 // A hunk that changes only whitespace/layout: both sides present and equal once
