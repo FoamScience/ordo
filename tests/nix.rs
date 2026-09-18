@@ -3,24 +3,8 @@
 //! function is not a separate declaration (it is a lambda bound to an
 //! attribute), and `import ./x.nix` is an ordinary application whose function
 //! happens to be named `import`.
-use ordo::model::{HunkOut, Input, Output};
-
-fn run(path: &str, old: &str, new: &str) -> Output {
-    ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({
-            "changes": [{ "path": path, "old": old, "new": new }]
-        }))
-        .unwrap(),
-    )
-}
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    run(path, old, new)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks)
-        .collect()
-}
+mod fixture;
+use fixture::{hunks as one, run_file as run};
 
 #[test]
 fn a_let_binding_links_to_where_it_is_referenced() {

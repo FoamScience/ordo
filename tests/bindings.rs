@@ -1,14 +1,6 @@
 //! P17 "where is this binding used?" provenance tests.
-use ordo::model::Input;
-
-fn rationales(v: serde_json::Value) -> Vec<String> {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    ordo::run(inp)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks.into_iter().map(|h| h.rationale))
-        .collect()
-}
+mod fixture;
+use fixture::rationales_json as rationales;
 
 fn one(path: &str, old: &str, new: &str) -> Vec<String> {
     rationales(serde_json::json!({

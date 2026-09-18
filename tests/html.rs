@@ -1,20 +1,9 @@
 //! html, and with it vue: only an element carrying an `id` is a definition —
 //! the one handle a stylesheet, a script or a fragment link addresses it by.
 //! A `.vue` single-file component needs no grammar of its own.
-use ordo::model::{HunkOut, Input};
-
-fn one(path: &str, old: &str, new: &str) -> Vec<HunkOut> {
-    ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({
-            "changes": [{ "path": path, "old": old, "new": new }]
-        }))
-        .unwrap(),
-    )
-    .files
-    .into_iter()
-    .flat_map(|f| f.hunks)
-    .collect()
-}
+use ordo::model::Input;
+mod fixture;
+use fixture::hunks as one;
 
 #[test]
 fn an_element_with_an_id_is_a_definition() {

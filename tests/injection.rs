@@ -1,10 +1,8 @@
 //! Language injection: a fenced code block in a prose file is parsed with the
 //! fence's own grammar, not left as opaque text.
-use ordo::model::{Input, Output};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
+use ordo::model::Output;
+mod fixture;
+use fixture::run_json as run;
 
 fn md(old: &str, new: &str) -> Output {
     run(serde_json::json!({ "changes": [{ "path": "README.md", "old": old, "new": new }] }))

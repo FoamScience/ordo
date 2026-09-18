@@ -9,7 +9,8 @@
 //!
 //! These assertions are shape-based, not snapshot-based: they say a rationale
 //! stays short and never repeats a provenance phrase, whatever the wording.
-use ordo::model::Input;
+mod fixture;
+use fixture::rationales_json as rationales;
 
 /// Generous next to real output (the widest observed across two corpora is
 /// ~356, from legitimately distinct move/extract fragments) and far below
@@ -27,15 +28,6 @@ const PROVENANCE: &[&str] = &[
     ", used in ",
     ", moves ",
 ];
-
-fn rationales(v: serde_json::Value) -> Vec<String> {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    ordo::run(inp)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks.into_iter().map(|h| h.rationale))
-        .collect()
-}
 
 fn check(label: &str, rats: &[String]) {
     for r in rats {

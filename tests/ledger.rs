@@ -1,11 +1,9 @@
 //! P23.1: one entry per *symbol* the change touches, rather than per hunk. A
 //! projection of data the engine already has — `symbols`, the per-file status
 //! maps, and every hunk's `uses` — never new analysis.
-use ordo::model::{Input, LedgerEntry, Output, SymbolChange};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
+use ordo::model::{LedgerEntry, SymbolChange};
+mod fixture;
+use fixture::run_json as run;
 
 fn one(path: &str, old: &str, new: &str) -> Vec<LedgerEntry> {
     run(serde_json::json!({

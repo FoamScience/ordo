@@ -1,11 +1,9 @@
 //! Hunk accounting: every hunk the diff produced is either ordered or recorded
 //! as dropped, with the reason. Without this a consumer cannot tell a hunk the
 //! engine deliberately removed from one it never found.
-use ordo::model::{DropReason, Input, Output};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
+use ordo::model::DropReason;
+mod fixture;
+use fixture::run_json as run;
 
 #[test]
 fn an_import_hunk_is_kept_as_noise_rather_than_dropped() {

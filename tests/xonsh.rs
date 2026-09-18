@@ -2,22 +2,9 @@
 //! node kinds, so what needs pinning is that ordo *reaches* them — the spec
 //! resolves by extension, imports bind the names python binds, `#` is a
 //! comment, and `$FOO = …` names a binding python's `assignment` never sees.
-use ordo::model::{Category, Input, Output};
-
-fn run(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
-}
-
-fn one(path: &str, old: &str, new: &str) -> Output {
-    run(serde_json::json!({ "changes": [{ "path": path, "old": old, "new": new }] }))
-}
-
-fn rationales(out: &Output) -> Vec<String> {
-    out.files
-        .iter()
-        .flat_map(|f| f.hunks.iter().map(|h| h.rationale.clone()))
-        .collect()
-}
+use ordo::model::Category;
+mod fixture;
+use fixture::{rationales_of as rationales, run_file as one};
 
 #[test]
 fn every_xonsh_extension_resolves_to_the_grammar() {
