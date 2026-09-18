@@ -7,7 +7,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo build
-      - run: cargo test
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --locked
+      - run: cargo test --locked
+      # the generated doc blocks, and every other check that lives in the
+      # `ordo` binary's test module, are behind the `tui` feature; without
+      # this step a docs/ or README drift ships green
+      - run: cargo test --locked --no-default-features
+      # the shipped rulesets are user-facing conventions; a rule that stops
+      # firing looks exactly like a convention nobody breaks
+      - run: |
+          cargo build --locked --bin ordo-engine
+          for f in rulesets/*.toml; do
+            b=$(basename "$f" .toml)
+            s=$(ls rulesets/samples/"$b".* 2>/dev/null | head -1)
+            [ -n "$s" ] || { echo "no sample for $b"; exit 1; }
+            python3 scripts/ruleset-check.py "$f" "$s" ./target/debug/ordo-engine
+          done

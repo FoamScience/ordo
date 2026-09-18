@@ -4,13 +4,24 @@
 use std::fs;
 use std::path::Path;
 
+/// Whether a `UPDATE_*` escape hatch is actually switched on.
+///
+/// These gates rewrite the recorded truth — golden fixtures, generated doc
+/// blocks, the corpus ratchet, the bench baseline — and then assert nothing.
+/// Testing `is_ok()` meant any value at all armed them, so `UPDATE_GOLDEN=0`
+/// or a stale empty export silently disabled the check while still reporting
+/// a pass.
+fn update_requested(var: &str) -> bool {
+    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
+}
+
 fn run_case(dir: &Path) {
     let input = fs::read_to_string(dir.join("input.json"))
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
     let inp: ordo::model::Input = serde_json::from_str(&input).expect("parse input.json");
     let got = serde_json::to_string_pretty(&ordo::run(inp)).unwrap();
     let exp_path = dir.join("expected.json");
-    if std::env::var("UPDATE_GOLDEN").is_ok() {
+    if update_requested("UPDATE_GOLDEN") {
         fs::write(&exp_path, format!("{got}\n")).unwrap();
         return;
     }

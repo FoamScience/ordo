@@ -12048,6 +12048,13 @@ mod tests {
 mod docs {
     use super::*;
 
+    /// Whether a `UPDATE_*` escape hatch is actually switched on. Testing
+    /// `is_ok()` meant any value armed it, so `UPDATE_DOCS=0` rewrote the
+    /// generated blocks and asserted nothing while still reporting a pass.
+    fn update_requested(var: &str) -> bool {
+        std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
+    }
+
     /// Every file that carries generated blocks, relative to the crate root.
     /// Kept in step with `.gitattributes` by a test below.
     const FILES: &[&str] = &[
@@ -12508,7 +12515,7 @@ mod docs {
     #[test]
     fn generated_blocks_match_the_code_that_owns_them() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let update = std::env::var("UPDATE_DOCS").is_ok();
+        let update = update_requested("UPDATE_DOCS");
         let mut stale = vec![];
         let mut seen: Vec<String> = vec![];
         for rel in FILES {

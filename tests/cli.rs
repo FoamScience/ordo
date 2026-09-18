@@ -87,3 +87,34 @@ fn documented_flags_are_accepted() {
         assert_eq!(code, 0, "{args:?} must be accepted:\n{out}");
     }
 }
+
+#[test]
+fn pack_renders_a_review_pack() {
+    // the `pack` subcommand's argument wiring had no test; ordo::pack was only
+    // ever reached through the library
+    let (out, code) = run(
+        &["pack", "--json"],
+        r#"{"changes":[{"path":"a.py","old":"def f():\n    return 1\n","new":"def f():\n    return 2\n"}]}"#,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("# ordo review pack"), "{out}");
+    assert!(out.contains("## reading order"), "{out}");
+}
+
+#[test]
+fn version_and_help_answer_without_reading_stdin() {
+    for args in [
+        &["--version"][..],
+        &["-V"][..],
+        &["--help"][..],
+        &["-h"][..],
+    ] {
+        let (out, code) = run(args, "");
+        assert_eq!(code, 0, "{args:?}: {out}");
+        assert!(!out.trim().is_empty(), "{args:?} printed nothing");
+    }
+    let (v, _) = run(&["--version"], "");
+    assert!(v.contains("ordo-engine") && v.contains("schema"), "{v}");
+    let (h, _) = run(&["--help"], "");
+    assert!(h.contains("usage:") && h.contains("pack"), "{h}");
+}
