@@ -23,6 +23,17 @@ use ordo::model::{Category, Output};
 mod common;
 use common::{commit_input, corpus_dir, git, parse_manifest, Repo};
 
+/// Whether a `UPDATE_*` escape hatch is actually switched on.
+///
+/// These gates rewrite the recorded truth — golden fixtures, generated doc
+/// blocks, the corpus ratchet, the bench baseline — and then assert nothing.
+/// Testing `is_ok()` meant any value at all armed them, so `UPDATE_GOLDEN=0`
+/// or a stale empty export silently disabled the check while still reporting
+/// a pass.
+fn update_requested(var: &str) -> bool {
+    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
+}
+
 const MAX_RATIONALE: usize = 240;
 const BASELINE: &str = "corpus/baseline.json";
 
@@ -287,13 +298,23 @@ fn read_baseline() -> BTreeMap<String, BTreeMap<String, usize>> {
 #[test]
 fn corpora_hold_their_invariants_and_do_not_regress() {
     let Some(root) = corpus_dir() else {
+        // Skipping is right for a normal `cargo test` — the sweep needs real
+        // repositories cloned first. It is wrong for a run that meant to
+        // exercise the ratchet, where a silent pass is indistinguishable from
+        // a green one, so that caller says so and gets a failure instead.
+        assert!(
+            !update_requested("ORDO_CORPUS_REQUIRED"),
+            "ORDO_CORPUS_REQUIRED is set but $ORDO_CORPUS is unset or missing — \
+             the quality ratchet did not run; populate it with scripts/corpus-fetch.sh"
+        );
         eprintln!(
             "corpus: $ORDO_CORPUS unset or missing — skipping.\n\
-             populate it with scripts/corpus-fetch.sh"
+             populate it with scripts/corpus-fetch.sh\n\
+             set ORDO_CORPUS_REQUIRED=1 to make this a failure instead"
         );
         return;
     };
-    let update = std::env::var("UPDATE_CORPUS_BASELINE").is_ok();
+    let update = update_requested("UPDATE_CORPUS_BASELINE");
     let baseline = read_baseline();
     let mut recorded: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut failures: Vec<String> = vec![];
