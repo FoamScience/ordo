@@ -41,65 +41,7 @@ pub fn run(input: Input) -> Output {
     // statements *said* is harvested first, since blanking is what makes the
     // rest work — see `extract::mask_template`.
     let (input, templates) = mask_templates(input);
-    // per-file hunks + semantics
-    let mut hunks: Vec<PerFileHunks> = vec![];
-    for (fi, change) in input.changes.iter().enumerate() {
-        let (raw, mut sem, deg, com, sw) = build_change(change, input.options.full_context);
-        apply_template_facts(&templates[fi], &change.path, &raw, &mut sem);
-        if deg {
-            eprintln!(
-                "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
-                change.path
-            );
-        }
-        // A pure-import hunk is *noise*, not nothing: it follows from the real
-        // change rather than being it, so it never leads the reading order and
-        // never seeds a def→use edge — but it stays visible, dimmed, where the
-        // diff put it. Dropping it outright made ordo asymmetric in a way
-        // reviewers noticed: a removed import was reported ("removes import
-        // loguru", from the deletion path) while an added one vanished, so a
-        // moved import read as a deletion with no counterpart.
-        //
-        // `only_comments` still drops, because there the caller asked for a
-        // subset; the drop is recorded with its range so `hunks + dropped`
-        // accounts for every hunk the diff produced.
-        let mut raw_kept = vec![];
-        let mut sem_kept = vec![];
-        let mut com_kept = vec![];
-        let mut gone = vec![];
-        let mut sw_kept = vec![];
-        for (((r, mut s), c), w) in raw.into_iter().zip(sem).zip(com).zip(sw) {
-            if s.category == Category::Import {
-                s.noise = true;
-            }
-            let reason = if input.options.only_comments && !c {
-                Some(DropReason::NonComment)
-            } else {
-                None
-            };
-            match reason {
-                Some(reason) => gone.push(DroppedHunk {
-                    reason,
-                    old_range: r.old_range,
-                    new_range: r.new_range,
-                }),
-                None => {
-                    raw_kept.push(r);
-                    sem_kept.push(s);
-                    com_kept.push(c);
-                    sw_kept.push(w);
-                }
-            }
-        }
-        hunks.push(PerFileHunks {
-            raw: raw_kept,
-            sem: sem_kept,
-            degraded: deg,
-            comment: com_kept,
-            switched: sw_kept,
-            dropped: gone,
-        });
-    }
+    let mut hunks = build_hunks(&input, &templates);
 
     let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
     let n = input.changes.len();
@@ -109,149 +51,10 @@ pub fn run(input: Input) -> Output {
 
     let changed = detect_changes(&symbols, &paths);
 
-    // A hunk that only deletes has no new side to classify from, so a removed
-    // import used to read as a plain `other` hunk while an added one was an
-    // import. Classify a pure deletion from the side it actually has.
-    for fi in 0..n {
-        let (Some(spec), Some(old_src)) =
-            (lang::for_path(&paths[fi]), input.changes[fi].old.as_deref())
-        else {
-            continue;
-        };
-        let rows = extract::import_row_set(spec, old_src);
-        if rows.is_empty() {
-            continue;
-        }
-        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
-        for (li, sem) in sems.iter_mut().enumerate() {
-            let [o0, o1] = sem.old_range;
-            let [n0, n1] = raw[li].new_range;
-            let deletes_only = n0 > n1;
-            if deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r)) {
-                sem.category = Category::Import;
-                sem.noise = true;
-            }
-        }
-    }
-
-    // A pure-import hunk whose statements all existed in the old file is a
-    // reordering, not an arrival: "moves import pg" rather than "changes".
-    for fi in 0..n {
-        let (Some(spec), Some(old_src)) =
-            (lang::for_path(&paths[fi]), input.changes[fi].old.as_deref())
-        else {
-            continue;
-        };
-        let Some(new_src) = input.changes[fi].new.as_deref() else {
-            continue;
-        };
-        let before = extract::import_statements(spec, old_src);
-        if before.is_empty() {
-            continue;
-        }
-        let new_lines: Vec<&str> = new_src.lines().collect();
-        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
-        for (li, sem) in sems.iter_mut().enumerate() {
-            if sem.category != Category::Import {
-                continue;
-            }
-            let [r0, r1] = raw[li].new_range;
-            if r0 == 0 || r0 > r1 {
-                continue;
-            }
-            // every non-blank line of the hunk has to be an import the old file
-            // already had; one new line among them makes this an arrival
-            let mut lines = (r0..=r1)
-                .filter_map(|r| new_lines.get(r - 1))
-                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-                .filter(|l| !l.is_empty())
-                .peekable();
-            sem.import_moved = lines.peek().is_some() && lines.all(|l| before.contains(&l));
-        }
-    }
-
-    // An import line that moved, leaving a blank line behind, reads as a bare
-    // change: the new side carries no rows to classify by, and the old side is
-    // where the meaning was. ordo already treats pure-import hunks as
-    // bookkeeping, so the residue of reordering them is formatting. A genuinely
-    // deleted import is excluded below — that one is named.
-    for fi in 0..n {
-        let Some(new) = input.changes[fi].new.as_deref() else {
-            continue;
-        };
-        let new_lines: Vec<&str> = new.lines().collect();
-        let import_rows: HashSet<usize> = symbols[fi].old_rows.1.iter().map(|(_, r)| *r).collect();
-        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
-        for (li, sem) in sems.iter_mut().enumerate() {
-            let [o0, o1] = sem.old_range;
-            if sem.noise || o0 == 0 || o0 > o1 {
-                continue;
-            }
-            let [n0, n1] = raw[li].new_range;
-            let new_blank = n0 > n1
-                || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
-            // a *deleted* import is a real removal and is named as such; this
-            // is only the residue of one that moved, where nothing was removed
-            let named = changed[fi]
-                .removals
-                .iter()
-                .any(|r| r.row >= o0 && r.row <= o1);
-            if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
-                sem.noise = true;
-            }
-        }
-    }
+    classify_imports(&mut hunks, &input.changes, &symbols, &changed);
 
     // ---- reviewing rules (Options.rules) ----
-    // A data member added in this change is initialized in-class or in a
-    // constructor's initializer list — and if that constructor changed, its
-    // file is in the diff. So "no initializer anywhere in the change" is
-    // decidable from the change alone, header and `.cpp` together. A member
-    // the old side already had is not this change's to answer for.
-    //
-    // Keyed by `Class.member`, so one class's initializer cannot answer for
-    // another's same-named member while the header/`.cpp` pair still meets —
-    // see `extract::owned_member`.
-    let mut inits: HashSet<String> = HashSet::new();
-    for change in &input.changes {
-        if let (Some(spec), Some(new)) = (lang::for_path(&change.path), change.new.as_deref()) {
-            if matches!(spec.name, "cpp" | "java") {
-                inits.extend(extract::field_initializers(spec, new));
-            }
-        }
-    }
-    for (fi, change) in input.changes.iter().enumerate() {
-        let Some(spec) = lang::for_path(&change.path) else {
-            continue;
-        };
-        if !matches!(spec.name, "cpp" | "java") {
-            continue;
-        }
-        let old_names: HashSet<String> = change
-            .old
-            .as_deref()
-            .map(|o| {
-                extract::member_rows(spec, o)
-                    .into_iter()
-                    .map(|(_, n, _, ctr)| match ctr {
-                        Some(c) => format!("{c}.{n}"),
-                        None => n,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        for sem in &mut hunks[fi].sem {
-            sem.uninit_members
-                .retain(|n| !inits.contains(n) && !old_names.contains(n));
-            for n in &sem.uninit_members {
-                // the key is qualified so header and `.cpp` match; the note
-                // sits on the hunk that declares the member, where the class
-                // is already on screen, so it reads the bare name
-                let bare = n.rsplit('.').next().unwrap_or(n);
-                sem.notes.push(format!("uninitialized member {bare}"));
-            }
-        }
-    }
+    uninit_members(&mut hunks, &input.changes);
 
     // Evaluated after the semantics they match on, and before the ordering they
     // can influence. A rule's `noise` and `priority` reach the hunk itself; its
@@ -440,6 +243,234 @@ pub fn run(input: Input) -> Output {
         },
         notes,
         ledger,
+    }
+}
+
+/// Hunks and semantics for every changed file, with the drops the caller asked
+/// for already taken out.
+fn build_hunks(input: &Input, templates: &[TemplateFacts]) -> Vec<PerFileHunks> {
+    // per-file hunks + semantics
+    let mut hunks: Vec<PerFileHunks> = vec![];
+    for (fi, change) in input.changes.iter().enumerate() {
+        let (raw, mut sem, deg, com, sw) = build_change(change, input.options.full_context);
+        apply_template_facts(&templates[fi], &change.path, &raw, &mut sem);
+        if deg {
+            eprintln!(
+                "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
+                change.path
+            );
+        }
+        // A pure-import hunk is *noise*, not nothing: it follows from the real
+        // change rather than being it, so it never leads the reading order and
+        // never seeds a def→use edge — but it stays visible, dimmed, where the
+        // diff put it. Dropping it outright made ordo asymmetric in a way
+        // reviewers noticed: a removed import was reported ("removes import
+        // loguru", from the deletion path) while an added one vanished, so a
+        // moved import read as a deletion with no counterpart.
+        //
+        // `only_comments` still drops, because there the caller asked for a
+        // subset; the drop is recorded with its range so `hunks + dropped`
+        // accounts for every hunk the diff produced.
+        let mut raw_kept = vec![];
+        let mut sem_kept = vec![];
+        let mut com_kept = vec![];
+        let mut gone = vec![];
+        let mut sw_kept = vec![];
+        for (((r, mut s), c), w) in raw.into_iter().zip(sem).zip(com).zip(sw) {
+            if s.category == Category::Import {
+                s.noise = true;
+            }
+            let reason = if input.options.only_comments && !c {
+                Some(DropReason::NonComment)
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => gone.push(DroppedHunk {
+                    reason,
+                    old_range: r.old_range,
+                    new_range: r.new_range,
+                }),
+                None => {
+                    raw_kept.push(r);
+                    sem_kept.push(s);
+                    com_kept.push(c);
+                    sw_kept.push(w);
+                }
+            }
+        }
+        hunks.push(PerFileHunks {
+            raw: raw_kept,
+            sem: sem_kept,
+            degraded: deg,
+            comment: com_kept,
+            switched: sw_kept,
+            dropped: gone,
+        });
+    }
+
+    hunks
+}
+
+/// Three corrections to import classification that need the old side, applied
+/// after `analyze` has had its say: a pure deletion classified from the side it
+/// actually has, a reordering told apart from an arrival, and the blank line a
+/// moved import leaves behind marked as the formatting it is.
+fn classify_imports(
+    hunks: &mut [PerFileHunks],
+    changes: &[Change],
+    symbols: &[FileSymbols],
+    changed: &[FileChanges],
+) {
+    let n = changes.len();
+    // A hunk that only deletes has no new side to classify from, so a removed
+    // import used to read as a plain `other` hunk while an added one was an
+    // import. Classify a pure deletion from the side it actually has.
+    for fi in 0..n {
+        let (Some(spec), Some(old_src)) = (
+            lang::for_path(&changes[fi].path),
+            changes[fi].old.as_deref(),
+        ) else {
+            continue;
+        };
+        let rows = extract::import_row_set(spec, old_src);
+        if rows.is_empty() {
+            continue;
+        }
+        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
+        for (li, sem) in sems.iter_mut().enumerate() {
+            let [o0, o1] = sem.old_range;
+            let [n0, n1] = raw[li].new_range;
+            let deletes_only = n0 > n1;
+            if deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r)) {
+                sem.category = Category::Import;
+                sem.noise = true;
+            }
+        }
+    }
+
+    // A pure-import hunk whose statements all existed in the old file is a
+    // reordering, not an arrival: "moves import pg" rather than "changes".
+    for fi in 0..n {
+        let (Some(spec), Some(old_src)) = (
+            lang::for_path(&changes[fi].path),
+            changes[fi].old.as_deref(),
+        ) else {
+            continue;
+        };
+        let Some(new_src) = changes[fi].new.as_deref() else {
+            continue;
+        };
+        let before = extract::import_statements(spec, old_src);
+        if before.is_empty() {
+            continue;
+        }
+        let new_lines: Vec<&str> = new_src.lines().collect();
+        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
+        for (li, sem) in sems.iter_mut().enumerate() {
+            if sem.category != Category::Import {
+                continue;
+            }
+            let [r0, r1] = raw[li].new_range;
+            if r0 == 0 || r0 > r1 {
+                continue;
+            }
+            // every non-blank line of the hunk has to be an import the old file
+            // already had; one new line among them makes this an arrival
+            let mut lines = (r0..=r1)
+                .filter_map(|r| new_lines.get(r - 1))
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|l| !l.is_empty())
+                .peekable();
+            sem.import_moved = lines.peek().is_some() && lines.all(|l| before.contains(&l));
+        }
+    }
+
+    // An import line that moved, leaving a blank line behind, reads as a bare
+    // change: the new side carries no rows to classify by, and the old side is
+    // where the meaning was. ordo already treats pure-import hunks as
+    // bookkeeping, so the residue of reordering them is formatting. A genuinely
+    // deleted import is excluded below — that one is named.
+    for fi in 0..n {
+        let Some(new) = changes[fi].new.as_deref() else {
+            continue;
+        };
+        let new_lines: Vec<&str> = new.lines().collect();
+        let import_rows: HashSet<usize> = symbols[fi].old_rows.1.iter().map(|(_, r)| *r).collect();
+        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
+        for (li, sem) in sems.iter_mut().enumerate() {
+            let [o0, o1] = sem.old_range;
+            if sem.noise || o0 == 0 || o0 > o1 {
+                continue;
+            }
+            let [n0, n1] = raw[li].new_range;
+            let new_blank = n0 > n1
+                || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
+            // a *deleted* import is a real removal and is named as such; this
+            // is only the residue of one that moved, where nothing was removed
+            let named = changed[fi]
+                .removals
+                .iter()
+                .any(|r| r.row >= o0 && r.row <= o1);
+            if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
+                sem.noise = true;
+            }
+        }
+    }
+}
+
+/// Drop the "uninitialized member" note for anything this change does
+/// initialize, anywhere in it — the declaration and the constructor are
+/// routinely in different files.
+fn uninit_members(hunks: &mut [PerFileHunks], changes: &[Change]) {
+    // A data member added in this change is initialized in-class or in a
+    // constructor's initializer list — and if that constructor changed, its
+    // file is in the diff. So "no initializer anywhere in the change" is
+    // decidable from the change alone, header and `.cpp` together. A member
+    // the old side already had is not this change's to answer for.
+    //
+    // Keyed by `Class.member`, so one class's initializer cannot answer for
+    // another's same-named member while the header/`.cpp` pair still meets —
+    // see `extract::owned_member`.
+    let mut inits: HashSet<String> = HashSet::new();
+    for change in changes {
+        if let (Some(spec), Some(new)) = (lang::for_path(&change.path), change.new.as_deref()) {
+            if matches!(spec.name, "cpp" | "java") {
+                inits.extend(extract::field_initializers(spec, new));
+            }
+        }
+    }
+    for (fi, change) in changes.iter().enumerate() {
+        let Some(spec) = lang::for_path(&change.path) else {
+            continue;
+        };
+        if !matches!(spec.name, "cpp" | "java") {
+            continue;
+        }
+        let old_names: HashSet<String> = change
+            .old
+            .as_deref()
+            .map(|o| {
+                extract::member_rows(spec, o)
+                    .into_iter()
+                    .map(|(_, n, _, ctr)| match ctr {
+                        Some(c) => format!("{c}.{n}"),
+                        None => n,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for sem in &mut hunks[fi].sem {
+            sem.uninit_members
+                .retain(|n| !inits.contains(n) && !old_names.contains(n));
+            for n in &sem.uninit_members {
+                // the key is qualified so header and `.cpp` match; the note
+                // sits on the hunk that declares the member, where the class
+                // is already on screen, so it reads the bare name
+                let bare = n.rsplit('.').next().unwrap_or(n);
+                sem.notes.push(format!("uninitialized member {bare}"));
+            }
+        }
     }
 }
 
