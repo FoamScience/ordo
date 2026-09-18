@@ -29,7 +29,8 @@ const USAGE: &str = "\
 ordo — interactive review of a commit, ordered for comprehension.
 
 usage:
-  ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]... [--all] [--only-comments]
+  ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]...
+       [--sarif <file>]... [--all] [--only-comments]
   ordo --init-config [--force]
   ordo help [<topic>]
   ordo --version
@@ -44,6 +45,12 @@ advisories and PR-split clusters.
 On a GitButler-managed repo <rev> also takes the CLI IDs `but status` prints: a
 branch (by ID or name) reviews that branch's own commits, a commit ID (or a
 change-ID prefix) reviews that commit.
+
+--sarif <file> reads analyzer results in SARIF 2.1.0 — what semgrep, CodeQL,
+ruff, eslint, shellcheck and `clippy --message-format` all emit — and attaches
+each finding to the hunk whose lines contain it, so they arrive in the reading
+order instead of as a separate list. Repeatable. A finding on a line this change
+did not touch is counted in `:audit` rather than shown.
 
 Generated and lock files (Cargo.lock, package-lock.json, vendor/, node_modules/,
 .min.js, …) are skipped, as is anything .gitattributes marks `linguist-generated`
@@ -186,6 +193,12 @@ struct Ledger {
     hunks_import: usize,
     /// hunks the engine dropped under `only_comments`
     hunks_non_comment: usize,
+    /// analyzer findings read from `--sarif` files
+    findings_seen: usize,
+    /// of those, ones whose line is in no hunk this change touched — the
+    /// normal case for a file the diff barely reached, counted so the
+    /// difference is never a silent one
+    findings_unplaced: usize,
 }
 
 /// Which changed files reach the engine. Generated and lock files are dropped
@@ -336,7 +349,15 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
 }
 
 /// rev, keymap, path filter, --only-comments, theme, --rules files
-type ParsedArgs = (String, Keymap, Filter, bool, Theme, Vec<String>);
+type ParsedArgs = (
+    String,
+    Keymap,
+    Filter,
+    bool,
+    Theme,
+    Vec<String>,
+    Vec<String>,
+);
 
 /// The user-facing documentation, embedded in the binary so `ordo help
 /// <topic>` works with no network, no install layout to find, and no chance of
@@ -449,6 +470,8 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     let mut want_theme = false;
     let mut want_rules = false;
     let mut extra_rules: Vec<String> = vec![];
+    let mut sarif: Vec<String> = vec![];
+    let mut want_sarif = false;
     let mut want_init = false;
     let mut force = false;
     // `ordo help [<topic>]` short-circuits everything else: it takes an
@@ -477,6 +500,11 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             want_rules = false;
             continue;
         }
+        if want_sarif {
+            sarif.push(a);
+            want_sarif = false;
+            continue;
+        }
         match a.as_str() {
             "--keys" => want_preset = true,
             s if s.starts_with("--keys=") => {
@@ -490,6 +518,8 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             }
             "--rules" => want_rules = true,
             s if s.starts_with("--rules=") => extra_rules.push(s["--rules=".len()..].to_string()),
+            "--sarif" => want_sarif = true,
+            s if s.starts_with("--sarif=") => sarif.push(s["--sarif=".len()..].to_string()),
             "--all" => skip_generated = false,
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
@@ -580,6 +610,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
         only_comments,
         theme,
         extra_rules,
+        sarif,
     ))
 }
 
@@ -603,7 +634,7 @@ fn highlight_progress(i: usize, total: usize) -> String {
 }
 
 fn main() -> std::io::Result<()> {
-    let (rev, keys, filter, only_comments, theme, extra_rules) = match parse_args() {
+    let (rev, keys, filter, only_comments, theme, extra_rules, sarif) = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
     };
@@ -637,6 +668,7 @@ fn main() -> std::io::Result<()> {
         theme,
         rules,
         rules_report,
+        sarif,
     )
 }
 
@@ -701,18 +733,33 @@ fn group_reasons(out: &Output) -> HashMap<String, String> {
 /// positional order — unreachable here, since every `Change` this file
 /// builds always sets `new` (see `gather_range`/`gather_uncommitted`), which
 /// is the one branch in `build_change` that never degrades.
-fn load(
+/// Everything the worker needs to produce a review. Bundled because these
+/// travel together to `load` and to every reload of it, and are otherwise eight
+/// positional arguments whose order nothing checks.
+struct LoadSpec {
     target: Target,
     filter: Filter,
     only_comments: bool,
     rev: String,
-    // highlighting happens here, off the draw loop, so the worker needs the
-    // theme's syntax colours rather than re-highlighting on every redraw
+    /// highlighting happens on the worker, off the draw loop, so it needs the
+    /// theme's syntax colours rather than re-highlighting on every redraw
     syn: Syntax,
-    // the reviewer's own rules (user + repo), collected by `main`
+    /// the reviewer's own rules (user + repo), collected by `main`
     rules: Vec<ordo::model::Rule>,
-    tx: mpsc::Sender<LoadMsg>,
-) {
+    /// paths given with `--sarif`; their findings are placed onto the hunks
+    sarif: Vec<String>,
+}
+
+fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
+    let LoadSpec {
+        target,
+        filter,
+        only_comments,
+        rev,
+        syn,
+        rules,
+        sarif,
+    } = spec;
     let progress = |msg: String| {
         let _ = tx.send(LoadMsg::Progress(msg));
     };
@@ -774,6 +821,22 @@ fn load(
         .filter(|h| h.category == ordo::model::Category::Import)
         .count();
     let mut items = build_items(&out);
+    // analyzer findings land on the hunk that contains their line, so they
+    // arrive in the reading order rather than as a separate flat list
+    let findings: Vec<Finding> = sarif
+        .iter()
+        .flat_map(|p| match std::fs::read_to_string(p) {
+            Ok(text) => parse_sarif(&text),
+            Err(e) => {
+                note_command_failure("sarif", &[p.as_str()], &e.to_string());
+                vec![]
+            }
+        })
+        .collect();
+    // straight onto the local ledger: `filter.tally` was snapshotted above, so
+    // anything written back to it now would never reach the screen
+    ledger.findings_seen += findings.len();
+    ledger.findings_unplaced += place_findings(&mut items, &findings);
     refine_items(&mut items, &sources);
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None);
@@ -881,6 +944,131 @@ fn load(
         deltas,
         delta_gone,
     })));
+}
+
+// ------------------------------------------------------------------- sarif
+
+/// One analyzer finding, placed at a file and line.
+///
+/// Ordo does not detect these — it orders them. A SARIF file is what semgrep,
+/// CodeQL, clippy, ruff, eslint, shellcheck and gosec all already emit, so one
+/// reader puts every analyzer a team runs into the reading order, beside the
+/// hunk the reviewer is standing in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Finding {
+    /// the analyzer that reported it (`runs[].tool.driver.name`)
+    tool: String,
+    /// `result.ruleId`, the analyzer's own name for the check
+    rule: String,
+    /// `warn` for error/warning, `note` for note/none — the split `RuleHit`
+    /// already uses, so the two read the same way in the why pane
+    level: &'static str,
+    message: String,
+    path: String,
+    /// 1-based, as SARIF writes it and as hunk ranges are kept
+    line: usize,
+}
+
+/// Read `runs[].results[]` out of a SARIF document.
+///
+/// Deliberately a traversal of `serde_json::Value` rather than a typed schema:
+/// SARIF 2.1.0 is a very large specification and this needs six fields of it.
+/// Anything malformed is skipped rather than failing the run — a review must
+/// not be blocked because one analyzer wrote something unexpected.
+fn parse_sarif(text: &str) -> Vec<Finding> {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
+        return vec![];
+    };
+    let mut out = vec![];
+    for run in doc["runs"].as_array().into_iter().flatten() {
+        let tool = run["tool"]["driver"]["name"]
+            .as_str()
+            .unwrap_or("sarif")
+            .to_string();
+        for r in run["results"].as_array().into_iter().flatten() {
+            let level = match r["level"].as_str().unwrap_or("warning") {
+                "error" | "warning" => "warn",
+                _ => "note",
+            };
+            let rule = r["ruleId"].as_str().unwrap_or("").to_string();
+            let message = r["message"]["text"].as_str().unwrap_or("").to_string();
+            if message.is_empty() {
+                continue;
+            }
+            // a result may carry several locations; each is its own finding,
+            // because each is somewhere a reviewer might be standing
+            for loc in r["locations"].as_array().into_iter().flatten() {
+                let phys = &loc["physicalLocation"];
+                let Some(uri) = phys["artifactLocation"]["uri"].as_str() else {
+                    continue;
+                };
+                let Some(line) = phys["region"]["startLine"].as_u64() else {
+                    continue;
+                };
+                out.push(Finding {
+                    tool: tool.clone(),
+                    rule: rule.clone(),
+                    level,
+                    message: message.clone(),
+                    // SARIF uris are often `file:///abs` or repo-relative;
+                    // both are normalised to what git reports for a path
+                    path: normalise_uri(uri),
+                    line: line as usize,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// A SARIF `artifactLocation.uri` as a repo-relative path. Handles the
+/// `file://` form and a leading `./`; an absolute path is left alone here and
+/// matched by suffix when the finding is placed.
+fn normalise_uri(uri: &str) -> String {
+    let p = uri.strip_prefix("file://").unwrap_or(uri);
+    p.strip_prefix("./").unwrap_or(p).to_string()
+}
+
+/// Attach each finding to the hunk whose new-side range covers its line.
+///
+/// Returns how many could not be placed. Those are not dropped quietly: a
+/// finding on a line this change did not touch is the normal case (the file is
+/// full of code the diff never reached), and `:audit` reports the count for the
+/// same reason it reports every other hunk that never made the screen.
+fn place_findings(items: &mut [Item], findings: &[Finding]) -> usize {
+    let mut unplaced = 0;
+    for f in findings {
+        let hit = items.iter_mut().find(|it| {
+            path_matches(&it.path, &f.path)
+                && it.new_range[0] <= f.line
+                && f.line <= it.new_range[1]
+        });
+        match hit {
+            Some(it) => {
+                // the row mark is decided in `build_items`, before findings
+                // exist; a warning-level finding earns the same ⚠ a warn rule
+                // or an advisory does, or the reviewer has to open the hunk to
+                // discover there is anything to see
+                if f.level == "warn" {
+                    it.mark = "⚠ ".to_string();
+                }
+                it.findings.push(f.clone());
+            }
+            None => unplaced += 1,
+        }
+    }
+    unplaced
+}
+
+/// Whether a SARIF uri names the same file git called `path`. An analyzer run
+/// from the repo root writes the same relative path; one run elsewhere writes
+/// an absolute one, which matches by suffix on a path boundary.
+fn path_matches(path: &str, uri: &str) -> bool {
+    if path == uri {
+        return true;
+    }
+    uri.strip_suffix(path)
+        .is_some_and(|head| head.is_empty() || head.ends_with('/'))
 }
 
 // ------------------------------------------------------------------- git layer
@@ -1453,6 +1641,8 @@ struct Item {
     group: String,
     /// reviewing rules that matched this hunk (`ordo::model::Rule`)
     rules: Vec<ordo::model::RuleHit>,
+    /// analyzer findings whose line falls inside this hunk (see `Finding`)
+    findings: Vec<Finding>,
     /// intra-line refinement (`ordo::refine`), parallel to the hunk's lines on
     /// each side: `Some(spans)` means the line was paired with its counterpart
     /// and only those char spans changed; `None` means it renders whole. Empty
@@ -3942,6 +4132,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 enclosing: h.enclosing.clone(),
                 group: h.group.clone(),
                 rules: h.rules.clone(),
+                findings: vec![],
                 refined: ordo::refine::Refined::default(),
                 cluster: cluster_of.get(h.id.as_str()).copied(),
             })
@@ -6681,6 +6872,7 @@ fn run(
     theme: Theme,
     rules: Vec<ordo::model::Rule>,
     rules_report: Vec<String>,
+    sarif: Vec<String>,
 ) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -6697,14 +6889,18 @@ fn run(
     let mut rx = rx;
     let worker_rev = rev.clone();
     let worker_rules = rules.clone();
+    let worker_sarif = sarif.clone();
     thread::spawn(move || {
         load(
-            target,
-            filter,
-            only_comments,
-            worker_rev,
-            theme.syn,
-            worker_rules,
+            LoadSpec {
+                target,
+                filter,
+                only_comments,
+                rev: worker_rev,
+                syn: theme.syn,
+                rules: worker_rules,
+                sarif: worker_sarif,
+            },
             tx,
         )
     });
@@ -6924,14 +7120,18 @@ fn run(
                                 rx = new_rx;
                                 let filt = base_filter.clone();
                                 let reload_rules = rules.clone();
+                                let reload_sarif = sarif.clone();
                                 thread::spawn(move || {
                                     load(
-                                        target,
-                                        filt,
-                                        only_comments,
-                                        new_rev,
-                                        theme.syn,
-                                        reload_rules,
+                                        LoadSpec {
+                                            target,
+                                            filter: filt,
+                                            only_comments,
+                                            rev: new_rev,
+                                            syn: theme.syn,
+                                            rules: reload_rules,
+                                            sarif: reload_sarif,
+                                        },
                                         new_tx,
                                     )
                                 });
@@ -7360,6 +7560,29 @@ fn why_rows(
                 kind: WhyKind::Text,
             });
         }
+    }
+    // an analyzer's finding reads like a rule hit, because to the reviewer it
+    // is one — the only difference is who detected it
+    for f in &it.findings {
+        rows.push(WhyRow {
+            text: format!(
+                "{} {} [{}{}]",
+                if f.level == "warn" { "⚠" } else { "·" },
+                f.message,
+                f.tool,
+                if f.rule.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", f.rule)
+                }
+            ),
+            style: Style::default().fg(if f.level == "warn" {
+                theme.warn
+            } else {
+                theme.accent
+            }),
+            kind: WhyKind::Text,
+        });
     }
     for d in &it.details {
         rows.push(WhyRow {
@@ -8320,6 +8543,12 @@ fn build_audit(
         "of which import hunks — noise, but shown by default where the diff put them",
     ));
     out.push(row(hidden.comment, "not a comment change (:only-comments)"));
+    if ledger.findings_seen > 0 {
+        out.push(row(
+            ledger.findings_unplaced,
+            "analyzer findings on lines this change did not touch",
+        ));
+    }
     out.push(row(
         hidden.glob,
         &match path_filter {
@@ -9100,6 +9329,75 @@ mod tests {
             !got.iter().any(|l| l.starts_with("but ")),
             "`but` is optional; its absence is not a failure to report: {got:?}"
         );
+    }
+
+    const SARIF: &str = r#"{"version":"2.1.0","runs":[{
+      "tool":{"driver":{"name":"semgrep"}},
+      "results":[
+        {"ruleId":"no-eval","level":"error","message":{"text":"eval on input"},
+         "locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":"src/a.py"},"region":{"startLine":10}}}]},
+        {"ruleId":"doc","level":"note","message":{"text":"no docstring"},
+         "locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":"file:///repo/src/a.py"},"region":{"startLine":50}}}]},
+        {"ruleId":"broken","level":"warning","message":{"text":""},
+         "locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":"src/a.py"},"region":{"startLine":1}}}]}
+      ]}]}"#;
+
+    #[test]
+    fn sarif_results_become_findings() {
+        let f = parse_sarif(SARIF);
+        // the third result has an empty message and is skipped: a finding with
+        // nothing to say is not worth a row
+        assert_eq!(f.len(), 2, "{f:?}");
+        assert_eq!(f[0].tool, "semgrep");
+        assert_eq!(f[0].rule, "no-eval");
+        assert_eq!(f[0].level, "warn", "error maps to the warn half");
+        assert_eq!((f[0].path.as_str(), f[0].line), ("src/a.py", 10));
+        assert_eq!(f[1].level, "note", "note maps to the note half");
+        assert_eq!(f[1].path, "/repo/src/a.py", "file:// is stripped");
+    }
+
+    #[test]
+    fn malformed_sarif_is_skipped_not_fatal() {
+        assert!(parse_sarif("not json").is_empty());
+        assert!(parse_sarif("{}").is_empty());
+        // a result with no location cannot be placed, so it is not a finding
+        assert!(parse_sarif(r#"{"runs":[{"results":[{"message":{"text":"x"}}]}]}"#).is_empty());
+    }
+
+    #[test]
+    fn an_analyzer_path_matches_on_a_path_boundary() {
+        assert!(path_matches("src/a.py", "src/a.py"));
+        assert!(path_matches("src/a.py", "/home/u/repo/src/a.py"));
+        // the suffix has to end at a separator, or `a.py` would match `ba.py`
+        assert!(!path_matches("a.py", "src/ba.py"));
+        assert!(!path_matches("src/a.py", "src/b.py"));
+    }
+
+    #[test]
+    fn a_finding_lands_on_the_hunk_that_contains_its_line() {
+        let mut items = vec![test_item("src/a.py"), test_item("src/a.py")];
+        items[0].new_range = [1, 20];
+        items[1].new_range = [40, 60];
+        let f = parse_sarif(SARIF);
+        let unplaced = place_findings(&mut items, &f);
+
+        assert_eq!(items[0].findings.len(), 1, "line 10 is in 1..=20");
+        assert_eq!(items[1].findings.len(), 1, "line 50 is in 40..=60");
+        assert_eq!(unplaced, 0);
+        assert_eq!(items[0].mark, "⚠ ", "a warn finding marks the row");
+        assert_eq!(items[1].mark, "", "a note finding does not");
+    }
+
+    #[test]
+    fn a_finding_outside_every_hunk_is_counted_not_dropped() {
+        let mut items = vec![test_item("src/a.py")];
+        items[0].new_range = [100, 200];
+        // both findings sit outside it; neither may vanish silently
+        assert_eq!(place_findings(&mut items, &parse_sarif(SARIF)), 2);
+        assert!(items[0].findings.is_empty());
     }
 
     /// The layout is a pure function of the size, so it can be asserted without
@@ -10277,6 +10575,8 @@ mod tests {
             files_unreadable: 1,
             hunks_import: 4,
             hunks_non_comment: 0,
+            findings_seen: 0,
+            findings_unplaced: 0,
         };
         let clean = Hidden {
             comment: 0,
@@ -10424,6 +10724,7 @@ mod tests {
             enclosing: None,
             group: String::new(),
             rules: vec![],
+            findings: vec![],
             refined: ordo::refine::Refined::default(),
             cluster: None,
         }
