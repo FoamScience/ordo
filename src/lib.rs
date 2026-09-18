@@ -9,7 +9,7 @@ mod patch;
 pub mod refine;
 mod rules;
 
-use extract::{analyze, compute_hunks, symbol_sets, HunkSem, RawHunk};
+use extract::{analyze, compute_hunks, HunkSem, RawHunk};
 use lang::LangSpec;
 use model::*;
 use std::collections::{HashMap, HashSet};
@@ -1048,18 +1048,25 @@ impl FileSymbols {
         let spec = lang::for_path(&c.path);
         let old = c.old.as_deref().zip(spec);
         let new = c.new.as_deref().zip(spec);
-        let old_rows = old.map_or((vec![], vec![]), |(o, sp)| extract::symbol_rows(sp, o));
-        let (new_defs, new_imports) = new.map_or((HashSet::new(), HashSet::new()), |(n, sp)| {
-            symbol_sets(sp, n)
+        // one descent per side: rows and bodies come back together, where they
+        // used to be two walks of the same tree (see `extract::symbol_facts`)
+        let (old_rows, old_body) = old.map_or(((vec![], vec![]), vec![]), |(o, sp)| {
+            extract::symbol_facts(sp, o)
         });
+        let (new_rows, new_body) = new.map_or(((vec![], vec![]), vec![]), |(n, sp)| {
+            extract::symbol_facts(sp, n)
+        });
+        let set = |v: &[(String, usize)]| v.iter().map(|(n, _)| n.clone()).collect();
+        let (new_defs, new_imports): (HashSet<String>, HashSet<String>) =
+            (set(&new_rows.0), set(&new_rows.1));
         FileSymbols {
             old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
             old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
             old_locals: old.map_or(HashSet::new(), |(o, sp)| extract::local_names(sp, o)),
             new_defs,
             new_imports,
-            old_body: old.map_or(vec![], |(o, sp)| extract::symbol_bodies(sp, o)),
-            new_body: new.map_or(vec![], |(n, sp)| extract::symbol_bodies(sp, n)),
+            old_body,
+            new_body,
             old_binds: old.map_or(vec![], |(o, sp)| extract::top_level_bindings(sp, o)),
             new_binds: new.map_or(HashSet::new(), |(n, sp)| {
                 extract::top_level_bindings(sp, n)
