@@ -33,6 +33,11 @@ fn with_headers(diff: &str) -> String {
 }
 
 /// Split a multi-file git/unified patch into `(path, single-file-diff)` chunks.
+///
+/// **Ceiling:** files are split on `diff --git` lines. A plain `diff -u` over
+/// several files carries no such line and comes back as one chunk named after
+/// its first `+++`; `git diff` (what `ordo review` is written for) always emits
+/// them.
 pub fn split_patch(patch: &str) -> Vec<(String, String)> {
     let mut files: Vec<(String, String)> = vec![];
     let mut cur: Option<String> = None;
@@ -83,9 +88,15 @@ pub fn parse_file_diff(diff: &str, full_context: bool) -> ParsedFile {
     let mut new_side: Vec<&str> = vec![]; // context + added
     let mut in_hunk = false;
     for line in diff.lines() {
-        if line.starts_with("+++ ") {
+        // Only *outside* a hunk body is `--- `/`+++ ` a file header. Inside
+        // one it is an ordinary changed line whose own text begins with `--`
+        // or `++`: a lua or sql comment being removed (`-` + `-- note`), TOML
+        // front matter being added to a markdown file (`+` + `+++`). Treating
+        // those as headers dropped them from the reconstructed side, and the
+        // hunk then reported an edit as a pure addition.
+        if !in_hunk && line.starts_with("+++ ") {
             // new path marker — nothing to record here
-        } else if let Some(p) = line.strip_prefix("--- ") {
+        } else if let Some(p) = (!in_hunk).then(|| line.strip_prefix("--- ")).flatten() {
             if clean_path(p) == "/dev/null" {
                 is_new_file = true;
             }
@@ -130,8 +141,8 @@ fn parse_hunk_header(line: &str) -> Option<RawHunk> {
     let mut parts = core.split_whitespace();
     let old = parts.next()?.strip_prefix('-')?;
     let new = parts.next()?.strip_prefix('+')?;
-    let (os, ol) = parse_range(old);
-    let (ns, nl) = parse_range(new);
+    let (os, ol) = parse_range(old)?;
+    let (ns, nl) = parse_range(new)?;
     let old_range = if ol > 0 {
         [os, os + ol - 1]
     } else {
@@ -155,11 +166,18 @@ fn parse_hunk_header(line: &str) -> Option<RawHunk> {
     })
 }
 
-fn parse_range(s: &str) -> (usize, usize) {
+/// One side of an `@@` header: `start[,count]`, both 1-based line numbers, with
+/// `count` defaulting to 1. `None` when it does not parse, or when a non-empty
+/// side claims to start at line 0 — the arithmetic below reads `start - 1`, and
+/// a header this malformed is not one to guess at.
+fn parse_range(s: &str) -> Option<(usize, usize)> {
     let mut it = s.split(',');
-    let start = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let count = it.next().and_then(|v| v.parse().ok()).unwrap_or(1);
-    (start, count)
+    let start: usize = it.next()?.parse().ok()?;
+    let count: usize = match it.next() {
+        Some(v) => v.parse().ok()?,
+        None => 1,
+    };
+    (start > 0 || count == 0).then_some((start, count))
 }
 
 fn clean_path(p: &str) -> String {
@@ -173,6 +191,27 @@ fn clean_path(p: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::apply;
+
+    use super::{parse_file_diff, parse_hunk_header};
+
+    #[test]
+    fn a_malformed_hunk_header_is_skipped_not_fatal() {
+        // `ns - 1` on a header whose start did not parse used to panic
+        assert!(parse_hunk_header("@@ -1,3 +x,3 @@").is_none());
+        assert!(parse_hunk_header("@@ -1,3 +0,3 @@").is_none());
+        // an empty new side legitimately starts at 0
+        assert!(parse_hunk_header("@@ -1,3 +0,0 @@").is_some());
+    }
+
+    #[test]
+    fn a_changed_line_starting_with_dashes_is_not_a_file_header() {
+        // removing a lua comment writes `-` + `-- note`; that used to be read
+        // as a `--- ` file header and dropped from the reconstructed old side
+        let diff = "--- a/f.lua\n+++ b/f.lua\n@@ -1,2 +1,2 @@\n local x = 1\n--- old\n+-- new\n";
+        let pf = parse_file_diff(diff, true);
+        assert_eq!(pf.old.as_deref(), Some("local x = 1\n-- old\n"));
+        assert_eq!(pf.new.as_deref(), Some("local x = 1\n-- new\n"));
+    }
 
     const OLD: &str = "a\nb\nc\n";
     const NEW: &str = "a\nB\nc\n";

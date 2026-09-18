@@ -94,3 +94,32 @@ fn multi_line_hunks_pair_line_by_line_in_order() {
 fn an_unsupported_path_refuses_rather_than_guessing() {
     assert!(Refiner::new("a.png", &lines("x\n"), &lines("y\n")).is_none());
 }
+
+#[test]
+fn a_long_hunk_still_pairs_every_line() {
+    // the pairing backtrack used to reconstruct the fill's choice by testing
+    // accumulated f32 sums against f32::EPSILON; over enough lines the sums
+    // grow past that tolerance and pairs were silently dropped
+    let n = 60;
+    let old: Vec<String> = (0..n).map(|i| format!("let v{i} = compute(a);")).collect();
+    let new: Vec<String> = (0..n).map(|i| format!("let v{i} = compute(b);")).collect();
+    let r = Refiner::new("a.rs", &old, &new).expect("rust grammar");
+    let out = r.refine([1, n], [1, n]);
+    let unpaired = out.removed.iter().filter(|s| s.is_none()).count();
+    assert_eq!(unpaired, 0, "every line is the same line edited");
+    for (i, spans) in out.added.iter().enumerate() {
+        assert_eq!(texts(&new[i], spans), vec!["b".to_string()], "line {i}");
+    }
+}
+
+#[test]
+fn a_machine_generated_line_renders_whole() {
+    // one minified line carries six figures of leaves; the LCS table is
+    // (n+1)*(m+1) u32s, so it must refuse rather than allocate gigabytes
+    let long = format!("var x=[{}];", vec!["1"; 40_000].join(","));
+    let old = vec![long.clone()];
+    let new = vec![long.replace("var x", "var y")];
+    let r = Refiner::new("a.js", &old, &new).expect("javascript grammar");
+    let out = r.refine([1, 1], [1, 1]);
+    assert_eq!(out.added, vec![None], "too large to refine → renders whole");
+}
