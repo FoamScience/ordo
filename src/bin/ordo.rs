@@ -13292,6 +13292,104 @@ mod docs {
         );
     }
 
+    /// The `[[rule]]` condition key `k` as `model::When` spells it, or `None`
+    /// when it is a client-only key with no engine counterpart.
+    fn when_field_of(k: &str) -> Option<String> {
+        match k {
+            // the engine reads no files; this one resolves to `query` before
+            // the rule is handed over
+            "query-file" => None,
+            // flattening the nested model collided with the rule-level
+            // `noise`, so the TOML spells the condition differently
+            "noise-when" => Some("noise".to_string()),
+            other => Some(other.replace('-', "_")),
+        }
+    }
+
+    /// Does `model::When` have a field by this name? Asked by deserializing a
+    /// one-key object and checking nothing landed in the catch-all — the same
+    /// technique `tests/schema.rs` uses against the published schema.
+    fn when_accepts(field: &str) -> bool {
+        for v in [
+            serde_json::json!("x"),
+            serde_json::json!(true),
+            serde_json::json!(1),
+            serde_json::json!([]),
+            serde_json::json!("import"),
+        ] {
+            if let Ok(w) =
+                serde_json::from_value::<ordo::model::When>(serde_json::json!({ field: v }))
+            {
+                if w.unknown.is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// `RuleToml` is a second spelling of the engine's rule schema — the TOML
+    /// surface is flat and kebab-cased while `model::Rule` nests its conditions
+    /// under `when`. That copy is deliberate: `deny_unknown_fields` on the flat
+    /// struct is what makes a typo in a `rules.toml` a parse error naming the
+    /// offending line and listing every valid key, which a `#[serde(flatten)]`
+    /// of `When` cannot do (it reports the wrong line and drops the list).
+    ///
+    /// The copy being deliberate does not make drift acceptable. Every
+    /// condition the TOML accepts has to be one the engine reads, or it is a
+    /// documented option that parses and then does nothing — which is exactly
+    /// how `when.rules` reached the published schema (tasks-9sj.13).
+    #[test]
+    fn every_toml_condition_is_one_the_engine_reads() {
+        let conditions: Vec<&str> = RULE_DOC
+            .iter()
+            .filter(|(_, is_cond, _)| *is_cond)
+            .map(|(k, _, _)| *k)
+            .collect();
+        assert!(conditions.len() > 15, "RULE_DOC lost its conditions");
+
+        for key in &conditions {
+            let Some(field) = when_field_of(key) else {
+                continue; // client-only, by the table above
+            };
+            assert!(
+                when_accepts(&field),
+                "`{key}` is a documented [[rule]] condition, but `model::When` \
+                 has no `{field}` — it would parse and then never match"
+            );
+        }
+    }
+
+    /// And the reverse: a condition the engine reads that the TOML cannot
+    /// express is a feature no rule author can reach.
+    #[test]
+    fn every_engine_condition_is_reachable_from_toml() {
+        let documented: Vec<String> = RULE_DOC
+            .iter()
+            .filter(|(_, is_cond, _)| *is_cond)
+            .filter_map(|(k, _, _)| when_field_of(k))
+            .collect();
+        // read the engine's own list off the published schema, which
+        // tests/schema.rs already pins to `model::When`
+        let schema: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/v1.json"),
+            )
+            .expect("schema/v1.json"),
+        )
+        .expect("valid json");
+        let when = schema["$defs"]["input"]["properties"]["options"]["properties"]["rules"]
+            ["items"]["properties"]["when"]["properties"]
+            .as_object()
+            .expect("when properties");
+        for field in when.keys() {
+            assert!(
+                documented.contains(field),
+                "the engine reads `when.{field}`, but no [[rule]] key reaches it"
+            );
+        }
+    }
+
     /// `RULE_DOC` is prose, but its *keys* are not allowed to be an opinion: a
     /// condition the rules engine accepts and this table omits is a feature
     /// nobody can find, and a key here that `RuleToml` rejects is a documented
