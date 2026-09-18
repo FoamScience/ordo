@@ -123,3 +123,30 @@ fn file_strategy_keeps_position() {
         prev = h.new_range[0];
     }
 }
+
+#[test]
+fn a_dependency_cycle_still_orders_every_hunk_once() {
+    // the topological sort carries its ready set across iterations now; a cycle
+    // falls back to the same deterministic key, and nothing may be lost or
+    // repeated on either path
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "a.py",
+                  "old": "def f():\n    return 1\n",
+                  "new": "def f():\n    return g()\n" },
+                { "path": "b.py",
+                  "old": "def g():\n    return 2\n",
+                  "new": "def g():\n    return f()\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    let total: usize = out.files.iter().map(|f| f.hunks.len()).sum();
+    assert_eq!(out.order.len(), total, "{:?}", out.order);
+    let mut ids: Vec<&str> = out.order.iter().map(|o| o.hunk.as_str()).collect();
+    ids.sort_unstable();
+    let before = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), before, "a hunk was ordered twice: {ids:?}");
+}

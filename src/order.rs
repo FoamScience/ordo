@@ -5,7 +5,7 @@
 use crate::extract::{BindingUse, HunkSem};
 use crate::model::{Category, Strategy};
 use crate::name_list;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub struct GroupInfo {
     pub reason: String,
@@ -70,18 +70,6 @@ fn join_frags(frags: &[String]) -> String {
     out
 }
 
-/// Last-resort guard on the one-line bound. `rationale_for` composes through
-/// many paths — fragments, provenance clauses, binding clauses — each capped on
-/// its own, and no single one of them can see the finished length. Clamping
-/// once, where every path lands, is what actually holds the contract.
-/// A container name as the *rationale* should say it.
-///
-/// `enclosing` carries the full path because a consumer navigating to the hunk
-/// wants it, but a rationale is one line: a nested test label
-/// (`describe "compiler: transform v-bind" > it "errors on a bad argument"`)
-/// spends the whole budget on the container and leaves none for what changed.
-/// The innermost segment identifies it; anything still very long is elided
-/// rather than allowed to crowd out the rest of the sentence.
 /// Symbols grouped by the verb their change earns: adds, adds type, edits,
 /// changes signature of, changes type.
 type Verbs<'a> = (
@@ -92,6 +80,14 @@ type Verbs<'a> = (
     Vec<&'a str>,
 );
 
+/// A container name, shortened to what a rationale can afford.
+///
+/// `enclosing` carries the full path because a consumer navigating to the hunk
+/// wants it, but a rationale is one line: a nested test label
+/// (`describe "compiler: transform v-bind" > it "errors on a bad argument"`)
+/// spends the whole budget on the container and leaves none for what changed.
+/// The innermost segment identifies it; anything still very long is elided
+/// rather than allowed to crowd out the rest of the sentence.
 pub(crate) fn short_container(name: &str) -> String {
     // Only a *test* path collapses to its innermost segment: its outer levels
     // are sentences a reviewer already read in the file. A markdown section
@@ -114,6 +110,10 @@ pub(crate) fn short_container(name: &str) -> String {
 /// How much of a rationale one container name may occupy.
 const CONTAINER_BUDGET: usize = 60;
 
+/// Last-resort guard on the one-line bound. `rationale_for` composes through
+/// many paths — fragments, provenance clauses, binding clauses — each capped on
+/// its own, and no single one of them can see the finished length. Clamping
+/// once, where every path lands, is what actually holds the contract.
 fn clamp_rationale(r: String) -> String {
     if r.chars().count() <= MAX_RATIONALE {
         return r;
@@ -121,8 +121,13 @@ fn clamp_rationale(r: String) -> String {
     // cut at a fragment boundary when there is one, so the line still ends on a
     // complete statement rather than mid-name
     let head: String = r.chars().take(MAX_RATIONALE - 2).collect();
+    // `rfind` gives a byte offset; the "did we keep enough of the line" test is
+    // in characters, so on a non-ASCII rationale comparing the two directly
+    // overstated how much was kept and cut at a boundary it should have passed
     match head.rfind("; ") {
-        Some(i) if i > MAX_RATIONALE / 2 => format!("{}…", &head[..i]),
+        Some(i) if head[..i].chars().count() > MAX_RATIONALE / 2 => {
+            format!("{}…", &head[..i])
+        }
         _ => format!("{head}…"),
     }
 }
@@ -149,6 +154,11 @@ fn src_frags(pairs: &[(&str, &str)], verb: &str, sep: &str, rel: &str) -> Vec<St
         }
     }
 }
+
+/// A group's sort key: rule priority (descending), then file, then source row,
+/// then the group index — which makes every key distinct, so a sorted set of
+/// them doubles as the ready queue in the topological sort.
+type GroupKey = (std::cmp::Reverse<i64>, usize, usize, usize);
 
 fn cat_rank(c: Category) -> u8 {
     match c {
@@ -434,27 +444,40 @@ pub fn order_all(
             // Static for the whole Kahn loop below (depends only on group
             // membership, not on which groups are done/ready), so it is
             // computed once here rather than per ready-set comparison.
-            let key_v: Vec<(std::cmp::Reverse<i64>, usize, usize, usize)> = (0..g)
+            let key_v: Vec<GroupKey> = (0..g)
                 .map(|gi| (std::cmp::Reverse(gprio_v[gi]), gfile_v[gi], grow_v[gi], gi))
                 .collect();
-            let mut done = vec![false; g];
+            // The ready set is carried across iterations rather than rebuilt by
+            // scanning every group on each of the g rounds: a group joins it
+            // exactly when its indegree reaches zero. `key_v` ends in `gi`, so
+            // its values are distinct and a sorted set of them is a priority
+            // queue that also supports the removals the cycle break needs.
+            // Same reason `users` exists above — the corpus reaches ~15k hunks
+            // in one repo, where g² does not hold.
+            let mut ready: BTreeSet<GroupKey> = (0..g)
+                .filter(|&gi| indeg[gi] == 0)
+                .map(|gi| key_v[gi])
+                .collect();
+            let mut left: BTreeSet<GroupKey> = (0..g).map(|gi| key_v[gi]).collect();
             let mut order = vec![];
             for _ in 0..g {
-                let ready: Vec<usize> = (0..g).filter(|&gi| !done[gi] && indeg[gi] == 0).collect();
-                let pick = if !ready.is_empty() {
-                    *ready.iter().min_by_key(|&&gi| key_v[gi]).unwrap()
-                } else {
-                    // cycle: break by deterministic key
-                    (0..g)
-                        .filter(|&gi| !done[gi])
-                        .min_by_key(|&gi| key_v[gi])
-                        .unwrap()
+                // lowest key among the freed groups, else — a cycle — the
+                // lowest key still standing, which is the same deterministic
+                // tiebreak applied to a set the graph never released
+                let key = match ready.first().or_else(|| left.first()) {
+                    Some(k) => *k,
+                    None => break,
                 };
-                done[pick] = true;
+                let pick = key.3;
+                ready.remove(&key);
+                left.remove(&key);
                 order.push(pick);
                 for &s in &succ[pick] {
                     if indeg[s] > 0 {
                         indeg[s] -= 1;
+                        if indeg[s] == 0 && left.contains(&key_v[s]) {
+                            ready.insert(key_v[s]);
+                        }
                     }
                 }
             }
@@ -508,7 +531,7 @@ pub fn order_all(
         }
     }
     let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (gi, group) in groups.iter().enumerate().take(g) {
+    for (gi, group) in groups.iter().enumerate() {
         let r = uf_find(&mut parent, gi);
         by_root
             .entry(r)

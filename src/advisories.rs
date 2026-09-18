@@ -26,11 +26,18 @@ pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize
 type Out = Vec<(usize, Advisory)>;
 type Rule = fn(Node, &[u8], &str, &mut Out);
 
+// An explicit stack, not recursion: a long chain of binary expressions — a
+// minified bundle is the usual source — nests deep enough to take the process
+// down with it, and a stack overflow is not something `run` can degrade from.
 fn walk(node: Node, src: &[u8], path: &str, rule: Rule, out: &mut Out) {
-    rule(node, src, path, out);
-    let mut cur = node.walk();
-    for ch in node.named_children(&mut cur) {
-        walk(ch, src, path, rule, out);
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        rule(n, src, path, out);
+        // pushed in reverse so popping walks the children left to right, the
+        // order the recursive version emitted advisories in
+        let mut cur = n.walk();
+        let kids: Vec<Node> = n.named_children(&mut cur).collect();
+        stack.extend(kids.into_iter().rev());
     }
 }
 
@@ -68,7 +75,9 @@ fn header_bytes<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
 }
 
 fn contains_bytes(hay: &[u8], needle: &[u8]) -> bool {
-    hay.windows(needle.len()).any(|w| w == needle)
+    // `windows(0)` panics; no caller passes an empty needle, and none should
+    // have to know that to stay safe
+    !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
 }
 
 fn named<'a>(node: Node<'a>) -> Vec<Node<'a>> {
