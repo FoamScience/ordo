@@ -1,4 +1,11 @@
 //! P10 rationale-pattern tests.
+//!
+//! Assertions here are exact lists wherever the fixture has a determinate
+//! shape. The advisory-catalogue tests below are the deliberate exception: each
+//! feeds a file stuffed with many flagged constructs and asserts that one of
+//! them is detected, so membership is the claim being made. Pinning those to a
+//! full list would make every one of them fail whenever an unrelated advisory
+//! is added — churn with no signal.
 use ordo::model::Input;
 mod fixture;
 use fixture::rationales_json as rationales;
@@ -96,14 +103,9 @@ fn p11_unnamed_defs_contribute_no_enclosing_segment() {
         .iter()
         .filter_map(|h| h.enclosing.clone())
         .collect();
-    assert!(
-        enc.iter().any(|e| e == "outer"),
-        "nests under the nearest named def: {enc:?}"
-    );
-    assert!(
-        !enc.iter().any(|e| e.contains("<anonymous>")),
-        "no placeholder segment: {enc:?}"
-    );
+    // exactly one enclosing, and it is the nearest named def — an exact list
+    // also proves the absence of any `<anonymous>` placeholder segment
+    assert_eq!(enc, vec!["outer"]);
 }
 
 #[test]
@@ -153,10 +155,7 @@ class W:
         .iter()
         .filter_map(|h| h.enclosing.clone())
         .collect();
-    assert!(!enc.iter().any(|e| e.contains("<anonymous>")), "{enc:?}");
-    assert!(enc.iter().any(|e| e == "C.method"), "{enc:?}");
-    assert!(enc.iter().any(|e| e == "W.foo"), "{enc:?}");
-    assert!(enc.iter().any(|e| e == "W.g"), "{enc:?}");
+    assert_eq!(enc, vec!["C.method", "W.foo", "W.g"]);
 }
 
 #[test]
@@ -198,18 +197,12 @@ fn p12_noise_formatting_and_generated() {
         a.files[0].hunks.iter().all(|h| h.noise),
         "formatting hunk flagged noise"
     );
-    assert!(
-        a.files[0]
-            .hunks
-            .iter()
-            .any(|h| h.rationale == "formatting only"),
-        "formatting rationale: {:?}",
-        a.files[0]
-            .hunks
-            .iter()
-            .map(|h| &h.rationale)
-            .collect::<Vec<_>>()
-    );
+    let rats: Vec<&str> = a.files[0]
+        .hunks
+        .iter()
+        .map(|h| h.rationale.as_str())
+        .collect();
+    assert_eq!(rats, vec!["formatting only"]);
 
     // generated/lockfile path → noise regardless of content
     let b = ordo::run(
@@ -222,13 +215,12 @@ fn p12_noise_formatting_and_generated() {
         b.files[0].hunks.iter().all(|h| h.noise),
         "generated hunk flagged noise"
     );
-    assert!(
-        b.files[0]
-            .hunks
-            .iter()
-            .any(|h| h.rationale == "generated file"),
-        "generated rationale"
-    );
+    let rats: Vec<&str> = b.files[0]
+        .hunks
+        .iter()
+        .map(|h| h.rationale.as_str())
+        .collect();
+    assert_eq!(rats, vec!["generated file"]);
 }
 
 #[test]
@@ -400,14 +392,7 @@ fn p13_def_smells_size_and_params() {
         .iter()
         .flat_map(|f| f.hunks.iter().flat_map(|h| h.notes.clone()))
         .collect();
-    assert!(
-        notes.iter().any(|n| n.starts_with("large definition")),
-        "large-def note: {notes:?}"
-    );
-    assert!(
-        notes.iter().any(|n| n == "7 params"),
-        "param-bloat note: {notes:?}"
-    );
+    assert_eq!(notes, vec!["large definition (66 lines)", "7 params"]);
 }
 
 #[test]
