@@ -23,15 +23,17 @@ fn p15_add_remove_and_change_within_a_container() {
         "pub enum Cli {\n    Build,\n    Test,\n    Legacy,\n}\n",
         "pub enum Cli {\n    Build,\n    Test,\n    Serve,\n    Watch,\n}\n",
     );
-    assert!(d.iter().any(|x| x == "adds Serve, Watch to Cli"), "{d:?}");
-    assert!(d.iter().any(|x| x == "removes Legacy from Cli"), "{d:?}");
+    assert_eq!(
+        d,
+        vec!["adds Serve, Watch to Cli", "removes Legacy from Cli"]
+    );
 
     let d = one(
         "b.rs",
         "pub struct C {\n    pub name: String,\n    pub retries: usize,\n}\n",
         "pub struct C {\n    pub name: String,\n    pub retries: u32,\n}\n",
     );
-    assert!(d.iter().any(|x| x == "changes retries in C"), "{d:?}");
+    assert_eq!(d, vec!["changes retries in C"]);
 }
 
 #[test]
@@ -43,44 +45,43 @@ fn p15_generalizes_across_languages() {
             "a.go",
             "package m\ntype C struct {\n\tA int\n\tLegacy bool\n}\n",
             "package m\ntype C struct {\n\tA int\n\tServe bool\n}\n",
-            "adds Serve",
+            &["adds Serve", "removes Legacy"],
         ),
         (
             "b.java",
             "class M {\n  enum Cli { BUILD, LEGACY }\n}\n",
             "class M {\n  enum Cli { BUILD, SERVE }\n}\n",
-            "adds SERVE to M.Cli",
+            &["adds SERVE to M.Cli", "removes LEGACY from M.Cli"],
         ),
         (
             "c.ts",
             "export enum Cli { Build = 1, Legacy = 2 }\n",
             "export enum Cli { Build = 1, Serve = 2 }\n",
-            "adds Serve to Cli",
+            &["adds Serve to Cli", "removes Legacy from Cli"],
         ),
         (
             "d.js",
             "const o = { name: \"x\", legacy: true };\n",
             "const o = { name: \"x\", serve: true };\n",
-            "adds serve",
+            &["adds serve", "removes legacy"],
         ),
         (
             "e.py",
             "OPTS = {\n    \"name\": \"x\",\n    \"legacy\": True,\n}\n",
             "OPTS = {\n    \"name\": \"x\",\n    \"serve\": True,\n}\n",
-            "adds serve",
+            &["adds serve to OPTS", "removes legacy from OPTS"],
         ),
         (
             "f.cpp",
             "struct C {\n  int a;\n  bool legacy;\n};\n",
             "struct C {\n  int a;\n  bool serve;\n};\n",
-            "adds serve",
+            &["adds serve to C", "removes legacy from C"],
         ),
     ] {
+        // the whole detail list, not just its first clause — the prefix check
+        // this replaced never looked at the `removes` half at all
         let d = one(path, old, new);
-        assert!(
-            d.iter().any(|x| x.starts_with(want)),
-            "{path}: want {want:?}, got {d:?}"
-        );
+        assert_eq!(d, want, "{path}");
     }
 }
 
@@ -93,8 +94,7 @@ fn p15_member_sharing_a_line_with_a_change_is_not_named() {
         "export enum Cli { Build = 1, Test = 2 }\n",
         "export enum Cli { Build = 1, Test = 9 }\n",
     );
-    assert!(d.iter().any(|x| x == "changes Test in Cli"), "{d:?}");
-    assert!(!d.iter().any(|x| x.contains("Build")), "{d:?}");
+    assert_eq!(d, vec!["changes Test in Cli"]);
 }
 
 #[test]
@@ -116,10 +116,7 @@ fn p15_long_member_lists_are_capped() {
         "pub enum E {\n    A,\n}\n",
         "pub enum E {\n    A,\n    B,\n    C,\n    D,\n    F,\n    G,\n}\n",
     );
-    assert!(
-        d.iter().any(|x| x == "adds B, C, D, and 2 more to E"),
-        "{d:?}"
-    );
+    assert_eq!(d, vec!["adds B, C, D, and 2 more to E"]);
 }
 
 #[test]
@@ -142,10 +139,7 @@ fn a_member_that_is_its_own_container_is_not_relisted() {
         "const opts = { name: \"x\" };\n",
         "const opts = { name: \"x\", retries: 5 };\n",
     );
-    assert!(
-        d.iter().any(|x| x.contains("retries")),
-        "an ordinary member still reports: {d:?}"
-    );
+    assert_eq!(d, vec!["adds retries"], "an ordinary member still reports");
 }
 
 #[test]
@@ -158,21 +152,13 @@ fn p15_keyword_arguments_attribute_to_their_own_call_not_the_enclosing_def() {
         "import argparse\n\ndef main():\n    ap = argparse.ArgumentParser()\n    ap.add_argument(\"--sample\", type=int, required=True)\n    return ap.parse_args()\n",
         "import argparse\n\ndef main():\n    ap = argparse.ArgumentParser()\n    ap.add_argument(\"--sample\", type=int, help=\"one sample number\")\n    ap.add_argument(\"--samples\", type=int, nargs=\"*\", default=[], help=\"many\")\n    return ap.parse_args()\n",
     );
-    assert!(!d.iter().any(|x| x.contains(" to main")), "{d:?}");
-    assert!(
-        d.iter()
-            .any(|x| x == "adds help to ap.add_argument(\"--sample\")"),
-        "{d:?}"
-    );
-    assert!(
-        d.iter()
-            .any(|x| x == "removes required from ap.add_argument(\"--sample\")"),
-        "{d:?}"
-    );
-    assert!(
-        d.iter()
-            .any(|x| x.starts_with("adds") && x.contains("ap.add_argument(\"--samples\")")),
-        "{d:?}"
+    assert_eq!(
+        d,
+        vec![
+            "adds help to ap.add_argument(\"--sample\")",
+            "removes required from ap.add_argument(\"--sample\")",
+            "adds default, help, nargs, and 1 more to ap.add_argument(\"--samples\")"
+        ]
     );
 }
 
@@ -183,10 +169,7 @@ fn p15_call_with_no_literal_first_argument_falls_back_to_callee_alone() {
         "def main():\n    foo(x, y=1)\n",
         "def main():\n    foo(x, y=1, z=2)\n",
     );
-    assert!(
-        d.iter().any(|x| x == "adds z to foo"),
-        "container should be the bare callee name: {d:?}"
-    );
+    assert_eq!(d, vec!["adds z to foo"]);
 }
 
 #[test]
@@ -198,5 +181,5 @@ fn p15_struct_member_still_attributes_to_its_type() {
         "pub struct C {\n    pub name: String,\n}\n",
         "pub struct C {\n    pub name: String,\n    pub retries: u32,\n}\n",
     );
-    assert!(d.iter().any(|x| x == "adds retries to C"), "{d:?}");
+    assert_eq!(d, vec!["adds retries to C"]);
 }
