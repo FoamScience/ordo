@@ -27,11 +27,8 @@ fn both_function_spellings_define() {
         "function rollback {\n  echo x\n}\n",
     ] {
         let hs = one("a.sh", "echo hi\n", &format!("echo hi\n\n{body}"));
-        assert!(
-            hs.iter()
-                .any(|h| h.defines.contains(&"rollback".to_string())),
-            "{body}: {hs:?}"
-        );
+        assert_eq!(hs.len(), 1, "{body}: {hs:?}");
+        assert_eq!(hs[0].defines, vec!["rollback".to_string()]);
     }
 }
 
@@ -42,11 +39,8 @@ fn source_is_an_import_naming_the_script() {
         "set -eu\n\nmain\n",
         "set -eu\nsource ./lib/common.sh\n\nmain\n",
     );
-    assert!(
-        hs.iter()
-            .any(|h| h.rationale == "adds import ./lib/common.sh"),
-        "{hs:?}"
-    );
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rats, vec!["adds import ./lib/common.sh"]);
 }
 
 #[test]

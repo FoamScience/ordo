@@ -76,10 +76,9 @@ fn no_uses_inside_a_function_names_the_enclosing_scope() {
     let old = "def build(spec):\n    return spec\n";
     let new = "def build(spec):\n    may_refine = not spec.shrouded\n    return spec\n";
     let rats = one("a.py", old, new);
-    assert!(
-        rats.iter()
-            .any(|r| r == "adds local may_refine, no uses in build — check nested scopes"),
-        "{rats:?}"
+    assert_eq!(
+        rats,
+        vec!["adds local may_refine, no uses in build — check nested scopes"]
     );
 }
 
@@ -88,10 +87,9 @@ fn no_uses_at_module_level_says_check_other_files() {
     let old = "import os\n";
     let new = "import os\nmay_refine = True\n";
     let rats = one("a.py", old, new);
-    assert!(
-        rats.iter()
-            .any(|r| r == "adds may_refine, no uses in this file — check other files"),
-        "{rats:?}"
+    assert_eq!(
+        rats,
+        vec!["adds may_refine, no uses in this file — check other files"]
     );
 }
 

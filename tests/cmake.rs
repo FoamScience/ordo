@@ -13,11 +13,8 @@ fn cmakelists_is_matched_by_filename() {
         "project(demo)\n",
         "project(demo)\nset(SOURCES a.cpp)\n",
     );
-    assert!(
-        hs.iter()
-            .any(|h| h.defines.contains(&"SOURCES".to_string())),
-        "{hs:?}"
-    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].defines, vec!["SOURCES".to_string()]);
 }
 
 #[test]

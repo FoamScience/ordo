@@ -12,11 +12,8 @@ fn a_rule_set_is_named_by_its_whole_selector_list() {
         ".btn {\n  color: red;\n}\n",
         ".btn, .btn-primary {\n  color: red;\n}\n",
     );
-    assert!(
-        hs.iter()
-            .any(|h| h.defines.contains(&".btn, .btn-primary".to_string())),
-        "{hs:?}"
-    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].defines, vec![".btn, .btn-primary".to_string()]);
 }
 
 #[test]
@@ -73,11 +70,8 @@ fn a_declaration_is_a_member_of_its_rule() {
         ".btn {\n  color: red;\n  padding: 4px;\n}\n",
         ".btn {\n  color: blue;\n  padding: 4px;\n}\n",
     );
-    assert!(
-        hs.iter()
-            .any(|h| h.details.contains(&"changes color in .btn".to_string())),
-        "{hs:?}"
-    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].details, vec!["changes color in .btn".to_string()]);
 }
 
 #[test]
@@ -89,5 +83,6 @@ fn a_declaration_edit_is_not_a_change_to_the_selector() {
         ".btn {\n  color: red;\n}\n",
         ".btn {\n  color: blue;\n}\n",
     );
-    assert!(hs.iter().any(|h| h.rationale == "edits .btn"), "{hs:?}");
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rats, vec!["edits .btn"]);
 }

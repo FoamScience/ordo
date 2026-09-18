@@ -65,12 +65,9 @@ fn p15_reports_the_subsection_added_to_its_parent() {
         .iter()
         .find(|h| h.defines.contains(&"Usage".to_string()))
         .expect("hunk defining Usage");
-    assert!(
-        h.details
-            .iter()
-            .any(|d| d == "adds section Usage to Project > Install"),
-        "{:?}",
-        h.details
+    assert_eq!(
+        h.details,
+        vec!["adds section Usage to Project > Install".to_string()]
     );
 }
 
@@ -92,10 +89,8 @@ fn removes_section_wording_for_a_deleted_subsection() {
     let old = "# Project\n\n## Install\n\nRun it.\n\n### Usage\n\nRun it.\n";
     let new = "# Project\n\n## Install\n\nRun it.\n";
     let hs = one("a.md", old, new);
-    assert!(
-        hs.iter().any(|h| h.rationale == "removes section Usage"),
-        "{hs:?}"
-    );
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rats, vec!["removes section Usage"]);
 }
 
 #[test]
@@ -120,10 +115,7 @@ fn section_paths_use_an_arrow_not_a_dot() {
     .into_iter()
     .map(|h| h.rationale)
     .collect();
-    assert!(
-        rats.iter().any(|r| r.contains("Project > Install")),
-        "prose scope joins with an arrow: {rats:?}"
-    );
+    assert_eq!(rats, vec!["edits section Project > Install"]);
     assert!(
         !rats.iter().any(|r| r.contains("Project.Install")),
         "prose scope must not use a dot: {rats:?}"
