@@ -187,42 +187,27 @@ pub struct FileFacts<'a> {
     pub symbols: &'a [crate::FileSymbols],
     /// what the change did to each file's definitions
     pub changed: &'a [crate::FileChanges],
-    /// per hunk: every changed line is a comment
-    pub comment_only: &'a [Vec<bool>],
-    /// per hunk: how it moved code across the comment boundary, if it did
-    pub switched: &'a [Vec<Option<crate::SideShift>>],
 }
 
 pub fn order_all(
-    files: &[Vec<HunkSem>],
+    files: &[crate::PerFileHunks],
     paths: &[String],
     facts: &FileFacts,
     strategy: Strategy,
     cross_file: bool,
 ) -> OrderedAll {
-    let FileFacts {
-        symbols,
-        changed,
-        comment_only,
-        switched,
-    } = *facts;
+    let FileFacts { symbols, changed } = *facts;
     // ---- flatten all files into a global hunk list ----
     let mut coord = vec![];
     let mut sem: Vec<&HunkSem> = vec![];
     let mut comment: Vec<bool> = vec![];
     let mut switched_off: Vec<Option<crate::SideShift>> = vec![];
-    for (fi, hs) in files.iter().enumerate() {
-        for (li, s) in hs.iter().enumerate() {
+    for (fi, f) in files.iter().enumerate() {
+        for (li, s) in f.sem.iter().enumerate() {
             coord.push((fi, li));
             sem.push(s);
-            comment.push(
-                comment_only
-                    .get(fi)
-                    .and_then(|v| v.get(li))
-                    .copied()
-                    .unwrap_or(false),
-            );
-            switched_off.push(switched.get(fi).and_then(|v| v.get(li)).copied().flatten());
+            comment.push(f.comment.get(li).copied().unwrap_or(false));
+            switched_off.push(f.switched.get(li).copied().flatten());
         }
     }
     let n = sem.len();

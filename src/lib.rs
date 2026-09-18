@@ -42,12 +42,7 @@ pub fn run(input: Input) -> Output {
     // rest work — see `extract::mask_template`.
     let (input, templates) = mask_templates(input);
     // per-file hunks + semantics
-    let mut raws: Vec<Vec<RawHunk>> = vec![];
-    let mut sems: Vec<Vec<HunkSem>> = vec![];
-    let mut degraded: Vec<bool> = vec![];
-    let mut comment_only: Vec<Vec<bool>> = vec![];
-    let mut switched: Vec<Vec<Option<SideShift>>> = vec![];
-    let mut dropped: Vec<Vec<DroppedHunk>> = vec![];
+    let mut hunks: Vec<PerFileHunks> = vec![];
     for (fi, change) in input.changes.iter().enumerate() {
         let (raw, mut sem, deg, com, sw) = build_change(change, input.options.full_context);
         apply_template_facts(&templates[fi], &change.path, &raw, &mut sem);
@@ -96,13 +91,14 @@ pub fn run(input: Input) -> Output {
                 }
             }
         }
-        let (raw, sem, com) = (raw_kept, sem_kept, com_kept);
-        raws.push(raw);
-        sems.push(sem);
-        degraded.push(deg);
-        comment_only.push(com);
-        switched.push(sw_kept);
-        dropped.push(gone);
+        hunks.push(PerFileHunks {
+            raw: raw_kept,
+            sem: sem_kept,
+            degraded: deg,
+            comment: com_kept,
+            switched: sw_kept,
+            dropped: gone,
+        });
     }
 
     let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
@@ -290,9 +286,10 @@ pub fn run(input: Input) -> Output {
         if rows.is_empty() {
             continue;
         }
-        for (li, sem) in sems[fi].iter_mut().enumerate() {
+        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
+        for (li, sem) in sems.iter_mut().enumerate() {
             let [o0, o1] = sem.old_range;
-            let [n0, n1] = raws[fi][li].new_range;
+            let [n0, n1] = raw[li].new_range;
             let deletes_only = n0 > n1;
             if deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r)) {
                 sem.category = Category::Import;
@@ -317,11 +314,12 @@ pub fn run(input: Input) -> Output {
             continue;
         }
         let new_lines: Vec<&str> = new_src.lines().collect();
-        for (li, sem) in sems[fi].iter_mut().enumerate() {
+        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
+        for (li, sem) in sems.iter_mut().enumerate() {
             if sem.category != Category::Import {
                 continue;
             }
-            let [r0, r1] = raws[fi][li].new_range;
+            let [r0, r1] = raw[li].new_range;
             if r0 == 0 || r0 > r1 {
                 continue;
             }
@@ -347,12 +345,13 @@ pub fn run(input: Input) -> Output {
         };
         let new_lines: Vec<&str> = new.lines().collect();
         let import_rows: HashSet<usize> = symbols[fi].old_rows.1.iter().map(|(_, r)| *r).collect();
-        for (li, sem) in sems[fi].iter_mut().enumerate() {
+        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
+        for (li, sem) in sems.iter_mut().enumerate() {
             let [o0, o1] = sem.old_range;
             if sem.noise || o0 == 0 || o0 > o1 {
                 continue;
             }
-            let [n0, n1] = raws[fi][li].new_range;
+            let [n0, n1] = raw[li].new_range;
             let new_blank = n0 > n1
                 || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
             // a *deleted* import is a real removal and is named as such; this
@@ -405,7 +404,7 @@ pub fn run(input: Input) -> Output {
                     .collect()
             })
             .unwrap_or_default();
-        for sem in &mut sems[fi] {
+        for sem in &mut hunks[fi].sem {
             sem.uninit_members
                 .retain(|n| !inits.contains(n) && !old_names.contains(n));
             for n in &sem.uninit_members {
@@ -435,9 +434,9 @@ pub fn run(input: Input) -> Output {
                 change.new.as_deref().map_or(0, |n| n.lines().count()),
             );
             let mut per_file = vec![];
-            for li in 0..raws[fi].len() {
-                let sem = &sems[fi][li];
-                let [r0, r1] = raws[fi][li].new_range;
+            for li in 0..hunks[fi].raw.len() {
+                let sem = &hunks[fi].sem[li];
+                let [r0, r1] = hunks[fi].raw[li].new_range;
                 let facts = rules::HunkFacts {
                     path,
                     rows: (r0, r1),
@@ -448,7 +447,7 @@ pub fn run(input: Input) -> Output {
                     uses: &sem.uses,
                     imports: &sem.imports,
                     noise: sem.noise,
-                    comment: comment_only[fi][li],
+                    comment: hunks[fi].comment[li],
                     def_lines: sem.def_lines,
                     def_params: sem.def_params,
                     nesting: sem.nesting,
@@ -465,9 +464,9 @@ pub fn run(input: Input) -> Output {
         for fi in 0..n {
             for (li, hits) in rule_hits[fi].iter().enumerate() {
                 if rules::Rules::any_noise(hits, &input.options.rules) {
-                    sems[fi][li].noise = true;
+                    hunks[fi].sem[li].noise = true;
                 }
-                sems[fi][li].priority = rules::Rules::priority(hits, &input.options.rules);
+                hunks[fi].sem[li].priority = rules::Rules::priority(hits, &input.options.rules);
             }
         }
     }
@@ -475,34 +474,33 @@ pub fn run(input: Input) -> Output {
     let facts = order::FileFacts {
         symbols: &symbols,
         changed: &changed,
-        comment_only: &comment_only,
-        switched: &switched,
     };
     let ordered = order::order_all(
-        &sems,
+        &hunks,
         &paths,
         &facts,
         input.options.strategy,
         input.options.cross_file,
     );
 
-    // global hunk id per (file, local) and reverse map to global index
-    let mut hid_of: Vec<Vec<String>> = raws.iter().map(|r| vec![String::new(); r.len()]).collect();
-    let mut gidx_of: Vec<Vec<usize>> = raws.iter().map(|r| vec![0usize; r.len()]).collect();
+    // what the ordering decided about each hunk, at the hunk
+    let mut placed: Vec<Vec<HunkPlace>> = hunks
+        .iter()
+        .map(|f| vec![HunkPlace::default(); f.raw.len()])
+        .collect();
     for (i, &(fi, li)) in ordered.coord.iter().enumerate() {
-        hid_of[fi][li] = format!("h{i}");
-        gidx_of[fi][li] = i;
+        placed[fi][li].id = format!("h{i}");
+        placed[fi][li].global = i;
     }
     let gids: Vec<String> = (0..ordered.groups.len())
         .map(|gi| format!("g{gi}"))
         .collect();
 
-    // per-file order_index = rank within that file across the global reading order
-    let mut order_index: Vec<Vec<usize>> = raws.iter().map(|r| vec![0usize; r.len()]).collect();
-    let mut file_counter = vec![0usize; raws.len()];
+    // rank within that file across the global reading order
+    let mut file_counter = vec![0usize; hunks.len()];
     for &i in &ordered.perm {
         let (fi, li) = ordered.coord[i];
-        order_index[fi][li] = file_counter[fi];
+        placed[fi][li].in_file = file_counter[fi];
         file_counter[fi] += 1;
     }
 
@@ -514,7 +512,7 @@ pub fn run(input: Input) -> Output {
             let (fi, li) = ordered.coord[i];
             OrderItem {
                 path: input.changes[fi].path.clone(),
-                hunk: hid_of[fi][li].clone(),
+                hunk: placed[fi][li].id.clone(),
             }
         })
         .collect();
@@ -522,42 +520,42 @@ pub fn run(input: Input) -> Output {
     // per-file hunk metadata
     let mut files: Vec<FileOut> = vec![];
     for (fi, change) in input.changes.iter().enumerate() {
-        let mut hunks = vec![];
-        for li in 0..raws[fi].len() {
-            let gi = gidx_of[fi][li];
-            hunks.push(HunkOut {
-                id: hid_of[fi][li].clone(),
-                old_range: raws[fi][li].old_range,
-                new_range: raws[fi][li].new_range,
-                category: sems[fi][li].category,
-                enclosing: sems[fi][li].enclosing.clone(),
-                enclosing_kind: sems[fi][li].enclosing_kind,
-                defines: sems[fi][li].defines.clone(),
-                uses: sems[fi][li].uses.clone(),
+        let mut out_hunks = vec![];
+        for (li, place) in placed[fi].iter().enumerate() {
+            let gi = place.global;
+            out_hunks.push(HunkOut {
+                id: place.id.clone(),
+                old_range: hunks[fi].raw[li].old_range,
+                new_range: hunks[fi].raw[li].new_range,
+                category: hunks[fi].sem[li].category,
+                enclosing: hunks[fi].sem[li].enclosing.clone(),
+                enclosing_kind: hunks[fi].sem[li].enclosing_kind,
+                defines: hunks[fi].sem[li].defines.clone(),
+                uses: hunks[fi].sem[li].uses.clone(),
                 group: gids[ordered.group_idx[gi]].clone(),
-                order_index: order_index[fi][li],
+                order_index: place.in_file,
                 rationale: ordered.rationale[gi].clone(),
-                noise: sems[fi][li].noise,
-                comment: comment_only[fi][li],
-                details: sems[fi][li].details.clone(),
-                notes: sems[fi][li].notes.clone(),
-                advisories: sems[fi][li].advisories.clone(),
-                symbols: sems[fi][li].symbols.clone(),
+                noise: hunks[fi].sem[li].noise,
+                comment: hunks[fi].comment[li],
+                details: hunks[fi].sem[li].details.clone(),
+                notes: hunks[fi].sem[li].notes.clone(),
+                advisories: hunks[fi].sem[li].advisories.clone(),
+                symbols: hunks[fi].sem[li].symbols.clone(),
                 rules: rule_hits[fi].get(li).cloned().unwrap_or_default(),
             });
         }
         files.push(FileOut {
             path: change.path.clone(),
-            hunks,
-            degraded: degraded[fi],
+            hunks: out_hunks,
+            degraded: hunks[fi].degraded,
             unsupported: lang::for_path(&change.path).is_none(),
-            dropped: std::mem::take(&mut dropped[fi]),
+            dropped: std::mem::take(&mut hunks[fi].dropped),
         });
     }
 
     let hid = |gi: usize| {
         let (fi, li) = ordered.coord[gi];
-        hid_of[fi][li].clone()
+        placed[fi][li].id.clone()
     };
     let groups_out: Vec<Group> = ordered
         .groups
@@ -936,6 +934,36 @@ fn build_ledger(
 /// as every iteration pushed to every one of them. Bundled, the compiler holds
 /// that invariant instead, and a pass that wants a file's symbols names one
 /// thing rather than indexing ten.
+/// Where one hunk landed once the ordering ran: its public id, its position in
+/// the global reading order, and its rank within its own file. Three
+/// `Vec<Vec<_>>` indexed by the same `(file, hunk)` pair, so one value.
+#[derive(Clone, Default)]
+struct HunkPlace {
+    id: String,
+    global: usize,
+    in_file: usize,
+}
+
+/// One file's hunks and everything the engine knows per hunk.
+///
+/// `raw`, `sem`, `comment` and `switched` are strictly parallel — index `li` of
+/// each describes the same hunk. They were four separate `Vec<Vec<_>>` in
+/// `run`, kept in step only because every loop that pushed to one pushed to all
+/// four; here the invariant is that they are built together in one place.
+pub(crate) struct PerFileHunks {
+    pub(crate) raw: Vec<RawHunk>,
+    pub(crate) sem: Vec<HunkSem>,
+    /// the file carried a diff but full content could not be recovered, so its
+    /// ordering is positional only
+    pub(crate) degraded: bool,
+    /// every changed line of this hunk is a comment
+    pub(crate) comment: Vec<bool>,
+    /// how this hunk moved code across the comment boundary, if it did
+    pub(crate) switched: Vec<Option<SideShift>>,
+    /// hunks this file had that never reached the reading order
+    pub(crate) dropped: Vec<DroppedHunk>,
+}
+
 /// What this change did to one file's definitions — the per-file half of the
 /// answer the narration and the ledger both read. Five `Vec`s, all indexed by
 /// the same `fi` and all filled in the same pass, so they are one value.
