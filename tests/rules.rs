@@ -683,3 +683,73 @@ fn java_counts_a_this_assignment_in_a_constructor() {
     );
     assert!(hits(&assigned, "W.java").is_empty());
 }
+
+#[test]
+fn a_hunk_in_no_container_is_not_a_definition() {
+    // `enclosing_kind` was `None` both for a plain definition and for no
+    // container at all, so a `definition` rule fired on top-level code
+    let out = run(serde_json::json!({
+        "changes": [{ "path": "a.py",
+            "old": "TOP = 1\ndef f():\n    return 1\n",
+            "new": "TOP = 2\ndef f():\n    return 2\n" }],
+        "options": { "rules": [
+            { "name": "in-a-def", "when": { "enclosing_kind": "definition" }, "note": "n" },
+            { "name": "loose", "when": { "enclosing_kind": "none" }, "note": "n" }
+        ]}
+    }));
+    let h = hits(&out, "a.py");
+    assert_eq!(
+        h.iter().filter(|x| *x == "note:in-a-def").count(),
+        1,
+        "{h:?}"
+    );
+    assert_eq!(h.iter().filter(|x| *x == "note:loose").count(), 1, "{h:?}");
+}
+
+#[test]
+fn a_rule_that_can_never_fire_is_reported() {
+    let out = run(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "x = 1\n", "new": "x = 2\n" }],
+        "options": { "rules": [
+            { "name": "typo-lang", "when": { "lang": "pyhton" }, "note": "n" },
+            { "name": "typo-kind", "when": { "enclosing_kind": "definitio" }, "note": "n" },
+            { "name": "dup", "when": {}, "note": "n" },
+            { "name": "dup", "when": {}, "note": "n" }
+        ]}
+    }));
+    let p = out.problems.join("\n");
+    assert!(p.contains("unknown lang `pyhton`"), "{p}");
+    assert!(p.contains("unknown enclosing_kind `definitio`"), "{p}");
+    assert!(p.contains("duplicate rule name"), "{p}");
+}
+
+#[test]
+fn kind_and_query_on_one_rule_must_both_point_at_the_row() {
+    // `When`'s conditions are ANDed; these two used to be a union, so the rule
+    // fired on a def the query never matched
+    let out = run(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "x0 = 0\nx1 = 1\nx2 = 2\nx3 = 3\nx4 = 4\nx5 = 5\nx6 = 6\nx7 = 7\nx8 = 8\nx9 = 9\nx10 = 10\nx11 = 11\n",
+            "new": "def keep():\n    return 1\nx0 = 0\nx1 = 1\nx2 = 2\nx3 = 3\nx4 = 4\nx5 = 5\nx6 = 6\nx7 = 7\nx8 = 8\nx9 = 9\nx10 = 10\nx11 = 11\ndef drop():\n    return 2\n" }],
+        "options": { "rules": [{
+            "name": "both",
+            "when": {
+                "lang": "python",
+                "kind": "function_definition",
+                "query": "((function_definition name: (identifier) @n) (#eq? @n \"keep\"))"
+            },
+            "note": "n"
+        }]}
+    }));
+    assert!(out.problems.is_empty(), "{:?}", out.problems);
+    let marked: Vec<&str> = out.files[0]
+        .hunks
+        .iter()
+        .filter(|h| !h.rules.is_empty())
+        .flat_map(|h| h.defines.iter().map(|d| d.as_str()))
+        .collect();
+    assert!(marked.contains(&"keep"), "{marked:?}");
+    assert!(
+        !marked.contains(&"drop"),
+        "kind alone must not fire: {marked:?}"
+    );
+}

@@ -12196,7 +12196,7 @@ mod docs {
         (
             "enclosing-kind",
             true,
-            "what holds the hunk — see the table in [cli.md](cli.md)",
+            "what holds the hunk — `none` (nothing does) · `definition` · the region kinds in [cli.md](cli.md)",
         ),
         ("defines", true, "glob against any name the hunk defines"),
         ("uses", true, "glob against any name the hunk uses"),

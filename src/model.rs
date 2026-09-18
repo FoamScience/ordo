@@ -23,7 +23,7 @@ pub struct Change {
 pub struct Options {
     #[serde(default)]
     pub strategy: Strategy,
-    #[serde(default = "yes")]
+    #[serde(default = "cross_file_default")]
     pub cross_file: bool,
     /// Caller asserts each `diff` is a complete (full-context) patch, so a
     /// modified file can be reconstructed for full semantics. Off by default.
@@ -44,15 +44,18 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            strategy: Strategy::Comprehension,
-            cross_file: true,
+            strategy: Strategy::default(),
+            cross_file: cross_file_default(),
             full_context: false,
             only_comments: false,
             rules: vec![],
         }
     }
 }
-fn yes() -> bool {
+
+/// Cross-file linking is on unless the caller turns it off. One function so the
+/// serde default and `Options::default()` cannot drift apart.
+fn cross_file_default() -> bool {
     true
 }
 
