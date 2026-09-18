@@ -4391,91 +4391,49 @@ const HL: &[(&str, Role)] = &[
 type LineSpans = Vec<(String, Color)>;
 type Highlights = HashMap<String, Vec<LineSpans>>;
 
-// grammar + highlights query for a path (mirrors the engine's extension map;
-// kept here because highlighting is a TUI-only presentation concern). The query
-// is owned so cpp can inherit C's rules (Neovim `; inherits: c`, which
-// tree-sitter-highlight doesn't resolve) by prepending the C query.
-fn owned_query(l: tree_sitter::Language, q: &str) -> (tree_sitter::Language, String) {
-    (l, q.to_string())
+/// The grammar and highlights query for a path.
+///
+/// The path→language question is the engine's, and is asked through
+/// `ordo::lang_name_for_path` so there is one answer to it: this used to carry
+/// its own copy of the extension table plus the by-filename cases, and had
+/// already drifted — `.C`, `.H` (C++ by the GNU/OpenFOAM convention) and
+/// `.zsh` got full engine semantics and no highlighting at all. What stays
+/// here is the part that really is presentation: which query paints which
+/// language. A language with no query highlights as plain text, which is what
+/// a bare `.j2` did before and still does.
+fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
+    highlight_for_lang(ordo::lang_name_for_path(path)?)
 }
 
-fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
-    // a template highlights as the format underneath it (`values.yaml.j2` is
-    // yaml with jinja in it); the jinja itself is left plain, which is close
-    // enough to how most editors render one
-    let path = match path.rsplit_once('.') {
-        Some((head, "j2" | "jinja" | "jinja2" | "tmpl" | "tpl" | "erb" | "ejs" | "gotmpl")) => head,
-        _ => path,
-    };
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let (path, name) = match name.rsplit_once('.') {
-        Some((head, "local")) if !head.is_empty() => {
-            (path.strip_suffix(".local").unwrap_or(path), head)
-        }
-        _ => (path, name),
-    };
-    if name == "CMakeLists.txt" {
-        return Some(owned_query(
-            tree_sitter_cmake::LANGUAGE.into(),
-            tree_sitter_cmake::HIGHLIGHTS_QUERY,
-        ));
-    }
-    if matches!(name, ".bashrc" | ".bash_profile" | ".profile" | ".env") {
-        return Some(owned_query(
-            tree_sitter_bash::LANGUAGE.into(),
-            tree_sitter_bash::HIGHLIGHT_QUERY,
-        ));
-    }
-    if matches!(
-        name,
-        "Makefile" | "makefile" | "GNUmakefile" | "Makefile.am" | "Makefile.in"
-    ) {
-        return Some(owned_query(
-            tree_sitter_make::LANGUAGE.into(),
-            tree_sitter_make::HIGHLIGHTS_QUERY,
-        ));
-    }
-    let ini_by_name = matches!(
-        name,
-        ".gitconfig"
-            | ".gitmodules"
-            | ".editorconfig"
-            | ".npmrc"
-            | ".hgrc"
-            | ".flake8"
-            | ".pylintrc"
-            | ".coveragerc"
-    ) || path.ends_with(".git/config")
-        || path.ends_with(".dvc/config");
-    if ini_by_name {
-        return Some(owned_query(
-            tree_sitter_ini::LANGUAGE.into(),
-            tree_sitter_ini::HIGHLIGHTS_QUERY,
-        ));
-    }
-    let ext = name.rsplit('.').next()?;
+/// Languages the engine reads but nothing here paints. The template grammars
+/// are deliberate — a `.j2` with no host format under it renders plain, which
+/// is roughly what an editor does with one. Anything else appearing in this
+/// list is a gap, and `every_engine_language_is_painted_or_listed` says so.
+#[cfg(test)]
+const NO_HIGHLIGHT: &[&str] = &["jinja", "erb", "gotmpl"];
+
+fn highlight_for_lang(lang: &str) -> Option<(tree_sitter::Language, String)> {
     let owned = |l: tree_sitter::Language, q: &str| (l, q.to_string());
-    Some(match ext {
-        "py" | "pyi" => owned(
+    Some(match lang {
+        "python" => owned(
             tree_sitter_python::LANGUAGE.into(),
             tree_sitter_python::HIGHLIGHTS_QUERY,
         ),
-        // the xonsh crate does not export a highlights query yet; python's
-        // compiles against the superset grammar, so the python half of a
-        // `.xsh` file highlights and the shell forms stay plain
-        "xsh" | "xonsh" | "xonshrc" => owned(
+        // xonsh is python plus shell syntax; python's query covers the overlap
+        // and leaves the shell parts uncoloured rather than miscoloured
+        "xonsh" => owned(
             tree_sitter_xonsh::LANGUAGE.into(),
             tree_sitter_python::HIGHLIGHTS_QUERY,
         ),
-        "js" | "mjs" | "cjs" | "jsx" => owned(
+        "javascript" => owned(
             tree_sitter_javascript::LANGUAGE.into(),
             tree_sitter_javascript::HIGHLIGHT_QUERY,
         ),
-        "rs" => owned(
+        "rust" => owned(
             tree_sitter_rust::LANGUAGE.into(),
             tree_sitter_rust::HIGHLIGHTS_QUERY,
         ),
-        "ts" | "mts" | "cts" => owned(
+        "typescript" => owned(
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             tree_sitter_typescript::HIGHLIGHTS_QUERY,
         ),
@@ -4487,11 +4445,13 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_go::LANGUAGE.into(),
             tree_sitter_go::HIGHLIGHTS_QUERY,
         ),
-        "c" | "h" => owned(
+        "c" => owned(
             tree_sitter_c::LANGUAGE.into(),
             tree_sitter_c::HIGHLIGHT_QUERY,
         ),
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => (
+        // cpp's query inherits C's (Neovim `; inherits: c`, which
+        // tree-sitter-highlight does not resolve), so C's is prepended
+        "cpp" => (
             tree_sitter_cpp::LANGUAGE.into(),
             format!(
                 "{}\n{}",
@@ -4515,7 +4475,7 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_json::LANGUAGE.into(),
             tree_sitter_json::HIGHLIGHTS_QUERY,
         ),
-        "yml" | "yaml" => owned(
+        "yaml" => owned(
             tree_sitter_yaml::LANGUAGE.into(),
             tree_sitter_yaml::HIGHLIGHTS_QUERY,
         ),
@@ -4523,15 +4483,15 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_cmake::LANGUAGE.into(),
             tree_sitter_cmake::HIGHLIGHTS_QUERY,
         ),
-        "mk" | "mak" | "make" => owned(
+        "make" => owned(
             tree_sitter_make::LANGUAGE.into(),
             tree_sitter_make::HIGHLIGHTS_QUERY,
         ),
-        "sh" | "bash" => owned(
+        "bash" => owned(
             tree_sitter_bash::LANGUAGE.into(),
             tree_sitter_bash::HIGHLIGHT_QUERY,
         ),
-        "html" | "htm" | "vue" => owned(
+        "html" => owned(
             tree_sitter_html::LANGUAGE.into(),
             tree_sitter_html::HIGHLIGHTS_QUERY,
         ),
@@ -4547,11 +4507,11 @@ fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
             tree_sitter_nix::LANGUAGE.into(),
             tree_sitter_nix::HIGHLIGHTS_QUERY,
         ),
-        "ini" | "cfg" => owned(
+        "ini" => owned(
             tree_sitter_ini::LANGUAGE.into(),
             tree_sitter_ini::HIGHLIGHTS_QUERY,
         ),
-        "md" | "markdown" => (tree_sitter_md::LANGUAGE.into(), md_block_query()),
+        "markdown" => (tree_sitter_md::LANGUAGE.into(), md_block_query()),
         _ => return None,
     })
 }
@@ -8745,6 +8705,43 @@ mod tests {
         assert_ne!(list_marker.1, Color::Reset);
         let fence_open = h[4].iter().find(|(t, _)| t == "```").unwrap();
         assert_ne!(fence_open.1, Color::Reset);
+    }
+
+    /// Every language the engine resolves is either painted here or listed as
+    /// deliberately unpainted. The two tables were separate copies of the same
+    /// extension map and had drifted by three entries — `.C`, `.H` and `.zsh`
+    /// got full semantics and no colour — which nothing could have noticed.
+    #[test]
+    fn every_engine_language_is_painted_or_listed() {
+        for (name, _) in ordo::languages() {
+            assert!(
+                highlight_for_lang(name).is_some() || NO_HIGHLIGHT.contains(&name),
+                "engine language `{name}` has no highlights query and is not in NO_HIGHLIGHT"
+            );
+        }
+    }
+
+    /// The reverse: nothing is listed as unpainted that is actually painted,
+    /// so the list cannot rot into an excuse.
+    #[test]
+    fn nothing_listed_as_unpainted_is_painted() {
+        for name in NO_HIGHLIGHT {
+            assert!(
+                highlight_for_lang(name).is_none(),
+                "`{name}` is in NO_HIGHLIGHT but has a query"
+            );
+        }
+    }
+
+    /// The three extensions the duplicate table had lost.
+    #[test]
+    fn the_extensions_the_duplicate_table_dropped_are_painted() {
+        for path in ["a.C", "a.H", "s.zsh"] {
+            assert!(
+                highlight_spec(path).is_some(),
+                "{path} resolves in the engine but is not painted"
+            );
+        }
     }
 
     #[test]
