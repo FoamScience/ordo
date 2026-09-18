@@ -1174,11 +1174,16 @@ fn walk(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mu
 fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c: &mut Collected) {
     let kind = node.kind();
     let sr = node.start_position().row;
+    // Both sides are keyed by the class that owns the member, not by the bare
+    // name: the declaration sits in `class B` and the initializer in `B::B`,
+    // and the walker's scope stack reads `B` for each, so the header and the
+    // `.cpp` still meet. Bare names let one class's initializer answer for
+    // every same-named member in the changeset.
     if let Some(n) = field_init_name(node, src, spec) {
-        c.field_inits.insert(n);
+        c.field_inits.insert(owned_member(stack, &n));
     }
     if let Some(name) = uninit_field(node, src, spec) {
-        c.uninit_fields.push((sr, name));
+        c.uninit_fields.push((sr, owned_member(stack, &name)));
     }
     if import_like(node, src, spec) {
         // the whole statement's rows count as import — a hunk that lands
@@ -3029,6 +3034,15 @@ pub fn field_initializers(spec: &LangSpec, content: &str) -> HashSet<String> {
         &mut c,
     );
     c.field_inits
+}
+
+/// `Class.member` when the walker knows the class, else the bare name — which
+/// is the old behaviour, and right for a member with no enclosing type.
+pub fn owned_member(stack: &[String], name: &str) -> String {
+    match stack.last() {
+        Some(owner) => format!("{owner}.{name}"),
+        None => name.to_string(),
+    }
 }
 
 fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
