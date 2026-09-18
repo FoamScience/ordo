@@ -1045,7 +1045,7 @@ fn region_label(
             // a condition is an expression, not an identifier: collapse runs of
             // whitespace but keep the single spaces that make it readable
             let cond = node.child_by_field_name("condition")?.utf8_text(src).ok()?;
-            let cond = cond.split_whitespace().collect::<Vec<_>>().join(" ");
+            let cond = squeeze(cond);
             (!cond.is_empty()).then(|| (format!("#if {cond}"), ContainerKind::Region))
         }
         // a `with` block at file scope: a script's real work often lives in
@@ -1062,7 +1062,7 @@ fn region_label(
             // an expression, not an identifier: collapse runs of whitespace
             // but keep the single spaces that make it readable, as `#if` does
             let text = item.child_by_field_name("value")?.utf8_text(src).ok()?;
-            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let text = squeeze(text);
             (!text.is_empty()).then(|| (format!("with {text}"), ContainerKind::Region))
         }
         // xonsh: a command line at file scope is the script's actual work, and
@@ -1107,7 +1107,7 @@ fn region_label(
                 .named_children(&mut cur)
                 .find(|c| c.kind().ends_with("_start"))?;
             let text = start.utf8_text(src).ok()?;
-            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let text = squeeze(text);
             (!text.is_empty()).then_some((text, ContainerKind::Region))
         }
         // `<script setup>`, `<style scoped>`, `<style module lang="scss">` —
@@ -1120,7 +1120,7 @@ fn region_label(
                 .named_children(&mut cur)
                 .find(|n| matches!(n.kind(), "start_tag" | "self_closing_tag"))?;
             let text = tag.utf8_text(src).ok()?;
-            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let text = squeeze(text);
             (!text.is_empty()).then_some((text, ContainerKind::Region))
         }
         // `@media (min-width: 700px)` is `#ifdef` in a different hat: a real
@@ -1130,7 +1130,7 @@ fn region_label(
                 .named_children(&mut node.walk())
                 .find(|c| !matches!(c.kind(), "block"))
                 .and_then(|c| c.utf8_text(src).ok())
-                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                .map(squeeze)
                 .filter(|t| !t.is_empty())?;
             let at = if node.kind() == "media_statement" {
                 "@media"
@@ -1218,7 +1218,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
                 continue;
             }
             if let Ok(text) = el.utf8_text(src) {
-                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                let text = squeeze(text);
                 if !text.is_empty() {
                     c.member_rows.push((
                         el.start_position().row,
@@ -1381,10 +1381,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         // *is* in both sets and must keep today's behavior — see lang.rs's
         // java comment on that same trap.
         if (spec.prose || spec.data) && spec.is_member(kind) {
-            let text = node
-                .utf8_text(src)
-                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
-                .unwrap_or_default();
+            let text = node.utf8_text(src).map(squeeze).unwrap_or_default();
             // neither prose nor config has calls: the container is always
             // the enclosing def (`stack`, not yet pushed with `own` here).
             let container = (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)));
@@ -1436,10 +1433,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
     }
     if spec.is_member(kind) {
         if let Some(name) = member_name(node, src) {
-            let text = node
-                .utf8_text(src)
-                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
-                .unwrap_or_default();
+            let text = node.utf8_text(src).map(squeeze).unwrap_or_default();
             let container = member_container(node, src, stack, spec);
             c.member_rows.push((sr, name, text, container));
         }
@@ -2237,7 +2231,7 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
             .named_children(&mut cur)
             .find(|c| c.kind() == "selectors")?;
         let text = sel.utf8_text(src).ok()?;
-        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = squeeze(text);
         return (!text.is_empty()).then_some(text);
     }
     if node.kind() == "keyframes_statement" {
@@ -2504,7 +2498,7 @@ const HEADING_NAME_MAX: usize = 80;
 
 fn normalize_heading(raw: &str) -> Option<String> {
     let stripped = raw.trim_start_matches('#').trim();
-    let collapsed = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed = squeeze(stripped);
     if collapsed.is_empty() {
         return None;
     }
@@ -2562,16 +2556,37 @@ pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
     let Some(tree) = lang::parse(spec, content) else {
         return HashSet::new();
     };
-    let mut c = Collected::default();
-    let mut stack: Vec<String> = vec![];
-    walk(
-        tree.root_node(),
-        content.as_bytes(),
-        spec,
-        &mut stack,
-        &mut c,
-    );
-    c.local_binds.into_iter().map(|(_, n)| n).collect()
+    let mut out = HashSet::new();
+    collect_local_binds(tree.root_node(), content.as_bytes(), spec, &mut out);
+    out
+}
+
+/// Names bound by a local declaration, and nothing else.
+///
+/// This used to run the general `walk`, which fills seventeen `Collected`
+/// fields, to read one of them — measured at a third of `FileSymbols::of`,
+/// itself roughly 39% of a run over a large changeset. The rule is
+/// self-contained (`is_local`, minus anything under a failed parse), so it
+/// gets its own descent.
+fn collect_local_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut HashSet<String>) {
+    // A declaration the parser could not make sense of yields nonsense names —
+    // a macro-heavy c++ header parses with ERROR nodes and hands back
+    // `virtual`/`override` as if they were bound. Nothing from a failed parse
+    // is trustworthy; the same guard the general walk applies.
+    if spec.is_local(node.kind()) && !node.has_error() {
+        for id in binding_idents(node, node.kind()) {
+            if let Ok(name) = id.utf8_text(src).map(tidy_ident) {
+                if !name.is_empty() {
+                    out.insert(name);
+                }
+            }
+        }
+        // fall through: a bound value can still hold further declarations
+    }
+    let mut cur = node.walk();
+    for child in node.named_children(&mut cur) {
+        collect_local_binds(child, src, spec, out);
+    }
 }
 
 /// All def names and import names present in `content` (whole file). Used for
@@ -2713,11 +2728,11 @@ fn collect_bodies(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<Body>) 
                 None => full,
             };
             let text = body.and_then(|b| b.utf8_text(src).ok()).unwrap_or(full);
-            let header = header.split_whitespace().collect::<Vec<_>>().join(" ");
-            let whole = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let header = squeeze(header);
+            let whole = squeeze(text);
             let lines = text
                 .lines()
-                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .map(squeeze)
                 .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
                 .collect();
             out.push((name, header, whole, lines));
@@ -2819,7 +2834,7 @@ pub fn import_statements(spec: &LangSpec, content: &str) -> HashSet<String> {
     let src = content.as_bytes();
     each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
         if let Ok(t) = n.utf8_text(src) {
-            out.insert(t.split_whitespace().collect::<Vec<_>>().join(" "));
+            out.insert(squeeze(t));
         }
     });
     out
@@ -3045,6 +3060,25 @@ pub fn owned_member(stack: &[String], name: &str) -> String {
     }
 }
 
+/// One string with runs of whitespace collapsed to single spaces and the ends
+/// trimmed — the normalisation every body, header and line comparison in this
+/// module runs before matching.
+///
+/// `split_whitespace().collect::<Vec<_>>().join(" ")` says the same thing, and
+/// allocates a `Vec<&str>` to do it. `collect_bodies` runs this once per line
+/// of every definition in every file on both sides, which measured as the
+/// single largest cost in `FileSymbols::of`.
+pub(crate) fn squeeze(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for word in s.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
+}
+
 fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
     let mut out = vec![];
     let mut cur = node.walk();
@@ -3057,4 +3091,28 @@ fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
         out.extend(ident_text_rows(ch, src));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::squeeze;
+
+    /// `squeeze` replaced `split_whitespace().collect::<Vec<_>>().join(" ")` at
+    /// fourteen sites; it has to mean exactly that, including at the edges.
+    #[test]
+    fn squeeze_matches_the_idiom_it_replaced() {
+        let idiom = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        for case in [
+            "",
+            "   ",
+            "one",
+            "  leading and trailing  ",
+            "runs   of\tmixed \n whitespace",
+            "\n\ttabs\tand\nnewlines\n",
+            "def f(a,   b):  return   a",
+            "héllo   wörld",
+        ] {
+            assert_eq!(squeeze(case), idiom(case), "{case:?}");
+        }
+    }
 }
