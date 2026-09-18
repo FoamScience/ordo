@@ -107,7 +107,7 @@ occasionally what you want, otherwise a mistake its name should make obvious.
 | `path-not` | glob the file path must *not* match — third-party code, a framework carve-out |
 | `lang` | `python`, `cpp`, `markdown`, … as `src/lang.rs` names them |
 | `category` | `import` · `definition` · `other` |
-| `enclosing-kind` | what holds the hunk — see the table in [cli.md](cli.md) |
+| `enclosing-kind` | what holds the hunk — `none` (nothing does) · `definition` · the region kinds in [cli.md](cli.md) |
 | `defines` | glob against any name the hunk defines |
 | `uses` | glob against any name the hunk uses |
 | `imports` | glob against any name the hunk imports |

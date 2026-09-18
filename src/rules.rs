@@ -45,6 +45,10 @@ pub struct HunkFacts<'a> {
     /// 1-based inclusive new-side rows
     pub rows: (usize, usize),
     pub category: Category,
+    /// the name of what holds the hunk, if anything — `enclosing_kind` alone
+    /// cannot tell "a plain definition" from "no container at all", since both
+    /// carry `None`
+    pub enclosing: Option<&'a str>,
     pub enclosing_kind: Option<ContainerKind>,
     pub defines: &'a [String],
     pub uses: &'a [String],
@@ -69,12 +73,14 @@ pub struct Rules<'r> {
     /// first failure say. A query written for one grammar legitimately fails to
     /// parse under another, but one that parses under *none* of the languages
     /// in the change is broken, and saying so is the whole point of reporting.
-    tried: HashMap<&'r str, (bool, String)>,
-    /// compiled queries, cached by (rule name, language name) — `query_rows`
+    tried: HashMap<usize, (bool, String)>,
+    /// compiled queries, cached by (rule index, language name) — `query_rows`
     /// runs once per file, so without this the same rule's `Query::new`
     /// (an automaton build, not cheap) reran for every file sharing a
     /// language. Same idea as the globs/regexes `Rules::new` compiles once.
-    query_cache: HashMap<(&'r str, &'static str), Result<Query, String>>,
+    /// Keyed by index rather than by name: two rules may share a name (it is
+    /// reported, not rejected) and must not share a compiled query.
+    query_cache: HashMap<(usize, &'static str), Result<Query, String>>,
 }
 
 fn regex(
@@ -109,9 +115,49 @@ fn glob(
     }
 }
 
+/// Every `enclosing_kind` a rule may name — the inverse of `kind_name`, so a
+/// misspelling is reported rather than matching nothing forever.
+const KIND_NAMES: &[&str] = &[
+    "none",
+    "definition",
+    "test",
+    "region",
+    "preamble",
+    "front-matter",
+    "binding",
+    "call",
+    "document",
+];
+
 impl<'r> Rules<'r> {
     pub fn new(rules: &'r [Rule]) -> Rules<'r> {
         let mut problems = vec![];
+        // A rule that never fires looks exactly like a convention nobody
+        // breaks, so every way of writing one by accident is reported here:
+        // a name that collides (the query cache and the noise/priority lookup
+        // are both keyed by name), a language or container kind that does not
+        // exist.
+        let mut seen: Vec<&str> = vec![];
+        for rule in rules {
+            if seen.contains(&rule.name.as_str()) {
+                problems.push(format!("rule `{}`: duplicate rule name", rule.name));
+            }
+            seen.push(&rule.name);
+            if let Some(l) = &rule.when.lang {
+                if !lang::all().iter().any(|s| s.name == l) {
+                    problems.push(format!("rule `{}`: unknown lang `{l}`", rule.name));
+                }
+            }
+            if let Some(k) = &rule.when.enclosing_kind {
+                if !KIND_NAMES.contains(&k.as_str()) {
+                    problems.push(format!(
+                        "rule `{}`: unknown enclosing_kind `{k}` (one of {})",
+                        rule.name,
+                        KIND_NAMES.join(", ")
+                    ));
+                }
+            }
+        }
         let compiled = rules
             .iter()
             .map(|rule| {
@@ -171,7 +217,7 @@ impl<'r> Rules<'r> {
                     && c.path_not.as_ref().is_none_or(|g| !g.is_match(f.path))
                     && w.lang.as_deref().is_none_or(|l| lang == Some(l))
                     && w.category.is_none_or(|c2| c2 == f.category)
-                    && w.enclosing_kind.as_deref().is_none_or(|k| kind_name(f.enclosing_kind) == k)
+                    && w.enclosing_kind.as_deref().is_none_or(|k| kind_name(f.enclosing, f.enclosing_kind) == k)
                     && any(&c.defines, f.defines)
                     && any(&c.uses, f.uses)
                     && any(&c.imports, f.imports)
@@ -254,20 +300,22 @@ impl<'r> Rules<'r> {
         // and a grammar it doesn't parse simply doesn't match: complaining
         // that a Rust query "does not compile for markdown" would bury the
         // real errors in noise.
-        let queries: Vec<(&str, &str, bool)> = self
+        let applies = |c: &Compiled| c.rule.when.lang.as_deref().is_none_or(|l| l == spec.name);
+        let queries: Vec<(usize, &'r str, &'r str, bool)> = self
             .compiled
             .iter()
-            .filter(|c| c.rule.when.lang.as_deref().is_none_or(|l| l == spec.name))
-            .filter_map(|c| {
+            .enumerate()
+            .filter(|(_, c)| applies(c))
+            .filter_map(|(i, c)| {
                 let q = c.rule.when.query.as_deref()?;
-                Some((c.rule.name.as_str(), q, c.rule.when.lang.is_some()))
+                Some((i, c.rule.name.as_str(), q, c.rule.when.lang.is_some()))
             })
             .collect();
-        let kind_rules: Vec<&Compiled> = self
+        let kind_rules: Vec<(usize, &Compiled)> = self
             .compiled
             .iter()
-            .filter(|c| c.rule.when.kind.is_some())
-            .filter(|c| c.rule.when.lang.as_deref().is_none_or(|l| l == spec.name))
+            .enumerate()
+            .filter(|(_, c)| c.rule.when.kind.is_some() && applies(c))
             .collect();
         if queries.is_empty() && kind_rules.is_empty() {
             return out;
@@ -280,13 +328,14 @@ impl<'r> Rules<'r> {
         // and without children Y" — one walk of the tree, every rule checked
         // at every node. Children include anonymous tokens, so `without =
         // "virtual"` reads a keyword an anchor never could.
+        let mut by_kind: HashMap<usize, Vec<usize>> = HashMap::new();
         if !kind_rules.is_empty() {
             let mut kind_hits: Vec<Vec<usize>> = vec![vec![]; kind_rules.len()];
             let mut stack = vec![tree.root_node()];
             while let Some(node) = stack.pop() {
-                for (i, c) in kind_rules.iter().enumerate() {
+                for (slot, (_, c)) in kind_rules.iter().enumerate() {
                     if c.introduces(node, content.as_bytes()) {
-                        kind_hits[i].push(node_row(node));
+                        kind_hits[slot].push(node_row(node));
                     }
                 }
                 let mut cur = node.walk();
@@ -294,20 +343,17 @@ impl<'r> Rules<'r> {
                     stack.push(ch);
                 }
             }
-            for (c, mut rows) in kind_rules.iter().zip(kind_hits) {
+            for ((i, _), mut rows) in kind_rules.iter().zip(kind_hits) {
                 rows.sort_unstable();
                 rows.dedup();
-                out.entry(c.rule.name.as_str()).or_default().extend(rows);
+                by_kind.insert(*i, rows);
             }
         }
-        if queries.is_empty() {
-            return out;
-        }
-        for (name, src, explicit) in queries {
-            let key = (name, spec.name);
+        let mut by_query: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, name, src, explicit) in queries {
             let compiled = self
                 .query_cache
-                .entry(key)
+                .entry((i, spec.name))
                 .or_insert_with(|| Query::new(&language, src).map_err(|e| e.to_string()));
             let query = match compiled {
                 Ok(q) => q,
@@ -318,13 +364,13 @@ impl<'r> Rules<'r> {
                             spec.name
                         ));
                     } else {
-                        self.tried.entry(name).or_insert((false, e.clone()));
+                        self.tried.entry(i).or_insert((false, e.clone()));
                     }
                     continue;
                 }
             };
             if !explicit {
-                self.tried.insert(name, (true, String::new()));
+                self.tried.insert(i, (true, String::new()));
             }
             let mut cursor = QueryCursor::new();
             let mut rows = vec![];
@@ -336,7 +382,18 @@ impl<'r> Rules<'r> {
             }
             rows.sort_unstable();
             rows.dedup();
-            out.entry(name).or_default().extend(rows);
+            by_query.insert(i, rows);
+        }
+        // `When`'s conditions are ANDed, and `kind` and `query` are two of
+        // them: a rule carrying both used to fire on the union of what each
+        // matched. Intersect instead, so both have to point at the same row.
+        for (i, c) in self.compiled.iter().enumerate() {
+            let rows = match (by_kind.get(&i), by_query.get(&i)) {
+                (Some(k), Some(q)) => k.iter().filter(|r| q.contains(r)).copied().collect(),
+                (Some(rows), None) | (None, Some(rows)) => rows.clone(),
+                (None, None) => continue,
+            };
+            out.insert(c.rule.name.as_str(), rows);
         }
         out
     }
@@ -396,7 +453,8 @@ impl Rules<'_> {
             .tried
             .iter()
             .filter(|(_, (ok, _))| !ok)
-            .map(|(name, (_, err))| {
+            .map(|(i, (_, err))| {
+                let name = &self.compiled[*i].rule.name;
                 format!(
                     "rule `{name}`: query does not compile for any language in this change: {err}"
                 )
@@ -411,8 +469,13 @@ fn node_row(n: Node) -> usize {
     n.start_position().row + 1
 }
 
-fn kind_name(k: Option<ContainerKind>) -> &'static str {
+/// The `enclosing_kind` name a rule is written against. `None` for both fields
+/// means the hunk sits in no container at all, which is not the same as sitting
+/// in a plain definition — conflating the two fired every
+/// `enclosing_kind = "definition"` rule on top-level code.
+fn kind_name(enclosing: Option<&str>, k: Option<ContainerKind>) -> &'static str {
     match k {
+        None if enclosing.is_none() => "none",
         None => "definition",
         Some(ContainerKind::Definition) => "definition",
         Some(ContainerKind::Test) => "test",

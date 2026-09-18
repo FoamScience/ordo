@@ -474,6 +474,7 @@ pub fn run(input: Input) -> Output {
                     path,
                     rows: (r0, r1),
                     category: sem.category,
+                    enclosing: sem.enclosing.as_deref(),
                     enclosing_kind: sem.enclosing_kind,
                     defines: &sem.defines,
                     uses: &sem.uses,
