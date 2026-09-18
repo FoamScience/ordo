@@ -1,15 +1,26 @@
 //! CLI: `ordo-engine order --json < input.json > output.json`.
-//! (`ordo-engine review <patch>` is planned — P3/P7.)
 use std::io::Read;
 use std::process::exit;
 
+const USAGE: &str = "usage:
+  ordo-engine order  [--only-comments] --json < input.json > output.json
+  ordo-engine pack   [--only-comments] --json < input.json  # compact LLM-ready review context
+  ordo-engine review [--full-context] [patch]               # patch from arg or stdin
+  ordo-engine --version
+
+--full-context: the patch is a complete diff (git diff -U100000), so modified
+                files get full semantics instead of positional order.
+--only-comments: drop every non-comment/docstring hunk before ordering, so
+                 order/groups/edges/clusters cover only comment changes.";
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let rest = args.get(2..).unwrap_or(&[]);
     let cmd = args.get(1).map(String::as_str).unwrap_or("order");
     match cmd {
-        "order" => order(&args[2..]),
-        "pack" => pack(&args[2..]),
-        "review" => review(&args[2..]),
+        "order" => order(rest),
+        "pack" => pack(rest),
+        "review" => review(rest),
         "-V" | "--version" | "version" => {
             println!(
                 "ordo-engine {} (schema {})",
@@ -17,11 +28,9 @@ fn main() {
                 ordo::SCHEMA_VERSION
             );
         }
-        "-h" | "--help" | "help" => {
-            eprintln!("usage:\n  ordo-engine order [--only-comments] --json < input.json > output.json\n  ordo-engine pack  [--only-comments] --json < input.json  # compact LLM-ready review context\n  ordo-engine review [--full-context] [patch]   # patch from arg or stdin\n  ordo --version\n\n--full-context: the patch is a complete diff (git diff -U100000), so modified\n                files get full semantics instead of positional order.\n--only-comments: drop every non-comment/docstring hunk before ordering, so\n                 order/groups/edges/clusters cover only comment changes.");
-        }
+        "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
-            eprintln!("ordo-engine: unknown command '{other}'\nusage: ordo-engine order --json < input.json | ordo-engine review [--full-context] [patch] | ordo --version");
+            eprintln!("ordo-engine: unknown command '{other}'\n{USAGE}");
             exit(2);
         }
     }
@@ -37,7 +46,10 @@ fn review(args: &[String]) {
     for a in args {
         if a == "--full-context" {
             full_context = true;
-        } else if !a.starts_with('-') {
+        } else if a.starts_with('-') {
+            eprintln!("ordo-engine review: unknown flag '{a}'\n{USAGE}");
+            exit(2);
+        } else {
             path = Some(a);
         }
     }
@@ -76,6 +88,21 @@ fn read_stdin() -> String {
     buf
 }
 
+/// `--only-comments` is the only flag `order`/`pack` take; anything else
+/// starting with `-` is a typo, and silently ordering the whole diff instead of
+/// the comment subset the caller asked for is worse than refusing.
+fn only_comments_flag(args: &[String]) -> bool {
+    for a in args {
+        // `--json` names the input format these two already require; it is
+        // accepted so the documented invocation works, and means nothing.
+        if a != "--only-comments" && a != "--json" {
+            eprintln!("ordo-engine: unknown flag '{a}'\n{USAGE}");
+            exit(2);
+        }
+    }
+    args.iter().any(|a| a == "--only-comments")
+}
+
 fn read_input(only_comments: bool) -> ordo::model::Input {
     let buf = read_stdin();
     let mut input: ordo::model::Input = serde_json::from_str(&buf).unwrap_or_else(|e| {
@@ -89,14 +116,12 @@ fn read_input(only_comments: bool) -> ordo::model::Input {
 }
 
 fn order(args: &[String]) {
-    emit(ordo::run(read_input(
-        args.iter().any(|a| a == "--only-comments"),
-    )));
+    emit(ordo::run(read_input(only_comments_flag(args))));
 }
 
 /// `ordo-engine pack --json < input.json` — compact, LLM-ready review context.
 fn pack(args: &[String]) {
-    let input = read_input(args.iter().any(|a| a == "--only-comments"));
+    let input = read_input(only_comments_flag(args));
     print!("{}", ordo::pack(&ordo::run(input)));
 }
 

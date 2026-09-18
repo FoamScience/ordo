@@ -1264,3 +1264,32 @@ fn multiline_data_string_assigned_to_a_variable_is_not_a_comment() {
         "a data string assigned to a variable must not be called a comment: {rats:?}"
     );
 }
+
+#[test]
+fn a_lone_unrelated_pair_is_not_a_rename() {
+    // one def removed, one added, bodies with nothing in common: the lone-pair
+    // fallback used to call this a rename on arity alone
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py",
+            "old": "def foo():\n    total = 0\n    for r in rows:\n        total += r\n    return total\n",
+            "new": "def bar():\n    conn = connect()\n    conn.send(payload)\n    conn.close()\n" } ]
+    }));
+    assert!(
+        !rats.iter().any(|r| r.contains("renames")),
+        "unrelated pair is not a rename: {rats:?}"
+    );
+}
+
+#[test]
+fn a_lone_pair_that_shares_its_body_is_a_rename() {
+    // same body, one line edited: still the same code under a new name
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py",
+            "old": "def foo():\n    total = 0\n    for r in rows:\n        total += r\n    return total\n",
+            "new": "def bar():\n    total = 1\n    for r in rows:\n        total += r\n    return total\n" } ]
+    }));
+    assert!(
+        rats.iter().any(|r| r == "renames foo → bar"),
+        "edited rename: {rats:?}"
+    );
+}
