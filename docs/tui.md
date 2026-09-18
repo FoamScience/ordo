@@ -120,9 +120,10 @@ always drives the code pane.
 | **panes** | | |
 | focus the next pane | `C-w C-w`, `C-w w` | `F6` |
 | focus the previous pane | `C-w W`, `C-w p` | `S-F6` |
-| focus the reading-order pane | `C-w h`, `C-w Left` | `C-1` |
-| focus the code pane | `C-w l`, `C-w k`, `C-w Right`, `C-w Up` | `C-2` |
-| focus the why pane | `C-w j`, `C-w Down` | `C-3` |
+| focus the reading-order pane (again to zoom) | `1`, `C-w h`, `C-w Left` | `C-1` |
+| focus the code pane (again to zoom) | `2`, `C-w l`, `C-w k`, `C-w Right`, `C-w Up` | `C-2` |
+| focus the why pane | `3`, `C-w j`, `C-w Down` | `C-3` |
+| fill the frame with the focused pane | `C-w z`, `C-w _` |  |
 | **search** | | |
 | open the text-search prompt | `/` | `C-f` |
 | next occurrence of the symbol under the cursor | `*` | `C-F12` |

@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ordo::model::{Change, HunkOut, Input, Options, Output, Strategy, Symbol};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -2086,6 +2086,8 @@ enum Action {
     HalfDown,
     HalfUp,
     FocusNext,
+    /// fill the frame with the focused pane, or restore the split
+    Zoom,
     FocusPrev,
     Focus(Pane),
     // code-pane cursor motions
@@ -2245,6 +2247,15 @@ fn keymap(name: &str) -> Option<Keymap> {
                 (Some(ctrl('w')), ch('w'), Action::FocusNext),
                 (Some(ctrl('w')), ch('W'), Action::FocusPrev),
                 (Some(ctrl('w')), ch('p'), Action::FocusPrev),
+                // plain digits, because Ctrl-1/2/3 below are unsendable by
+                // xterm, gnome-terminal, Terminal.app and most tmux setups —
+                // only kitty-protocol terminals emit them. Pressing the digit
+                // of the pane already focused zooms it.
+                (None, ch('1'), Action::Focus(Pane::List)),
+                (None, ch('2'), Action::Focus(Pane::Code)),
+                (None, ch('3'), Action::Focus(Pane::Why)),
+                (Some(ctrl('w')), ch('z'), Action::Zoom),
+                (Some(ctrl('w')), ch('_'), Action::Zoom),
                 (Some(ctrl('w')), ch('h'), Action::Focus(Pane::List)),
                 (Some(ctrl('w')), ch('l'), Action::Focus(Pane::Code)),
                 (Some(ctrl('w')), ch('k'), Action::Focus(Pane::Code)),
@@ -2422,10 +2433,14 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::PageUp => (Category::Navigation, "page up"),
         Action::HalfDown => (Category::Navigation, "half-page down"),
         Action::HalfUp => (Category::Navigation, "half-page up"),
+        Action::Zoom => (Category::Panes, "fill the frame with the focused pane"),
         Action::FocusNext => (Category::Panes, "focus the next pane"),
         Action::FocusPrev => (Category::Panes, "focus the previous pane"),
-        Action::Focus(Pane::List) => (Category::Panes, "focus the reading-order pane"),
-        Action::Focus(Pane::Code) => (Category::Panes, "focus the code pane"),
+        Action::Focus(Pane::List) => (
+            Category::Panes,
+            "focus the reading-order pane (again to zoom)",
+        ),
+        Action::Focus(Pane::Code) => (Category::Panes, "focus the code pane (again to zoom)"),
         Action::Focus(Pane::Why) => (Category::Panes, "focus the why pane"),
         Action::CursorLeft => (Category::Navigation, "move the code cursor left"),
         Action::CursorRight => (Category::Navigation, "move the code cursor right"),
@@ -2493,6 +2508,7 @@ const ACTION_NAMES: &[(&str, Action)] = &[
     ("focus-list", Action::Focus(Pane::List)),
     ("focus-code", Action::Focus(Pane::Code)),
     ("focus-why", Action::Focus(Pane::Why)),
+    ("zoom", Action::Zoom),
     ("cursor-left", Action::CursorLeft),
     ("cursor-right", Action::CursorRight),
     ("word-next", Action::WordNext),
@@ -3521,8 +3537,27 @@ fn build_help(keys: &Keymap) -> Vec<String> {
             out.push(String::new());
         }
         out.push(category_label(cat).to_uppercase());
+        // At most three chords per row. The help is for discovery, and one
+        // action with four aliases (`Space, f, C-f, PageDown`) widened the key
+        // column for every other row in its section; the full set is in the
+        // generated table in docs/tui.md.
+        const SHOWN: usize = 3;
+        let label = |r: &Row| {
+            let mut l = r.keys[..r.keys.len().min(SHOWN)].join(", ");
+            if r.keys.len() > SHOWN {
+                l.push('…');
+            }
+            l
+        };
+        // the column is as wide as the widest chord in this section, not a
+        // fixed 16 that the longest row overflowed and fell out of line with
+        let w = group
+            .iter()
+            .map(|r| label(r).chars().count())
+            .max()
+            .unwrap_or(0);
         for r in group {
-            out.push(format!("  {:<16} {}", r.keys.join(", "), r.desc));
+            out.push(format!("  {:<w$} {}", label(r), r.desc));
         }
     }
     out
@@ -3695,6 +3730,9 @@ struct App {
     /// `:group` — show a non-selectable group-reason header before each run
     /// of the reading-order list that shares a group id
     show_groups: bool,
+    /// the focused pane fills the frame. A narrow terminal zooms on its own
+    /// (see `SPLIT_COLS`); this is the explicit toggle on top of that.
+    zoom: bool,
     /// bucket key -> the header text for it. What the keys *are* depends on
     /// `mode`: group ids in hunk mode, `L<n>` ledger keys in ledger mode.
     groups: HashMap<String, String>,
@@ -6748,6 +6786,7 @@ fn run(
                         marks,
                         theme,
                         show_groups: false,
+                        zoom: false,
                         group_reasons: groups.clone(),
                         groups,
                         mode: ViewMode::default(),
@@ -6948,7 +6987,10 @@ fn apply(app: &mut App, a: Action) -> bool {
         // the review session
         Action::Quit if app.search.is_some() => app.search = None,
         Action::Quit => return true,
+        // asking for the pane you are already in means "give me more of it"
+        Action::Focus(p) if app.focus == p => app.zoom = !app.zoom,
         Action::Focus(p) => app.focus = p,
+        Action::Zoom => app.zoom = !app.zoom,
         Action::FocusNext => app.focus = app.focus.next(),
         Action::FocusPrev => app.focus = app.focus.prev(),
         Action::ToggleReviewed => {
@@ -7472,6 +7514,86 @@ fn jump_back(app: &mut App) {
 /// A pane's frame. Rounded corners and a dim border for context, the theme's
 /// focus colour for the pane that has it — the border is how the reviewer knows
 /// where the keys will land, so it is the one piece of chrome allowed to be loud.
+/// The bottom row: which pane each digit selects, whether the frame is zoomed,
+/// and the movement keys the code pane's title used to carry and truncate.
+/// The focused pane's own digit is emphasised, so focus is legible without
+/// hunting for the highlighted border.
+fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
+    let theme = &app.theme;
+    let mut out = vec![];
+    for (n, pane, label) in [
+        (1, Pane::List, "list"),
+        (2, Pane::Code, "code"),
+        (3, Pane::Why, "why"),
+    ] {
+        let on = app.focus == pane;
+        let style = if on {
+            Style::default()
+                .fg(theme.border_focus)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.dim)
+        };
+        out.push(Span::styled(format!(" {n} {label}"), style));
+    }
+    let hint = if zoomed {
+        // say how to get out of it, since the other two panes are not on screen
+        if app.zoom {
+            "  ·  zoomed (same digit restores)"
+        } else {
+            "  ·  narrow: one pane at a time"
+        }
+    } else {
+        "  ·  same digit zooms"
+    };
+    out.push(Span::styled(
+        hint.to_string(),
+        Style::default().fg(theme.dim),
+    ));
+    out.push(Span::styled(
+        format!("  ·  {}  ·  ? help ", app.keys.hint),
+        Style::default().fg(theme.dim),
+    ));
+    out
+}
+
+/// Below this the three panes each get too little width to be read, so the
+/// focused one takes the frame instead. Measured, not guessed: at 80 columns a
+/// 38% list pane is 30 wide and loses the line number off `gate.py:L117`.
+const SPLIT_COLS: u16 = 96;
+
+/// Below this nothing can be laid out honestly, so say so rather than draw a
+/// frame of truncated stubs.
+const MIN_COLS: u16 = 56;
+const MIN_ROWS: u16 = 12;
+
+/// What a terminal too small for any layout gets: the requirement, what it
+/// currently is, and nothing else.
+fn draw_too_small(f: &mut Frame, area: Rect, theme: &Theme) {
+    let lines = vec![
+        Line::from(Span::styled(
+            format!("ordo needs {MIN_COLS}×{MIN_ROWS}"),
+            Style::default().fg(theme.fg),
+        )),
+        Line::from(Span::styled(
+            format!("this terminal is {}×{}", area.width, area.height),
+            Style::default().fg(theme.dim),
+        )),
+    ];
+    let top = area.height.saturating_sub(lines.len() as u16) / 2;
+    let rect = Rect {
+        x: area.x,
+        y: area.y + top,
+        width: area.width,
+        height: lines.len() as u16,
+    };
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).alignment(Alignment::Center),
+        rect,
+    );
+}
+
 fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
     let border = if focused {
         theme.border_focus
@@ -7492,12 +7614,66 @@ fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
 }
 
 fn draw(f: &mut Frame, app: &mut App, rev: &str) {
-    let cols = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(f.area());
+    let area = f.area();
+    if area.width < MIN_COLS || area.height < MIN_ROWS {
+        draw_too_small(f, area, &app.theme);
+        return;
+    }
+    // one row reserved at the bottom for the key hint, which used to ride in
+    // the code pane's border title and was truncated mid-word there
+    let root = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let (body, footer_area) = (root[0], root[1]);
+
+    let it = &app.items[app.sel];
+    // built before the layout, because the why pane is sized to it: it used to
+    // take a flat 30% and sat nearly empty on a one-line rationale
+    let why_content = why_rows(
+        it,
+        &app.view,
+        &app.theme,
+        note_for(app, app.sel),
+        &out_of_order_labels(app, app.sel),
+        delta_line(app, app.sel),
+        cascade_line(app, app.sel).as_deref(),
+    );
+
+    // Below `SPLIT_COLS` three panes each get too little to be read; one good
+    // pane beats three starved ones, so a narrow terminal zooms on its own.
+    if body.width < SPLIT_COLS {
+        // the split is unavailable at this width, so an explicit toggle would
+        // sit invisible and surprise the reviewer when the terminal widens
+        app.zoom = false;
+    }
+    let zoomed = app.zoom || body.width < SPLIT_COLS;
+    let (list_area, code_area, why_area) = if zoomed {
+        match app.focus {
+            Pane::List => (Some(body), None, None),
+            Pane::Code => (None, Some(body), None),
+            Pane::Why => (None, None, Some(body)),
+        }
+    } else {
+        let cols = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .split(body);
+        // The pane wraps, so logical lines are not rows: a rationale wider
+        // than the pane needs more than one. Size to the wrapped height, plus
+        // borders, floored so an empty pane still reads as a pane and capped
+        // so a long rationale cannot crowd out the code.
+        let why_w = (cols[1].width.saturating_sub(2)).max(1) as usize;
+        let wrapped: usize = why_content
+            .iter()
+            .map(|r| r.text.chars().count().div_ceil(why_w).max(1))
+            .sum();
+        let why_h = (wrapped as u16)
+            .saturating_add(2)
+            .clamp(3, (body.height * 2 / 5).max(3));
+        let rhs = Layout::vertical([Constraint::Min(3), Constraint::Length(why_h)]).split(cols[1]);
+        (Some(cols[0]), Some(rhs[0]), Some(rhs[1]))
+    };
 
     // left — reading order
     let symbol = "▶ ";
-    let text_w = (cols[0].width as usize).saturating_sub(2 + symbol.chars().count());
+    let text_w = (list_area.map_or(body.width, |a| a.width) as usize)
+        .saturating_sub(2 + symbol.chars().count());
     let display = display_rows(
         &app.view,
         &app.items,
@@ -7510,7 +7686,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         .map(|row| match row {
             DisplayRow::Header(reason) => {
                 let spans = vec![Span::styled(
-                    format!("· {reason}"),
+                    reason.to_string(),
                     Style::default()
                         .fg(app.theme.border_focus)
                         .add_modifier(Modifier::BOLD),
@@ -7534,6 +7710,9 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                 let tinted = it.noise || app.reviewed[i];
                 let dim = |c: Color| if tinted { style } else { style.fg(c) };
                 let spans = vec![
+                    // two cells of indent put the file under the definition it
+                    // belongs to; headers sit flush, so the list reads as a tree
+                    Span::styled("  ".to_string(), style),
                     Span::styled(it.mark.clone(), dim(app.theme.mark)),
                     Span::styled(it.path.clone(), style),
                     Span::styled(format!(":L{}", it.new_range[0]), dim(app.theme.accent)),
@@ -7557,7 +7736,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     let list = List::new(rows)
         .block(pane_block(
             format!(
-                " {rev} — {done}/{total} reviewed{}{} · {} ",
+                " 1 {rev} — {done}/{total} reviewed{}{} · {} ",
                 // edge coverage is the number that tracks understanding; it is
                 // omitted when the review has no def→use links to cover
                 if edges_total > 0 {
@@ -7573,15 +7752,16 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         ))
         .highlight_style(Style::default().bg(app.theme.select_bg))
         .highlight_symbol(symbol);
-    f.render_stateful_widget(list, cols[0], &mut state);
+    if let Some(r) = list_area {
+        f.render_stateful_widget(list, r, &mut state);
+    }
 
-    // right — code (top) + why (bottom)
-    let rhs =
-        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).split(cols[1]);
-    let it = &app.items[app.sel];
-
-    let code_w = (rhs[0].width as usize).saturating_sub(2);
-    app.code_height = rhs[0].height.saturating_sub(2);
+    // right — code (top) + why (bottom); either may be absent while zoomed.
+    // A hidden pane falls back to `body`, which is not a guess: that is exactly
+    // the rect it gets when the next keypress zooms to it.
+    let code_rect = code_area.unwrap_or(body);
+    let code_w = (code_rect.width as usize).saturating_sub(2);
+    app.code_height = code_rect.height.saturating_sub(2);
     app.code_width = code_w.saturating_sub(GUTTER_W).min(u16::MAX as usize) as u16;
     // clamp to the selected file's longest line so hscroll can't run away
     // past any content it could ever bring into view; cached per path since
@@ -7637,24 +7817,17 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         } else {
             format!("[{}/{}] {glyph}{}", s.index + 1, s.matches.len(), s.pattern)
         };
-        format!(" {}{clip}  {status}  ({}) ", it.path, app.keys.hint)
+        format!(" 2 {}{clip}  {status} ", it.path)
     } else {
-        format!(" {}{clip}  ({}) ", it.path, app.keys.hint)
+        format!(" 2 {}{clip} ", it.path)
     };
 
-    let why_content = why_rows(
-        it,
-        &app.view,
-        &app.theme,
-        note_for(app, app.sel),
-        &out_of_order_labels(app, app.sel),
-        delta_line(app, app.sel),
-        cascade_line(app, app.sel).as_deref(),
-    );
     // `why` wraps, so this counts logical lines — enough to keep the scroll in range
     app.code_len = code_total;
     app.why_len = why_content.len();
-    app.why_height = rhs[1].height.saturating_sub(2);
+    // as with `code_rect`: a hidden pane records the height it would have if
+    // the next keypress brought it back, so paging never runs against a zero
+    app.why_height = why_area.unwrap_or(body).height.saturating_sub(2);
     app.scroll = app.scroll.min(last_line(app.code_len));
     app.why_scroll = app.why_scroll.min(last_line(app.why_len));
     app.why_sel = app.why_sel.min(last_line(app.why_len) as usize);
@@ -7677,27 +7850,36 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
 
     // `code` is already the slice starting at `app.scroll`, so the paragraph
     // renders it from the top rather than scrolling within it
-    let code_view = Paragraph::new(Text::from(code))
-        .block(pane_block(code_title, app.focus == Pane::Code, &app.theme))
-        .scroll((0, 0));
-    f.render_widget(code_view, rhs[0]);
+    if let Some(r) = code_area {
+        let code_view = Paragraph::new(Text::from(code))
+            .block(pane_block(code_title, app.focus == Pane::Code, &app.theme))
+            .scroll((0, 0));
+        f.render_widget(code_view, r);
+    }
 
-    let info = Paragraph::new(Text::from(why))
-        .block(pane_block(
-            " why ".to_string(),
-            app.focus == Pane::Why,
-            &app.theme,
-        ))
-        .scroll((app.why_scroll, 0))
-        .wrap(Wrap { trim: false });
-    f.render_widget(info, rhs[1]);
+    if let Some(r) = why_area {
+        let info = Paragraph::new(Text::from(why))
+            .block(pane_block(
+                " 3 why ".to_string(),
+                app.focus == Pane::Why,
+                &app.theme,
+            ))
+            .scroll((app.why_scroll, 0))
+            .wrap(Wrap { trim: false });
+        f.render_widget(info, r);
+    }
+
+    f.render_widget(
+        Paragraph::new(Line::from(footer_spans(app, zoomed))),
+        footer_area,
+    );
 
     if let Some(popup) = app.popup.as_mut() {
         popup.scroll = popup.scroll.min(last_line(popup.lines.len()));
         popup.hscroll = popup.hscroll.min(last_line(popup_width(&popup.lines)));
     }
     if let Some(popup) = &app.popup {
-        let rect = popup_rect(rhs[0], popup.lines.len());
+        let rect = popup_rect(body, popup.lines.len());
         f.render_widget(Clear, rect);
         // borrow each span's content instead of cloning the popup body every
         // frame — Paragraph only needs `Into<Text>`, not an owned copy
@@ -7719,9 +7901,22 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
             .collect();
         let clipped =
             popup_width(&popup.lines) > rect.width.saturating_sub(2) as usize || popup.hscroll > 0;
+        // a popup taller than its frame said so nowhere: the help is roughly
+        // twice the height it is shown at, and nothing indicated the rest
+        let shown = rect.height.saturating_sub(2) as usize;
+        let more = if popup.lines.len() > shown {
+            format!(
+                " [{}-{}/{}]",
+                popup.scroll as usize + 1,
+                (popup.scroll as usize + shown).min(popup.lines.len()),
+                popup.lines.len()
+            )
+        } else {
+            String::new()
+        };
         let block = Block::bordered()
             .title(format!(
-                " {}{} ",
+                " {}{}{more} ",
                 popup.title,
                 if clipped { " ‹›" } else { "" }
             ))
@@ -10495,6 +10690,7 @@ mod tests {
             marks: HashMap::new(),
             theme: theme("dark").unwrap(),
             show_groups: false,
+            zoom: false,
             groups: HashMap::new(),
             group_reasons: HashMap::new(),
             mode: ViewMode::Hunks,
