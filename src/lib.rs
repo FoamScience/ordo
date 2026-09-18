@@ -119,78 +119,25 @@ pub fn run(input: Input) -> Output {
             .find(|(nm, _, _, _)| nm == name)
             .map(|(_, h, _, _)| h.clone())
     };
-    let mut old_defs: Vec<HashSet<String>> = vec![];
-    let mut old_imports: Vec<HashSet<String>> = vec![];
-    let mut old_locals: Vec<HashSet<String>> = vec![];
-    let mut new_defs_v: Vec<HashSet<String>> = vec![];
-    let mut new_imports_v: Vec<HashSet<String>> = vec![];
-    let mut old_rows: Vec<extract::SymbolRows> = vec![];
-    let mut old_body: Vec<Vec<extract::Body>> = vec![];
-    let mut new_body: Vec<Vec<extract::Body>> = vec![];
-    // file-scope bindings per side: a removed one is named rather than counted
-    let mut old_binds: Vec<Vec<(String, usize)>> = vec![];
-    let mut new_binds: Vec<HashSet<String>> = vec![];
-    for c in &input.changes {
-        let spec = lang::for_path(&c.path);
-        let rows = match (c.old.as_deref(), spec) {
-            (Some(old), Some(sp)) => extract::symbol_rows(sp, old),
-            _ => (vec![], vec![]),
-        };
-        let (nd, ni) = match (c.new.as_deref(), spec) {
-            (Some(new), Some(sp)) => symbol_sets(sp, new),
-            _ => (HashSet::new(), HashSet::new()),
-        };
-        let ob = spec
-            .zip(c.old.as_deref())
-            .map(|(sp, o)| extract::symbol_bodies(sp, o))
-            .unwrap_or_default();
-        let nb = spec
-            .zip(c.new.as_deref())
-            .map(|(sp, nw)| extract::symbol_bodies(sp, nw))
-            .unwrap_or_default();
-        old_defs.push(rows.0.iter().map(|(nm, _)| nm.clone()).collect());
-        old_imports.push(rows.1.iter().map(|(nm, _)| nm.clone()).collect());
-        old_locals.push(match (c.old.as_deref(), spec) {
-            (Some(old), Some(sp)) => extract::local_names(sp, old),
-            _ => HashSet::new(),
-        });
-        new_defs_v.push(nd);
-        new_imports_v.push(ni);
-        old_rows.push(rows);
-        old_body.push(ob);
-        new_body.push(nb);
-        old_binds.push(match (c.old.as_deref(), spec) {
-            (Some(old), Some(sp)) => extract::top_level_bindings(sp, old),
-            _ => vec![],
-        });
-        new_binds.push(match (c.new.as_deref(), spec) {
-            (Some(nw), Some(sp)) => extract::top_level_bindings(sp, nw)
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect(),
-            _ => HashSet::new(),
-        });
-    }
+    let symbols: Vec<FileSymbols> = input.changes.iter().map(FileSymbols::of).collect();
+
     // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
     let mut appeared: HashMap<(String, String), usize> = HashMap::new();
-    for (fi, nb) in new_body.iter().enumerate() {
-        for (name, _, body, _) in nb {
-            if body.len() >= 8 && !old_defs[fi].contains(name) {
+    for (fi, fs) in symbols.iter().enumerate() {
+        for (name, _, body, _) in &fs.new_body {
+            if body.len() >= 8 && !fs.old_defs.contains(name) {
                 appeared.entry((name.clone(), body.clone())).or_insert(fi);
             }
         }
     }
 
-    let mut rename: Vec<HashMap<String, String>> = vec![HashMap::new(); n];
-    let mut moved_in: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → source path
-    let mut relocated: Vec<HashMap<String, String>> = vec![HashMap::new(); n]; // new name → old def it was extracted from
-    let mut body_only: Vec<HashSet<String>> = vec![HashSet::new(); n]; // existing def, unchanged signature → body-only edit
-    let mut removals: Vec<Vec<Removal>> = vec![vec![]; n];
+    let mut changed: Vec<FileChanges> = (0..n).map(|_| FileChanges::default()).collect();
     for fi in 0..n {
-        let (nd, ni) = (&new_defs_v[fi], &new_imports_v[fi]);
-        let od = &old_defs[fi];
-        let (odr, oir) = &old_rows[fi];
-        let (ob, nb) = (&old_body[fi], &new_body[fi]);
+        let fs = &symbols[fi];
+        let (nd, ni) = (&fs.new_defs, &fs.new_imports);
+        let od = &fs.old_defs;
+        let (odr, oir) = &fs.old_rows;
+        let (ob, nb) = (&fs.old_body, &fs.new_body);
         let mut removed_d: Vec<String> = od.difference(nd).cloned().collect();
         let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
         removed_d.sort();
@@ -241,7 +188,7 @@ pub fn run(input: Input) -> Output {
             if let Some(&tgt) = appeared.get(&(r.clone(), rb)) {
                 if tgt != fi {
                     moved_out.insert(r.clone(), tgt);
-                    moved_in[tgt].insert(r.clone(), paths[fi].clone());
+                    changed[tgt].moved_in.insert(r.clone(), paths[fi].clone());
                 }
             }
         }
@@ -276,14 +223,14 @@ pub fn run(input: Input) -> Output {
                 reloc.insert(a.clone(), x.clone());
             }
         }
-        relocated[fi] = reloc;
+        changed[fi].relocated = reloc;
 
         // #4: an existing def whose signature is unchanged → body-only edit, not
         // a signature change. Positive-only: unknown headers keep "changes signature of".
         for name in od.intersection(nd) {
             match (header_of(ob, name), header_of(nb, name)) {
                 (Some(o), Some(m)) if o == m => {
-                    body_only[fi].insert(name.clone());
+                    changed[fi].body_only.insert(name.clone());
                 }
                 _ => {}
             }
@@ -318,8 +265,8 @@ pub fn run(input: Input) -> Output {
         }
         // a removed file-scope binding: not a definition, but naming it beats
         // the "removes N lines" fallback a module constant would get otherwise
-        for (name, row) in &old_binds[fi] {
-            if !new_binds[fi].contains(name) && !nd.contains(name) && !od.contains(name) {
+        for (name, row) in &fs.old_binds {
+            if !fs.new_binds.contains(name) && !nd.contains(name) && !od.contains(name) {
                 rem.push(Removal {
                     row: *row,
                     name: name.clone(),
@@ -327,8 +274,8 @@ pub fn run(input: Input) -> Output {
                 });
             }
         }
-        rename[fi] = ren;
-        removals[fi] = rem;
+        changed[fi].rename = ren;
+        changed[fi].removals = rem;
     }
     // A hunk that only deletes has no new side to classify from, so a removed
     // import used to read as a plain `other` hunk while an added one was an
@@ -399,7 +346,7 @@ pub fn run(input: Input) -> Output {
             continue;
         };
         let new_lines: Vec<&str> = new.lines().collect();
-        let import_rows: HashSet<usize> = old_rows[fi].1.iter().map(|(_, r)| *r).collect();
+        let import_rows: HashSet<usize> = symbols[fi].old_rows.1.iter().map(|(_, r)| *r).collect();
         for (li, sem) in sems[fi].iter_mut().enumerate() {
             let [o0, o1] = sem.old_range;
             if sem.noise || o0 == 0 || o0 > o1 {
@@ -410,7 +357,10 @@ pub fn run(input: Input) -> Output {
                 || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
             // a *deleted* import is a real removal and is named as such; this
             // is only the residue of one that moved, where nothing was removed
-            let named = removals[fi].iter().any(|r| r.row >= o0 && r.row <= o1);
+            let named = changed[fi]
+                .removals
+                .iter()
+                .any(|r| r.row >= o0 && r.row <= o1);
             if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
                 sem.noise = true;
             }
@@ -523,14 +473,8 @@ pub fn run(input: Input) -> Output {
     }
 
     let facts = order::FileFacts {
-        old_defs: &old_defs,
-        old_imports: &old_imports,
-        old_locals: &old_locals,
-        rename: &rename,
-        moved_in: &moved_in,
-        relocated: &relocated,
-        body_only: &body_only,
-        removals: &removals,
+        symbols: &symbols,
+        changed: &changed,
         comment_only: &comment_only,
         switched: &switched,
     };
@@ -644,7 +588,7 @@ pub fn run(input: Input) -> Output {
     let ledger = build_ledger(&files, &order, &facts);
     let notes = changeset_notes(&files, &ledger);
     arity_check(&mut files, &ledger, &input.changes);
-    incomplete_rename(&mut files, &ledger, &input.changes, &new_defs_v);
+    incomplete_rename(&mut files, &ledger, &input.changes, &symbols);
     Output {
         schema: SCHEMA_VERSION,
         order,
@@ -776,13 +720,13 @@ fn incomplete_rename(
     files: &mut [FileOut],
     ledger: &[LedgerEntry],
     changes: &[Change],
-    new_defs: &[HashSet<String>],
+    symbols: &[FileSymbols],
 ) {
     for e in ledger.iter().filter(|e| e.change == SymbolChange::Renamed) {
         let Some(old) = e.from.as_deref() else {
             continue;
         };
-        if new_defs.iter().any(|d| d.contains(old)) {
+        if symbols.iter().any(|s| s.new_defs.contains(old)) {
             continue; // the old name still defines something; not an orphan
         }
         let mut left: Vec<String> = vec![];
@@ -854,16 +798,16 @@ fn build_ledger(
                     continue; // one line per symbol, not per hunk that touches it
                 }
                 let n = sym.name.as_str();
-                let get = |m: &[HashMap<String, String>]| m[fi].get(n).cloned();
-                let (change, from) = if let Some(src) = get(facts.relocated) {
+                let c = &facts.changed[fi];
+                let (change, from) = if let Some(src) = c.relocated.get(n).cloned() {
                     (SymbolChange::Extracted, Some(src))
-                } else if let Some(src) = get(facts.moved_in) {
+                } else if let Some(src) = c.moved_in.get(n).cloned() {
                     (SymbolChange::Moved, Some(src))
-                } else if let Some(old) = get(facts.rename) {
+                } else if let Some(old) = c.rename.get(n).cloned() {
                     (SymbolChange::Renamed, Some(old))
-                } else if !facts.old_defs[fi].contains(n) {
+                } else if !facts.symbols[fi].old_defs.contains(n) {
                     (SymbolChange::Added, None)
-                } else if facts.body_only[fi].contains(n) {
+                } else if facts.changed[fi].body_only.contains(n) {
                     (SymbolChange::Body, None)
                 } else {
                     (SymbolChange::Signature, None)
@@ -909,7 +853,7 @@ fn build_ledger(
             }
             // `body_only` is keyed by bare name; `enclosing` is qualified
             let bare = name.rsplit('.').next().unwrap_or(name);
-            let change = if facts.body_only[fi].contains(bare) {
+            let change = if facts.changed[fi].body_only.contains(bare) {
                 SymbolChange::Body
             } else {
                 SymbolChange::Signature
@@ -943,7 +887,7 @@ fn build_ledger(
         // because it was renamed or moved to another file. An import is not a
         // symbol the ledger tracks, and a move is reported as `Moved` from
         // the arriving side.
-        for r in &facts.removals[fi] {
+        for r in &facts.changed[fi].removals {
             if !matches!(r.kind, RemovalKind::Def | RemovalKind::Section) {
                 continue;
             }
@@ -984,6 +928,76 @@ fn build_ledger(
     }
     out.sort_by_key(|(p, _)| *p);
     out.into_iter().map(|(_, e)| e).collect()
+}
+
+/// What one file's two sides declare, as the later passes ask about it.
+///
+/// These were ten `Vec`s pushed in lockstep inside `run`, correct only so long
+/// as every iteration pushed to every one of them. Bundled, the compiler holds
+/// that invariant instead, and a pass that wants a file's symbols names one
+/// thing rather than indexing ten.
+/// What this change did to one file's definitions — the per-file half of the
+/// answer the narration and the ledger both read. Five `Vec`s, all indexed by
+/// the same `fi` and all filled in the same pass, so they are one value.
+#[derive(Default)]
+pub(crate) struct FileChanges {
+    /// new name → the name it had before (#7)
+    pub(crate) rename: HashMap<String, String>,
+    /// new name → the path it arrived from (P12.1)
+    pub(crate) moved_in: HashMap<String, String>,
+    /// new name → the def it was extracted out of (P16)
+    pub(crate) relocated: HashMap<String, String>,
+    /// defs whose signature is unchanged, so a hunk in them is a body edit (#4)
+    pub(crate) body_only: HashSet<String>,
+    /// everything the file no longer has, as facts (see `Removal`)
+    pub(crate) removals: Vec<Removal>,
+}
+
+pub(crate) struct FileSymbols {
+    /// names the old side defined / imported / bound locally
+    pub(crate) old_defs: HashSet<String>,
+    pub(crate) old_imports: HashSet<String>,
+    pub(crate) old_locals: HashSet<String>,
+    /// the same for the new side
+    new_defs: HashSet<String>,
+    pub(crate) new_imports: HashSet<String>,
+    /// old-side (name, row) for defs and imports — positions, not just names
+    pub(crate) old_rows: extract::SymbolRows,
+    /// header and body text per definition, for rename and move matching
+    pub(crate) old_body: Vec<extract::Body>,
+    pub(crate) new_body: Vec<extract::Body>,
+    /// file-scope bindings: a removed one is named rather than counted
+    pub(crate) old_binds: Vec<(String, usize)>,
+    pub(crate) new_binds: HashSet<String>,
+}
+
+impl FileSymbols {
+    fn of(c: &Change) -> FileSymbols {
+        let spec = lang::for_path(&c.path);
+        let old = c.old.as_deref().zip(spec);
+        let new = c.new.as_deref().zip(spec);
+        let old_rows = old.map_or((vec![], vec![]), |(o, sp)| extract::symbol_rows(sp, o));
+        let (new_defs, new_imports) = new.map_or((HashSet::new(), HashSet::new()), |(n, sp)| {
+            symbol_sets(sp, n)
+        });
+        FileSymbols {
+            old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
+            old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
+            old_locals: old.map_or(HashSet::new(), |(o, sp)| extract::local_names(sp, o)),
+            new_defs,
+            new_imports,
+            old_body: old.map_or(vec![], |(o, sp)| extract::symbol_bodies(sp, o)),
+            new_body: new.map_or(vec![], |(n, sp)| extract::symbol_bodies(sp, n)),
+            old_binds: old.map_or(vec![], |(o, sp)| extract::top_level_bindings(sp, o)),
+            new_binds: new.map_or(HashSet::new(), |(n, sp)| {
+                extract::top_level_bindings(sp, n)
+                    .into_iter()
+                    .map(|(nm, _)| nm)
+                    .collect()
+            }),
+            old_rows,
+        }
+    }
 }
 
 /// Two definitions on opposite sides of a change are the same code under a new
