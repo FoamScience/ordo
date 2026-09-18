@@ -30,7 +30,7 @@ ordo — interactive review of a commit, ordered for comprehension.
 
 usage:
   ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]...
-       [--sarif <file>]... [--all] [--only-comments]
+       [--sarif <file>]... [--coverage <file>]... [--all] [--only-comments]
   ordo --init-config [--force]
   ordo help [<topic>]
   ordo --version
@@ -51,6 +51,13 @@ ruff, eslint, shellcheck and `clippy --message-format` all emit — and attaches
 each finding to the hunk whose lines contain it, so they arrive in the reading
 order instead of as a separate list. Repeatable. A finding on a line this change
 did not touch is counted in `:audit` rather than shown.
+
+--coverage <file> reads an lcov tracefile — what `cargo llvm-cov --lcov`,
+`coverage.py lcov` and most language toolchains emit — and reports, per hunk,
+how many of the executable lines it changed were never run. Repeatable. Only
+lcov's `DA:` records count, so a blank line, a comment or a declaration is never
+held against a hunk. This is the fact behind the engine's `code changed but no
+test touched` note, which is a guess made from file names.
 
 Generated and lock files (Cargo.lock, package-lock.json, vendor/, node_modules/,
 .min.js, …) are skipped, as is anything .gitattributes marks `linguist-generated`
@@ -199,6 +206,11 @@ struct Ledger {
     /// normal case for a file the diff barely reached, counted so the
     /// difference is never a silent one
     findings_unplaced: usize,
+    /// files named in the `--coverage` tracefiles
+    coverage_files: usize,
+    /// of those, ones this review never looked at — usual, since a tracefile
+    /// covers a project and a change touches part of it
+    coverage_unmatched: usize,
 }
 
 /// Which changed files reach the engine. Generated and lock files are dropped
@@ -349,15 +361,19 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
 }
 
 /// rev, keymap, path filter, --only-comments, theme, --rules files
-type ParsedArgs = (
-    String,
-    Keymap,
-    Filter,
-    bool,
-    Theme,
-    Vec<String>,
-    Vec<String>,
-);
+/// What the command line asked for. A named struct rather than the eight-wide
+/// tuple this was, where the only thing keeping `sarif` out of `extra_rules`
+/// was that both are `Vec<String>` in the right order.
+struct ParsedArgs {
+    rev: String,
+    keys: Keymap,
+    filter: Filter,
+    only_comments: bool,
+    theme: Theme,
+    extra_rules: Vec<String>,
+    sarif: Vec<String>,
+    coverage: Vec<String>,
+}
 
 /// The user-facing documentation, embedded in the binary so `ordo help
 /// <topic>` works with no network, no install layout to find, and no chance of
@@ -472,6 +488,8 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     let mut extra_rules: Vec<String> = vec![];
     let mut sarif: Vec<String> = vec![];
     let mut want_sarif = false;
+    let mut coverage: Vec<String> = vec![];
+    let mut want_coverage = false;
     let mut want_init = false;
     let mut force = false;
     // `ordo help [<topic>]` short-circuits everything else: it takes an
@@ -505,6 +523,11 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             want_sarif = false;
             continue;
         }
+        if want_coverage {
+            coverage.push(a);
+            want_coverage = false;
+            continue;
+        }
         match a.as_str() {
             "--keys" => want_preset = true,
             s if s.starts_with("--keys=") => {
@@ -520,6 +543,10 @@ fn parse_args() -> Result<ParsedArgs, i32> {
             s if s.starts_with("--rules=") => extra_rules.push(s["--rules=".len()..].to_string()),
             "--sarif" => want_sarif = true,
             s if s.starts_with("--sarif=") => sarif.push(s["--sarif=".len()..].to_string()),
+            "--coverage" => want_coverage = true,
+            s if s.starts_with("--coverage=") => {
+                coverage.push(s["--coverage=".len()..].to_string())
+            }
             "--all" => skip_generated = false,
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
@@ -603,15 +630,16 @@ fn parse_args() -> Result<ParsedArgs, i32> {
         negatives_emptied: std::cell::Cell::new(false),
         tally: std::cell::Cell::new(Ledger::default()),
     };
-    Ok((
-        rev.unwrap_or_else(|| "HEAD".to_string()),
+    Ok(ParsedArgs {
+        rev: rev.unwrap_or_else(|| "HEAD".to_string()),
         keys,
         filter,
         only_comments,
         theme,
         extra_rules,
         sarif,
-    ))
+        coverage,
+    })
 }
 
 fn plural(n: usize) -> &'static str {
@@ -634,7 +662,16 @@ fn highlight_progress(i: usize, total: usize) -> String {
 }
 
 fn main() -> std::io::Result<()> {
-    let (rev, keys, filter, only_comments, theme, extra_rules, sarif) = match parse_args() {
+    let ParsedArgs {
+        rev,
+        keys,
+        filter,
+        only_comments,
+        theme,
+        extra_rules,
+        sarif,
+        coverage,
+    } = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
     };
@@ -669,6 +706,7 @@ fn main() -> std::io::Result<()> {
         rules,
         rules_report,
         sarif,
+        coverage,
     )
 }
 
@@ -748,6 +786,8 @@ struct LoadSpec {
     rules: Vec<ordo::model::Rule>,
     /// paths given with `--sarif`; their findings are placed onto the hunks
     sarif: Vec<String>,
+    /// paths given with `--coverage`; lcov tracefiles
+    coverage: Vec<String>,
 }
 
 fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
@@ -759,6 +799,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         syn,
         rules,
         sarif,
+        coverage,
     } = spec;
     let progress = |msg: String| {
         let _ = tx.send(LoadMsg::Progress(msg));
@@ -837,6 +878,18 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     // anything written back to it now would never reach the screen
     ledger.findings_seen += findings.len();
     ledger.findings_unplaced += place_findings(&mut items, &findings);
+    // coverage says whether what the change wrote was ever executed — the fact
+    // behind the engine's "code changed but no test touched" proxy
+    for path in &coverage {
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                let cov = parse_lcov(&text);
+                ledger.coverage_files += cov.files.len();
+                ledger.coverage_unmatched += place_coverage(&mut items, &cov);
+            }
+            Err(e) => note_command_failure("coverage", &[path.as_str()], &e.to_string()),
+        }
+    }
     refine_items(&mut items, &sources);
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None);
@@ -1069,6 +1122,85 @@ fn path_matches(path: &str, uri: &str) -> bool {
     }
     uri.strip_suffix(path)
         .is_some_and(|head| head.is_empty() || head.ends_with('/'))
+}
+
+// ---------------------------------------------------------------- coverage
+
+/// Which lines of a file a test run executed, from an lcov tracefile.
+///
+/// Only `DA:` records are read: lcov emits one per *executable* line, so a
+/// blank line, a comment or a declaration never counts against a hunk. That is
+/// the difference between "12 of 14 added lines are executed by no test" and a
+/// number inflated by every brace in the diff.
+#[derive(Default)]
+struct Coverage {
+    /// path as the tracefile wrote it -> (line -> times executed)
+    files: HashMap<String, HashMap<usize, u64>>,
+}
+
+/// Parse an lcov tracefile. Records outside `SF:`/`DA:`/`end_of_record` are
+/// ignored — branch and function coverage say nothing about whether a changed
+/// line ran. A malformed line is skipped rather than failing the review.
+fn parse_lcov(text: &str) -> Coverage {
+    let mut cov = Coverage::default();
+    let mut cur: Option<String> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(path) = line.strip_prefix("SF:") {
+            cur = Some(normalise_uri(path));
+        } else if line == "end_of_record" {
+            cur = None;
+        } else if let Some(rest) = line.strip_prefix("DA:") {
+            let Some(path) = cur.as_ref() else { continue };
+            let mut parts = rest.split(',');
+            let (Some(Ok(n)), Some(Ok(hits))) = (
+                parts.next().map(str::parse::<usize>),
+                parts.next().map(str::parse::<u64>),
+            ) else {
+                continue;
+            };
+            // a line can appear more than once (several tracefiles merged, or
+            // one line owned by several branches); the highest count wins,
+            // because executed once anywhere is executed
+            let e = cov.files.entry(path.clone()).or_default().entry(n);
+            let slot = e.or_insert(0);
+            *slot = (*slot).max(hits);
+        }
+    }
+    cov
+}
+
+/// How much of what each hunk changed was actually executed.
+///
+/// Returns the number of tracefile entries that matched no reviewed file —
+/// the normal case, since a tracefile covers the whole project and a change
+/// touches a handful of it. Counted rather than dropped, for the reason
+/// `:audit` counts everything else.
+fn place_coverage(items: &mut [Item], cov: &Coverage) -> usize {
+    let mut unmatched = 0;
+    for (path, lines) in &cov.files {
+        let mut used = false;
+        for it in items.iter_mut() {
+            if !path_matches(&it.path, path) {
+                continue;
+            }
+            used = true;
+            let [a, b] = it.new_range;
+            if a == 0 || a > b {
+                continue; // a pure deletion has no new side to have run
+            }
+            let executable: Vec<u64> = (a..=b).filter_map(|n| lines.get(&n).copied()).collect();
+            if executable.is_empty() {
+                continue; // nothing here the tracefile considers runnable
+            }
+            let cold = executable.iter().filter(|h| **h == 0).count();
+            it.executed = Some((executable.len() - cold, executable.len()));
+        }
+        if !used {
+            unmatched += 1;
+        }
+    }
+    unmatched
 }
 
 // ------------------------------------------------------------------- git layer
@@ -1643,6 +1775,9 @@ struct Item {
     rules: Vec<ordo::model::RuleHit>,
     /// analyzer findings whose line falls inside this hunk (see `Finding`)
     findings: Vec<Finding>,
+    /// (executed, executable) counts for the lines this hunk changed, when a
+    /// coverage tracefile covers them
+    executed: Option<(usize, usize)>,
     /// intra-line refinement (`ordo::refine`), parallel to the hunk's lines on
     /// each side: `Some(spans)` means the line was paired with its counterpart
     /// and only those char spans changed; `None` means it renders whole. Empty
@@ -4133,6 +4268,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 group: h.group.clone(),
                 rules: h.rules.clone(),
                 findings: vec![],
+                executed: None,
                 refined: ordo::refine::Refined::default(),
                 cluster: cluster_of.get(h.id.as_str()).copied(),
             })
@@ -6873,6 +7009,7 @@ fn run(
     rules: Vec<ordo::model::Rule>,
     rules_report: Vec<String>,
     sarif: Vec<String>,
+    coverage: Vec<String>,
 ) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -6890,6 +7027,7 @@ fn run(
     let worker_rev = rev.clone();
     let worker_rules = rules.clone();
     let worker_sarif = sarif.clone();
+    let worker_coverage = coverage.clone();
     thread::spawn(move || {
         load(
             LoadSpec {
@@ -6900,6 +7038,7 @@ fn run(
                 syn: theme.syn,
                 rules: worker_rules,
                 sarif: worker_sarif,
+                coverage: worker_coverage,
             },
             tx,
         )
@@ -7121,6 +7260,7 @@ fn run(
                                 let filt = base_filter.clone();
                                 let reload_rules = rules.clone();
                                 let reload_sarif = sarif.clone();
+                                let reload_coverage = coverage.clone();
                                 thread::spawn(move || {
                                     load(
                                         LoadSpec {
@@ -7131,6 +7271,7 @@ fn run(
                                             syn: theme.syn,
                                             rules: reload_rules,
                                             sarif: reload_sarif,
+                                            coverage: reload_coverage,
                                         },
                                         new_tx,
                                     )
@@ -7560,6 +7701,24 @@ fn why_rows(
                 kind: WhyKind::Text,
             });
         }
+    }
+    // Coverage leads the derived rows: "nothing here ran" changes how the rest
+    // of the hunk should be read.
+    if let Some((run, total)) = it.executed {
+        let cold = total - run;
+        rows.push(WhyRow {
+            text: if cold == 0 {
+                format!("all {total} executable lines here are covered by tests")
+            } else {
+                format!("{cold} of {total} executable lines here are executed by no test")
+            },
+            style: Style::default().fg(if cold == 0 {
+                theme.reviewed
+            } else {
+                theme.warn
+            }),
+            kind: WhyKind::Text,
+        });
     }
     // an analyzer's finding reads like a rule hit, because to the reviewer it
     // is one — the only difference is who detected it
@@ -8543,6 +8702,12 @@ fn build_audit(
         "of which import hunks — noise, but shown by default where the diff put them",
     ));
     out.push(row(hidden.comment, "not a comment change (:only-comments)"));
+    if ledger.coverage_files > 0 {
+        out.push(row(
+            ledger.coverage_unmatched,
+            "files in the coverage tracefiles this review never looked at",
+        ));
+    }
     if ledger.findings_seen > 0 {
         out.push(row(
             ledger.findings_unplaced,
@@ -9329,6 +9494,79 @@ mod tests {
             !got.iter().any(|l| l.starts_with("but ")),
             "`but` is optional; its absence is not a failure to report: {got:?}"
         );
+    }
+
+    const LCOV: &str = "\
+SF:src/a.py
+DA:10,3
+DA:11,0
+DA:12,0
+DA:11,7
+not-a-record
+DA:oops,1
+end_of_record
+SF:src/untouched.py
+DA:1,0
+end_of_record
+";
+
+    #[test]
+    fn lcov_records_become_line_counts() {
+        let cov = parse_lcov(LCOV);
+        let a = cov.files.get("src/a.py").expect("src/a.py");
+        assert_eq!(a.get(&10), Some(&3));
+        // the same line twice keeps the higher count: executed once anywhere
+        // is executed, and merged tracefiles repeat lines
+        assert_eq!(a.get(&11), Some(&7));
+        assert_eq!(a.get(&12), Some(&0));
+        assert_eq!(a.len(), 3, "malformed records are skipped: {a:?}");
+        assert!(cov.files.contains_key("src/untouched.py"));
+    }
+
+    #[test]
+    fn malformed_lcov_is_skipped_not_fatal() {
+        assert!(parse_lcov("").files.is_empty());
+        assert!(
+            parse_lcov(
+                "garbage
+DA:1,1
+"
+            )
+            .files
+            .is_empty(),
+            "DA with no SF"
+        );
+    }
+
+    #[test]
+    fn coverage_counts_only_lines_the_tracefile_calls_executable() {
+        let mut items = vec![test_item("src/a.py")];
+        // the hunk spans 9..=13; only 10, 11 and 12 are executable, and of
+        // those only 12 never ran — 9 and 13 are blank or comment lines the
+        // tracefile never mentions and must not count against the hunk
+        items[0].new_range = [9, 13];
+        let unmatched = place_coverage(&mut items, &parse_lcov(LCOV));
+        assert_eq!(items[0].executed, Some((2, 3)), "2 of 3 executable ran");
+        assert_eq!(unmatched, 1, "src/untouched.py matched no reviewed file");
+    }
+
+    #[test]
+    fn a_hunk_with_nothing_executable_reports_nothing() {
+        let mut items = vec![test_item("src/a.py")];
+        items[0].new_range = [100, 200];
+        place_coverage(&mut items, &parse_lcov(LCOV));
+        assert_eq!(
+            items[0].executed, None,
+            "no DA record in range is not the same as zero coverage"
+        );
+    }
+
+    #[test]
+    fn a_pure_deletion_has_no_coverage_to_report() {
+        let mut items = vec![test_item("src/a.py")];
+        items[0].new_range = [11, 10]; // end < start: the empty new side
+        place_coverage(&mut items, &parse_lcov(LCOV));
+        assert_eq!(items[0].executed, None);
     }
 
     const SARIF: &str = r#"{"version":"2.1.0","runs":[{
@@ -10577,6 +10815,8 @@ mod tests {
             hunks_non_comment: 0,
             findings_seen: 0,
             findings_unplaced: 0,
+            coverage_files: 0,
+            coverage_unmatched: 0,
         };
         let clean = Hidden {
             comment: 0,
@@ -10725,6 +10965,7 @@ mod tests {
             group: String::new(),
             rules: vec![],
             findings: vec![],
+            executed: None,
             refined: ordo::refine::Refined::default(),
             cluster: None,
         }
