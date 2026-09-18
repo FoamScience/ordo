@@ -183,21 +183,10 @@ fn cat_rank(c: Category) -> u8 {
 /// together, are derived together, and the list grows whenever the rationale
 /// layer learns to say something new.
 pub struct FileFacts<'a> {
-    /// symbols each file defined / imported / bound locally, old side
-    pub old_defs: &'a [HashSet<String>],
-    pub old_imports: &'a [HashSet<String>],
-    pub old_locals: &'a [HashSet<String>],
-    /// new name → old name, per file (#7)
-    pub rename: &'a [HashMap<String, String>],
-    /// new name → the path it came from (P12.1)
-    pub moved_in: &'a [HashMap<String, String>],
-    /// new name → the def it was extracted from (P16)
-    pub relocated: &'a [HashMap<String, String>],
-    /// defs whose signature is unchanged, so a hunk in them is a body edit (#4)
-    pub body_only: &'a [HashSet<String>],
-    /// everything the file no longer has (#5/#7), as facts — the wording is
-    /// this module's, see `removal_phrase`
-    pub removals: &'a [Vec<Removal>],
+    /// what each file's two sides declare (old defs, imports, locals, …)
+    pub symbols: &'a [crate::FileSymbols],
+    /// what the change did to each file's definitions
+    pub changed: &'a [crate::FileChanges],
     /// per hunk: every changed line is a comment
     pub comment_only: &'a [Vec<bool>],
     /// per hunk: how it moved code across the comment boundary, if it did
@@ -212,14 +201,8 @@ pub fn order_all(
     cross_file: bool,
 ) -> OrderedAll {
     let FileFacts {
-        old_defs,
-        old_imports,
-        old_locals,
-        rename,
-        moved_in,
-        relocated,
-        body_only,
-        removals,
+        symbols,
+        changed,
         comment_only,
         switched,
     } = *facts;
@@ -514,14 +497,8 @@ pub fn order_all(
         group_file: &gfile_v,
         group_row: &grow_v,
         paths,
-        old_defs,
-        old_imports,
-        old_locals,
-        rename,
-        moved_in,
-        relocated,
-        body_only,
-        removals,
+        symbols,
+        changed,
         comment: &comment,
         switched: &switched_off,
         cross_file,
@@ -584,14 +561,8 @@ struct RatCtx<'a> {
     group_file: &'a [usize],
     group_row: &'a [usize],
     paths: &'a [String],
-    old_defs: &'a [HashSet<String>],
-    old_imports: &'a [HashSet<String>],
-    old_locals: &'a [HashSet<String>],
-    rename: &'a [HashMap<String, String>],
-    moved_in: &'a [HashMap<String, String>],
-    relocated: &'a [HashMap<String, String>],
-    body_only: &'a [HashSet<String>],
-    removals: &'a [Vec<Removal>],
+    symbols: &'a [crate::FileSymbols],
+    changed: &'a [crate::FileChanges],
     comment: &'a [bool],
     /// how the hunk moved code across the comment boundary, if it did
     switched: &'a [Option<crate::SideShift>],
@@ -620,8 +591,14 @@ impl RatCtx<'_> {
     // pre-existing symbol whose header changed → "changes signature of"/"changes
     // type" (a def-category hunk means the declaration line itself moved).
     fn def_verb(&self, file: usize, sym: &str, is_type: bool) -> &'static str {
-        let existed = self.old_defs.get(file).is_some_and(|s| s.contains(sym));
-        let body_only = self.body_only.get(file).is_some_and(|s| s.contains(sym));
+        let existed = self
+            .symbols
+            .get(file)
+            .is_some_and(|s| s.old_defs.contains(sym));
+        let body_only = self
+            .changed
+            .get(file)
+            .is_some_and(|c| c.body_only.contains(sym));
         match (existed, is_type) {
             (false, false) => "adds",
             (false, true) => "adds type",
@@ -682,8 +659,9 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     // exactly right, where "removes 1 line" would claim something left.
     let import_speaks = s.category == Category::Import
         && (!s.new_empty
-            || ctx.removals.get(my_file).is_some_and(|v| {
-                v.iter()
+            || ctx.changed.get(my_file).is_some_and(|c| {
+                c.removals
+                    .iter()
                     .any(|r| r.row >= s.old_range[0] && r.row <= s.old_range[1])
             }));
     if s.noise && !import_speaks {
@@ -703,10 +681,11 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // #5 (add side): new import(s) → "adds import"; a touched existing one →
         // "changes import"; the same statement, somewhere else in the file →
         // "moves import", which is what a reordered import block really did
-        let all_new = s
-            .imports
-            .iter()
-            .all(|im| !ctx.old_imports.get(my_file).is_some_and(|o| o.contains(im)));
+        let all_new = s.imports.iter().all(|im| {
+            !ctx.symbols
+                .get(my_file)
+                .is_some_and(|o| o.old_imports.contains(im))
+        });
         let verb = match (s.import_moved, all_new) {
             (true, _) => "moves import",
             (false, true) => "adds import",
@@ -777,11 +756,26 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // that adds two functions reads "adds a, b" rather than twice over
         let (mut adds, mut adds_ty, mut edits, mut ch_sig, mut ch_ty): Verbs = Default::default();
         for d in real.iter().copied() {
-            if let Some(src) = ctx.moved_in.get(my_file).and_then(|m| m.get(d)) {
+            if let Some(src) = ctx
+                .changed
+                .get(my_file)
+                .map(|c| &c.moved_in)
+                .and_then(|m| m.get(d))
+            {
                 move_pairs.push((d.as_str(), src.as_str()));
-            } else if let Some(old) = ctx.rename.get(my_file).and_then(|m| m.get(d)) {
+            } else if let Some(old) = ctx
+                .changed
+                .get(my_file)
+                .map(|c| &c.rename)
+                .and_then(|m| m.get(d))
+            {
                 rename_pairs.push((old.as_str(), d.as_str()));
-            } else if let Some(src) = ctx.relocated.get(my_file).and_then(|m| m.get(d)) {
+            } else if let Some(src) = ctx
+                .changed
+                .get(my_file)
+                .map(|c| &c.relocated)
+                .and_then(|m| m.get(d))
+            {
                 extract_pairs.push((d.as_str(), src.as_str()));
             } else {
                 match ctx.def_verb(my_file, d, s.is_type) {
@@ -888,7 +882,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // composed line past the one-line bound — degrade the same way
         // name_list itself does (a count instead of the full listing)
         // rather than let the line grow unboundedly.
-        if let Some(r) = binding_rationale(s, &ctx.old_locals[my_file]) {
+        if let Some(r) = binding_rationale(s, &ctx.symbols[my_file].old_locals) {
             if out.chars().count() + 2 + r.chars().count() <= MAX_RATIONALE {
                 out += "; ";
                 out += &r;
@@ -896,7 +890,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
                 let n = s
                     .bindings
                     .iter()
-                    .filter(|b| !ctx.old_locals[my_file].contains(&b.name))
+                    .filter(|b| !ctx.symbols[my_file].old_locals.contains(&b.name))
                     .count();
                 let summary = format!("; +{n} more binding{}", if n == 1 { "" } else { "s" });
                 if out.chars().count() + summary.chars().count() <= MAX_RATIONALE {
@@ -937,7 +931,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         // P17: a local binding this hunk introduces beats the bare "edits
         // {enclosing}" fallback — naming the binding and where it's used (or
         // that it isn't) is more useful than restating the enclosing def.
-        if let Some(r) = binding_rationale(s, &ctx.old_locals[my_file]) {
+        if let Some(r) = binding_rationale(s, &ctx.symbols[my_file].old_locals) {
             return r;
         }
         if let Some(nm) = &s.enclosing {
@@ -947,7 +941,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         return format!("uses {}", name_list(&names));
     }
 
-    if let Some(r) = binding_rationale(s, &ctx.old_locals[my_file]) {
+    if let Some(r) = binding_rationale(s, &ctx.symbols[my_file].old_locals) {
         return r;
     }
 
@@ -965,8 +959,9 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     }
     // #5/#7 removal: a deletion hunk whose old lines held a removed symbol
     let [o0, o1] = s.old_range;
-    if let Some(label) = ctx.removals.get(my_file).and_then(|v| {
-        v.iter()
+    if let Some(label) = ctx.changed.get(my_file).and_then(|c| {
+        c.removals
+            .iter()
             .find(|r| r.row >= o0 && r.row <= o1)
             .map(removal_phrase)
     }) {
