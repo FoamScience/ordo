@@ -11,10 +11,8 @@ fn an_element_with_an_id_is_a_definition() {
     let new = "<body>\n  <section id=\"main\">\n    <h1>Hi</h1>\n  </section>\n  \
                <footer id=\"foot\">\n    <p>x</p>\n  </footer>\n</body>\n";
     let hs = one("page.html", old, new);
-    assert!(
-        hs.iter().any(|h| h.defines.contains(&"#foot".to_string())),
-        "{hs:?}"
-    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].defines, vec!["#foot".to_string()]);
 }
 
 #[test]
@@ -27,10 +25,8 @@ fn an_element_without_an_id_is_transparent() {
         "<section id=\"main\">\n  <div><span>b</span></div>\n</section>\n",
     );
     assert!(hs.iter().all(|h| h.defines.is_empty()), "{hs:?}");
-    assert!(
-        hs.iter().any(|h| h.enclosing.as_deref() == Some("#main")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![Some("#main")]);
 }
 
 #[test]
@@ -60,10 +56,8 @@ fn a_vue_component_needs_no_grammar_of_its_own() {
     }))
     .unwrap();
     assert!(!ordo::run(inp).files[0].unsupported);
-    assert!(
-        hs.iter().any(|h| h.enclosing.as_deref() == Some("#card")),
-        "{hs:?}"
-    );
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enc, vec![Some("#card"), Some("<script setup lang=\"ts\">")]);
 }
 
 #[test]
@@ -122,14 +116,10 @@ fn sfc_blocks_are_named_the_way_a_reviewer_names_them() {
     let old = "<script setup lang=\"ts\">\nconst msg = 'hi'\n</script>\n\n<style scoped>\n.card { color: red; }\n</style>\n";
     let new = "<script setup lang=\"ts\">\nconst msg = 'hey'\n</script>\n\n<style scoped>\n.card { color: blue; }\n</style>\n";
     let hs = one("Card.vue", old, new);
-    assert!(
-        hs.iter()
-            .any(|h| h.rationale == "edits <script setup lang=\"ts\">"),
-        "{hs:?}"
-    );
-    assert!(
-        hs.iter().any(|h| h.rationale == "edits <style scoped>"),
-        "{hs:?}"
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(
+        rats,
+        vec!["edits <script setup lang=\"ts\">", "edits <style scoped>"]
     );
 }
 
@@ -152,15 +142,10 @@ fn svelte_block_forms_are_named_containers() {
     let new =
         "{#if n > 2}\n  <p>x</p>\n{/if}\n\n{#each items as thing}\n  <p>{thing}</p>\n{/each}\n";
     let hs = one("App.svelte", old, new);
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("{#each items as thing}")),
-        "{hs:?}"
-    );
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("{#if n > 2}")),
-        "{hs:?}"
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(
+        enc,
+        vec![Some("{#if n > 2}"), Some("{#each items as thing}")]
     );
 }
 
