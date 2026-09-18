@@ -40,11 +40,8 @@ fn a_custom_property_links_to_the_var_that_reads_it() {
     let out = run(serde_json::json!({
         "changes": [{ "path": "t.css", "old": old, "new": new }]
     }));
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("--brand")),
-        "{:?}",
-        out.edges
-    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: --brand"]);
 }
 
 #[test]

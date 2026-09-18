@@ -27,11 +27,10 @@ fn a_let_binding_links_to_where_it_is_referenced() {
     let old = "{ pkgs, ... }:\nlet\n  version = \"1.0\";\nin\n{\n  name = \"demo\";\n}\n";
     let new = "{ pkgs, ... }:\nlet\n  version = \"2.0\";\nin\n{\n  name = \"demo\";\n  rev = version;\n}\n";
     let out = run("default.nix", old, new);
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("version")),
-        "{:?}",
-        out.edges
-    );
+    // one binding changed and one use arrived, so there is exactly one link —
+    // `any` here would also have passed on a second, spurious edge
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: version"]);
 }
 
 #[test]
@@ -41,11 +40,8 @@ fn a_dotted_attrpath_is_one_name() {
         "{\n  meta.description = \"a\";\n}\n",
         "{\n  meta.description = \"b\";\n}\n",
     );
-    assert!(
-        hs.iter()
-            .any(|h| h.enclosing.as_deref() == Some("meta.description")),
-        "{hs:?}"
-    );
+    let enclosing: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(enclosing, vec![Some("meta.description")]);
 }
 
 #[test]
@@ -55,7 +51,8 @@ fn a_changed_attribute_has_no_signature() {
         "{\n  name = \"a\";\n}\n",
         "{\n  name = \"b\";\n}\n",
     );
-    assert!(hs.iter().any(|h| h.rationale == "changes name"), "{hs:?}");
+    let rationales: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rationales, vec!["changes name"]);
 }
 
 #[test]
@@ -85,9 +82,6 @@ fn an_imported_path_is_bound_to_the_name_that_holds_it() {
         "let\n  a = 1;\nin a\n",
         "let\n  a = 1;\n  overlay = import ./overlays.nix;\nin a\n",
     );
-    assert!(
-        hs.iter()
-            .any(|h| h.defines.contains(&"overlay".to_string())),
-        "{hs:?}"
-    );
+    let defines: Vec<&[String]> = hs.iter().map(|h| h.defines.as_slice()).collect();
+    assert_eq!(defines, vec![["overlay".to_string()].as_slice()]);
 }

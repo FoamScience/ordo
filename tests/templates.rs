@@ -59,11 +59,8 @@ fn an_interpolated_variable_is_a_use_of_what_defines_it() {
     }));
     let tmpl = &out.files[0].hunks[0];
     assert!(tmpl.uses.contains(&"db_port".to_string()), "{tmpl:?}");
-    assert!(
-        out.edges.iter().any(|e| e.why.contains("db_port")),
-        "{:?}",
-        out.edges
-    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: db_port"]);
 }
 
 #[test]
