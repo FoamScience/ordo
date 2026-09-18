@@ -89,3 +89,17 @@ fn a_dotenv_file_is_read_as_shell() {
         assert!(!ordo::run(inp).files[0].unsupported, "{path}");
     }
 }
+
+#[test]
+fn a_zsh_script_has_a_grammar() {
+    // `zsh` resolved from a markdown fence but not from a path
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": "s.zsh",
+                "old": "greet() {\n  echo hi\n}\n",
+                "new": "greet() {\n  echo bye\n}\n" }]
+        }))
+        .unwrap(),
+    );
+    assert!(!out.files[0].unsupported, "{:?}", out.files[0]);
+}

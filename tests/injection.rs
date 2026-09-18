@@ -85,3 +85,19 @@ fn injected_rows_are_reported_in_the_prose_file_coordinates() {
     assert_eq!(h.new_range, [7, 7], "{:?}", h.new_range);
     assert!(h.uses.contains(&"beta".to_string()), "{:?}", h.uses);
 }
+
+#[test]
+fn a_fence_resolves_by_extension_when_no_alias_names_it() {
+    // the fence table and the path table were written out separately and had
+    // drifted: html, css, vue and svelte had grammars but no fence alias
+    let out = md(
+        "# T\n\n```css\n.a { color: red }\n```\n",
+        "# T\n\n```css\n.a { color: blue }\n```\n",
+    );
+    let uses: Vec<&String> = out.files[0]
+        .hunks
+        .iter()
+        .flat_map(|h| h.uses.iter().chain(h.defines.iter()))
+        .collect();
+    assert!(!uses.is_empty(), "css fence is parsed, not opaque: {out:?}");
+}
