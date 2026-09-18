@@ -6637,12 +6637,24 @@ fn open_quickfix_editor(app: &mut App, terminal: &mut ratatui::DefaultTerminal, 
 
 /// While loading: just a status line under the pane border, same idiom as
 /// the review panes. Nothing else can be drawn yet — no items, no sources.
-fn draw_loading(f: &mut Frame, rev: &str, status: &str) {
+/// The screen before the review arrives. It used the terminal's own colours and
+/// square borders while every pane that follows is themed and rounded, so the
+/// app visibly changed shape the moment it finished loading.
+fn draw_loading(f: &mut Frame, rev: &str, status: &str, theme: &Theme) {
     let area = f.area();
-    let block = Block::bordered().title(format!(" {rev} — loading… "));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(Span::styled(
+            format!(" {rev} — loading… "),
+            Style::default().fg(theme.dim),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let p = Paragraph::new(Text::from(vec![Line::from(status.to_string())]));
+    let p = Paragraph::new(Text::from(vec![Line::from(Span::styled(
+        status.to_string(),
+        Style::default().fg(theme.fg),
+    ))]));
     f.render_widget(p, inner);
 }
 
@@ -6823,7 +6835,7 @@ fn run(
 
         if dirty {
             if let Err(e) = terminal.draw(|f| match &mut state {
-                State::Loading(status) => draw_loading(f, &rev, status),
+                State::Loading(status) => draw_loading(f, &rev, status, &theme),
                 State::Ready(app) => draw(f, app, &rev),
             }) {
                 break 'outer Err(e);
@@ -6939,6 +6951,15 @@ fn run(
                         }
                         Resolve::Act(a) => {
                             app.pending = None;
+                            // Paging and scrolling need the pane heights, which
+                            // only the renderer used to know — so a key pressed
+                            // before the first draw used the placeholder 10, and
+                            // every key after a resize used the previous frame's
+                            // size. Both are computed here, from the same
+                            // function the renderer uses.
+                            if let Ok(size) = terminal.size() {
+                                set_geometry(app, Rect::new(0, 0, size.width, size.height));
+                            }
                             if apply(app, a) {
                                 break 'outer Ok(());
                             }
@@ -7321,11 +7342,24 @@ fn why_rows(
     // The engine's terminal fallback rationale: it found nothing to say about
     // the hunk, so a "reason: change" line says nothing either — leave it out.
     if it.rationale != "change" {
-        rows.push(WhyRow {
-            text: format!("reason: {}", it.rationale),
-            style: Style::default().fg(theme.border_focus),
-            kind: WhyKind::Text,
-        });
+        // The engine joins independent clauses with "; " to fit one line, which
+        // is right for `hunks[].rationale` in the JSON and wrong here: a busy
+        // hunk arrived as one wrapped paragraph ("adds a, b, c, and 5 more;
+        // adds CFG (L30, L37, …), HOST (…), READY (…)") that has to be read
+        // word by word. One clause per row restores what the join flattened,
+        // and the pane is sized to its wrapped height, so the rows are free.
+        for (i, frag) in it.rationale.split("; ").enumerate() {
+            rows.push(WhyRow {
+                text: if i == 0 {
+                    format!("reason: {frag}")
+                } else {
+                    // aligned under the first clause, not under the label
+                    format!("        {frag}")
+                },
+                style: Style::default().fg(theme.border_focus),
+                kind: WhyKind::Text,
+            });
+        }
     }
     for d in &it.details {
         rows.push(WhyRow {
@@ -7557,6 +7591,101 @@ fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
     out
 }
 
+/// Record the pane heights and the code pane's width on `app`. Called by the
+/// renderer and by the event loop before a key is handled, so the two can never
+/// disagree about how tall a page is.
+fn set_geometry(app: &mut App, area: Rect) {
+    if area.width < MIN_COLS || area.height < MIN_ROWS {
+        return;
+    }
+    let body = body_of(area);
+    if body.width < SPLIT_COLS {
+        // the split is unavailable at this width, so an explicit toggle would
+        // sit invisible and surprise the reviewer when the terminal widens
+        app.zoom = false;
+    }
+    let why_widths: Vec<usize> = why_rows(
+        &app.items[app.sel],
+        &app.view,
+        &app.theme,
+        note_for(app, app.sel),
+        &out_of_order_labels(app, app.sel),
+        delta_line(app, app.sel),
+        cascade_line(app, app.sel).as_deref(),
+    )
+    .iter()
+    .map(|r| r.text.chars().count())
+    .collect();
+    let panes = pane_rects(body, app.focus, app.zoom, &why_widths);
+    record_geometry(app, &panes, body);
+}
+
+/// Copy a computed layout onto `app`. A hidden pane records the height it would
+/// have if the next keypress brought it back, so paging never runs against a
+/// zero — and `body` is not a guess there: it is exactly the rect that pane
+/// gets when it is zoomed to.
+fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
+    let code = panes.code.unwrap_or(body);
+    app.code_height = code.height.saturating_sub(2);
+    app.code_width = (code.width as usize)
+        .saturating_sub(2)
+        .saturating_sub(GUTTER_W)
+        .min(u16::MAX as usize) as u16;
+    app.why_height = panes.why.unwrap_or(body).height.saturating_sub(2);
+}
+
+/// Where each pane sits this frame. Pure in the terminal size, the focus and
+/// the zoom flag, so the event loop can ask the same question the renderer
+/// does instead of reading what the last frame happened to leave behind.
+struct Panes {
+    zoomed: bool,
+    list: Option<Rect>,
+    code: Option<Rect>,
+    why: Option<Rect>,
+}
+
+/// `why_widths` is each rationale row's character count; the why pane wraps, so
+/// its height is the wrapped row count, not the logical one.
+fn pane_rects(body: Rect, focus: Pane, zoom: bool, why_widths: &[usize]) -> Panes {
+    // Below `SPLIT_COLS` three panes each get too little to be read; one good
+    // pane beats three starved ones, so a narrow terminal zooms on its own.
+    let zoomed = zoom || body.width < SPLIT_COLS;
+    if zoomed {
+        let (list, code, why) = match focus {
+            Pane::List => (Some(body), None, None),
+            Pane::Code => (None, Some(body), None),
+            Pane::Why => (None, None, Some(body)),
+        };
+        return Panes {
+            zoomed,
+            list,
+            code,
+            why,
+        };
+    }
+    let cols =
+        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).split(body);
+    // content height plus borders, floored so an empty pane still reads as a
+    // pane, capped so a long rationale cannot crowd out the code
+    let why_w = (cols[1].width.saturating_sub(2)).max(1) as usize;
+    let wrapped: usize = why_widths.iter().map(|w| w.div_ceil(why_w).max(1)).sum();
+    let why_h = (wrapped as u16)
+        .saturating_add(2)
+        .clamp(3, (body.height * 2 / 5).max(3));
+    let rhs = Layout::vertical([Constraint::Min(3), Constraint::Length(why_h)]).split(cols[1]);
+    Panes {
+        zoomed,
+        list: Some(cols[0]),
+        code: Some(rhs[0]),
+        why: Some(rhs[1]),
+    }
+}
+
+/// The body rect — everything above the footer row.
+fn body_of(area: Rect) -> Rect {
+    Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area)[0]
+}
+
 /// Below this the three panes each get too little width to be read, so the
 /// focused one takes the frame instead. Measured, not guessed: at 80 columns a
 /// 38% list pane is 30 wide and loses the line number off `gate.py:L117`.
@@ -7623,6 +7752,11 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     // the code pane's border title and was truncated mid-word there
     let root = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
     let (body, footer_area) = (root[0], root[1]);
+    if body.width < SPLIT_COLS {
+        // the split is unavailable at this width, so an explicit toggle would
+        // sit invisible and surprise the reviewer when the terminal widens
+        app.zoom = false;
+    }
 
     let it = &app.items[app.sel];
     // built before the layout, because the why pane is sized to it: it used to
@@ -7637,38 +7771,22 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         cascade_line(app, app.sel).as_deref(),
     );
 
-    // Below `SPLIT_COLS` three panes each get too little to be read; one good
-    // pane beats three starved ones, so a narrow terminal zooms on its own.
-    if body.width < SPLIT_COLS {
-        // the split is unavailable at this width, so an explicit toggle would
-        // sit invisible and surprise the reviewer when the terminal widens
-        app.zoom = false;
-    }
-    let zoomed = app.zoom || body.width < SPLIT_COLS;
-    let (list_area, code_area, why_area) = if zoomed {
-        match app.focus {
-            Pane::List => (Some(body), None, None),
-            Pane::Code => (None, Some(body), None),
-            Pane::Why => (None, None, Some(body)),
-        }
-    } else {
-        let cols = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
-            .split(body);
-        // The pane wraps, so logical lines are not rows: a rationale wider
-        // than the pane needs more than one. Size to the wrapped height, plus
-        // borders, floored so an empty pane still reads as a pane and capped
-        // so a long rationale cannot crowd out the code.
-        let why_w = (cols[1].width.saturating_sub(2)).max(1) as usize;
-        let wrapped: usize = why_content
-            .iter()
-            .map(|r| r.text.chars().count().div_ceil(why_w).max(1))
-            .sum();
-        let why_h = (wrapped as u16)
-            .saturating_add(2)
-            .clamp(3, (body.height * 2 / 5).max(3));
-        let rhs = Layout::vertical([Constraint::Min(3), Constraint::Length(why_h)]).split(cols[1]);
-        (Some(cols[0]), Some(rhs[0]), Some(rhs[1]))
-    };
+    let why_widths: Vec<usize> = why_content.iter().map(|r| r.text.chars().count()).collect();
+    let panes = pane_rects(body, app.focus, app.zoom, &why_widths);
+    // Record what the panes came out as, rather than deriving it a second
+    // time. `set_geometry` answers the same question for the event loop from
+    // the same `pane_rects`, but has to rebuild the why rows to do it; here
+    // they are already built. Field-at-a-time because `it` still borrows
+    // `app.items`, and these are disjoint fields.
+    let code_pane = panes.code.unwrap_or(body);
+    app.code_height = code_pane.height.saturating_sub(2);
+    app.code_width = (code_pane.width as usize)
+        .saturating_sub(2)
+        .saturating_sub(GUTTER_W)
+        .min(u16::MAX as usize) as u16;
+    app.why_height = panes.why.unwrap_or(body).height.saturating_sub(2);
+    let (zoomed, list_area, code_area, why_area) =
+        (panes.zoomed, panes.list, panes.code, panes.why);
 
     // left — reading order
     let symbol = "▶ ";
@@ -7761,8 +7879,6 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     // the rect it gets when the next keypress zooms to it.
     let code_rect = code_area.unwrap_or(body);
     let code_w = (code_rect.width as usize).saturating_sub(2);
-    app.code_height = code_rect.height.saturating_sub(2);
-    app.code_width = code_w.saturating_sub(GUTTER_W).min(u16::MAX as usize) as u16;
     // clamp to the selected file's longest line so hscroll can't run away
     // past any content it could ever bring into view; cached per path since
     // it only changes on a load/`:e`, not every frame
@@ -7822,12 +7938,11 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         format!(" 2 {}{clip} ", it.path)
     };
 
-    // `why` wraps, so this counts logical lines — enough to keep the scroll in range
+    // What remains here is content, not geometry: these depend on the selected
+    // hunk's own length, which only exists once the view has been built. The
+    // pane sizes they clamp against were set by `set_geometry` above.
     app.code_len = code_total;
     app.why_len = why_content.len();
-    // as with `code_rect`: a hidden pane records the height it would have if
-    // the next keypress brought it back, so paging never runs against a zero
-    app.why_height = why_area.unwrap_or(body).height.saturating_sub(2);
     app.scroll = app.scroll.min(last_line(app.code_len));
     app.why_scroll = app.why_scroll.min(last_line(app.why_len));
     app.why_sel = app.why_sel.min(last_line(app.why_len) as usize);
@@ -8985,6 +9100,60 @@ mod tests {
             !got.iter().any(|l| l.starts_with("but ")),
             "`but` is optional; its absence is not a failure to report: {got:?}"
         );
+    }
+
+    /// The layout is a pure function of the size, so it can be asserted without
+    /// a terminal — which is the point of having pulled it out of `draw`.
+    #[test]
+    fn a_zoomed_layout_shows_exactly_one_pane() {
+        let body = Rect::new(0, 0, 140, 40);
+        for focus in [Pane::List, Pane::Code, Pane::Why] {
+            let p = pane_rects(body, focus, true, &[10]);
+            let shown = [p.list, p.code, p.why]
+                .iter()
+                .filter(|r| r.is_some())
+                .count();
+            assert_eq!(shown, 1, "{focus:?} zoomed");
+            assert!(p.zoomed);
+        }
+    }
+
+    #[test]
+    fn a_narrow_terminal_zooms_without_being_asked() {
+        let narrow = Rect::new(0, 0, SPLIT_COLS - 1, 40);
+        let p = pane_rects(narrow, Pane::Code, false, &[10]);
+        assert!(p.zoomed, "below SPLIT_COLS the split is not offered");
+        assert_eq!(p.code, Some(narrow));
+        assert!(p.list.is_none() && p.why.is_none());
+
+        let wide = Rect::new(0, 0, SPLIT_COLS, 40);
+        assert!(!pane_rects(wide, Pane::Code, false, &[10]).zoomed);
+    }
+
+    #[test]
+    fn the_why_pane_is_sized_to_its_wrapped_content() {
+        let body = Rect::new(0, 0, 140, 40);
+        // one short rationale: the floor, not 30% of the frame
+        let small = pane_rects(body, Pane::Code, false, &[20]).why.unwrap();
+        assert_eq!(small.height, 3, "one line plus borders");
+
+        // a rationale far wider than the pane wraps to several rows
+        let wide_row = (body.width as usize) * 3;
+        let big = pane_rects(body, Pane::Code, false, &[wide_row])
+            .why
+            .unwrap();
+        assert!(
+            big.height > small.height,
+            "a wrapped rationale needs more rows: {} vs {}",
+            big.height,
+            small.height
+        );
+
+        // and it cannot eat the code pane
+        let huge = pane_rects(body, Pane::Code, false, &[wide_row * 40])
+            .why
+            .unwrap();
+        assert!(huge.height <= body.height * 2 / 5, "capped at 40%");
     }
 
     /// Every language the engine resolves is either painted here or listed as
