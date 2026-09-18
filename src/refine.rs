@@ -36,10 +36,17 @@ pub struct Refined {
 /// relationship the code doesn't have.
 const PAIR_THRESHOLD: f32 = 0.4;
 
-/// Refinement is O(removed × added) in line pairing and O(n × m) in leaves per
-/// pair. A hunk far past this is a rewrite, where per-token highlighting would
-/// be noise anyway, so it renders whole rather than costing a frame.
+/// Refinement is O(removed × added) in line pairing. A hunk far past this is a
+/// rewrite, where per-token highlighting would be noise anyway, so it renders
+/// whole rather than costing a frame.
 const MAX_PAIRS: usize = 4096;
+
+/// Cells the leaf LCS table may hold for one line pair. The table is
+/// `(n+1)×(m+1)` `u32`s, and nothing bounds the leaves on a single line: one
+/// changed line of a minified bundle carries six figures of them, and the
+/// allocation that follows is measured in gigabytes. Past this the pair renders
+/// whole, which is what a machine-generated line deserves anyway.
+const MAX_LCS_CELLS: usize = 1 << 22;
 
 /// One grammar leaf, clipped to a single line. `id` is an interned form of the
 /// leaf's text, unique per distinct string across both sides of a `Refiner`,
@@ -182,8 +189,11 @@ fn tokens_by_row(
 
 /// Fills the LCS DP table (flat, row-major, `(n+1) x (m+1)`) and returns it
 /// alongside `n`/`m`, for callers that need to backtrack it.
-fn lcs_table(a: &[Token], b: &[Token]) -> (Vec<u32>, usize, usize) {
+fn lcs_table(a: &[Token], b: &[Token]) -> Option<(Vec<u32>, usize, usize)> {
     let (n, m) = (a.len(), b.len());
+    if (n + 1).saturating_mul(m + 1) > MAX_LCS_CELLS {
+        return None;
+    }
     let w = m + 1;
     let mut dp = vec![0u32; (n + 1) * w];
     for i in (0..n).rev() {
@@ -195,12 +205,14 @@ fn lcs_table(a: &[Token], b: &[Token]) -> (Vec<u32>, usize, usize) {
             };
         }
     }
-    (dp, n, m)
+    Some((dp, n, m))
 }
 
 /// Longest common subsequence of two token runs, as index pairs.
 fn lcs(a: &[Token], b: &[Token]) -> Vec<(usize, usize)> {
-    let (dp, n, m) = lcs_table(a, b);
+    let Some((dp, n, m)) = lcs_table(a, b) else {
+        return vec![];
+    };
     let w = m + 1;
     let (mut i, mut j, mut out) = (0, 0, vec![]);
     while i < n && j < m {
@@ -220,18 +232,21 @@ fn lcs(a: &[Token], b: &[Token]) -> Vec<(usize, usize)> {
 /// Length of the LCS of two token runs, without backtracking a match out of
 /// the table — the fill is reverse (`i`/`j` count down to 0), so the full
 /// subsequence length ends up at `dp[0][0]`.
-fn lcs_len(a: &[Token], b: &[Token]) -> usize {
-    let (dp, _, _) = lcs_table(a, b);
-    dp[0] as usize
+fn lcs_len(a: &[Token], b: &[Token]) -> Option<usize> {
+    let (dp, _, _) = lcs_table(a, b)?;
+    Some(dp[0] as usize)
 }
 
-/// How much two lines have in common, 0.0–1.0, by matched leaves.
+/// How much two lines have in common, 0.0–1.0, by matched leaves. A pair too
+/// large to build a table for scores 0 and so never pairs.
 fn similarity(a: &[Token], b: &[Token]) -> f32 {
     if a.is_empty() && b.is_empty() {
         return 1.0;
     }
-    let common = lcs_len(a, b) as f32;
-    2.0 * common / (a.len() + b.len()) as f32
+    match lcs_len(a, b) {
+        Some(common) => 2.0 * common as f32 / (a.len() + b.len()) as f32,
+        None => 0.0,
+    }
 }
 
 /// Which removed line is which added line, order-preserving: a monotone
@@ -255,8 +270,13 @@ fn pair_lines(old: &[Vec<Token>], new: &[Vec<Token>]) -> Vec<(usize, usize)> {
     }
     let (mut i, mut j, mut out) = (0, 0, vec![]);
     while i < n && j < m {
-        let paired = sim[i][j] >= PAIR_THRESHOLD
-            && (sim[i][j] + dp[i + 1][j + 1] - dp[i][j]).abs() < f32::EPSILON;
+        // Re-take the branch the fill took, by recomputing its `max` rather
+        // than testing the accumulated sums for equality: `dp` holds sums of
+        // many similarities, whose representable gap is far wider than
+        // `f32::EPSILON`, so an absolute-epsilon comparison silently dropped
+        // pairs on a long hunk. Ties prefer the pair, exactly as the fill does.
+        let pair = sim[i][j] + dp[i + 1][j + 1];
+        let paired = sim[i][j] >= PAIR_THRESHOLD && pair >= dp[i + 1][j] && pair >= dp[i][j + 1];
         if paired {
             out.push((i, j));
             i += 1;
