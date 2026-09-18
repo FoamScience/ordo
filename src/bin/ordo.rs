@@ -895,11 +895,10 @@ fn git(args: &[&str]) -> String {
 // Runs a binary, returning its stdout as a string or empty on any failure to
 // launch or a nonzero exit — the shared body behind `git` and `but`.
 //
-// **Ceiling:** a failure is indistinguishable from empty output, and stderr is
-// discarded. That is right for `but`, which is optional, but it means a git
-// error mid-load (a bad object, a corrupt index) surfaces as "nothing to
-// review" with no reason attached. Reporting it needs a channel from the
-// worker thread to the screen, since the TUI owns the terminal by then.
+// A failure still reads as empty output to the caller — no call site would
+// branch differently on it — but it is no longer silent: the command and the
+// first line of its stderr are recorded (see `COMMAND_FAILURES`) and shown in
+// the empty-review message and in `:audit`.
 fn run_cmd(bin: &str, args: &[&str]) -> String {
     let Ok(out) = Command::new(bin).args(args).output() else {
         note_command_failure(bin, args, "could not be run");
