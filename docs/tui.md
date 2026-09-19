@@ -37,6 +37,43 @@ would cost most of a minute up front. The answer is cached per hunk.
 Neither changes the reading order. Order is the def→use graph's to decide;
 churn says what deserves attention, which is a different question.
 
+## `:config`
+
+`:config` opens every setting ordo has, grouped by the file it is written to.
+The list is **generated** from the tables the program already reads — the
+keymap, `theme_names`, the theme roles, the action names, the bundled rulesets
+and the construct catalog's own files — so a new theme role, key action or
+catalog rule appears here because it was added there, not because a second list
+was kept in step.
+
+| key | |
+| --- | --- |
+| `j` / `k`, arrows, `g` / `G` | move |
+| `Space` / `Enter` | change the selected setting — flip a flag, cycle a choice, or open a colour or binding for typing |
+| `Enter` / `Esc` while typing | accept / cancel |
+| `w` | write what changed |
+| `Esc` / `q` | close |
+
+The view owns those keys rather than taking them from the keymap, because the
+keymap preset is itself one of the settings.
+
+Catalog rules are grouped by the file they are written in, and a section
+carries its rules: turning off `c-cpp` turns off its fourteen constructs, and
+turning one back on brings the section back with it. Changing a rule re-runs
+the review, so the list under the dialog is the answer to the setting you just
+changed.
+
+A colour or a key binding is free text: `Space` opens it, you type, `Enter`
+accepts. An empty colour reads `(terminal)` — that role follows the terminal's
+own palette rather than being unset.
+
+`w` writes only what you altered, into the file each section names —
+`tui.toml` for the preset, theme and keys, `rules.toml` for the catalog and
+rulesets. Existing lines are replaced where they sit, so the commented-out
+defaults that document the file, and any note you left in it, survive. If a
+file cannot be read or written the dialog says so and keeps the change pending
+rather than reporting a save that did not happen.
+
 ## The dependency canvas
 
 `gD` opens the hunk's dependencies as one view. The hunk itself sits across the
@@ -193,6 +230,7 @@ command's own arguments:
 | `:only-comments` | toggle showing only comment/docstring hunks |
 | `:all` | toggle showing generated/formatting-noise hunks |
 | `:rules` | where the active rules came from, and what was replaced or disabled |
+| `:config` | every setting, generated from the tables the program reads |
 | `:filter <glob>` | narrow the review to paths matching &lt;glob&gt;; no argument clears it |
 | `:keys <preset>` | swap the keymap live (vim, vscode) |
 | `:theme <name>` | swap the palette live (:theme with no name lists them) |

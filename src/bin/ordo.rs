@@ -2322,7 +2322,8 @@ fn load_snaps(path: &Path) -> HashMap<String, Snap> {
 
 fn save_snaps(path: &Path, snaps: &HashMap<String, Snap>) {
     if let Ok(text) = serde_json::to_string(snaps) {
-        write_atomic(path, &text);
+        // best-effort: a mark that cannot be persisted still works this session
+        let _ = write_atomic(path, &text);
     }
 }
 
@@ -2336,11 +2337,11 @@ fn save_snaps(path: &Path, snaps: &HashMap<String, Snap>) {
 /// Best-effort throughout — a read-only filesystem, a missing `$HOME` or a
 /// failed rename all just mean the state is not persisted. A lost mark is the
 /// accepted cost; a blocked review is not.
-fn write_atomic(path: &Path, text: &str) {
-    let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
+fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::other("no parent directory"));
+    };
+    std::fs::create_dir_all(parent)?;
     // same directory, so the rename stays within one filesystem; the pid keeps
     // two ordo processes on one repo from writing the same temporary
     let tmp = parent.join(format!(
@@ -2348,13 +2349,15 @@ fn write_atomic(path: &Path, text: &str) {
         path.file_name().and_then(|n| n.to_str()).unwrap_or("state"),
         std::process::id()
     ));
-    if std::fs::write(&tmp, text).is_err() {
+    if let Err(e) = std::fs::write(&tmp, text) {
         let _ = std::fs::remove_file(&tmp);
-        return;
+        return Err(e);
     }
-    if std::fs::rename(&tmp, path).is_err() {
+    if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
+    Ok(())
 }
 
 /// This run's snapshot, and how each item differs from the stored one.
@@ -2472,7 +2475,8 @@ fn save_marks(path: &Path, marks: &HashMap<u64, u64>) {
         .map(|(k, v)| (format!("{k:016x}"), *v))
         .collect();
     if let Ok(text) = serde_json::to_string(&body) {
-        write_atomic(path, &text);
+        // best-effort: a mark that cannot be persisted still works this session
+        let _ = write_atomic(path, &text);
     }
 }
 
@@ -2658,6 +2662,11 @@ impl Keymap {
         find(None).unwrap_or(Resolve::Miss)
     }
 }
+
+/// Every keymap `keymap` answers to. The list is the authority — a test asserts
+/// it and the function agree, so `:config` can offer presets without a second
+/// copy of the names.
+const KEYMAP_NAMES: &[&str] = &["vim", "vscode"];
 
 fn keymap(name: &str) -> Option<Keymap> {
     match name {
@@ -3217,6 +3226,14 @@ fn preset(name: &str) -> Option<&'static str> {
     PRESETS.iter().find(|(n, _)| *n == name).map(|(_, t)| *t)
 }
 
+/// The user's own rules file — where `:config` writes a catalog or ruleset
+/// change, since it is the one that applies to every repository.
+fn user_rules_path() -> Option<PathBuf> {
+    config_path()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .map(|d| d.join("rules.toml"))
+}
+
 fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
     let mut out = vec![];
     if let Some(dir) = config_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
@@ -3239,6 +3256,7 @@ struct RuleSet {
     rules: Vec<ordo::model::Rule>,
     catalog: bool,
     disables: Vec<String>,
+    includes: Vec<String>,
 }
 
 struct RulesReport {
@@ -3250,6 +3268,8 @@ struct RulesReport {
     disabled: Vec<String>,
     /// false when any rules file said `catalog = false`
     catalog: bool,
+    /// bundled rulesets named by `include`
+    includes: Vec<String>,
     /// the `disable` globs themselves, forwarded to the engine so they reach
     /// the construct catalog too — a catalog entry is a rule, and silencing it
     /// by name is the same gesture
@@ -3262,6 +3282,7 @@ impl RulesReport {
             rules: self.rules.clone(),
             catalog,
             disables: self.disables.clone(),
+            includes: self.includes.clone(),
         }
     }
 
@@ -3315,6 +3336,8 @@ struct Layering {
     problems: Vec<String>,
     /// `None` until a file says; `Some(false)` turns the catalog off
     catalog: Option<bool>,
+    /// bundled rulesets pulled in by `include`
+    includes: Vec<String>,
 }
 
 fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut Layering) {
@@ -3330,6 +3353,7 @@ fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut La
     }
     for inc in &doc.include {
         if let Some(t) = preset(inc) {
+            acc.includes.push(inc.clone());
             layer_rules(t, inc, Path::new("."), depth + 1, acc);
         } else {
             let path = base.join(inc);
@@ -3431,6 +3455,7 @@ fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
         replaced: acc.replaced,
         disabled,
         catalog: acc.catalog.unwrap_or(true),
+        includes: acc.includes,
         disables: acc.disables,
     }
 }
@@ -3771,6 +3796,387 @@ fn init_config(preset: &str, theme_name: &str) -> String {
         }
     }
     out
+}
+
+// ------------------------------------------------------------------ config UI
+
+/// What a setting is, which decides how `:config` shows and changes it.
+#[derive(Clone, Debug, PartialEq)]
+enum FieldKind {
+    /// on/off — Space toggles
+    Flag(bool),
+    /// one of a fixed set — Space cycles
+    Choice { at: usize, options: Vec<String> },
+    /// free text (a colour, a key binding) — Enter opens it in the command bar
+    Text(String),
+}
+
+/// One setting: where it is written, what it is now, and what it means.
+#[derive(Clone, Debug)]
+struct ConfigField {
+    /// the config key this writes, e.g. `theme.accent`, `binds.j`, `catalog`
+    key: String,
+    label: String,
+    help: String,
+    kind: FieldKind,
+}
+
+#[derive(Clone, Debug)]
+struct ConfigSection {
+    title: String,
+    /// which file this section is written to, shown in the UI so a reviewer
+    /// knows what `:config` is about to edit
+    file: String,
+    fields: Vec<ConfigField>,
+}
+
+/// The whole settings surface, derived from the tables the program already
+/// reads: `KEYMAP_NAMES`, `theme_names`, `THEME_ROLES`, the live `Keymap`,
+/// `ACTION_NAMES`, `PRESETS` and `ordo::catalog::sections`.
+///
+/// Nothing here is a hand-written list. A new theme role, key action, bundled
+/// ruleset or catalog rule appears in `:config` because it appears in the table
+/// it already had to be added to.
+fn config_schema(app: &App) -> Vec<ConfigSection> {
+    // the header names the file `w` will actually write. With no config
+    // directory there is no such file, and saying so beats printing a bare
+    // name that implies one — the writer would silently skip it
+    let unresolved = "(no config directory — $XDG_CONFIG_HOME or $HOME unset)";
+    let tui = config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| unresolved.to_string());
+    let rules_file = user_rules_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| unresolved.to_string());
+    let disabled = |name: &str| app.disables.iter().any(|d| d == name);
+
+    let mut out = vec![];
+
+    let choice = |current: &str, options: Vec<String>| {
+        let at = options.iter().position(|o| o == current).unwrap_or(0);
+        FieldKind::Choice { at, options }
+    };
+    out.push(ConfigSection {
+        title: "general".to_string(),
+        file: tui.clone(),
+        fields: vec![
+            ConfigField {
+                key: "preset".to_string(),
+                label: "keymap preset".to_string(),
+                help: "which set of bindings the reviewer starts from".to_string(),
+                kind: choice(
+                    app.keys.name,
+                    KEYMAP_NAMES.iter().map(|s| s.to_string()).collect(),
+                ),
+            },
+            ConfigField {
+                key: "theme".to_string(),
+                label: "theme".to_string(),
+                help: "the palette; the roles below override it".to_string(),
+                kind: choice(app.theme.name, theme_names()),
+            },
+        ],
+    });
+
+    // the construct catalog: the whole thing, then a switch per file, then one
+    // per rule — a reviewer turns off "the C++ constructs", not nineteen names
+    let mut catalog = vec![ConfigField {
+        key: "catalog".to_string(),
+        label: "construct catalog".to_string(),
+        help: "the built-in advisories; off leaves only your own rules".to_string(),
+        kind: FieldKind::Flag(app.catalog),
+    }];
+    for sec in ordo::catalog::sections() {
+        let all_off = sec.rules.iter().all(|r| disabled(r));
+        catalog.push(ConfigField {
+            key: format!("section:{}", sec.name),
+            label: format!("  {} ({} rules)", sec.name, sec.rules.len()),
+            help: "every rule in this file".to_string(),
+            kind: FieldKind::Flag(!all_off),
+        });
+        for r in &sec.rules {
+            catalog.push(ConfigField {
+                key: format!("disable:{r}"),
+                label: format!("    {r}"),
+                help: String::new(),
+                kind: FieldKind::Flag(!disabled(r)),
+            });
+        }
+    }
+    out.push(ConfigSection {
+        title: "catalog".to_string(),
+        file: rules_file.clone(),
+        fields: catalog,
+    });
+
+    out.push(ConfigSection {
+        title: "rulesets".to_string(),
+        file: rules_file,
+        fields: PRESETS
+            .iter()
+            .map(|(name, _)| ConfigField {
+                key: format!("include:{name}"),
+                label: name.to_string(),
+                help: "a bundled convention set".to_string(),
+                kind: FieldKind::Flag(app.includes.iter().any(|i| i == name)),
+            })
+            .collect(),
+    });
+
+    out.push(ConfigSection {
+        title: "theme roles".to_string(),
+        file: tui.clone(),
+        fields: THEME_ROLES
+            .iter()
+            .map(|role| ConfigField {
+                key: format!("theme.{role}"),
+                label: role.to_string(),
+                help: "#rrggbb, or empty to follow the terminal".to_string(),
+                kind: FieldKind::Text(match theme_role_color(&app.theme, role) {
+                    Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    _ => String::new(),
+                }),
+            })
+            .collect(),
+    });
+
+    out.push(ConfigSection {
+        title: "keys".to_string(),
+        file: tui,
+        fields: app
+            .keys
+            .binds
+            .iter()
+            .map(|(prefix, key, action)| {
+                let keys = match prefix {
+                    Some(p) => format!("{} {}", key_label(*p), key_label(*key)),
+                    None => key_label(*key),
+                };
+                let name = ACTION_NAMES
+                    .iter()
+                    .find(|(_, a)| a == action)
+                    .map(|(n, _)| *n)
+                    .unwrap_or("");
+                ConfigField {
+                    key: format!("binds.{keys}"),
+                    label: keys.clone(),
+                    help: action_help(*action).1.to_string(),
+                    kind: FieldKind::Text(name.to_string()),
+                }
+            })
+            .collect(),
+    });
+    out
+}
+
+/// `:config`'s open state: the generated schema, plus where the cursor is.
+///
+/// The schema is rebuilt on open rather than cached, so it always shows what
+/// the session actually holds.
+struct ConfigUi {
+    sections: Vec<ConfigSection>,
+    /// the schema as it was on open, so writing touches only what changed —
+    /// flipping one rule must not materialise all 47 binds into the file
+    original: Vec<ConfigSection>,
+    /// (section, field) for every navigable row, in display order
+    rows: Vec<(usize, usize)>,
+    sel: usize,
+    scroll: u16,
+    /// something changed and has not been written
+    dirty: bool,
+    /// the text being typed into the selected field; `None` unless editing.
+    /// A colour and a key binding are free text, and a settings view that can
+    /// show them but not change them is a list, not a config.
+    editing: Option<String>,
+}
+
+impl ConfigUi {
+    fn open(app: &App) -> ConfigUi {
+        let sections = config_schema(app);
+        let rows = sections
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| (0..s.fields.len()).map(move |j| (i, j)))
+            .collect();
+        ConfigUi {
+            original: sections.clone(),
+            sections,
+            rows,
+            sel: 0,
+            scroll: 0,
+            dirty: false,
+            editing: None,
+        }
+    }
+
+    /// Every field whose value differs from the one this view opened with.
+    fn changed(&self) -> Vec<&ConfigField> {
+        let was: HashMap<&str, &FieldKind> = self
+            .original
+            .iter()
+            .flat_map(|s| &s.fields)
+            .map(|f| (f.key.as_str(), &f.kind))
+            .collect();
+        self.sections
+            .iter()
+            .flat_map(|s| &s.fields)
+            .filter(|f| was.get(f.key.as_str()).is_some_and(|k| **k != f.kind))
+            .collect()
+    }
+
+    fn field(&self, at: usize) -> Option<&ConfigField> {
+        let (i, j) = *self.rows.get(at)?;
+        self.sections.get(i)?.fields.get(j)
+    }
+
+    fn field_mut(&mut self, at: usize) -> Option<&mut ConfigField> {
+        let (i, j) = *self.rows.get(at)?;
+        self.sections.get_mut(i)?.fields.get_mut(j)
+    }
+
+    /// Space on the selected row: flip a flag, cycle a choice. Text fields are
+    /// edited through the command bar instead, which already does text.
+    ///
+    /// A section's switch carries its rules with it — turning off "the C++
+    /// constructs" is the gesture, not fourteen of them — and a rule turned off
+    /// by hand leaves the section showing off once nothing in it is left on.
+    fn toggle(&mut self) -> bool {
+        let Some(f) = self.field_mut(self.sel) else {
+            return false;
+        };
+        let (key, now) = (f.key.clone(), f.kind.clone());
+        match &mut f.kind {
+            FieldKind::Flag(v) => *v = !*v,
+            FieldKind::Choice { at, options } => {
+                if !options.is_empty() {
+                    *at = (*at + 1) % options.len();
+                }
+            }
+            // text opens for editing rather than cycling
+            FieldKind::Text(t) => {
+                let seed = t.clone();
+                self.editing = Some(seed);
+                return false;
+            }
+        }
+        if let (Some(section), FieldKind::Flag(was)) = (key.strip_prefix("section:"), now) {
+            self.set_section(section, !was);
+        }
+        self.sync_sections();
+        self.dirty = true;
+        true
+    }
+
+    /// Commit the text being typed into the selected field.
+    fn commit_edit(&mut self) {
+        let Some(text) = self.editing.take() else {
+            return;
+        };
+        let sel = self.sel;
+        if let Some(f) = self.field_mut(sel) {
+            if let FieldKind::Text(t) = &mut f.kind {
+                if *t != text {
+                    *t = text;
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Set every rule of one catalog section.
+    fn set_section(&mut self, section: &str, on: bool) {
+        let names: Vec<String> = ordo::catalog::sections()
+            .iter()
+            .find(|s| s.name == section)
+            .map(|s| s.rules.clone())
+            .unwrap_or_default();
+        for sec in &mut self.sections {
+            for f in &mut sec.fields {
+                if let Some(rule) = f.key.strip_prefix("disable:") {
+                    if names.iter().any(|n| n == rule) {
+                        f.kind = FieldKind::Flag(on);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A section reads on while any of its rules is on.
+    fn sync_sections(&mut self) {
+        let on: Vec<(String, bool)> = ordo::catalog::sections()
+            .iter()
+            .map(|s| {
+                let any = s.rules.iter().any(|r| {
+                    self.sections.iter().flat_map(|x| &x.fields).any(|f| {
+                        f.key.strip_prefix("disable:") == Some(r.as_str())
+                            && matches!(f.kind, FieldKind::Flag(true))
+                    })
+                });
+                (s.name.clone(), any)
+            })
+            .collect();
+        for sec in &mut self.sections {
+            for f in &mut sec.fields {
+                if let Some(name) = f.key.strip_prefix("section:") {
+                    if let Some((_, any)) = on.iter().find(|(n, _)| n == name) {
+                        f.kind = FieldKind::Flag(*any);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Set `key = value` under `[section]`, preserving everything else in the file
+/// — including the commented-out defaults `--init-config` writes, which are the
+/// documentation.
+///
+/// An existing line for the key is replaced where it sits, commented or not, so
+/// a setting keeps its place and its explaining comment. Otherwise the line is
+/// appended to the section, and the section is created if it is missing.
+fn upsert_toml(text: &str, section: Option<&str>, key: &str, value: &str) -> String {
+    let want = format!("{key} = {value}");
+    let mut out: Vec<String> = vec![];
+    let mut here = section.is_none();
+    let mut done = false;
+    let mut last_in_section = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(head) = t.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            here = section.is_some_and(|s| s == head.trim());
+        }
+        // a key line, live or commented out, is the one to replace
+        let bare = t.trim_start_matches('#').trim();
+        let is_key = !done
+            && here
+            && bare
+                .split_once('=')
+                .is_some_and(|(k, _)| k.trim() == key || k.trim().trim_matches('"') == key);
+        if is_key {
+            out.push(want.clone());
+            done = true;
+        } else {
+            out.push(line.to_string());
+        }
+        if here {
+            last_in_section = Some(out.len());
+        }
+    }
+    if !done {
+        match (section, last_in_section) {
+            // append inside the section it belongs to
+            (Some(_), Some(at)) => out.insert(at, want),
+            (None, _) => out.insert(0, want),
+            (Some(s), None) => {
+                out.push(String::new());
+                out.push(format!("[{s}]"));
+                out.push(want);
+            }
+        }
+    }
+    let mut joined = out.join("\n");
+    joined.push('\n');
+    joined
 }
 
 /// `--init-config`: write the generated config, refusing to clobber one that
@@ -4238,6 +4644,10 @@ struct App {
     /// `disable` globs from every rules file, forwarded to the engine so they
     /// silence catalog entries as well as the caller's own rules
     disables: Vec<String>,
+    /// bundled rulesets named by `include` — what `:config` shows as on
+    includes: Vec<String>,
+    /// `:config`'s open state; `None` when it is closed
+    config: Option<ConfigUi>,
     /// commits per file in `FILE_CHURN_WINDOW`, computed once at load. The
     /// cheap half of the signal: always shown, and `H` refines the selected
     /// hunk to its exact lines.
@@ -7534,6 +7944,8 @@ fn run(
                         rules: rules.rules.clone(),
                         catalog: rules.catalog,
                         disables: rules.disables.clone(),
+                        includes: rules.includes.clone(),
+                        config: None,
                         strategy: "comprehension".to_string(),
                         rules_report: rules_report.clone(),
                         max_col: HashMap::new(),
@@ -7588,6 +8000,50 @@ fn run(
                     }
                 }
                 State::Ready(app) => {
+                    // `:config` owns its keys rather than going through the
+                    // keymap: its hints have to be true whatever preset is
+                    // loaded, and changing the preset is one of the settings —
+                    // going through the map would rebind the view mid-edit.
+                    if app.config.as_ref().is_some_and(|c| c.editing.is_some()) {
+                        let c = app.config.as_mut().expect("checked");
+                        match (k.code, k.modifiers) {
+                            (KeyCode::Enter, _) => c.commit_edit(),
+                            (KeyCode::Esc, _) => c.editing = None,
+                            (KeyCode::Backspace, _) => {
+                                if let Some(t) = c.editing.as_mut() {
+                                    t.pop();
+                                }
+                            }
+                            (KeyCode::Char(ch), m) if !m.contains(KeyModifiers::CONTROL) => {
+                                if let Some(t) = c.editing.as_mut() {
+                                    t.push(ch);
+                                }
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    if app.config.is_some() {
+                        match (k.code, k.modifiers) {
+                            (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => app.config = None,
+                            (KeyCode::Down, _) | (KeyCode::Char('j'), _) => move_config(app, 1),
+                            (KeyCode::Up, _) | (KeyCode::Char('k'), _) => move_config(app, -1),
+                            (KeyCode::PageDown, _) => move_config(app, PAGE as isize),
+                            (KeyCode::PageUp, _) => move_config(app, -(PAGE as isize)),
+                            // `g`/`G` as well as Home/End: the rest of the app
+                            // answers to them and the fingers do not re-learn
+                            (KeyCode::Home, _) | (KeyCode::Char('g'), _) => {
+                                move_config(app, isize::MIN / 2)
+                            }
+                            (KeyCode::End, _) | (KeyCode::Char('G'), _) => {
+                                move_config(app, isize::MAX / 2)
+                            }
+                            (KeyCode::Char(' '), _) | (KeyCode::Enter, _) => config_toggle(app),
+                            (KeyCode::Char('w'), _) => config_write(app),
+                            _ => {}
+                        }
+                        continue;
+                    }
                     // input mode: every key edits the search prompt instead of
                     // running an action, so chords (C-w C-w, gg) can't leak in
                     // while it's open
@@ -8705,6 +9161,319 @@ fn max_anchor_h(area_h: u16) -> u16 {
     (area_h.saturating_sub(2) / 2).max(ANCHOR_H_MIN)
 }
 
+/// Move `:config`'s selection, clamped.
+fn move_config(app: &mut App, by: isize) {
+    let Some(c) = app.config.as_mut() else { return };
+    if c.rows.is_empty() {
+        return;
+    }
+    let last = c.rows.len() as isize - 1;
+    c.sel = (c.sel as isize).saturating_add(by).clamp(0, last) as usize;
+}
+
+/// Space on the selected setting. A rule or catalog change re-runs the engine,
+/// because what the reviewer is looking at is the answer to those settings.
+fn config_toggle(app: &mut App) {
+    let Some(c) = app.config.as_mut() else { return };
+    if !c.toggle() {
+        return;
+    }
+    let rules_changed = c.field(c.sel).is_some_and(|f| {
+        f.key.starts_with("disable:") || f.key.starts_with("section:") || f.key == "catalog"
+    });
+    let (catalog, disables) = config_rule_state(c);
+    let (theme_name, preset) = config_general(c);
+    if rules_changed {
+        app.catalog = catalog;
+        app.disables = disables;
+        let _ = run_strategy(app, app.strategy.clone().as_str());
+    }
+    if let Some(t) = theme(&theme_name) {
+        app.theme = t;
+    }
+    if let Some(k) = keymap(&preset) {
+        app.keys = k;
+    }
+}
+
+/// The catalog switch and the `disable` list the current UI state implies.
+fn config_rule_state(c: &ConfigUi) -> (bool, Vec<String>) {
+    let mut catalog = true;
+    let mut disables = vec![];
+    for f in c.sections.iter().flat_map(|s| &s.fields) {
+        match (&f.key, &f.kind) {
+            (k, FieldKind::Flag(v)) if k == "catalog" => catalog = *v,
+            (k, FieldKind::Flag(false)) => {
+                if let Some(rule) = k.strip_prefix("disable:") {
+                    disables.push(rule.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    (catalog, disables)
+}
+
+/// Write what changed to the files each section names.
+///
+/// Only what the reviewer actually altered: the schema holds every setting, and
+/// materialising all of them would bury a one-line change in a hundred.
+fn config_write(app: &mut App) {
+    let Some(c) = app.config.as_ref() else { return };
+    let changed = c.changed();
+    if changed.is_empty() {
+        return;
+    }
+    let touches_rules = |k: &str| {
+        k == "catalog"
+            || k.starts_with("disable:")
+            || k.starts_with("section:")
+            || k.starts_with("include:")
+    };
+    let mut wrote: Vec<String> = vec![];
+
+    let mut failed: Vec<String> = vec![];
+    if let Some(path) = config_path() {
+        // an existing file that cannot be read must not be rewritten from
+        // nothing: that would drop every setting already in it
+        let mut text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                failed.push(format!("{}: {e}", path.display()));
+                String::new()
+            }
+        };
+        let readable = failed.is_empty();
+        let mut touched = false;
+        for f in changed.iter().filter(|f| !touches_rules(&f.key)) {
+            let (section, key) = match f.key.split_once('.') {
+                Some(("theme", k)) => (Some("theme"), k.to_string()),
+                Some(("binds", k)) => (Some("binds"), format!("\"{k}\"")),
+                _ => (None, f.key.clone()),
+            };
+            let value = match &f.kind {
+                FieldKind::Flag(v) => v.to_string(),
+                FieldKind::Choice { at, options } => {
+                    format!("\"{}\"", options.get(*at).cloned().unwrap_or_default())
+                }
+                FieldKind::Text(t) => format!("\"{t}\""),
+            };
+            text = upsert_toml(&text, section, &key, &value);
+            touched = true;
+        }
+        if touched && readable {
+            match write_atomic(&path, &text) {
+                Ok(()) => wrote.push(path.display().to_string()),
+                Err(e) => failed.push(format!("{}: {e}", path.display())),
+            }
+        }
+    }
+
+    // each key only if something in its category moved: rewriting `include`
+    // because a catalog rule changed would put a line in the file that the
+    // reviewer never asked for
+    let touched = |p: &str| changed.iter().any(|f| f.key.starts_with(p));
+    if changed.iter().any(|f| touches_rules(&f.key)) {
+        if let Some(path) = user_rules_path() {
+            let mut text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => {
+                    failed.push(format!("{}: {e}", path.display()));
+                    app.popup = Some(Popup::new(
+                        "config NOT written",
+                        failed.into_iter().map(Line::from).collect(),
+                    ));
+                    return;
+                }
+            };
+            let (catalog, disables) = config_rule_state(c);
+            if changed.iter().any(|f| f.key == "catalog") {
+                text = upsert_toml(&text, None, "catalog", &catalog.to_string());
+            }
+            if touched("disable:") || touched("section:") {
+                text = upsert_toml(&text, None, "disable", &toml_list(&disables));
+            }
+            if touched("include:") {
+                text = upsert_toml(&text, None, "include", &toml_list(&config_includes(c)));
+            }
+            match write_atomic(&path, &text) {
+                Ok(()) => wrote.push(path.display().to_string()),
+                Err(e) => failed.push(format!("{}: {e}", path.display())),
+            }
+        }
+    }
+
+    // only a clean write clears the dirty mark: telling a reviewer their
+    // settings are saved when the disk refused is the one thing this must
+    // never do
+    if failed.is_empty() {
+        if let Some(c) = app.config.as_mut() {
+            c.original = c.sections.clone();
+            c.dirty = false;
+        }
+    }
+    let (title, lines) = if failed.is_empty() {
+        ("config written", wrote)
+    } else {
+        ("config NOT written", failed)
+    };
+    app.popup = Some(Popup::new(
+        title,
+        lines.into_iter().map(Line::from).collect(),
+    ));
+}
+
+/// A TOML array of strings, on one line.
+fn toml_list(items: &[String]) -> String {
+    let inner: Vec<String> = items.iter().map(|i| format!("\"{i}\"")).collect();
+    format!("[{}]", inner.join(", "))
+}
+
+/// The bundled rulesets the current UI state includes.
+fn config_includes(c: &ConfigUi) -> Vec<String> {
+    c.sections
+        .iter()
+        .flat_map(|s| &s.fields)
+        .filter_map(|f| match (&f.key, &f.kind) {
+            (k, FieldKind::Flag(true)) => k.strip_prefix("include:").map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The preset and theme the current UI state implies.
+fn config_general(c: &ConfigUi) -> (String, String) {
+    let pick = |key: &str| {
+        c.sections
+            .iter()
+            .flat_map(|s| &s.fields)
+            .find(|f| f.key == key)
+            .and_then(|f| match &f.kind {
+                FieldKind::Choice { at, options } => options.get(*at).cloned(),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    (pick("theme"), pick("preset"))
+}
+
+/// Render `:config` over the panes: a section at a time, current value on the
+/// right, the file each section writes to in its header.
+fn draw_config(f: &mut Frame, app: &App, body: Rect) {
+    let Some(c) = app.config.as_ref() else { return };
+    let theme = &app.theme;
+    let area = centred(body, 96, body.height.saturating_sub(4));
+    f.render_widget(Clear, area);
+    let title = format!(
+        " config{} — {} ",
+        if c.dirty { " ·" } else { "" },
+        if c.editing.is_some() {
+            "typing · Enter accept · Esc cancel"
+        } else {
+            "Space change · w write · Esc close"
+        }
+    );
+    // the selected setting's own sentence, on the bottom border: a list of
+    // names is not a config UI if nothing says what they do
+    let help = c
+        .field(c.sel)
+        .map(|f| f.help.clone())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus))
+        .title(Span::styled(title, Style::default().fg(theme.border_focus)))
+        .title_bottom(Span::styled(
+            if help.is_empty() {
+                String::new()
+            } else {
+                format!(" {help} ")
+            },
+            Style::default().fg(theme.dim),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let width = inner.width as usize;
+    let mut lines: Vec<Line<'static>> = vec![];
+    let mut row_of_sel = 0usize;
+    for (i, sec) in c.sections.iter().enumerate() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", sec.title),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("→ {}", sec.file), Style::default().fg(theme.dim)),
+        ]));
+        for (j, field) in sec.fields.iter().enumerate() {
+            let at = c.rows.iter().position(|&r| r == (i, j)).unwrap_or(0);
+            if at == c.sel {
+                row_of_sel = lines.len();
+            }
+            let value = match &field.kind {
+                FieldKind::Flag(true) => "on".to_string(),
+                FieldKind::Flag(false) => "off".to_string(),
+                FieldKind::Choice { at, options } => options.get(*at).cloned().unwrap_or_default(),
+                // an empty text field is not the same as one that follows the
+                // terminal; say which
+                FieldKind::Text(t) if t.is_empty() && field.key.starts_with("theme.") => {
+                    "(terminal)".to_string()
+                }
+                FieldKind::Text(t) if t.is_empty() => "(unset)".to_string(),
+                FieldKind::Text(t) => t.clone(),
+            };
+            let editing = at == c.sel && c.editing.is_some();
+            let value = match &c.editing {
+                Some(buf) if editing => format!("{buf}▏"),
+                _ => value,
+            };
+            let off = matches!(field.kind, FieldKind::Flag(false));
+            let pad = width.saturating_sub(field.label.chars().count() + value.chars().count() + 3);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}{} ", if at == c.sel { "▸ " } else { "  " }, field.label),
+                    Style::default().fg(if at == c.sel {
+                        theme.border_focus
+                    } else {
+                        theme.fg
+                    }),
+                ),
+                Span::styled(" ".repeat(pad), Style::default()),
+                Span::styled(
+                    value,
+                    Style::default().fg(if off { theme.dim } else { theme.accent }),
+                ),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+    // keep the selected row on screen without a scrollbar to maintain
+    let h = inner.height.max(1) as usize;
+    let top = row_of_sel
+        .saturating_sub(h / 2)
+        .min(lines.len().saturating_sub(h));
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).scroll((top as u16, 0)),
+        inner,
+    );
+    let _ = c.scroll;
+}
+
+/// A rect of at most `w` x `h`, centred in `body`.
+fn centred(body: Rect, w: u16, h: u16) -> Rect {
+    let width = w.min(body.width.saturating_sub(2));
+    let height = h.min(body.height.saturating_sub(2));
+    Rect {
+        x: body.x + (body.width.saturating_sub(width)) / 2,
+        y: body.y + (body.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    }
+}
+
 /// Render the dependency canvas over the panes.
 fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
     let Some(c) = app.canvas.as_ref() else { return };
@@ -9233,6 +10002,7 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     );
 
     draw_canvas(f, app, body);
+    draw_config(f, app, body);
 
     if let Some(popup) = app.popup.as_mut() {
         popup.scroll = popup.scroll.min(last_line(popup.lines.len()));
@@ -9443,6 +10213,11 @@ const COMMANDS: &[Cmd] = &[
         name: "rules",
         args: "",
         help: "where the active rules came from, and what was replaced or disabled",
+    },
+    Cmd {
+        name: "config",
+        args: "",
+        help: "every setting, generated from the tables the program reads",
     },
     Cmd {
         name: "filter",
@@ -10071,6 +10846,10 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 "commands",
                 build_command_help().into_iter().map(prose).collect(),
             ));
+            Ok(CommandOutcome::None)
+        }
+        "config" => {
+            app.config = Some(ConfigUi::open(app));
             Ok(CommandOutcome::None)
         }
         "rules" => {
@@ -12570,6 +13349,284 @@ DA:1,1
         assert!(problems[0].contains("same language"), "{problems:?}");
     }
 
+    /// A colour and a key binding are free text. A settings view that shows
+    /// them but cannot change them is a list, not a config.
+    #[test]
+    fn a_text_setting_can_be_typed_into() {
+        let app = test_app(0);
+        let mut ui = ConfigUi::open(&app);
+        let at = ui
+            .rows
+            .iter()
+            .position(|&(i, j)| ui.sections[i].fields[j].key.starts_with("theme."))
+            .expect("a theme role");
+        ui.sel = at;
+
+        // Space opens it rather than cycling, and changes nothing yet
+        assert!(!ui.toggle(), "text does not toggle");
+        assert!(ui.editing.is_some(), "it opened for editing");
+        assert!(!ui.dirty, "opening an editor is not a change");
+
+        ui.editing = Some("#ff0000".to_string());
+        ui.commit_edit();
+        assert!(ui.editing.is_none(), "committing closes the editor");
+        assert!(ui.dirty);
+        assert_eq!(
+            ui.changed()
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            vec![ui.field(at).unwrap().key.as_str()],
+            "exactly the edited field changed"
+        );
+
+        // and typing the same value back is not a change
+        let key = ui.field(at).unwrap().key.clone();
+        let before = ui
+            .original
+            .iter()
+            .flat_map(|s| &s.fields)
+            .find(|f| f.key == key)
+            .and_then(|f| match &f.kind {
+                FieldKind::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .expect("original value");
+        ui.editing = Some(before);
+        ui.commit_edit();
+        assert!(ui.changed().is_empty(), "typed back to where it started");
+    }
+
+    /// The whole point: a toggle reaches the file on disk.
+    #[test]
+    fn writing_lands_in_the_files_the_sections_name() {
+        let dir = std::env::temp_dir().join(format!("ordo-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("ordo")).expect("temp config dir");
+        std::fs::write(dir.join("ordo/tui.toml"), "# my notes\npreset = \"vim\"\n")
+            .expect("seed tui.toml");
+        std::fs::write(dir.join("ordo/rules.toml"), "# my rules\n").expect("seed rules.toml");
+        // SAFETY: single-threaded test, and the value is read through
+        // `config_path` on this thread only
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+
+        let mut app = test_app(0);
+        app.config = Some(ConfigUi::open(&app));
+        let at = {
+            let c = app.config.as_ref().unwrap();
+            c.rows
+                .iter()
+                .position(|&(i, j)| c.sections[i].fields[j].key == "catalog")
+                .expect("catalog switch")
+        };
+        app.config.as_mut().unwrap().sel = at;
+        app.config.as_mut().unwrap().toggle();
+        config_write(&mut app);
+
+        let rules = std::fs::read_to_string(dir.join("ordo/rules.toml")).expect("rules.toml");
+        assert!(rules.contains("catalog = false"), "not written:\n{rules}");
+        assert!(
+            rules.contains("# my rules"),
+            "the reviewer's own note survived"
+        );
+        let tui = std::fs::read_to_string(dir.join("ordo/tui.toml")).expect("tui.toml");
+        assert_eq!(
+            tui, "# my notes\npreset = \"vim\"\n",
+            "untouched by a rules change"
+        );
+        assert!(!app.config.as_ref().unwrap().dirty, "written means clean");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Writing must carry only what the reviewer altered. The schema holds
+    /// every setting; materialising all of them would bury a one-line change.
+    #[test]
+    fn only_the_changed_settings_are_written() {
+        let app = test_app(0);
+        let mut ui = ConfigUi::open(&app);
+        assert!(ui.changed().is_empty(), "nothing changed yet");
+
+        let at = ui
+            .rows
+            .iter()
+            .position(|&(i, j)| ui.sections[i].fields[j].key == "catalog")
+            .expect("catalog switch");
+        ui.sel = at;
+        ui.toggle();
+
+        let changed: Vec<&str> = ui.changed().iter().map(|f| f.key.as_str()).collect();
+        assert_eq!(changed, vec!["catalog"], "one flip, one changed field");
+
+        // and flipping it back is no change at all, not two
+        ui.toggle();
+        assert!(ui.changed().is_empty(), "back to where it started");
+    }
+
+    /// The config file's commented-out defaults ARE its documentation, and a
+    /// hand-written comment is someone's note to themselves. Writing one
+    /// setting must not cost either.
+    #[test]
+    fn upsert_keeps_the_rest_of_the_file() {
+        let file = "# ordo configuration\n\
+                    preset = \"vim\"\n\
+                    theme = \"dark\"\n\
+                    \n\
+                    # ---- keys\n\
+                    [binds]\n\
+                    # \"j\" = \"next\"  # move down\n\
+                    \n\
+                    [theme]\n\
+                    # accent = \"#89b4fa\"\n";
+
+        // a live key is replaced where it sits
+        let got = upsert_toml(file, None, "theme", "\"catppuccin-mocha\"");
+        assert!(got.contains("theme = \"catppuccin-mocha\""));
+        assert!(got.contains("preset = \"vim\""), "the neighbour survives");
+        assert!(got.contains("# ---- keys"), "comments survive");
+        assert_eq!(got.matches("theme =").count(), 1, "not duplicated");
+
+        // a commented-out default is uncommented in place, keeping its section
+        let got = upsert_toml(file, Some("theme"), "accent", "\"#ff0000\"");
+        assert!(got.contains("accent = \"#ff0000\""));
+        assert!(!got.contains("# accent"), "the old commented line is gone");
+        assert!(
+            got.contains("# \"j\" = \"next\""),
+            "other sections untouched"
+        );
+
+        // a key with no line yet lands inside its section
+        let got = upsert_toml(file, Some("binds"), "\"q\"", "\"quit\"");
+        let binds_at = got.find("[binds]").expect("binds");
+        let theme_at = got.find("[theme]").expect("theme");
+        let q_at = got.find("\"q\" = \"quit\"").expect("the new bind");
+        assert!(
+            binds_at < q_at && q_at < theme_at,
+            "landed in [binds]:\n{got}"
+        );
+
+        // a missing section is created rather than the key going astray
+        let got = upsert_toml("preset = \"vim\"\n", Some("theme"), "accent", "\"#ff0000\"");
+        assert!(got.contains("[theme]"));
+        assert!(got.trim_end().ends_with("accent = \"#ff0000\""));
+    }
+
+    /// The view owns its keys instead of going through the keymap, so its hints
+    /// are true in any preset — and so cycling the `preset` setting cannot
+    /// rebind the view while it is open. That bug cost a live debugging session:
+    /// `x` cycled vim to vscode and `w` stopped writing.
+    #[test]
+    fn the_config_view_does_not_lose_its_keys_when_the_preset_changes() {
+        let mut app = test_app(0);
+        app.config = Some(ConfigUi::open(&app));
+        let at = |app: &App, key: &str| {
+            let c = app.config.as_ref().unwrap();
+            c.rows
+                .iter()
+                .position(|&(i, j)| c.sections[i].fields[j].key == key)
+                .unwrap_or_else(|| panic!("no {key}"))
+        };
+        // cycle the preset: the live keymap changes under the view
+        app.config.as_mut().unwrap().sel = at(&app, "preset");
+        let before = app.keys.name;
+        config_toggle(&mut app);
+        assert_ne!(app.keys.name, before, "the preset really did change");
+
+        // and the view still works: its keys never went through the keymap
+        app.config.as_mut().unwrap().sel = at(&app, "catalog");
+        config_toggle(&mut app);
+        let c = app.config.as_ref().unwrap();
+        assert!(
+            matches!(
+                c.field(c.sel).map(|f| &f.kind),
+                Some(FieldKind::Flag(false))
+            ),
+            "the catalog switch still toggles after a preset change"
+        );
+    }
+
+    /// Turning a catalog section off carries its rules with it, and the section
+    /// reads off once nothing in it is left on. That cascade is the gesture the
+    /// UI exists for: nobody wants to press Space fourteen times.
+    #[test]
+    fn a_catalog_section_carries_its_rules() {
+        let mut ui = ConfigUi::open(&test_app(0));
+        let sections = ordo::catalog::sections();
+        let first = &sections[0];
+        let at = |ui: &ConfigUi, key: &str| {
+            ui.rows
+                .iter()
+                .position(|&(i, j)| ui.sections[i].fields[j].key == key)
+                .unwrap_or_else(|| panic!("no field {key}"))
+        };
+        let flag = |ui: &ConfigUi, key: &str| match ui.field(at(ui, key)).map(|f| &f.kind) {
+            Some(FieldKind::Flag(v)) => *v,
+            other => panic!("{key} is not a flag: {other:?}"),
+        };
+        let section_key = format!("section:{}", first.name);
+        assert!(flag(&ui, &section_key), "sections start on");
+
+        ui.sel = at(&ui, &section_key);
+        assert!(ui.toggle());
+        assert!(!flag(&ui, &section_key), "the section went off");
+        for r in &first.rules {
+            assert!(
+                !flag(&ui, &format!("disable:{r}")),
+                "{r} should have gone with its section"
+            );
+        }
+
+        // one rule back on brings the section back with it
+        ui.sel = at(&ui, &format!("disable:{}", first.rules[0]));
+        assert!(ui.toggle());
+        assert!(flag(&ui, &section_key), "the section follows its rules");
+        assert!(ui.dirty);
+    }
+
+    /// The settings surface is derived, never listed. Every table that feeds it
+    /// must be represented, so adding a theme role or a catalog rule shows up
+    /// in `:config` without anyone editing a second list.
+    #[test]
+    fn the_config_schema_is_generated_from_the_live_tables() {
+        let app = test_app(0);
+        let schema = config_schema(&app);
+        let titles: Vec<&str> = schema.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["general", "catalog", "rulesets", "theme roles", "keys"]
+        );
+        let by = |t: &str| {
+            schema
+                .iter()
+                .find(|s| s.title == t)
+                .unwrap_or_else(|| panic!("no {t} section"))
+        };
+        // one field per entry of each source table, plus the catalog's own
+        // switch and one per section
+        assert_eq!(by("rulesets").fields.len(), PRESETS.len());
+        assert_eq!(by("theme roles").fields.len(), THEME_ROLES.len());
+        assert_eq!(by("keys").fields.len(), app.keys.binds.len());
+        let sections = ordo::catalog::sections();
+        let rules: usize = sections.iter().map(|s| s.rules.len()).sum();
+        assert_eq!(by("catalog").fields.len(), 1 + sections.len() + rules);
+        // and the preset choice offers exactly the presets that resolve
+        let general = &by("general").fields[0];
+        match &general.kind {
+            FieldKind::Choice { options, .. } => assert_eq!(options.len(), KEYMAP_NAMES.len()),
+            k => panic!("preset should be a choice, got {k:?}"),
+        }
+    }
+
+    #[test]
+    fn the_keymap_list_and_the_keymap_function_agree() {
+        for n in KEYMAP_NAMES {
+            assert!(keymap(n).is_some(), "`{n}` is listed but does not resolve");
+        }
+        assert!(
+            keymap("nano").is_none(),
+            "an unlisted preset must not resolve"
+        );
+    }
+
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
@@ -12862,6 +13919,8 @@ DA:1,1
             file_churn: HashMap::new(),
             catalog: true,
             disables: vec![],
+            includes: vec![],
+            config: None,
             jumps: vec![],
             rev: "HEAD".to_string(),
             marks_path: None,
@@ -14993,7 +16052,12 @@ mod docs {
             .filter(|p| p.extension().is_some_and(|e| e == "toml"))
             .collect();
         files.sort();
-        let mut rules: Vec<ordo::model::Rule> = vec![];
+        #[derive(serde::Serialize)]
+        struct Compiled {
+            name: String,
+            rules: Vec<ordo::model::Rule>,
+        }
+        let mut out: Vec<Compiled> = vec![];
         let mut problems = vec![];
         for f in &files {
             let text = std::fs::read_to_string(f).expect("read catalog file");
@@ -15003,10 +16067,17 @@ mod docs {
                     .into_iter()
                     .map(|p| format!("{}: {p}", f.display())),
             );
-            rules.extend(doc.rules);
+            // the file stem is the section a reviewer turns off as a unit
+            out.push(Compiled {
+                name: f
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                rules: doc.rules,
+            });
         }
         (
-            serde_json::to_string_pretty(&rules).expect("serialize catalog"),
+            serde_json::to_string_pretty(&out).expect("serialize catalog"),
             problems,
         )
     }
