@@ -53,6 +53,7 @@ Not every hunk sits in a definition, and the ones that don't used to say only
 | *(omitted)* | a definition — a function, class, macro, … | `parse_cfg` |
 | `test` | a named block: `describe`/`it`/`test`, or a rust test macro | `describe "cli" > it "parses flags"` |
 | `region` | conditional compilation | `#ifdef CURL_DISABLE_HTTP` |
+| `namespace` | a namespace: it qualifies what it holds | `particode` |
 | `preamble` | prose before a document's first heading | `preamble` |
 | `front-matter` | a document's `---` metadata block | `front matter` |
 | `document` | one `---` document of a multi-document yaml file | `document 2` |

@@ -106,8 +106,10 @@
                           "definition",
                           "test",
                           "region",
+                          "namespace",
                           "preamble",
                           "front-matter",
+                          "document",
                           "binding",
                           "call"
                         ]
@@ -399,8 +401,10 @@
                       "enum": [
                         "test",
                         "region",
+                        "namespace",
                         "preamble",
                         "front-matter",
+                        "document",
                         "binding",
                         "call"
                       ],

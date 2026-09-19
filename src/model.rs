@@ -407,6 +407,10 @@ pub enum ContainerKind {
     Test,
     /// a conditional-compilation region, e.g. `#ifdef CURL_DISABLE_HTTP`
     Region,
+    /// a namespace: like `Document` it *scopes* — its name qualifies what it
+    /// contains — but it declares nothing a reviewer navigates to, and every
+    /// file in a project reopens the same one
+    Namespace,
     /// prose before a document's first heading
     Preamble,
     /// a document's `---` metadata block
@@ -419,6 +423,25 @@ pub enum ContainerKind {
     Binding,
     /// a top-level call whose multi-line arguments hold the hunk
     Call,
+}
+
+impl ContainerKind {
+    /// Every variant, `Definition` first — it is the omitted case, and the only
+    /// kind that is a symbol. The rest follow the enum's own order. Anything
+    /// that enumerates container kinds (the published schema, the TUI's
+    /// `:config` help) reads this, so a new variant cannot be added to one and
+    /// forgotten in the other.
+    pub const ALL: &'static [ContainerKind] = &[
+        ContainerKind::Definition,
+        ContainerKind::Test,
+        ContainerKind::Region,
+        ContainerKind::Namespace,
+        ContainerKind::Preamble,
+        ContainerKind::FrontMatter,
+        ContainerKind::Document,
+        ContainerKind::Binding,
+        ContainerKind::Call,
+    ];
 }
 
 /// What happened to a symbol across the whole change. Ordered from "this is
