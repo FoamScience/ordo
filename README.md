@@ -106,6 +106,7 @@ other consumer speaks to. Neither is required by the other.
 | [`docs/rules.md`](docs/rules.md) | conventions as data — conditions, limits, queries, shipped rulesets |
 | [`docs/languages.md`](docs/languages.md) | every supported language and the shape it is read in |
 | [`docs/ceilings.md`](docs/ceilings.md) | what `ordo` deliberately does not do |
+| [`docs/architecture.md`](docs/architecture.md) | for contributors: the seams, what may depend on what, where a new fact goes |
 
 Design notes — how a decision was reached rather than what it is — also live in
 [`docs/`](docs), suffixed `-design.md`.
