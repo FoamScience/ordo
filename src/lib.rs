@@ -1466,9 +1466,17 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     } else {
         (vec![], String::new(), false)
     };
-    let mut sems = lang::for_path(&change.path)
+    // `analyze` hands back the hunks it read: an added file arrives as one hunk
+    // however long it is, and comes back cut at the constructs inside it
+    let (raw, mut sems) = match lang::for_path(&change.path)
         .and_then(|spec| analyze(spec, &new, &raw, &change.path))
-        .unwrap_or_else(|| raw.iter().map(HunkSem::other).collect());
+    {
+        Some(pair) => pair,
+        None => {
+            let sems = raw.iter().map(HunkSem::other).collect();
+            (raw, sems)
+        }
+    };
     // P12.2 noise: generated/vendored path, or a formatting-only hunk
     let generated = lang::is_generated_path(&change.path);
     let old_lines: Vec<&str> = old.unwrap_or("").lines().collect();
