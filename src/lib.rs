@@ -75,6 +75,10 @@ fn catalog_for<'a>(options: &Options, problems: &mut Vec<String>) -> Cow<'a, [Ru
 }
 
 pub fn run(input: Input) -> Output {
+    // A caller who sends a diff gets the same review as one who sends
+    // `old`/`new`, whenever the diff carries enough to rebuild them.
+    let mut input = input;
+    fill_sides(&mut input);
     // Templates are rewritten before anything else looks at them: every later
     // parse (semantics, symbol rows, bodies, advisories) then sees text the
     // underlying grammar can read, at unchanged offsets. What the jinja
@@ -311,6 +315,37 @@ pub fn run(input: Input) -> Output {
         },
         notes,
         ledger,
+    }
+}
+
+/// Fill `old`/`new` from a `diff` wherever they can be recovered, so every
+/// stage that reads file content sees the same two sides.
+///
+/// The reconstruction used to live inside `build_change` and stay there: hunks
+/// were computed from the rebuilt text, but the symbol stage still saw
+/// `old: None` and read the file as having had no definitions at all — so on
+/// the whole patch path every pre-existing definition was reported as a
+/// signature change, and no hunk ever reported a body-only edit.
+fn fill_sides(input: &mut Input) {
+    let full_context = input.options.full_context;
+    for c in &mut input.changes {
+        if c.new.is_some() {
+            continue;
+        }
+        let Some(diff) = c.diff.as_deref() else {
+            continue;
+        };
+        match c.old.as_deref() {
+            // L1: the caller gave the old side, so the new one is old + diff
+            Some(old) => c.new = patch::apply(old, diff),
+            // L2: an added file, or a caller-asserted full-context patch
+            None => {
+                let pf = patch::parse_file_diff(diff, full_context);
+                if let (Some(old), Some(new)) = (pf.old, pf.new) {
+                    (c.old, c.new) = (Some(old), Some(new));
+                }
+            }
+        }
     }
 }
 
@@ -1454,15 +1489,15 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let old = change.old.as_deref();
     let (raw, new, degraded): (Vec<RawHunk>, String, bool) = if let Some(new) = &change.new {
         (compute_hunks(old.unwrap_or(""), new), new.clone(), false)
-    } else if let (Some(old), Some(diff)) = (old, &change.diff) {
-        // L1: reconstruct full new content by applying the diff to old
-        match patch::apply(old, diff) {
-            Some(new) => (compute_hunks(old, &new), new, false),
-            None => from_diff(diff, full_context), // apply failed → positional (L3)
-        }
     } else if let Some(diff) = &change.diff {
-        // diff only: full for additions / opt-in full-context, else positional
-        from_diff(diff, full_context)
+        // `fill_sides` rebuilds both sides whenever the diff allows it, so a
+        // change still carrying only a diff here is one it could not rebuild:
+        // the hunks are the `@@` ranges and the order is positional (L3)
+        (
+            patch::parse_file_diff(diff, full_context).hunks,
+            String::new(),
+            true,
+        )
     } else {
         (vec![], String::new(), false)
     };
@@ -1769,10 +1804,3 @@ fn formatting_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool 
     }
 }
 
-fn from_diff(diff: &str, full_context: bool) -> (Vec<RawHunk>, String, bool) {
-    let pf = patch::parse_file_diff(diff, full_context);
-    match (pf.old, pf.new) {
-        (Some(old), Some(new)) => (compute_hunks(&old, &new), new, false),
-        _ => (pf.hunks, String::new(), true), // positional → degraded
-    }
-}
