@@ -750,6 +750,10 @@ struct LoadResult {
     /// live for this session and are never written
     marks_path: Option<PathBuf>,
     marks: HashMap<u64, u64>,
+    /// commits touching each file in `FILE_CHURN_WINDOW` — the cheap, eager
+    /// half of the churn signal; `H` refines the selected hunk to its exact
+    /// lines (see `hunk_churn`)
+    file_churn: HashMap<String, usize>,
     /// group id -> reason, for `:group`'s header rows
     groups: HashMap<String, String>,
     /// what was dropped on the way here, for `:audit`
@@ -809,6 +813,8 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let progress = |msg: String| {
         let _ = tx.send(LoadMsg::Progress(msg));
     };
+    // resolved before `target` is consumed below; per-file churn counts from it
+    let churn_sha = review_commit_sha(&target);
     let t = std::time::Instant::now();
     let input = match target {
         Target::Commit(sha) => gather(&sha, &filter, &progress),
@@ -915,10 +921,26 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         let _ = tx.send(LoadMsg::Empty(msg));
         return;
     }
+    // cheap enough to be eager (see `file_churn`), and the reviewer gets the
+    // signal without having to ask for it on every hunk
+    let churn_paths: Vec<String> = {
+        let mut p: Vec<String> = items.iter().map(|i| i.path.clone()).collect();
+        p.sort();
+        p.dedup();
+        p
+    };
+    let churn_t = std::time::Instant::now();
+    let churn_by_file = match &churn_sha {
+        Some(sha) => file_churn(sha, &churn_paths, &progress),
+        None => HashMap::new(),
+    };
+    let (churn_ms, churn_files) = (churn_t.elapsed().as_millis(), churn_by_file.len());
     let timing = format!(
         "ordo: read {files} file{} in {read_ms}ms · highlighted {hl_files} in {hl_ms}ms · \
+         counted churn for {churn_files} file{} in {churn_ms}ms · \
          ordered {} hunks into {} groups, {} cluster{} in {}ms",
         plural(files),
+        plural(churn_files),
         items.len(),
         out.groups.len(),
         out.clusters.len(),
@@ -986,6 +1008,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     }
     let _ = tx.send(LoadMsg::Done(Box::new(LoadResult {
         items,
+        file_churn: churn_by_file,
         view,
         comments_only: only_comments,
         sources,
@@ -2063,7 +2086,13 @@ fn cascade_line(app: &App, i: usize) -> Option<String> {
 /// The one-line delta for item `i`, or `None` when it reads exactly as it did
 /// last time — and when there was no last time, since "everything is new" on a
 /// first run is noise rather than information.
-/// The churn row for hunk `i`, or `None` when it has not been asked for.
+/// `FILE_CHURN_WINDOW` as prose — "6.months" is a git argument, not English.
+fn churn_window_phrase() -> String {
+    FILE_CHURN_WINDOW.replace('.', " ")
+}
+
+/// The churn row for hunk `i`: the file's recent churn, or the hunk's own once
+/// `H` has asked for it.
 ///
 /// Rendered here rather than in `why_rows` so that function stays a pure
 /// function of an `Item`, the same way `delta_line` and `cascade_line` do it.
@@ -2071,7 +2100,19 @@ fn churn_line(app: &App, i: usize) -> Option<String> {
     let it = app.items.get(i)?;
     let key = (it.path.clone(), it.new_range[0], it.new_range[1]);
     let Some(churn) = app.churn_cache.get(&key) else {
-        return None; // never asked; `H` asks
+        // not asked for this hunk: fall back to the file, which load already
+        // counted. The specific answer replaces this one when `H` asks for it.
+        return match app.file_churn.get(&it.path) {
+            None | Some(0) => None,
+            Some(1) => Some(format!(
+                "this file changed once in the last {}",
+                churn_window_phrase()
+            )),
+            Some(n) => Some(format!(
+                "this file changed {n} times in the last {}",
+                churn_window_phrase()
+            )),
+        };
     };
     let Some(c) = churn else {
         return Some("churn: unavailable (no commit to review from)".to_string());
@@ -4145,6 +4186,10 @@ struct App {
     /// `None` means asked for and unavailable, which the why pane says out
     /// loud — a key that silently does nothing reads as broken
     churn_cache: HashMap<(String, usize, usize), Option<Churn>>,
+    /// commits per file in `FILE_CHURN_WINDOW`, computed once at load. The
+    /// cheap half of the signal: always shown, and `H` refines the selected
+    /// hunk to its exact lines.
+    file_churn: HashMap<String, usize>,
     /// positions `JumpToEdge` jumped from, most-recent last; `JumpBack` pops
     /// one. Bounded by `JUMP_STACK_CAP`.
     jumps: Vec<(usize, Cursor)>,
@@ -6595,6 +6640,53 @@ fn churn_query(it: &Item, uncommitted: bool) -> ChurnQuery {
     }
 }
 
+/// How far back per-file churn looks. Recent edits are the signal — a file
+/// rewritten twice last month reads differently from one rewritten twice in
+/// 2019, and an all-time count flattens that away.
+const FILE_CHURN_WINDOW: &str = "6.months";
+
+/// How many files the eager churn pass will spend time on.
+///
+/// One `git rev-list` per file, measured at ~9ms. That is nothing for a normal
+/// review and not nothing for a sweeping one: this repository's own history
+/// holds a 78-file commit, and a mass rename runs to hundreds. Past this many
+/// files the signal is dropped rather than paid for — a reviewer facing 200
+/// files is not triaging by churn, and `H` still answers for any hunk they
+/// stop on.
+const FILE_CHURN_MAX_FILES: usize = 100;
+
+/// Commits touching each file in the window.
+///
+/// Per *file*, not per hunk, and that is the whole reason it can be eager:
+/// ~9ms a file against `git log -L`'s ~200ms for one hunk. `rev-list --count`
+/// rather than counting the lines of a log: git already knows the number, and
+/// a hot file's log is a page of output to allocate and throw away.
+fn file_churn(
+    review_sha: &str,
+    paths: &[String],
+    progress: &dyn Fn(String),
+) -> HashMap<String, usize> {
+    let mut out = HashMap::new();
+    if paths.len() > FILE_CHURN_MAX_FILES {
+        return out;
+    }
+    for (i, path) in paths.iter().enumerate() {
+        progress(format!("history… {}/{}", i + 1, paths.len()));
+        let n = git(&[
+            "rev-list",
+            "--count",
+            &format!("--since={FILE_CHURN_WINDOW}"),
+            review_sha,
+            "--",
+            path,
+        ]);
+        if let Ok(n) = n.trim().parse::<usize>() {
+            out.insert(path.clone(), n);
+        }
+    }
+    out
+}
+
 fn hunk_churn(review_sha: &str, path: &str, q: &ChurnQuery) -> Churn {
     let [r0, r1] = q.rows;
     // a pure insertion has an empty old-side range (`[n, n - 1]`); there are no
@@ -7313,6 +7405,7 @@ fn run(
                     dirty = true;
                     let LoadResult {
                         items,
+                        file_churn,
                         view,
                         comments_only,
                         sources,
@@ -7367,6 +7460,7 @@ fn run(
                         uncommitted,
                         history_cache: HashMap::new(),
                         churn_cache: HashMap::new(),
+                        file_churn,
                         jumps: Vec::new(),
                         rev: rev.clone(),
                         marks_path,
@@ -12447,6 +12541,65 @@ DA:1,1
         );
     }
 
+    /// A sweeping change must not pay for a signal nobody triages by. One
+    /// `rev-list` per file is ~9ms, which is nothing for a normal review and
+    /// seconds for a mass rename.
+    #[test]
+    fn the_eager_churn_pass_gives_up_on_a_sweeping_change() {
+        let many: Vec<String> = (0..FILE_CHURN_MAX_FILES + 1)
+            .map(|i| format!("f{i}.rs"))
+            .collect();
+        let calls = std::cell::Cell::new(0usize);
+        let progress = |_: String| calls.set(calls.get() + 1);
+        let got = file_churn("HEAD", &many, &progress);
+        assert!(got.is_empty(), "past the cap it counts nothing");
+        assert_eq!(calls.get(), 0, "and does not shell out even once");
+    }
+
+    /// Two resolutions of the same signal: the file's recent churn is counted
+    /// at load and always shown; `H` replaces it with the hunk's own lines.
+    /// The specific answer must win wherever both exist.
+    #[test]
+    fn the_hunk_answer_replaces_the_file_answer_once_asked_for() {
+        let mut app = test_app(0);
+        let it = &app.items[0];
+        let path = it.path.clone();
+        let key = (path.clone(), it.new_range[0], it.new_range[1]);
+
+        // nothing known at all: no row
+        assert_eq!(churn_line(&app, 0), None);
+
+        // a file nothing has touched in the window says nothing, rather than
+        // spending a row on "0 times"
+        app.file_churn.insert(path.clone(), 0);
+        assert_eq!(churn_line(&app, 0), None);
+
+        app.file_churn.insert(path.clone(), 1);
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("this file changed once in the last 6 months")
+        );
+        app.file_churn.insert(path.clone(), 14);
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("this file changed 14 times in the last 6 months")
+        );
+
+        // `H` answers for these lines specifically, and that wins
+        app.churn_cache.insert(
+            key,
+            Some(Churn {
+                commits: 2,
+                capped: false,
+                last: Some(("Ada".to_string(), "2026-09-01".to_string())),
+            }),
+        );
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("these lines changed 2 times before — last 2026-09-01 by Ada")
+        );
+    }
+
     /// `H` must never shell out twice for the same hunk, and must record the
     /// unavailable case so it is not retried on every keypress.
     #[test]
@@ -12495,6 +12648,7 @@ DA:1,1
             uncommitted: false,
             history_cache: HashMap::new(),
             churn_cache: HashMap::new(),
+            file_churn: HashMap::new(),
             jumps: vec![],
             rev: "HEAD".to_string(),
             marks_path: None,

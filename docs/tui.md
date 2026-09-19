@@ -23,11 +23,19 @@ Where a name the hunk introduces is used, the code gutter carries a `▸` on tha
 row (the engine's `hunks[].uses_at`), and `]`/`[` step between them — positions
 belong in the code, not as a list of line numbers in the why pane.
 
-`H` asks how often the selected hunk's lines have changed before, and who
-touched them last. It is a keypress rather than something the load computes:
+The why pane carries the file's recent churn — how many commits touched it in
+the last six months — counted once at load, because one `git rev-list` per file
+is ~9ms. On a change touching more than a hundred files that pass is skipped
+rather than paid for: nobody triages a mass rename by churn.
+
+`H` refines it to the selected hunk: how often *those lines* changed, and who
+touched them last. That one is a keypress rather than load work because
 `git log -L` follows a line range through the whole history, which measured
 ~0.2s on a 13k-line file and is not bounded by `-n`, so a few hundred hunks
 would cost most of a minute up front. The answer is cached per hunk.
+
+Neither changes the reading order. Order is the def→use graph's to decide;
+churn says what deserves attention, which is a different question.
 
 Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
 removed line is paired with the added line it became, and only the differing
