@@ -232,8 +232,6 @@ command's own arguments:
 | `:rules` | where the active rules came from, and what was replaced or disabled |
 | `:config` | every setting, generated from the tables the program reads |
 | `:filter <glob>` | narrow the review to paths matching &lt;glob&gt;; no argument clears it |
-| `:keys <preset>` | swap the keymap live (vim, vscode) |
-| `:theme <name>` | swap the palette live (:theme with no name lists them) |
 | `:strategy <name>` | re-order the review (comprehension, defs-first, file) |
 | `:group` | toggle group-reason headers in the reading-order list |
 | `:rule` | draft a rule matching the selected hunk's shape |
@@ -259,7 +257,7 @@ or source text.
 
 ## Themes
 
-`--theme <name>` (also `$ORDO_TUI_THEME`, default `dark`); `:theme` lists
+`--theme <name>` (also `$ORDO_TUI_THEME`, default `dark`); `:config` lists
 them and swaps live. `dark` and `light` keep the **terminal's own**
 foreground palette and only tint the diff backgrounds — the default, because
 it matches the rest of your setup for free. Every other theme is truecolor:
@@ -278,7 +276,9 @@ What a theme *does* assume is a terminal background of matching lightness —
 which is why the choice is an explicit flag rather than a detection (OSC 11
 background queries aren't reliably supported).
 
-Every role is overridable, on top of any theme:
+Every role is overridable, on top of any theme. An empty value means the role
+follows its palette, which is what `:config` writes back when an override is
+cleared:
 
 ```toml
 [theme]

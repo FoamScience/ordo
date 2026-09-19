@@ -88,7 +88,7 @@ expand them first.
 `dark` and `light` keep the terminal's own foreground colours and only tint the
 diff backgrounds; the truecolor themes — catppuccin (mocha, macchiato, frappe,
 latte), tokyonight (night, storm, moon, day), gruvbox (dark, light), nord,
-dracula, solarized (dark, light) — name every colour themselves. `:theme` lists
+dracula, solarized (dark, light) — name every colour themselves. `:config` lists
 them and swaps live. No theme paints a window background, so terminal
 transparency survives; what a theme does assume is a background of matching
 lightness. Roles are overridable in tui.toml's [theme] section.
@@ -104,7 +104,7 @@ keys act on the focused pane, paging always drives the code pane.
 
 Command mode (`:` in vim, Ctrl+Shift+P in vscode) turns launch-time choices
 into live controls: `:only-comments`, `:all`, `:filter <glob>` (empty clears,
-same negative-glob syntax as the CLI), `:keys <preset>`, `:strategy
+same negative-glob syntax as the CLI), `:config` (every setting), `:strategy
 <comprehension|defs-first|file>` (re-orders in place), `:group` (toggle group
 headers in the reading-order list), `:goto <path>`, `:e <rev>` (review a
 different revision without restarting), `:q`, `:help` (lists these, generated
@@ -3923,19 +3923,30 @@ fn config_schema(app: &App) -> Vec<ConfigSection> {
             .collect(),
     });
 
+    // the live theme is its palette with the reviewer's overrides already laid
+    // on top, so a role that differs from the bare palette is an override and
+    // one that matches is not — which is the distinction a row has to show, or
+    // swapping the theme would carry the old palette's colours over with it
+    let bare = theme(app.theme.name);
     out.push(ConfigSection {
         title: "theme roles".to_string(),
         file: tui.clone(),
         fields: THEME_ROLES
             .iter()
-            .map(|role| ConfigField {
-                key: format!("theme.{role}"),
-                label: role.to_string(),
-                help: "#rrggbb, or empty to follow the terminal".to_string(),
-                kind: FieldKind::Text(match theme_role_color(&app.theme, role) {
-                    Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-                    _ => String::new(),
-                }),
+            .map(|role| {
+                let cur = theme_role_color(&app.theme, role);
+                let overridden = bare
+                    .as_ref()
+                    .is_none_or(|b| theme_role_color(b, role) != cur);
+                ConfigField {
+                    key: format!("theme.{role}"),
+                    label: role.to_string(),
+                    help: "#rrggbb, or empty to follow the theme".to_string(),
+                    kind: FieldKind::Text(match cur {
+                        Color::Rgb(r, g, b) if overridden => format!("#{r:02x}{g:02x}{b:02x}"),
+                        _ => String::new(),
+                    }),
+                }
             })
             .collect(),
     });
@@ -4293,6 +4304,9 @@ fn parse_key_config(text: &str) -> KeyConfig {
                 } else if !THEME_ROLES.contains(&k.as_str()) {
                     cfg.problems
                         .push(format!("line {}: unknown theme role `{k}`", n + 1));
+                } else if v.is_empty() {
+                    // an empty role follows the palette — what `:config` writes
+                    // back when a reviewer clears an override
                 } else {
                     match parse_hex(&v) {
                         Some(c) => cfg.colors.push((k, c)),
@@ -6253,8 +6267,8 @@ const PALETTES: &[Palette] = &[
     },
 ];
 
-/// Every theme name, terminal ones first — the order `--theme` and `:theme`
-/// report, and the order `:theme` completes in.
+/// Every theme name, terminal ones first — the order `--theme` reports, and
+/// the order `:config` cycles in.
 fn theme_names() -> Vec<String> {
     ["dark".to_string(), "light".to_string()]
         .into_iter()
@@ -8007,7 +8021,10 @@ fn run(
                     if app.config.as_ref().is_some_and(|c| c.editing.is_some()) {
                         let c = app.config.as_mut().expect("checked");
                         match (k.code, k.modifiers) {
-                            (KeyCode::Enter, _) => c.commit_edit(),
+                            (KeyCode::Enter, _) => {
+                                let _ = c;
+                                config_commit_edit(app);
+                            }
                             (KeyCode::Esc, _) => c.editing = None,
                             (KeyCode::Backspace, _) => {
                                 if let Some(t) = c.editing.as_mut() {
@@ -9173,6 +9190,21 @@ fn move_config(app: &mut App, by: isize) {
 
 /// Space on the selected setting. A rule or catalog change re-runs the engine,
 /// because what the reviewer is looking at is the answer to those settings.
+/// Swap the palette. Syntax colours are baked into the highlight cache at load
+/// time, so what is already on screen has to be highlighted again.
+fn swap_theme(app: &mut App, t: Theme) {
+    app.theme = t;
+    let paths: Vec<String> = app.highlights.keys().cloned().collect();
+    for path in paths {
+        let Some((_, nl)) = app.sources.get(&path) else {
+            continue;
+        };
+        if let Some(h) = highlight_file(&path, &nl.join("\n"), &app.theme.syn) {
+            app.highlights.insert(path, h);
+        }
+    }
+}
+
 fn config_toggle(app: &mut App) {
     let Some(c) = app.config.as_mut() else { return };
     if !c.toggle() {
@@ -9182,17 +9214,55 @@ fn config_toggle(app: &mut App) {
         f.key.starts_with("disable:") || f.key.starts_with("section:") || f.key == "catalog"
     });
     let (catalog, disables) = config_rule_state(c);
-    let (theme_name, preset) = config_general(c);
+    let (_, preset) = config_general(c);
     if rules_changed {
         app.catalog = catalog;
         app.disables = disables;
         let _ = run_strategy(app, app.strategy.clone().as_str());
     }
-    if let Some(t) = theme(&theme_name) {
-        app.theme = t;
-    }
-    if let Some(k) = keymap(&preset) {
+    config_apply_theme(app);
+    // guarded: a preset swap rebuilds the whole map, and doing that because a
+    // catalog checkbox moved would drop the reviewer's own `[binds]`
+    if let Some(k) = keymap(&preset).filter(|k| k.name != app.keys.name) {
         app.keys = k;
+    }
+}
+
+/// Accept the row being typed into, and repaint if it was a colour.
+fn config_commit_edit(app: &mut App) {
+    if let Some(c) = app.config.as_mut() {
+        c.commit_edit();
+    }
+    config_apply_theme(app);
+}
+
+/// The palette the config screen currently describes — the chosen theme with
+/// the filled-in role rows on top — applied if it isn't what's on screen.
+/// Both a theme swap and a single edited colour arrive here.
+fn config_apply_theme(app: &mut App) {
+    let Some(c) = app.config.as_ref() else { return };
+    let (name, _) = config_general(c);
+    let colors: Vec<(String, Color)> = c
+        .sections
+        .iter()
+        .flat_map(|s| &s.fields)
+        .filter_map(|f| {
+            let role = f.key.strip_prefix("theme.")?;
+            let FieldKind::Text(t) = &f.kind else {
+                return None;
+            };
+            Some((role.to_string(), parse_hex(t)?))
+        })
+        .collect();
+    let Some(base) = theme(&name) else { return };
+    let next = apply_theme_colors(base, &colors);
+    // re-highlighting every open file is not free: only a real difference
+    if next.name != app.theme.name
+        || THEME_ROLES
+            .iter()
+            .any(|r| theme_role_color(&next, r) != theme_role_color(&app.theme, r))
+    {
+        swap_theme(app, next);
     }
 }
 
@@ -10225,16 +10295,6 @@ const COMMANDS: &[Cmd] = &[
         help: "narrow the review to paths matching <glob>; no argument clears it",
     },
     Cmd {
-        name: "keys",
-        args: "<preset>",
-        help: "swap the keymap live (vim, vscode)",
-    },
-    Cmd {
-        name: "theme",
-        args: "<name>",
-        help: "swap the palette live (:theme with no name lists them)",
-    },
-    Cmd {
         name: "strategy",
         args: "<name>",
         help: "re-order the review (comprehension, defs-first, file)",
@@ -10467,8 +10527,6 @@ fn arg_candidates(
     rev_candidates: &[String],
 ) -> Vec<String> {
     match cmd {
-        "keys" => vec!["vim".to_string(), "vscode".to_string()],
-        "theme" => theme_names(),
         "strategy" => vec![
             "comprehension".to_string(),
             "defs-first".to_string(),
@@ -10910,48 +10968,6 @@ fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcome, String> 
                 Some((arg.to_string(), globs))
             };
             set_filters(app, app.comments_only, app.show_all, next)?;
-            Ok(CommandOutcome::None)
-        }
-        "theme" => {
-            let want = arg.trim();
-            if want.is_empty() {
-                // no argument: show what there is, rather than an error about
-                // the argument the reviewer is trying to discover
-                app.popup = Some(Popup::new(
-                    "themes",
-                    theme_names()
-                        .iter()
-                        .map(|n| {
-                            let mark = if *n == app.theme.name { "▸ " } else { "  " };
-                            prose(format!("{mark}{n}"))
-                        })
-                        .collect(),
-                ));
-                return Ok(CommandOutcome::None);
-            }
-            let Some(t) = theme(want) else {
-                return Err(format!("unknown theme '{want}' (try :theme to list them)"));
-            };
-            app.theme = t;
-            // syntax colours are baked into the highlight cache at load time,
-            // so a live theme swap has to re-highlight what is on screen
-            let paths: Vec<String> = app.highlights.keys().cloned().collect();
-            for path in paths {
-                let Some((_, nl)) = app.sources.get(&path) else {
-                    continue;
-                };
-                if let Some(h) = highlight_file(&path, &nl.join("\n"), &app.theme.syn) {
-                    app.highlights.insert(path, h);
-                }
-            }
-            Ok(CommandOutcome::None)
-        }
-        "keys" => {
-            let preset = arg.trim();
-            let Some(km) = keymap(preset) else {
-                return Err(format!("unknown key preset '{preset}' (want: vim, vscode)"));
-            };
-            app.keys = km;
             Ok(CommandOutcome::None)
         }
         "strategy" => {
@@ -12363,12 +12379,6 @@ DA:1,1
     fn command_completions_lists_command_names_before_any_space() {
         let got = command_completions("str", &[], &[], &[]);
         assert_eq!(got, vec!["strategy".to_string()]);
-    }
-
-    #[test]
-    fn command_completions_lists_keys_presets() {
-        let got = command_completions("keys ", &[], &[], &[]);
-        assert_eq!(got, vec!["vim".to_string(), "vscode".to_string()]);
     }
 
     #[test]
@@ -15211,24 +15221,103 @@ DA:1,1
         );
     }
 
+    /// Syntax colours are baked into the highlight cache at load time, so a
+    /// theme swap that only sets `app.theme` leaves the code pane painted in
+    /// the old palette. `:config` is now the only way to swap one.
     #[test]
-    fn theme_completes_from_the_theme_list() {
-        let got = command_completions("theme catp", &[], &[], &[]);
-        assert_eq!(got.len(), 4, "{got:?}");
-        assert!(got.iter().all(|n| n.starts_with("catppuccin-")), "{got:?}");
+    fn a_theme_change_in_config_re_highlights_what_is_on_screen() {
+        let mut app = test_app(0);
+        app.sources.insert(
+            "a.rs".to_string(),
+            (vec![], vec!["fn main() {}".to_string()]),
+        );
+        // a stale cache entry: re-highlighting is what refills it
+        app.highlights.insert("a.rs".to_string(), vec![]);
+        app.config = Some(ConfigUi::open(&app));
+
+        let at = {
+            let c = app.config.as_ref().unwrap();
+            c.rows
+                .iter()
+                .position(|&(i, j)| c.sections[i].fields[j].key == "theme")
+                .expect("theme setting")
+        };
+        app.config.as_mut().unwrap().sel = at;
+        let before = app.theme.name;
+        config_toggle(&mut app);
+
+        assert_ne!(app.theme.name, before, "cycling picks another theme");
+        assert!(
+            !app.highlights["a.rs"].is_empty(),
+            "the stale highlight cache was not rebuilt for the new palette"
+        );
     }
 
+    /// The role rows and the palette are one setting between them: cycling the
+    /// theme must not carry the old palette's colours over, and must not throw
+    /// the reviewer's own overrides away either.
     #[test]
-    fn the_theme_command_swaps_the_palette_and_rejects_an_unknown_name() {
+    fn config_keeps_role_overrides_across_a_theme_swap_and_applies_an_edit() {
         let mut app = test_app(0);
-        assert!(execute_command(&mut app, "theme nord").is_ok());
-        assert_eq!(app.theme.name, "nord");
-        match execute_command(&mut app, "theme nonesuch") {
-            Err(msg) => assert!(msg.contains("unknown theme"), "{msg}"),
-            Ok(_) => panic!("an unknown theme must be refused"),
+        let red = Color::Rgb(0xff, 0, 0);
+        app.theme = apply_theme_colors(theme("dark").unwrap(), &[("accent".to_string(), red)]);
+        app.config = Some(ConfigUi::open(&app));
+
+        let row = |app: &App, key: &str| {
+            let c = app.config.as_ref().unwrap();
+            c.rows
+                .iter()
+                .position(|&(i, j)| c.sections[i].fields[j].key == key)
+                .unwrap_or_else(|| panic!("no `{key}` row"))
+        };
+        // only the override is materialised; a role following its palette is
+        // blank, or the swap below would paste dark's colours onto the next one
+        let untouched: Vec<&str> = THEME_ROLES
+            .iter()
+            .copied()
+            .filter(|r| *r != "accent")
+            .collect();
+        let c = app.config.as_ref().unwrap();
+        assert_eq!(
+            c.field(row(&app, "theme.accent")).unwrap().kind,
+            FieldKind::Text("#ff0000".to_string())
+        );
+        for r in &untouched {
+            assert_eq!(
+                c.field(row(&app, &format!("theme.{r}"))).unwrap().kind,
+                FieldKind::Text(String::new()),
+                "`{r}` follows the palette and must read as blank"
+            );
         }
-        // and the refusal leaves the previous theme in place
-        assert_eq!(app.theme.name, "nord");
+
+        let at = row(&app, "theme");
+        app.config.as_mut().unwrap().sel = at;
+        config_toggle(&mut app);
+        assert_ne!(app.theme.name, "dark", "cycling picks another palette");
+        assert_eq!(
+            theme_role_color(&app.theme, "accent"),
+            red,
+            "the reviewer's override was thrown away by the swap"
+        );
+        let next = theme(app.theme.name).expect("the cycled-to palette");
+        for r in &untouched {
+            assert_eq!(
+                theme_role_color(&app.theme, r),
+                theme_role_color(&next, r),
+                "`{r}` kept dark's colour instead of following the new palette"
+            );
+        }
+
+        // and editing a role applies without waiting for a restart
+        let at = row(&app, "theme.border-focus");
+        let c = app.config.as_mut().unwrap();
+        c.sel = at;
+        c.editing = Some("#00ff00".to_string());
+        config_commit_edit(&mut app);
+        assert_eq!(
+            theme_role_color(&app.theme, "border-focus"),
+            Color::Rgb(0, 0xff, 0)
+        );
     }
 
     // ---- configurable keybinds ----
