@@ -37,6 +37,22 @@ would cost most of a minute up front. The answer is cached per hunk.
 Neither changes the reading order. Order is the def→use graph's to decide;
 churn says what deserves attention, which is a different question.
 
+## The dependency canvas
+
+`gD` opens the hunk's dependencies as one view. The hunk itself sits across the
+top, as much of it as the canvas can show; what it **needs** fans down the left
+half, what **needs it** down the right. Each direction keeps its half whether or
+not the other has anything in it, so a hunk with only callers reads as the same
+view with an empty left side rather than as a different one.
+
+Everything stretches to the space available: cards share the height under the
+rule, so one card on a side takes the column and four take a quarter each, and
+each side's cards span its half. Below 96 columns the halves are too narrow for
+code and the cards stack in one labelled column instead.
+
+`j`/`k` move between cards, `Enter` jumps to one and closes the canvas, `C-o`
+comes back.
+
 Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
 removed line is paired with the added line it became, and only the differing
 part carries the strong tint —
