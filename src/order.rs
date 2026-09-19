@@ -285,6 +285,20 @@ pub fn order_all(
             definers.entry(s.as_str()).or_default().push(b);
         }
     }
+    // (group, symbol) pairs the symbol is declared *inside another definition*
+    // in — a class member, a name in a namespace — rather than at file scope.
+    // Built from `symbols`, which is `defines` minus the names that are not
+    // declarations of this file's own (an import, a test label): those name
+    // something whose scope lives elsewhere, and treating them as file-scope is
+    // what lets an imported name keep resolving across files.
+    let mut scoped: HashSet<(usize, &str)> = HashSet::new();
+    for i in 0..n {
+        for sym in &sem[i].symbols {
+            if sym.scope.is_some() {
+                scoped.insert((group_idx[i], sym.name.as_str()));
+            }
+        }
+    }
     let mut edges: Vec<(usize, usize, String)> = vec![];
     let mut gedges: Vec<(usize, usize)> = vec![];
     for a in 0..g {
@@ -295,6 +309,9 @@ pub fn order_all(
         for s in &defs_a {
             for &b in users.get(s.as_str()).into_iter().flatten() {
                 if b == a || (!cross_file && gfile(a, &groups) != gfile(b, &groups)) {
+                    continue;
+                }
+                if !resolves(a, b, s, &definers, &scoped, |x| gfile(x, &groups)) {
                     continue;
                 }
                 reached.entry(b).or_insert(s);
@@ -479,6 +496,7 @@ pub fn order_all(
         groups: &groups,
         definers: &definers,
         users: &users,
+        scoped: &scoped,
         group_file: &gfile_v,
         group_row: &grow_v,
         paths,
@@ -536,6 +554,35 @@ fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
     x
 }
 
+/// Can a use in group `b` be attributed to the definition of `s` in group `a`?
+///
+/// Two shapes make that a guess rather than a fact, and a guess sends the
+/// reviewer to the wrong definition:
+///
+///   * several groups define `s` — nothing here says which one the use means;
+///   * `s` is declared inside another definition (a class member, a name in a
+///     namespace) and the use is in a different file — resolving that needs the
+///     imports, qualifications and overload rules this engine does not read.
+///
+/// Both are common in c++ header code, where short member names (`View`,
+/// `name`, `at`, `i`) repeat in every class, but neither is language-specific.
+/// The two groups are NOT interchangeable: it is the *definer's* scope that
+/// decides, so `definer` and `user` must be passed the way round their names
+/// say (pinned by `a_use_side_scope_does_not_block_the_edge`).
+fn resolves(
+    definer: usize,
+    user: usize,
+    s: &str,
+    definers: &HashMap<&str, Vec<usize>>,
+    scoped: &HashSet<(usize, &str)>,
+    file_of: impl Fn(usize) -> usize,
+) -> bool {
+    if definers.get(s).is_some_and(|d| d.len() > 1) {
+        return false;
+    }
+    !(scoped.contains(&(definer, s)) && file_of(definer) != file_of(user))
+}
+
 struct RatCtx<'a> {
     groups: &'a [GroupInfo],
     /// symbol → the groups defining / using it, ascending. Provenance asks
@@ -543,6 +590,9 @@ struct RatCtx<'a> {
     /// the answer is O(hunks × groups).
     definers: &'a HashMap<&'a str, Vec<usize>>,
     users: &'a HashMap<&'a str, Vec<usize>>,
+    /// (group, symbol) pairs whose symbol is declared inside another
+    /// definition rather than at file scope — see `resolves`
+    scoped: &'a HashSet<(usize, &'a str)>,
     group_file: &'a [usize],
     group_row: &'a [usize],
     paths: &'a [String],
@@ -566,6 +616,15 @@ impl RatCtx<'_> {
     // cross_file is off) lives in the same file as the hunk's group
     fn ok(&self, mine: usize, other: usize) -> bool {
         other != mine && (self.cross_file || self.group_file[other] == self.group_file[mine])
+    }
+    // ...and `other` really is where `sym` comes from, by the same rule the
+    // def→use graph uses: the rationale must not name a definition the graph
+    // refused to draw an edge to
+    fn ok_for(&self, mine: usize, other: usize, sym: &str) -> bool {
+        self.ok(mine, other)
+            && resolves(other, mine, sym, self.definers, self.scoped, |x| {
+                self.group_file[x]
+            })
     }
     // markdown (currently the only prose language): rationale wording says
     // "section" instead of naming a construct kind.
@@ -895,7 +954,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
                     .iter()
                     .copied()
                     .find(|&b| {
-                        ctx.ok(mine, b)
+                        ctx.ok_for(mine, b, u)
                             && ctx.group_file[b] != my_file
                             && !is_test_path(&ctx.paths[ctx.group_file[b]])
                     })
@@ -908,7 +967,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
             ctx.definers(u)
                 .iter()
                 .copied()
-                .find(|&b| ctx.ok(mine, b))
+                .find(|&b| ctx.ok_for(mine, b, u))
                 .map(|b| (u.clone(), b))
         }) {
             return ctx.use_of_phrase(&u, mine, b);
