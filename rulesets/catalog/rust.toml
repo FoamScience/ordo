@@ -1,0 +1,48 @@
+# The built-in construct catalog — Rust.
+#
+# These are not style rules. Each one is a powerful or overusable construct
+# that a senior reviewer stops at, with an escalation ladder saying what the
+# lightest sufficient alternative is. `verdict` fires only where the pattern is
+# deterministically wrong.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Copy one
+# into your own ruleset if you want to change its wording or scope.
+#
+# Constructs the rule language cannot state faithfully stay as walkers in
+# `src/advisories.rs`; see the list at the end of that file's module doc.
+
+[[rule]]
+name = "static-mut"
+lang = "rust"
+kind = "static_item"
+with = ["mutable_specifier"]
+verdict = '''
+static mut — data races and UB the moment it's touched from >1 place.
+1. immutable static / const
+2. OnceLock / LazyLock for init-once
+3. atomics for counters/flags
+4. Mutex/RwLock for shared mutable state'''
+
+[[rule]]
+name = "transmute"
+lang = "rust"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "transmute$"))
+'''
+note = '''
+mem::transmute — the biggest hammer, rarely justified.
+1. numeric cast → `as`
+2. float/int bits → f32::to_bits / from_bits
+3. byte reinterpret → bytemuck / a pointer cast
+4. transmute (last resort; same size, well-understood layout)'''
+
+[[rule]]
+name = "unsafe"
+lang = 'rust'
+kind = 'unsafe_block'
+note = '''
+unsafe — you now uphold the invariants the compiler cannot check.
+1. can a safe std API / abstraction do it?
+2. if not, keep the block minimal and document the invariant it upholds.'''

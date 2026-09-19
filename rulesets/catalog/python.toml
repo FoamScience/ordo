@@ -1,0 +1,108 @@
+# The built-in construct catalog — Python.
+#
+# These are not style rules. Each one is a powerful or overusable construct
+# that a senior reviewer stops at, with an escalation ladder saying what the
+# lightest sufficient alternative is. `verdict` fires only where the pattern is
+# deterministically wrong.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Copy one
+# into your own ruleset if you want to change its wording or scope.
+#
+# Constructs the rule language cannot state faithfully stay as walkers in
+# `src/advisories.rs`; see the list at the end of that file's module doc.
+
+[[rule]]
+name = "del-finalizer"
+lang = ["python", "xonsh"]
+query = '''
+((function_definition name: (identifier) @n) (#eq? @n "__del__"))
+'''
+verdict = '''
+__del__ finalizer — unpredictable timing, skipped at interpreter exit, keeps reference cycles alive.
+1. deterministic cleanup → a context manager (__enter__/__exit__ or contextlib)
+2. non-deterministic cleanup → weakref.finalize
+3. __del__ (last resort; must be exception-safe and side-effect-light)'''
+
+[[rule]]
+name = "getattribute-override"
+lang = ["python", "xonsh"]
+query = '''
+((function_definition name: (identifier) @n) (#eq? @n "__getattribute__"))
+'''
+note = '''
+__getattribute__ override — intercepts EVERY access (incl. dunders); easy infinite recursion, big slowdown.
+1. __getattr__ (fires only on a missing attribute)
+2. property / descriptors for specific attributes
+3. __getattribute__ (only for a genuine transparent proxy)'''
+
+[[rule]]
+name = "mutable-default-arg"
+lang = ["python", "xonsh"]
+query = '''
+[(default_parameter value: [(list) (dictionary) (set)])
+ (typed_default_parameter value: [(list) (dictionary) (set)])] @p
+'''
+verdict = '''
+mutable default argument — the same object is shared across all calls (classic bug).
+Use None as the sentinel and create the value inside the function.'''
+
+[[rule]]
+name = "assert-validation"
+lang = ["python", "xonsh"]
+test = false
+kind = "assert_statement"
+verdict = '''
+assert for validation — assertions are stripped under `python -O`.
+Raise a real exception (ValueError/TypeError) for runtime checks; keep assert for invariants.'''
+
+[[rule]]
+name = "eval/exec"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (identifier) @f) (#match? @f "^(eval|exec)$"))
+'''
+note = '''
+eval/exec — arbitrary code execution. Lightest sufficient step:
+1. parse data → ast.literal_eval / json
+2. dispatch by name → a dict or getattr
+3. import by path → importlib
+4. run arbitrary code → eval/exec (never on untrusted input)'''
+
+[[rule]]
+name = "os-system"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (attribute) @f) (#eq? @f "os.system"))
+'''
+note = '''
+os.system — runs a string through the shell (injection), no output capture, no error object.
+1. run a program → subprocess.run([...]) with an argument list (no shell)
+2. capture output → subprocess.run(..., capture_output=True)
+3. os.system (avoid; never with interpolated input)'''
+
+[[rule]]
+name = "pickle"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (attribute) @f)
+ (#match? @f "^c?[pP]ickle\\.loads?$"))
+'''
+note = '''
+pickle load — unpickling untrusted data executes arbitrary code (__reduce__).
+1. structured data → json
+2. with a schema → pydantic / dataclasses over json
+3. cross-language / binary → protobuf / msgpack
+4. pickle (only for data you produced and fully trust)'''
+
+[[rule]]
+name = "eq-without-hash"
+lang = ["python", "xonsh"]
+kind = "class_definition"
+text = 'def\s+__eq__'
+text-not = "__hash__"
+verdict = '''
+__eq__ without __hash__ — defining __eq__ makes instances unhashable (can't be a set member or dict key).
+1. immutable value → @dataclass(frozen=True) generates both
+2. by hand → define __hash__ over the same fields as __eq__
+3. intentionally unhashable → set `__hash__ = None` explicitly'''

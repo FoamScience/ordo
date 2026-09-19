@@ -1,0 +1,35 @@
+# The built-in construct catalog — Java.
+#
+# These are not style rules. Each one is a powerful or overusable construct
+# that a senior reviewer stops at, with an escalation ladder saying what the
+# lightest sufficient alternative is. `verdict` fires only where the pattern is
+# deterministically wrong.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Copy one
+# into your own ruleset if you want to change its wording or scope.
+#
+# Constructs the rule language cannot state faithfully stay as walkers in
+# `src/advisories.rs`; see the list at the end of that file's module doc.
+
+[[rule]]
+name = "reflection"
+lang = "java"
+query = '''
+((method_invocation name: (identifier) @m)
+ (#eq? @m "setAccessible"))
+'''
+note = '''
+reflection (setAccessible/forName) — breaks encapsulation and compile-time safety.
+1. an interface + a normal call
+2. a factory / ServiceLoader
+3. reflection (last resort, e.g. a framework)'''
+
+[[rule]]
+name = "empty-catch"
+lang = 'java'
+kind = 'catch_clause'
+text = '\{\s*\}\s*$'
+verdict = '''
+empty catch — the error is silently swallowed and failures vanish.
+Handle it, re-raise, or at minimum log; never an empty handler.'''

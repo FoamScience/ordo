@@ -81,7 +81,18 @@
                         "description": "glob against the file path"
                       },
                       "lang": {
-                        "type": "string"
+                        "description": "language name as `src/lang.rs` knows it; a list matches any of them, since one construct is often one rule across a family",
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        ]
                       },
                       "category": {
                         "enum": [
@@ -170,6 +181,10 @@
                       "path_not": {
                         "type": "string",
                         "description": "glob the file path must not match"
+                      },
+                      "test": {
+                        "type": "boolean",
+                        "description": "whether the file is a test path (`tests/`, `test_*`, `*_spec.*`, \u2026); `test = false` is how a rule says production code only"
                       },
                       "max_params": {
                         "type": "integer",
