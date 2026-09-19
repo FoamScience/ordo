@@ -8747,23 +8747,34 @@ fn draw_too_small(f: &mut Frame, area: Rect, theme: &Theme) {
     );
 }
 
+/// A pane's frame. Only the focused one is drawn.
+///
+/// Measured at 140x42 on the default theme, the border colour was 37% of every
+/// non-space cell painted — the single most-used colour on screen, and drawn
+/// at a contrast against the background low enough to read as texture rather
+/// than structure (tasks-9sj.30). Three full rectangles repeat what the title,
+/// the footer and the pane numbers already say.
+///
+/// So an unfocused pane keeps the frame's *space* and loses its glyphs: the
+/// panes stay separated by the gap the border occupied, the layout does not
+/// shift by a cell when focus moves, and the one box still on screen means
+/// "you are here" instead of "this is a pane".
 fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
-    let border = if focused {
-        theme.border_focus
+    let block = Block::bordered().title(Span::styled(
+        title,
+        Style::default().fg(if focused {
+            theme.border_focus
+        } else {
+            theme.dim
+        }),
+    ));
+    if focused {
+        block
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_focus))
     } else {
-        theme.border
-    };
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border))
-        .title(Span::styled(
-            title,
-            Style::default().fg(if focused {
-                theme.border_focus
-            } else {
-                theme.dim
-            }),
-        ))
+        block.border_set(ratatui::symbols::border::EMPTY)
+    }
 }
 
 fn draw(f: &mut Frame, app: &mut App, rev: &str) {
@@ -8830,10 +8841,14 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         .iter()
         .map(|row| match row {
             DisplayRow::Header(reason) => {
+                // bold, not blue: a group header is a structural label, and
+                // wearing the focus colour is what stopped that colour meaning
+                // focus (tasks-9sj.31). Weight separates it from its rows
+                // without spending the accent.
                 let spans = vec![Span::styled(
                     reason.to_string(),
                     Style::default()
-                        .fg(app.theme.border_focus)
+                        .fg(app.theme.fg)
                         .add_modifier(Modifier::BOLD),
                 )];
                 ListItem::new(Line::from(slice_range(spans, 0, text_w)))
@@ -8860,7 +8875,9 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
                     Span::styled("  ".to_string(), style),
                     Span::styled(it.mark.clone(), dim(app.theme.mark)),
                     Span::styled(it.path.clone(), style),
-                    Span::styled(format!(":L{}", it.new_range[0]), dim(app.theme.accent)),
+                    // a line number says *where*, not *look here*: the accent
+                    // is reserved for focus and selection (tasks-9sj.31)
+                    Span::styled(format!(":L{}", it.new_range[0]), dim(app.theme.dim)),
                     Span::styled(format!(" [{}]", cat_name(it.cat)), dim(app.theme.category)),
                 ];
                 ListItem::new(Line::from(slice_range(spans, 0, text_w)))
