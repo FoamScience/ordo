@@ -1104,14 +1104,28 @@ pub fn is_type_kind(kind: &str) -> bool {
     )
 }
 
-/// Small memoized cache of the last few (language, content) -> Tree parses.
-/// `lib.rs` calls `parse` 13-16 times per changed file on the same two
-/// strings (old/new side); a handful of slots is enough since the access
-/// pattern is "same string, many times in a row, then move to the next
-/// file" — an LRU would be overkill. `Tree::clone` is a cheap refcount bump
-/// (`ts_tree_copy`), not a deep copy, so handing out clones from the cache
-/// is free.
-const TREE_CACHE_CAP: usize = 4;
+/// Memoized (language, content) -> Tree cache.
+///
+/// `run` makes several passes over *every* changed file — hunk semantics,
+/// symbol facts, change detection, the rules engine — and each one re-parses
+/// the same two strings (the old and new side). The passes are the outer loop
+/// and the files the inner one, so a file's tree is wanted again only after
+/// every other file has been through.
+///
+/// This used to be four slots that cleared themselves when full, on the
+/// assumption that the access pattern was "same string many times in a row,
+/// then move on". Measured on an 8-file C changeset it was not: 16 distinct
+/// contents were parsed 56 times, every repeat a full re-parse.
+///
+/// So: least-recently-used, bounded by the source bytes held rather than an
+/// entry count, so one enormous file cannot evict everything else on its own.
+/// `Tree::clone` is a refcount bump (`ts_tree_copy`), not a deep copy.
+///
+/// The budget counts source because that is what a caller can reason about;
+/// the trees measured ~10x it (230 KiB of C held across an 8-file changeset
+/// moved peak RSS 12.5 -> 14.9 MB). 4 MiB therefore trades roughly 40 MB of
+/// peak memory for not re-parsing, and holds a 500-file review whole.
+const TREE_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 struct CacheEntry {
     lang: &'static str,
@@ -1122,7 +1136,22 @@ struct CacheEntry {
 
 thread_local! {
     static PARSER: RefCell<(Parser, &'static str)> = RefCell::new((Parser::new(), ""));
+    /// how many real parses have happened — a cache that silently stops
+    /// caching is otherwise invisible, since every call still returns a
+    /// correct tree. Read by `tree_cache_tests`.
+    #[cfg(test)]
+    static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TREE_CACHE: RefCell<Vec<CacheEntry>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Drop every cached tree.
+///
+/// The cache exists to serve the passes of one `run`; past that it is just
+/// retained memory, and the `ordo` client calls `run` again on every reload.
+/// `run` clears it on the way out so a finished review does not hold 4 MiB of
+/// source worth of trees for the life of the process.
+pub(crate) fn forget_trees() {
+    TREE_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 /// Parse `content` with this spec's grammar. `None` when the grammar refuses
@@ -1132,19 +1161,26 @@ pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
     content.hash(&mut hasher);
     let hash = hasher.finish();
 
-    // Hash + length as the collision guard: a 64-bit hash match alone is
-    // already astronomically unlikely to be wrong, and pairing it with the
-    // length costs nothing extra to check.
+    // A hit moves the entry to the back, so the front is always the least
+    // recently used. Hash + length is the collision guard: a 64-bit hash match
+    // alone is already astronomically unlikely to be wrong, and pairing it with
+    // the length costs nothing extra to check.
     let cached = TREE_CACHE.with(|c| {
-        c.borrow()
+        let mut c = c.borrow_mut();
+        let at = c
             .iter()
-            .find(|e| e.lang == spec.name && e.hash == hash && e.len == content.len())
-            .map(|e| e.tree.clone())
+            .position(|e| e.lang == spec.name && e.hash == hash && e.len == content.len())?;
+        let entry = c.remove(at);
+        let tree = entry.tree.clone();
+        c.push(entry);
+        Some(tree)
     });
     if let Some(tree) = cached {
         return Some(tree);
     }
 
+    #[cfg(test)]
+    PARSE_COUNT.with(|c| c.set(c.get() + 1));
     let tree = PARSER.with(|p| {
         let mut p = p.borrow_mut();
         let (parser, last_lang) = &mut *p;
@@ -1157,16 +1193,114 @@ pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
 
     TREE_CACHE.with(|c| {
         let mut c = c.borrow_mut();
-        if c.len() >= TREE_CACHE_CAP {
-            c.clear();
-        }
         c.push(CacheEntry {
             lang: spec.name,
             hash,
             len: content.len(),
             tree: tree.clone(),
         });
+        // drop from the front (least recently used) until the budget holds.
+        // The just-parsed entry always stays, even if it alone exceeds the
+        // budget: evicting it would guarantee a re-parse on the next pass,
+        // which is the behaviour this cache exists to prevent.
+        let mut held: usize = c.iter().map(|e| e.len).sum();
+        while held > TREE_CACHE_BYTES && c.len() > 1 {
+            held -= c.remove(0).len;
+        }
     });
 
     Some(tree)
+}
+
+#[cfg(test)]
+mod tree_cache_tests {
+    use super::*;
+
+    /// A cache that stops caching is invisible: every call still returns a
+    /// correct tree, only slower. These count parses directly so the failure
+    /// mode this cache exists to prevent is observable.
+    fn parses(spec: &LangSpec, contents: &[&str]) -> usize {
+        forget_trees();
+        let before = PARSE_COUNT.with(|c| c.get());
+        for c in contents {
+            assert!(parse(spec, c).is_some(), "{c} parses");
+        }
+        PARSE_COUNT.with(|c| c.get()) - before
+    }
+
+    fn c_spec() -> &'static LangSpec {
+        all().iter().find(|s| s.name == "c").expect("c grammar")
+    }
+
+    #[test]
+    fn the_same_content_is_parsed_once_however_often_it_is_asked_for() {
+        let spec = c_spec();
+        let src = "int main(void) { return 0; }\n";
+        assert_eq!(parses(spec, &[src, src, src, src, src]), 1);
+    }
+
+    /// The access pattern `run` actually has: several passes over every file,
+    /// so a file's tree is wanted again only after every other file. This is
+    /// what the old four-slot clear-on-full cache got wrong.
+    #[test]
+    fn a_pass_over_many_files_does_not_evict_the_file_it_started_with() {
+        let spec = c_spec();
+        let files: Vec<String> = (0..12)
+            .map(|i| format!("int f{i}(void) {{ return {i}; }}\n"))
+            .collect();
+        let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+        // three passes over all twelve, the shape `run` has
+        let mut seq: Vec<&str> = vec![];
+        for _ in 0..3 {
+            seq.extend(&refs);
+        }
+        assert_eq!(parses(spec, &seq), files.len());
+    }
+
+    #[test]
+    fn the_budget_evicts_the_least_recently_used_and_keeps_the_newest() {
+        let spec = c_spec();
+        // each body is over half the budget, so only one fits beside another
+        let big: Vec<String> = (0..3)
+            .map(|i| {
+                let pad = "// pad\n".repeat(TREE_CACHE_BYTES / 2 / 7);
+                format!("{pad}int g{i}(void) {{ return {i}; }}\n")
+            })
+            .collect();
+        forget_trees();
+        for b in &big {
+            assert!(parse(spec, b).is_some());
+        }
+        let held: usize = TREE_CACHE.with(|c| c.borrow().iter().map(|e| e.len).sum());
+        assert!(held <= TREE_CACHE_BYTES, "budget held: {held}");
+        // the most recent survives; the oldest was evicted
+        let newest = TREE_CACHE.with(|c| c.borrow().last().map(|e| e.len));
+        assert_eq!(newest, Some(big[2].len()));
+        forget_trees();
+    }
+
+    /// One file larger than the whole budget still caches, or the passes over
+    /// it re-parse it every time — the worst case, not a degenerate one.
+    #[test]
+    fn a_single_file_over_budget_is_still_cached() {
+        let spec = c_spec();
+        let huge = format!(
+            "{}int h(void) {{ return 0; }}\n",
+            "// pad\n".repeat(TREE_CACHE_BYTES / 7 + 16)
+        );
+        assert!(huge.len() > TREE_CACHE_BYTES);
+        assert_eq!(parses(spec, &[&huge, &huge, &huge]), 1);
+        forget_trees();
+    }
+
+    #[test]
+    fn forgetting_drops_everything() {
+        let spec = c_spec();
+        let src = "int k(void) { return 1; }\n";
+        assert_eq!(parses(spec, &[src, src]), 1);
+        forget_trees();
+        assert_eq!(TREE_CACHE.with(|c| c.borrow().len()), 0);
+        // and the next ask really re-parses
+        assert_eq!(parses(spec, &[src]), 1);
+    }
 }
