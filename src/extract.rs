@@ -1113,6 +1113,62 @@ fn subprocess_label(node: Node, src: &[u8]) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" "))
 }
 
+/// The macro name an include guard introduces, when this `preproc_def` is the
+/// `#define X` half of one: the conditional directly above it tested the same
+/// name, at file scope. The pair is bookkeeping — `X` names nothing a reviewer
+/// navigates to and nothing another file uses — so neither half becomes a
+/// container, a definition or a use.
+///
+/// Keyed on the `#define` rather than the `#ifndef` because a header whose body
+/// defeats the c++ parser comes back as one `ERROR` node with the guard's two
+/// directives flattened into it, and the name equality still holds there.
+///
+/// c/c++ only in practice: no other grammar in this crate produces
+/// `preproc_def` (verified against tree-sitter-{c,cpp}-0.23.4).
+fn include_guard_name(node: Node, src: &[u8]) -> Option<String> {
+    if node.kind() != "preproc_def" {
+        return None;
+    }
+    let parent = node.parent()?;
+    let at_file_scope = match parent.kind() {
+        "translation_unit" => true,
+        // a header whose body defeats the parser yields one top-level `ERROR`
+        // holding the flattened directives; deeper down, an ERROR says nothing
+        // about scope
+        "ERROR" => parent.parent().is_some_and(|g| g.kind() == "translation_unit"),
+        "preproc_ifdef" => parent.parent().is_some_and(|g| g.kind() == "translation_unit"),
+        _ => false,
+    };
+    if !at_file_scope {
+        return None;
+    }
+    let text = |n: Node| n.utf8_text(src).ok().map(str::trim);
+    let name = text(node.child_by_field_name("name")?)?;
+    let tested = prev_directive(node).filter(|s| s.kind() == "identifier").and_then(text)?;
+    (tested == name).then(|| name.to_string())
+}
+
+/// The named sibling before `node`, skipping comments: a guard commonly carries
+/// one between its two halves, and a comment is a named node.
+fn prev_directive(node: Node) -> Option<Node> {
+    let mut prev = node.prev_named_sibling();
+    while prev.is_some_and(|p| p.kind() == "comment") {
+        prev = prev?.prev_named_sibling();
+    }
+    prev
+}
+
+/// Does this `preproc_ifdef` open an include guard? Its `#define` is the first
+/// directive after the name it tests, not merely somewhere inside.
+fn opens_include_guard(node: Node, src: &[u8]) -> bool {
+    let mut cur = node.walk();
+    let first_directive = node
+        .named_children(&mut cur)
+        .skip(1)
+        .find(|c| c.kind() != "comment");
+    first_directive.is_some_and(|d| include_guard_name(d, src).is_some())
+}
+
 fn region_label(
     node: Node,
     src: &[u8],
@@ -1129,6 +1185,9 @@ fn region_label(
         // `#ifdef X` and `#ifndef X` share a node kind; the directive token
         // itself says which, and a reviewer reads them very differently
         "preproc_ifdef" => {
+            if opens_include_guard(node, src) {
+                return None;
+            }
             let name = text_of(node.child_by_field_name("name")?)?;
             let directive = node
                 .child(0)
@@ -1429,6 +1488,11 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         });
         // fall through: the arguments still hold uses, members and defs
     }
+    // the `#define` half of an include guard defines nothing: not a symbol, not
+    // a use of one. Its `#ifndef` is already transparent (see `region_label`).
+    if include_guard_name(node, src).is_some() {
+        return;
+    }
     if spec.is_def(kind) {
         let er = end_row(node, spec);
         // A def with no name of its own names no container, so it is
@@ -1691,6 +1755,17 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
                 }
             }
         }
+        return;
+    }
+    // the guard name in `#ifndef X` is not a use of anything either: the only
+    // thing that ever defines X is the `#define` right below it, which this
+    // same pair makes transparent
+    if lang::is_ident(kind)
+        && node
+            .next_named_sibling()
+            .and_then(|d| include_guard_name(d, src))
+            .is_some_and(|g| node.utf8_text(src).is_ok_and(|t| t.trim() == g))
+    {
         return;
     }
     if lang::is_ident(kind) {
