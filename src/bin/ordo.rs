@@ -8515,22 +8515,11 @@ fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
 /// as two columns.
 const CARD_W_MIN: u16 = 42;
 const CARD_STEP: u16 = 3;
-/// The widest a card may be. A card is a glance at a definition, not a second
-/// code pane, and a line past this is being read rather than recognised.
-const CARD_W_MAX: u16 = 88;
-
-/// How wide a card should be on this frame.
-///
-/// `CARD_W` used to be a flat 42 whatever the terminal. On a 1080p-wide
-/// terminal that clustered every card around the centre with a third of the
-/// screen empty on each side, and still clipped the code at 40 columns. Each
-/// side gets half the frame; the fan's outward steps come out of that, and
-/// what is left is the card.
-fn card_width(area_w: u16, per_side: u16) -> u16 {
-    let half = area_w.saturating_sub(4) / 2;
-    let steps = per_side.saturating_sub(1) * CARD_STEP;
-    half.saturating_sub(steps + 2).clamp(CARD_W_MIN, CARD_W_MAX)
-}
+/// The shortest a card may be: a border plus two rows of code.
+const CARD_H_MIN: u16 = 4;
+/// The shortest the anchor may be. A one-line hunk gets a border and one blank
+/// row rather than a three-row sliver; past that its own height decides.
+const ANCHOR_H_MIN: u16 = CARD_H_MIN;
 /// A card shows its definition's extent, clamped — past this nobody reads it
 /// in a glance, which is the whole point of the canvas.
 const CARD_ROWS: usize = 12;
@@ -8550,7 +8539,12 @@ struct CanvasLayout {
     fanned: bool,
 }
 
-fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
+fn canvas_layout(
+    body: Rect,
+    cards: &[Card],
+    anchor_idx: usize,
+    extent: &dyn Fn(usize) -> u16,
+) -> CanvasLayout {
     // inset from the frame so the canvas reads as floating over the panes
     let area = Rect {
         x: body.x + 1,
@@ -8559,33 +8553,31 @@ fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
         height: body.height.saturating_sub(2),
     };
     let inner_w = area.width.saturating_sub(2);
-    // the fan's widest side decides the card width, so both sides match
-    let per_side = {
-        let needs = cards.iter().filter(|c| c.needs).count() as u16;
-        let needed = cards.len() as u16 - needs;
-        needs.max(needed).max(1)
-    };
-    let card_w = card_width(area.width, per_side);
-    let anchor_w = card_w.min(inner_w);
+    // The anchor is the hunk being read: it takes the full width it is given
+    // and as much height as the hunk needs, rather than a fixed five rows that
+    // showed the first three lines of everything.
+    let anchor_h = (extent(anchor_idx) + 2).clamp(ANCHOR_H_MIN, max_anchor_h(area.height));
     let anchor = Rect {
-        x: area.x + 1 + (inner_w.saturating_sub(anchor_w)) / 2,
+        x: area.x + 1,
         y: area.y + 1,
-        width: anchor_w,
-        height: 5,
+        width: inner_w,
+        height: anchor_h,
     };
     // Below the split threshold each half would be under 48 columns, too
     // narrow for code: stack instead, same fallback a zoomed pane gets.
     let fanned = area.width >= SPLIT_COLS;
     let top = anchor.y + anchor.height + 1; // the rule under the anchor
+    let bottom = area.y + area.height.saturating_sub(1);
+    let avail_h = bottom.saturating_sub(top);
     let mut rects = Vec::with_capacity(cards.len());
     if !fanned {
-        let w = inner_w.min(card_w.max(inner_w));
-        for (i, _) in cards.iter().enumerate() {
+        let h = stacked_height(avail_h, cards.len() as u16);
+        for (i, c) in cards.iter().enumerate() {
             rects.push(Rect {
                 x: area.x + 1,
-                y: top + (i as u16) * 4,
-                width: w,
-                height: 4,
+                y: top + (i as u16) * h,
+                width: inner_w,
+                height: h.min(extent(c.idx).min(CARD_ROWS as u16) + 2),
             });
         }
         return CanvasLayout {
@@ -8595,36 +8587,48 @@ fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
             fanned,
         };
     }
+    // Each direction owns its half and keeps it. An empty side used to yield
+    // its width so the other could centre; that made a one-directional hunk
+    // look like a different view rather than the same one with nothing on the
+    // left, and left the reader unsure which side they were looking at.
     let centre = area.x + area.width / 2;
-    let any_needs = cards.iter().any(|c| c.needs);
-    let any_needed = cards.iter().any(|c| !c.needs);
-    let one_sided = !(any_needs && any_needed);
+    let n_left = cards.iter().filter(|c| c.needs).count() as u16;
+    let n_right = cards.len() as u16 - n_left;
+    let half = area.width.saturating_sub(4) / 2;
+    let card_w = |n: u16| -> u16 {
+        let steps = n.saturating_sub(1) * CARD_STEP;
+        half.saturating_sub(steps).max(CARD_W_MIN)
+    };
+    let (lw, rw) = (card_w(n_left), card_w(n_right));
+    let (lh, rh) = (
+        stacked_height(avail_h, n_left),
+        stacked_height(avail_h, n_right),
+    );
     let (mut li, mut ri) = (0u16, 0u16);
     for c in cards {
-        let rows = (CARD_ROWS.min(6) + 2) as u16;
-        let (i, x) = if one_sided {
-            // nothing on the other side: centre the fan instead of leaving a void
+        let (i, x, w, h) = if c.needs {
             let i = li;
             li += 1;
-            (i, area.x + 1 + (area.width.saturating_sub(2 + card_w)) / 2)
-        } else if c.needs {
-            let i = li;
-            li += 1;
-            let off = card_w + 2 + i * CARD_STEP;
-            (i, centre.saturating_sub(off).max(area.x + 1))
+            let off = lw + 2 + i * CARD_STEP;
+            (i, centre.saturating_sub(off).max(area.x + 1), lw, lh)
         } else {
             let i = ri;
             ri += 1;
             (
                 i,
-                (centre + 2 + i * CARD_STEP).min(area.x + area.width - card_w - 1),
+                (centre + 2 + i * CARD_STEP).min(area.x + area.width - rw - 1),
+                rw,
+                rh,
             )
         };
         rects.push(Rect {
             x,
-            y: top + i * rows,
-            width: card_w.min(area.width.saturating_sub(2)),
-            height: rows,
+            y: top + i * h,
+            width: w.min(inner_w),
+            // a card never grows past the hunk it shows — empty rows under two
+            // lines of code read as a rendering fault — nor past CARD_ROWS,
+            // which is as much as anyone takes in at a glance
+            height: h.min(extent(c.idx).min(CARD_ROWS as u16) + 2),
         });
     }
     CanvasLayout {
@@ -8635,6 +8639,23 @@ fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
     }
 }
 
+/// How tall each of `n` stacked cards may be in `avail` rows.
+///
+/// They share the space rather than taking a fixed slice of it: one card on a
+/// side gets the whole column, four get a quarter each.
+fn stacked_height(avail: u16, n: u16) -> u16 {
+    if n == 0 {
+        return CARD_H_MIN;
+    }
+    (avail / n).max(CARD_H_MIN)
+}
+
+/// The anchor may take at most half the canvas, however long the hunk is —
+/// past that there is no room left for the cards it exists to relate to.
+fn max_anchor_h(area_h: u16) -> u16 {
+    (area_h.saturating_sub(2) / 2).max(ANCHOR_H_MIN)
+}
+
 /// Render the dependency canvas over the panes.
 fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
     let Some(c) = app.canvas.as_ref() else { return };
@@ -8642,7 +8663,14 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
     if cards.is_empty() {
         return;
     }
-    let l = canvas_layout(body, &cards);
+    // how many rows a hunk actually occupies. Uncapped: the anchor is meant to
+    // cover its whole hunk, and `canvas_layout` caps the *cards* at CARD_ROWS
+    let extent = |idx: usize| -> u16 {
+        let it = &app.items[idx];
+        let n = it.new_range[1].saturating_sub(it.new_range[0]) + 1;
+        n.min(u16::MAX as usize) as u16
+    };
+    let l = canvas_layout(body, &cards, c.anchor, &extent);
     let theme = &app.theme;
     // cards that will not fit are counted, not silently dropped
     let hidden = l
@@ -10442,12 +10470,22 @@ DA:1,1
         }
     }
 
+    /// A hunk of `n` rows, for the layout tests — the real `extent` reads it
+    /// off the item.
+    fn rows(n: u16) -> impl Fn(usize) -> u16 {
+        move |_| n
+    }
+
+    fn layout(body: Rect, cards: &[Card]) -> CanvasLayout {
+        canvas_layout(body, cards, 0, &rows(6))
+    }
+
     /// The fan's defining property: neither side crosses the centre line.
     #[test]
     fn no_card_crosses_the_centre() {
         let body = Rect::new(0, 0, 140, 40);
         let cards: Vec<Card> = vec![card(true), card(true), card(false), card(false)];
-        let l = canvas_layout(body, &cards);
+        let l = layout(body, &cards);
         assert!(l.fanned);
         let centre = l.area.x + l.area.width / 2;
         for (c, r) in cards.iter().zip(l.cards.iter()) {
@@ -10465,24 +10503,36 @@ DA:1,1
     fn later_cards_step_outward() {
         let body = Rect::new(0, 0, 140, 40);
         let cards: Vec<Card> = vec![card(true), card(true), card(false), card(false)];
-        let l = canvas_layout(body, &cards);
+        let l = layout(body, &cards);
         assert!(l.cards[1].x < l.cards[0].x, "left side steps left");
         assert!(l.cards[3].x > l.cards[2].x, "right side steps right");
     }
 
-    /// One empty side is the common case, not an edge case: the other side
-    /// centres instead of leaving half the canvas void.
+    /// A direction keeps its half whether or not the other has anything in it.
+    ///
+    /// These used to centre when one side was empty. That made a hunk with
+    /// only callers look like a different view rather than the same one with
+    /// an empty left half, and left the reader guessing which side they were
+    /// reading.
     #[test]
-    fn a_one_sided_canvas_centres_instead_of_leaving_a_void() {
+    fn an_empty_side_still_keeps_its_half() {
         let body = Rect::new(0, 0, 140, 40);
-        let l = canvas_layout(body, &[card(false), card(false)]);
-        let centre = l.area.x + l.area.width / 2;
-        for r in &l.cards {
-            let mid = r.x + r.width / 2;
-            assert!(
-                mid.abs_diff(centre) <= 2,
-                "a lone side should centre, got {r:?} against centre {centre}"
-            );
+        for needs in [true, false] {
+            let l = layout(body, &[card(needs), card(needs)]);
+            let centre = l.area.x + l.area.width / 2;
+            for r in &l.cards {
+                if needs {
+                    assert!(
+                        r.x + r.width <= centre,
+                        "a lone `needs` side must stay left: {r:?}"
+                    );
+                } else {
+                    assert!(
+                        r.x >= centre,
+                        "a lone `needed by` side must stay right: {r:?}"
+                    );
+                }
+            }
         }
     }
 
@@ -10491,7 +10541,7 @@ DA:1,1
     #[test]
     fn a_narrow_canvas_stacks_instead_of_fanning() {
         let body = Rect::new(0, 0, SPLIT_COLS - 1, 40);
-        let l = canvas_layout(body, &[card(true), card(false)]);
+        let l = layout(body, &[card(true), card(false)]);
         assert!(!l.fanned);
         assert_eq!(l.cards[0].x, l.cards[1].x, "stacked cards share a column");
     }
@@ -12319,13 +12369,12 @@ DA:1,1
                     width,
                     height: 44,
                 };
-                let l = canvas_layout(body, &cs);
+                let l = canvas_layout(body, &cs, 0, &rows(6));
                 assert!(l.fanned, "{width} is above SPLIT_COLS");
                 let centre = l.area.x + l.area.width / 2;
                 let right_edge = l.area.x + l.area.width;
                 for (card, r) in cs.iter().zip(&l.cards) {
                     assert!(r.width >= CARD_W_MIN, "{width}: card too narrow {r:?}");
-                    assert!(r.width <= CARD_W_MAX, "{width}: card too wide {r:?}");
                     if card.needs {
                         assert!(
                             r.x + r.width <= centre + 1,
@@ -12347,21 +12396,80 @@ DA:1,1
     }
 
     /// A wide frame must actually be used, not centred on with empty margins.
+    /// Each side gets half, less what the fan's outward steps take.
     #[test]
     fn a_wide_frame_widens_the_cards() {
-        assert_eq!(
-            card_width(100, 3),
-            CARD_W_MIN,
-            "narrow clamps to the minimum"
-        );
-        assert_eq!(card_width(400, 3), CARD_W_MAX, "wide clamps to the maximum");
-        let mid = card_width(140, 2);
+        let narrow = layout(Rect::new(0, 0, 100, 40), &[card(true), card(false)]);
+        let wide = layout(Rect::new(0, 0, 240, 40), &[card(true), card(false)]);
         assert!(
-            mid > CARD_W_MIN && mid < CARD_W_MAX,
-            "140 columns should land between the clamps, got {mid}"
+            wide.cards[0].width > narrow.cards[0].width,
+            "a wider frame must widen the cards: {} vs {}",
+            wide.cards[0].width,
+            narrow.cards[0].width
         );
-        // more cards per side means more fan, so each card gives up width
-        assert!(card_width(200, 6) < card_width(200, 2));
+        // one card on a side takes that side whole, bar the gutter
+        let half = wide.area.width / 2;
+        assert!(
+            wide.cards[0].width + 4 >= half,
+            "a lone card should fill its half: {} of {half}",
+            wide.cards[0].width
+        );
+    }
+
+    /// The anchor is the hunk being read: it spans the canvas and grows to the
+    /// hunk's own height rather than showing a fixed three lines of it.
+    #[test]
+    fn the_anchor_covers_its_hunk() {
+        let body = Rect::new(0, 0, 200, 50);
+        let short = canvas_layout(body, &[card(true)], 0, &rows(2));
+        let tall = canvas_layout(body, &[card(true)], 0, &rows(30));
+        assert!(
+            tall.anchor.height > short.anchor.height,
+            "a longer hunk gets a taller anchor"
+        );
+        assert_eq!(short.anchor.height, 2 + 2, "a short hunk is not padded out");
+        assert!(
+            tall.anchor.height <= max_anchor_h(tall.area.height),
+            "but never past half the canvas, or no card fits under it"
+        );
+        assert!(
+            short.anchor.width + 2 >= short.area.width,
+            "the anchor spans the canvas: {} of {}",
+            short.anchor.width,
+            short.area.width
+        );
+        assert!(
+            short.anchor.width >= 80,
+            "at least 80 columns when the frame allows: {}",
+            short.anchor.width
+        );
+    }
+
+    /// Cards share the height under the rule rather than taking a fixed slice,
+    /// so a lone card on a side gets the whole column.
+    #[test]
+    fn cards_share_the_height_they_are_given() {
+        let body = Rect::new(0, 0, 200, 50);
+        let one = canvas_layout(body, &[card(true)], 0, &rows(30));
+        let four = canvas_layout(
+            body,
+            &[card(true), card(true), card(true), card(true)],
+            0,
+            &rows(30),
+        );
+        assert!(
+            one.cards[0].height > four.cards[0].height,
+            "one card takes more room than one of four: {} vs {}",
+            one.cards[0].height,
+            four.cards[0].height
+        );
+        for r in &four.cards {
+            assert!(r.height >= CARD_H_MIN, "never below the floor: {r:?}");
+            assert!(
+                r.height <= CARD_ROWS as u16 + 2,
+                "never past a glance: {r:?}"
+            );
+        }
     }
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
