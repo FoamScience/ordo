@@ -173,15 +173,76 @@ fn a_conditional_compilation_block_names_the_region_it_guards() {
 fn a_guarded_macro_does_not_swallow_the_line_after_it() {
     // `#define GUARD_H` ends at column 0 of the NEXT row, so without the
     // end-row correction the line after an include guard reads as part of the
-    // macro
+    // macro. The guard pair itself is bookkeeping: it names no container, so
+    // the line below it sits at file scope, not under `GUARD_H` and not under
+    // the `#ifndef`.
     let out = one(
         "h.h",
         "#ifndef GUARD_H\n#define GUARD_H\nint a = 1;\n#endif\n",
         "#ifndef GUARD_H\n#define GUARD_H\nint a = 2;\n#endif\n",
     );
+    assert_eq!(out.files[0].hunks[0].enclosing, None);
+}
+
+#[test]
+fn an_include_guard_defines_nothing_and_uses_nothing() {
+    // `particode_H` is not a symbol: it is not navigable, no other file
+    // references it, and letting it into `defines` put it in the ledger and
+    // seeded def→use edges between unrelated headers
+    let out = one(
+        "h.H",
+        "#ifndef particode_H\n#define particode_H\nint a = 1;\n#endif\n",
+        "#ifndef particode_H\n#define particode_H\nint a = 2;\n#endif\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert!(!h.defines.iter().any(|d| d == "particode_H"), "{:?}", h.defines);
+    assert!(!h.uses.iter().any(|u| u == "particode_H"), "{:?}", h.uses);
+    assert!(!out.ledger.iter().any(|l| l.name == "particode_H"));
+}
+
+#[test]
+fn a_comment_inside_the_guard_does_not_hide_it() {
+    let out = one(
+        "h.H",
+        "#ifndef A_H\n// why this header exists\n#define A_H\nint a = 1;\n#endif\n",
+        "#ifndef A_H\n// why this header exists\n#define A_H\nint a = 2;\n#endif\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.enclosing, None);
+    assert!(!h.defines.iter().any(|d| d == "A_H"), "{:?}", h.defines);
+}
+
+#[test]
+fn a_guard_is_recognised_even_when_the_body_defeats_the_parser() {
+    // real c++ headers carry macros the grammar cannot parse; the file then
+    // comes back as one ERROR node with the guard's directives flattened into
+    // it, which is why the guard is keyed on the `#define`, not the `#ifndef`
+    let body = "KOKKOS_INLINE_FUNCTION auto f() -> decltype(auto) { return @; }\n";
+    let out = one(
+        "h.H",
+        &format!("#ifndef A_H\n#define A_H\n{body}int a = 1;\n#endif\n"),
+        &format!("#ifndef A_H\n#define A_H\n{body}int a = 2;\n#endif\n"),
+    );
+    let defines: Vec<&String> = out.files[0]
+        .hunks
+        .iter()
+        .flat_map(|h| h.defines.iter())
+        .collect();
+    assert!(!defines.iter().any(|d| *d == "A_H"), "{defines:?}");
+}
+
+#[test]
+fn a_conditional_that_only_looks_like_a_guard_stays_a_region() {
+    // no `#define X` under it — a real feature switch, and naming it is the
+    // whole point of the region layer
+    let out = one(
+        "k.c",
+        "#ifndef NO_HTTP\nint w = 1;\n#endif\n",
+        "#ifndef NO_HTTP\nint w = 2;\n#endif\n",
+    );
     assert_eq!(
         out.files[0].hunks[0].enclosing.as_deref(),
-        Some("#ifndef GUARD_H")
+        Some("#ifndef NO_HTTP")
     );
 }
 
