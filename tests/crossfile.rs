@@ -63,3 +63,94 @@ fn cross_file_rationale_names_the_other_file() {
         "each side names the other file"
     );
 }
+
+#[test]
+fn a_name_two_files_both_define_seeds_no_edge() {
+    // nothing here says which `View` a use means, and naming one of them sends
+    // the reviewer to the wrong class
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "a.H", "old": "// a\n",
+                  "new": "// a\nstruct A\n{\n    using View = int;\n    View at(int i) { return i; }\n};\n" },
+                { "path": "b.H", "old": "// b\n",
+                  "new": "// b\nstruct B\n{\n    using View = long;\n    View at(int i) { return i; }\n};\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        !out.edges.iter().any(|e| e.why.contains("View")),
+        "{:?}",
+        out.edges
+    );
+}
+
+#[test]
+fn a_class_member_is_not_resolved_from_another_file() {
+    // `key` here is a method of DonorGrid; the `key` in the other file is a
+    // local of a different type. Matching them across files needs the imports
+    // and qualifications the engine does not read, so it declines to guess.
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "grid.H", "old": "// g\n",
+                  "new": "// g\nstruct DonorGrid\n{\n    int key(int p) const { return p; }\n};\n" },
+                { "path": "io.H", "old": "// i\n",
+                  "new": "// i\nvoid read()\n{\n    const char* key = lookup();\n    open(key);\n}\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        !out.edges.iter().any(|e| e.why.contains("key")),
+        "{:?}",
+        out.edges
+    );
+    let rats: Vec<&str> = out.files.iter().flat_map(|f| f.hunks.iter()).map(|h| h.rationale.as_str()).collect();
+    assert!(
+        !rats.iter().any(|r| r.contains("uses key, defined in")),
+        "the rationale must not claim what the graph refused: {rats:?}"
+    );
+}
+
+#[test]
+fn a_file_scope_definition_still_reaches_another_file() {
+    // the rule narrows guesses, it does not switch cross-file edges off
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        out.edges.iter().any(|e| e.why.contains("helper")),
+        "{:?}",
+        out.edges
+    );
+}
+
+#[test]
+fn a_use_side_scope_does_not_block_the_edge() {
+    // it is the *definition's* scope that decides whether a name resolves
+    // across files: a file-scope `helper` still reaches a use that happens to
+    // sit inside a class
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" },
+                { "path": "main.py", "old": "# m\n",
+                  "new": "# m\nclass Runner:\n    def go(self):\n        return helper()\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert!(
+        out.edges.iter().any(|e| e.why.contains("helper")),
+        "{:?}",
+        out.edges
+    );
+}
