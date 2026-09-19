@@ -387,8 +387,13 @@ struct ParsedArgs {
 /// directory in step.
 const TOPICS: &[(&str, &str, &str)] = &[
     (
+        "architecture",
+        "for contributors: the seams, and where a new fact goes",
+        include_str!("../../docs/architecture.md"),
+    ),
+    (
         "cli",
-        "the engine CLI, schema v1, and the library API",
+        "the engine CLI, schema v2, and the library API",
         include_str!("../../docs/cli.md"),
     ),
     (
