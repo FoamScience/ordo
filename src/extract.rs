@@ -345,18 +345,28 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         let importset: HashSet<&String> = imports.iter().collect();
         defines.retain(|d| !importset.contains(d));
         let is_type = (r0..=r1).any(|r| c.type_rows.contains(&r));
-        // P13.1: structural smells for a def introduced in this hunk
+        // P13.1: structural smells for a def introduced in this hunk — one
+        // note per kind, carrying the worst measurement, because a hunk that
+        // introduces forty definitions has one nesting problem to report, not
+        // forty of them. A data or prose format has no code shape to measure:
+        // every JSON key is a `pair`, so an object literal used to say
+        // "deeply nested" once per key.
         let mut notes = vec![];
-        for d in c.defs.iter().filter(|d| r0 <= d.s && d.s <= r1) {
-            let lines = d.e - d.s + 1;
+        if !spec.data && !spec.prose {
+            let (mut lines, mut depth, mut params) = (0, 0, 0);
+            for d in c.defs.iter().filter(|d| r0 <= d.s && d.s <= r1) {
+                lines = lines.max(d.e - d.s + 1);
+                depth = depth.max(d.depth);
+                params = params.max(d.params);
+            }
             if lines >= LARGE_LINES {
                 notes.push(format!("large definition ({lines} lines)"));
             }
-            if d.depth >= DEEP_NESTING {
-                notes.push(format!("deeply nested (depth {})", d.depth));
+            if depth >= DEEP_NESTING {
+                notes.push(format!("deeply nested (depth {depth})"));
             }
-            if d.params >= MANY_PARAMS {
-                notes.push(format!("{} params", d.params));
+            if params >= MANY_PARAMS {
+                notes.push(format!("{params} params"));
             }
         }
         // the same measurements, as facts a rule can put its own limit on
