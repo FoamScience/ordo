@@ -1,0 +1,94 @@
+# The built-in construct catalog — hardcoded facts.
+#
+# These are not style rules. Each one is a value that will be wrong later and
+# will not say so: a version that drifts from the dependency that ships, a path
+# that exists on one machine, a number whose meaning lives only in the author's
+# head.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Turn the
+# catalog off with `--no-catalog` or `catalog = false`, or silence one of these
+# by name with `disable = ["magic-number"]`.
+#
+# Every rule here is scoped `test = false`. A test's hardcoded path, expected
+# version or bare number IS the fixture — measured on the corpus, 72% of what
+# these rules first reported was in test files.
+#
+# `test = false` reads the PATH (`lang::is_test_path`), so a language that keeps
+# its tests beside the code in the same file — rust's `#[cfg(test)] mod tests`
+# is the common one — is still reported there. Living with that: the path is
+# what the engine knows, and an absolute path with someone's home directory in
+# it is worth a glance wherever it sits.
+#
+# The allow-list in the number rules is deliberate: 0, 1, 2 and -1 are how you
+# say "empty", "one", "a pair" and "not found", and naming them adds nothing.
+
+[[rule]]
+name = "hardcoded-version"
+test = false
+# What each grammar calls a string: `string` (python, js/ts, lua),
+# `string_literal` (rust, c, c++, java), `interpreted_string_literal` (go).
+# All three include their delimiters, which is what `^.` below leans on.
+# `string_content` is deliberately absent — it is the text *inside* the quotes.
+kind = ["string", "string_literal", "interpreted_string_literal"]
+# Three components, or a `v` prefix. Every looser form was measured on the
+# corpus and read something else as a version: a bare `N.N` caught
+# `marginTop: "-0.5rem"`; letting `/` introduce a two-part number caught
+# `"http/1.1"`, which is a protocol, not a pin. A real version says so, either
+# by having a patch level or by wearing a `v`.
+text = '(^|[/@-])v?[0-9]+\.[0-9]+\.[0-9]+|v[0-9]+\.[0-9]+'
+warn = """
+a version pinned inside a string — it drifts from the dependency that actually ships.
+1. read it from the manifest / package metadata at runtime
+2. a single constant next to the dependency it tracks
+3. inline (only for a URL that is genuinely frozen)"""
+
+[[rule]]
+name = "absolute-path"
+test = false
+kind = ["string", "string_literal", "interpreted_string_literal"]
+text = '^.(/(usr|var|home|opt|etc|tmp|srv)/|[A-Za-z]:\\)'
+warn = """
+an absolute path in source — it exists on one machine.
+1. take it as an argument or read it from the environment
+2. resolve it relative to the program, the repo root or a config value
+3. an absolute path only for a genuine system location (/proc, /dev/null)"""
+
+[[rule]]
+name = "magic-number"
+test = false
+lang = ["python", "xonsh"]
+query = '''
+((comparison_operator (integer) @n) (#not-match? @n "^(0|1|2|-1)$"))
+'''
+note = """
+a bare number in a comparison — its meaning lives only in your head.
+Name it: a constant says what 86400 is, the number does not."""
+
+[[rule]]
+name = "magic-number"
+test = false
+lang = ["rust"]
+# scoped to comparisons by capturing the operator. Matching any
+# `binary_expression` also caught arithmetic inside named constants —
+# `const BUDGET: usize = 4 * 1024 * 1024` — where the remedy this rule asks
+# for has already been applied.
+query = '''
+((binary_expression operator: _ @op right: (integer_literal) @n)
+ (#match? @op "^([<>]=?|==|!=)$")
+ (#not-match? @n "^(0|1|2)$"))
+'''
+note = """
+a bare number in a comparison — its meaning lives only in your head.
+Name it: a constant says what 86400 is, the number does not."""
+
+[[rule]]
+name = "magic-argument"
+test = false
+lang = ["python", "xonsh"]
+query = '''
+((call arguments: (argument_list (integer) @n)) (#not-match? @n "^(0|1|2|-1)$"))
+'''
+note = """
+a bare number passed as an argument — the call site says how many, not what.
+Name it at the definition, or pass it by keyword."""

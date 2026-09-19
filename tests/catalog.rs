@@ -92,3 +92,149 @@ fn a_user_rule_named_after_a_catalog_construct_does_not_inherit_its_hits() {
         "a non-matching user rule must not mark it skippable"
     );
 }
+
+fn python(src: &str, options: serde_json::Value) -> Vec<String> {
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "", "new": src }],
+        "options": options,
+    }))
+    .expect("fixture parses");
+    let mut n: Vec<String> = ordo::run(inp)
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter())
+        .flat_map(|h| h.findings.iter())
+        .filter(|f| f.source == FindingSource::Catalog)
+        .map(|f| f.name.clone())
+        .collect();
+    n.sort();
+    n.dedup();
+    n
+}
+
+const HARDCODED: &str = "import time\n\
+                         def poll(retries):\n\
+                         \x20   if retries > 86400:\n\
+                         \x20       return None\n\
+                         \x20   time.sleep(300)\n\
+                         \x20   return retries\n";
+
+/// The catalog is what a reviewer gets without configuring anything, and it has
+/// to be refusable — by the run, by the rules file, or one entry at a time.
+#[test]
+fn the_catalog_can_be_turned_off_whole_or_by_name() {
+    assert_eq!(
+        python(HARDCODED, serde_json::json!({})),
+        vec!["magic-argument", "magic-number"],
+        "on by default"
+    );
+    assert!(
+        python(HARDCODED, serde_json::json!({ "catalog": false })).is_empty(),
+        "catalog = false silences all of it"
+    );
+    assert!(
+        python(HARDCODED, serde_json::json!({ "disable": ["magic-*"] })).is_empty(),
+        "a glob reaches catalog entries, not only the caller's own rules"
+    );
+    assert_eq!(
+        python(
+            HARDCODED,
+            serde_json::json!({ "disable": ["magic-number"] })
+        ),
+        vec!["magic-argument"],
+        "and silences exactly the one named"
+    );
+}
+
+/// Turning the catalog off must not take the caller's own rules with it: they
+/// are the reason someone would turn it off.
+#[test]
+fn the_callers_own_rules_survive_the_catalog_being_off() {
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "", "new": HARDCODED }],
+        "options": {
+            "catalog": false,
+            "rules": [{ "name": "mine", "when": { "lang": "python" }, "note": "still here" }]
+        }
+    }))
+    .unwrap();
+    let names: Vec<(FindingSource, String)> = ordo::run(inp)
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter())
+        .flat_map(|h| h.findings.iter())
+        .map(|f| (f.source, f.name.clone()))
+        .collect();
+    assert_eq!(names, vec![(FindingSource::Rule, "mine".to_string())]);
+}
+
+/// The numbers everyone writes are not magic, and a number already sitting in a
+/// named constant needs no naming.
+#[test]
+fn the_number_rules_leave_idiomatic_code_alone() {
+    let clean = "TIMEOUT_S = 30\n\
+                 PAGE = 4096\n\
+                 def f(buf, n):\n\
+                 \x20   if n > 1:\n\
+                 \x20       return buf[0], buf[-1]\n\
+                 \x20   return range(0, len(buf), 2)\n";
+    assert!(
+        python(clean, serde_json::json!({})).is_empty(),
+        "named constants and 0/1/2/-1 are not findings: {:?}",
+        python(clean, serde_json::json!({}))
+    );
+}
+
+/// The string rules carry no `lang`, so they must work in every grammar — and
+/// a grammar names its string node whatever it likes. `kind = "string"` alone
+/// silently matched nothing in rust, go, c, c++ and java.
+#[test]
+fn the_string_rules_reach_every_grammar() {
+    let cases = [
+        ("a.py", "X = \"/usr/lib/z\"\n"),
+        ("a.rs", "const X: &str = \"/usr/lib/z\";\n"),
+        ("a.go", "package m\nvar X = \"/usr/lib/z\"\n"),
+        ("a.js", "const X = \"/usr/lib/z\"\n"),
+        ("a.ts", "const X: string = \"/usr/lib/z\"\n"),
+        ("a.c", "char *x = \"/usr/lib/z\";\n"),
+        ("a.cpp", "const char *x = \"/usr/lib/z\";\n"),
+        ("a.java", "class A { String x = \"/usr/lib/z\"; }\n"),
+        ("a.lua", "local x = \"/usr/lib/z\"\n"),
+    ];
+    for (path, src) in cases {
+        let inp: Input = serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": path, "old": "", "new": src }]
+        }))
+        .unwrap();
+        let hit = ordo::run(inp)
+            .files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .flat_map(|h| h.findings.iter())
+            .any(|f| f.name == "absolute-path");
+        assert!(hit, "{path}: the absolute path went unreported");
+    }
+}
+
+/// A `disable` nobody can parse must say so. Dropping it silently is the
+/// difference between "that rule is off" and "you typed it wrong".
+#[test]
+fn a_malformed_disable_glob_is_reported_not_swallowed() {
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "", "new": HARDCODED }],
+        "options": { "disable": ["["] }
+    }))
+    .unwrap();
+    let out = ordo::run(inp);
+    assert!(
+        out.problems.iter().any(|p| p.contains("is not a glob")),
+        "a broken disable must be reported: {:?}",
+        out.problems
+    );
+    // and the catalog still runs: one typo does not silence everything
+    assert!(out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter())
+        .any(|h| !h.findings.is_empty()));
+}

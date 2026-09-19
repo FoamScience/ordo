@@ -41,6 +41,21 @@ pub struct Options {
     /// `Rule`).
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// Whether the built-in construct catalog runs (see `crate::catalog`). On
+    /// by default: it is what a reviewer gets without configuring anything.
+    /// Turning it off leaves only `rules`, for a caller who wants their own
+    /// conventions and nothing else.
+    #[serde(default = "catalog_default")]
+    pub catalog: bool,
+    /// Rule names not to report, as globs — applied to the catalog as well as
+    /// to `rules`. A catalog entry is a rule like any other, so silencing one
+    /// by name is the same gesture whoever wrote it.
+    #[serde(default)]
+    pub disable: Vec<String>,
+}
+
+fn catalog_default() -> bool {
+    true
 }
 impl Default for Options {
     fn default() -> Self {
@@ -50,6 +65,8 @@ impl Default for Options {
             full_context: false,
             only_comments: false,
             rules: vec![],
+            catalog: catalog_default(),
+            disable: vec![],
         }
     }
 }

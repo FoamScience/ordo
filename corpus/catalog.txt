@@ -1,8 +1,15 @@
+buildtheworld 11747ea7 add_default_branch.py:1 magic-argument note
+click 07c909f2 src/click/termui.py:573 magic-number note
+click 07c909f2 src/click/termui.py:583 magic-number note
+click 07c909f2 src/click/termui.py:699 magic-argument note
 click 14588004 tests/test_options.py:1262 eq-without-hash verdict
 click 3da1f439 tests/test_options.py:1262 eq-without-hash verdict
 click 4a352253 src/click/core.py:738 assert-validation verdict
 click 587e3cc7 src/click/testing.py:72 assert-validation verdict
 click 6de21215 src/click/core.py:725 assert-validation verdict
+click 8a4ce842 src/click/termui.py:573 magic-number note
+click 8a4ce842 src/click/termui.py:583 magic-number note
+click 8a4ce842 src/click/termui.py:699 magic-argument note
 click ad39d749 src/click/testing.py:72 assert-validation verdict
 click cd4674a6 src/click/testing.py:72 assert-validation verdict
 click d340b0c1 tests/test_options.py:1262 eq-without-hash verdict
@@ -182,6 +189,7 @@ execa e085b108 lib/ipc/get-each.js:55 empty-catch verdict
 execa e2903e99 test-d/return/result-main.test-d.ts:56 any note
 execa e2903e99 test-d/return/result-main.test-d.ts:78 any note
 execa e69985dd test/terminate/kill-force.js:188 empty-catch verdict
+lazy 5b15bc9f lua/lazy/community/_generated.lua:2 hardcoded-version warn
 openfoam 08477d77 src/Lagrangian/Lagrangian/LagrangianEqn/LagrangianSp.C:98 raw-new-delete note
 openfoam 08477d77 src/OpenFOAM/fields/fieldTypes.H:58 function-macro note
 openfoam 08477d77 src/finiteVolume/finiteVolume/fvm/fvmSup.C:157 raw-new-delete note
@@ -356,6 +364,8 @@ openfoam f13dcf95 src/finiteVolume/fields/FieldFields/FieldField/FieldFieldFunct
 openfoam f13dcf95 src/finiteVolume/fields/FieldFields/scalarFieldField/scalarFieldField.C:1 function-macro note
 openfoam f13dcf95 src/finiteVolume/fields/FieldFields/scalarFieldField/scalarFieldField.H:1 function-macro note
 openfoam f7f22e73 src/radiationModels/radiationModels/fvDOM/radiativeIntensityRay/radiativeIntensityRay.C:195 raw-new-delete note
+ripgrep 0d7054d8 crates/ignore/src/walk.rs:2625 magic-number note
+ripgrep 241b87b3 crates/ignore/src/gitignore.rs:609 absolute-path warn
 vue 0243a792 packages/vue/__tests__/e2e/TransitionGroup.spec.ts:301 any note
 vue 027da6b2 packages/server-renderer/__tests__/ssrScopeId.spec.ts:277 any note
 vue 1398bf8d packages/runtime-dom/__tests__/customElement.spec.ts:1221 any note

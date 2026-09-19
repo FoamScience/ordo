@@ -31,7 +31,28 @@ findings carry `source = "catalog"` instead of `"rule"`; nothing else differs.
 
 It holds the advanced-construct advisories (see
 [reviewing.md](reviewing.md)) — `goto`, `unsafe`, `any`, raw `new`/`delete`,
-mutable default arguments. Copy one into your own file to reword or narrow it.
+mutable default arguments — and the **hardcoding** rules: a version pinned
+inside a string, an absolute path, a bare number in a comparison or an argument.
+Those last are values that will be wrong later and will not say so. Copy one
+into your own file to reword or narrow it.
+
+`0`, `1`, `2` and `-1` are never flagged: they are how you say "empty", "one",
+"a pair" and "not found", and naming them adds nothing.
+
+### Turning it off
+
+| how | scope |
+| --- | --- |
+| `ordo --no-catalog` | this run |
+| `catalog = false` in any rules file | for good |
+| `disable = ["magic-number"]` | one entry, by name or glob |
+
+`disable` reaches the catalog and your own rules alike — a catalog entry is a
+rule, and silencing it by name is the same gesture whoever wrote it. Turning the
+catalog off leaves your own rules running; they are the reason you would.
+
+Through the engine directly it is `options.catalog` and `options.disable`, so
+`ordo-engine order --json` behaves the same way.
 
 ## Presets: opting in, overriding, disabling
 

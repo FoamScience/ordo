@@ -244,6 +244,17 @@
                   }
                 }
               }
+            },
+            "catalog": {
+              "type": "boolean",
+              "description": "whether the built-in construct catalog runs; true by default \u2014 it is what a reviewer gets with no configuration"
+            },
+            "disable": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "rule names not to report, as globs; applied to the catalog as well as to `rules`"
             }
           }
         }
