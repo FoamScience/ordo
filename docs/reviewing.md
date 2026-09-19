@@ -343,9 +343,10 @@ Detection is deterministic tree-sitter, verdicts fire only when the pattern is
 concretely wrong. Most of the catalog is **data** — `rulesets/catalog/*.toml`,
 written in the same `[[rule]]` grammar as any ruleset and compiled into the
 engine (`src/catalog.rs`), so a construct can be read, copied into your own
-rules and reworded. It is always on; no `--rules` needed. What the rule
-language cannot state stays as a walker in `src/advisories.rs`, whose module
-doc lists each one and why:
+rules and reworded. It is on unless you turn it off — `--no-catalog` for a run,
+`catalog = false` in a rules file for good, `disable = ["goto"]` for one entry
+(see [rules.md](rules.md)). What the rule language cannot state stays as a
+walker in `src/advisories.rs`, whose module doc lists each one and why:
 
 | lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
 |---|---|---|
@@ -356,8 +357,11 @@ doc lists each one and why:
 | c | `goto` | `strcpy`/`sprintf`/`gets`/`scanf` (buffer overflow) |
 | c++ | (all of c) raw `new`/`delete`, `malloc`/`free`, C-style/`reinterpret`/`const`/`dynamic` cast, function-like macro, `using namespace std`, `volatile`, `[&]` capture, `memcpy` family, `system`/`exec*`, `alloca`, non-reentrant runtime, catch-by-value | unsafe string fns, `using namespace std` in a header, throw in destructor/`noexcept`, `setjmp`/`longjmp`, `operator&&`/`\|\|`/`,` overload |
 | java | reflection (`setAccessible`) | empty-`catch` |
+| any | hardcoded version in a string, absolute path, bare number in a comparison or an argument | — |
 
-`assert`/`panic` fire only outside test files.
+`assert`, `panic` and every hardcoding rule fire only outside test files — a
+test's hardcoded path or expected number is the fixture. `0`, `1`, `2` and `-1`
+are never called magic.
 
 </details>
 

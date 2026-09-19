@@ -13,6 +13,7 @@ pub mod rules;
 use extract::{analyze, compute_hunks, HunkSem, RawHunk};
 use lang::LangSpec;
 use model::*;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -34,6 +35,44 @@ pub fn lang_name_for_path(path: &str) -> Option<&'static str> {
 pub use patch::split_patch;
 
 pub const SCHEMA_VERSION: u32 = 2;
+
+/// Which catalog rules this run reports: none when the caller turned the
+/// catalog off, otherwise everything their `disable` globs do not name.
+fn catalog_for<'a>(options: &Options, problems: &mut Vec<String>) -> Cow<'a, [Rule]> {
+    if !options.catalog {
+        return Cow::Borrowed(&[]);
+    }
+    if options.disable.is_empty() {
+        // the common path: borrow the compiled catalog rather than deep-copying
+        // every rule's query and message on every run
+        return Cow::Borrowed(catalog::rules());
+    }
+    let mut set = globset::GlobSetBuilder::new();
+    for d in &options.disable {
+        match globset::Glob::new(d) {
+            Ok(g) => {
+                set.add(g);
+            }
+            // a `disable` nobody can parse silences nothing, and saying so is
+            // the difference between "that rule is off" and "you typed it wrong"
+            Err(e) => problems.push(format!("disable `{d}` is not a glob: {e}")),
+        }
+    }
+    let set = match set.build() {
+        Ok(s) => s,
+        Err(e) => {
+            problems.push(format!("disable: {e}"));
+            return Cow::Borrowed(catalog::rules());
+        }
+    };
+    Cow::Owned(
+        catalog::rules()
+            .iter()
+            .filter(|r| !set.is_match(&r.name))
+            .cloned()
+            .collect(),
+    )
+}
 
 pub fn run(input: Input) -> Output {
     // Templates are rewritten before anything else looks at them: every later
@@ -63,7 +102,12 @@ pub fn run(input: Input) -> Output {
     //
     // The catalog rides the same engine: it is the same mechanism with a
     // different `FindingSource`, so both sets share one parse per file.
-    let mut rule_engine = rules::Rules::with_catalog(catalog::rules(), &input.options.rules);
+    // The catalog is on unless the caller says otherwise, and a `disable` glob
+    // silences a catalog entry the same way it silences one of their own: a
+    // catalog rule is a rule, and the name is the name.
+    let mut catalog_problems = vec![];
+    let catalog = catalog_for(&input.options, &mut catalog_problems);
+    let mut rule_engine = rules::Rules::with_catalog(&catalog, &input.options.rules);
     let mut rule_hits: Vec<Vec<Vec<Finding>>> = vec![vec![]; n];
     for (fi, change) in input.changes.iter().enumerate() {
         let path = &change.path;
@@ -255,6 +299,12 @@ pub fn run(input: Input) -> Output {
             // one file kind repeats across a changeset; a broken rule should
             // be reported once, not once per file
             let mut p = rule_engine.problems.clone();
+            // a catalog that failed to parse is our bug, not a fault in the
+            // caller's rules — but they still deserve to know this run is
+            // missing every construct advisory
+            p.extend(catalog::problem().map(str::to_string));
+            // and a `disable` glob nobody can parse silences nothing
+            p.extend(catalog_problems);
             p.sort();
             p.dedup();
             p

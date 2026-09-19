@@ -31,6 +31,7 @@ ordo — interactive review of a commit, ordered for comprehension.
 usage:
   ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]...
        [--sarif <file>]... [--coverage <file>]... [--all] [--only-comments]
+       [--no-catalog]
   ordo --init-config [--force]
   ordo help [<topic>]
   ordo --version
@@ -50,6 +51,12 @@ change-ID prefix) reviews that commit.
 it needs fanning left and everything that needs it fanning right, each as a card
 showing that hunk's own code. Enter goes to a card (C-o returns), Esc closes.
 The canvas takes the next free pane digit while it is open, so `4` addresses it.
+
+--no-catalog runs only your own rules. The built-in construct catalog is on by
+default — it is what a reviewer gets with no configuration — and this turns it
+off for one run. `catalog = false` in a rules file turns it off for good, and
+`disable = [\"goto\"]` silences a single entry by name, the same gesture that
+silences one of your own rules.
 
 --sarif <file> reads analyzer results in SARIF 2.1.0 — what semgrep, CodeQL,
 ruff, eslint, shellcheck and `clippy --message-format` all emit — and attaches
@@ -378,6 +385,8 @@ struct ParsedArgs {
     extra_rules: Vec<String>,
     sarif: Vec<String>,
     coverage: Vec<String>,
+    /// `--no-catalog`: run only the caller's own rules this once
+    no_catalog: bool,
 }
 
 /// The user-facing documentation, embedded in the binary so `ordo help
@@ -485,6 +494,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     let mut rev: Option<String> = None;
     let mut globs: Vec<String> = vec![];
     let mut skip_generated = true;
+    let mut no_catalog = false;
     let mut only_comments = false;
     // whether the preset was *chosen* (flag or env) — a config file's own
     // `preset =` only applies when it wasn't
@@ -558,6 +568,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
                 coverage.push(s["--coverage=".len()..].to_string())
             }
             "--all" => skip_generated = false,
+            "--no-catalog" => no_catalog = true,
             "--only-comments" => only_comments = true,
             "--init-config" => want_init = true,
             "--force" => force = true,
@@ -649,6 +660,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
         extra_rules,
         sarif,
         coverage,
+        no_catalog,
     })
 }
 
@@ -681,6 +693,7 @@ fn main() -> std::io::Result<()> {
         extra_rules,
         sarif,
         coverage,
+        no_catalog,
     } = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
@@ -703,7 +716,9 @@ fn main() -> std::io::Result<()> {
         eprintln!("ordo: {p}");
     }
     let rules_report = report.lines();
-    let rules = report.rules;
+    // the catalog is on unless this run turned it off, either way round: the
+    // flag for once, `catalog = false` in a rules file for always
+    let rules = report.rule_set(!no_catalog && report.catalog);
     run(
         rev,
         keys,
@@ -796,8 +811,9 @@ struct LoadSpec {
     /// highlighting happens on the worker, off the draw loop, so it needs the
     /// theme's syntax colours rather than re-highlighting on every redraw
     syn: Syntax,
-    /// the reviewer's own rules (user + repo), collected by `main`
-    rules: Vec<ordo::model::Rule>,
+    /// the reviewer's own rules (user + repo) plus the catalog switch,
+    /// collected by `main`
+    rules: RuleSet,
     /// paths given with `--sarif`; their findings are placed onto the hunks
     sarif: Vec<String>,
     /// paths given with `--coverage`; lcov tracefiles
@@ -860,7 +876,9 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let t = std::time::Instant::now();
     progress("ordering…".to_string());
     let mut input = input;
-    input.options.rules = rules;
+    input.options.rules = rules.rules;
+    input.options.catalog = rules.catalog;
+    input.options.disable = rules.disables;
     let out = ordo::run(input);
     // the engine records what it dropped and why; fold it into the same ledger
     // the path filter has been filling in, so `:audit` reads one set of numbers
@@ -3214,6 +3232,15 @@ fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
 /// reviewer needs to trust them — where each came from, which definitions
 /// replaced an earlier one, which names were disabled. A silenced rule looks
 /// exactly like a convention nobody breaks, so the silencing is shown.
+/// The three rule facts that always travel together: what to run, whether the
+/// built-in catalog runs beside them, and what to silence in either.
+#[derive(Clone, Default)]
+struct RuleSet {
+    rules: Vec<ordo::model::Rule>,
+    catalog: bool,
+    disables: Vec<String>,
+}
+
 struct RulesReport {
     rules: Vec<ordo::model::Rule>,
     problems: Vec<String>,
@@ -3221,9 +3248,23 @@ struct RulesReport {
     origins: Vec<(String, usize)>,
     replaced: Vec<String>,
     disabled: Vec<String>,
+    /// false when any rules file said `catalog = false`
+    catalog: bool,
+    /// the `disable` globs themselves, forwarded to the engine so they reach
+    /// the construct catalog too — a catalog entry is a rule, and silencing it
+    /// by name is the same gesture
+    disables: Vec<String>,
 }
 
 impl RulesReport {
+    fn rule_set(&self, catalog: bool) -> RuleSet {
+        RuleSet {
+            rules: self.rules.clone(),
+            catalog,
+            disables: self.disables.clone(),
+        }
+    }
+
     /// The `:rules` popup, one line per fact.
     fn lines(&self) -> Vec<String> {
         let mut out = vec![format!(
@@ -3263,67 +3304,58 @@ impl RulesReport {
 /// only collected here; they apply once everything is layered, so a user can
 /// silence a rule the repo includes and the repo one a user includes.
 #[allow(clippy::too_many_arguments)]
-fn layer_rules(
-    text: &str,
-    origin: &str,
-    base: &Path,
-    depth: usize,
-    layered: &mut Vec<(ordo::model::Rule, String)>,
-    disables: &mut Vec<String>,
-    replaced: &mut Vec<String>,
-    problems: &mut Vec<String>,
-) {
+/// What layering a rules file accumulates: every rule kept and where it came
+/// from, every `disable` glob, every name a later file replaced, whether the
+/// catalog was switched off, and anything that went wrong.
+#[derive(Default)]
+struct Layering {
+    layered: Vec<(ordo::model::Rule, String)>,
+    disables: Vec<String>,
+    replaced: Vec<String>,
+    problems: Vec<String>,
+    /// `None` until a file says; `Some(false)` turns the catalog off
+    catalog: Option<bool>,
+}
+
+fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut Layering) {
     if depth > 8 {
-        problems.push(format!(
+        acc.problems.push(format!(
             "{origin}: include nesting deeper than 8 — a cycle?"
         ));
         return;
     }
     let doc = parse_rules_doc(text, base);
     for p in doc.problems {
-        problems.push(format!("{origin}: {p}"));
+        acc.problems.push(format!("{origin}: {p}"));
     }
     for inc in &doc.include {
         if let Some(t) = preset(inc) {
-            layer_rules(
-                t,
-                inc,
-                Path::new("."),
-                depth + 1,
-                layered,
-                disables,
-                replaced,
-                problems,
-            );
+            layer_rules(t, inc, Path::new("."), depth + 1, acc);
         } else {
             let path = base.join(inc);
             match std::fs::read_to_string(&path) {
                 Ok(t) => {
                     let label = path.display().to_string();
                     let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    layer_rules(
-                        &t,
-                        &label,
-                        &parent,
-                        depth + 1,
-                        layered,
-                        disables,
-                        replaced,
-                        problems,
-                    );
+                    layer_rules(&t, &label, &parent, depth + 1, acc);
                 }
-                Err(e) => problems.push(format!("{origin}: include `{inc}`: {e}")),
+                Err(e) => acc.problems.push(format!("{origin}: include `{inc}`: {e}")),
             }
         }
     }
-    disables.extend(doc.disable);
+    acc.disables.extend(doc.disable);
+    if let Some(c) = doc.catalog {
+        // any file saying no wins: the switch is off, not voted on
+        acc.catalog = Some(acc.catalog.unwrap_or(true) && c);
+    }
     for rule in doc.rules {
-        match layered.iter().position(|(r, _)| r.name == rule.name) {
+        match acc.layered.iter().position(|(r, _)| r.name == rule.name) {
             Some(i) => {
-                replaced.push(format!("{}  ({} → {origin})", rule.name, layered[i].1));
-                layered[i] = (rule, origin.to_string());
+                acc.replaced
+                    .push(format!("{}  ({} → {origin})", rule.name, acc.layered[i].1));
+                acc.layered[i] = (rule, origin.to_string());
             }
-            None => layered.push((rule, origin.to_string())),
+            None => acc.layered.push((rule, origin.to_string())),
         }
     }
 }
@@ -3338,10 +3370,7 @@ fn load_rules_report(repo_root: &str, extra: &[String]) -> RulesReport {
 /// `extra` — a `--rules` argument — was asked for, so its absence is reported,
 /// unless it names a bundled preset.
 fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
-    let mut layered: Vec<(ordo::model::Rule, String)> = vec![];
-    let mut disables = vec![];
-    let mut replaced = vec![];
-    let mut problems = vec![];
+    let mut acc = Layering::default();
     let n_implicit = implicit.len();
     for (i, src) in implicit
         .into_iter()
@@ -3352,16 +3381,7 @@ fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
         let name = src.to_string_lossy().into_owned();
         if !implicit && !src.exists() {
             if let Some(t) = preset(&name) {
-                layer_rules(
-                    t,
-                    &name,
-                    Path::new("."),
-                    0,
-                    &mut layered,
-                    &mut disables,
-                    &mut replaced,
-                    &mut problems,
-                );
+                layer_rules(t, &name, Path::new("."), 0, &mut acc);
                 continue;
             }
         }
@@ -3369,35 +3389,28 @@ fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
             Ok(t) => t,
             Err(_) if implicit => continue,
             Err(e) => {
-                problems.push(format!("{name}: {e}"));
+                acc.problems.push(format!("{name}: {e}"));
                 continue;
             }
         };
         let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
-        layer_rules(
-            &text,
-            &name,
-            &base,
-            0,
-            &mut layered,
-            &mut disables,
-            &mut replaced,
-            &mut problems,
-        );
+        layer_rules(&text, &name, &base, 0, &mut acc);
     }
     // disables win, whoever wrote them
     let mut set = globset::GlobSetBuilder::new();
-    for d in &disables {
+    for d in &acc.disables {
         match globset::Glob::new(d) {
             Ok(g) => {
                 set.add(g);
             }
-            Err(e) => problems.push(format!("disable `{d}` is not a glob: {e}")),
+            Err(e) => acc
+                .problems
+                .push(format!("disable `{d}` is not a glob: {e}")),
         }
     }
     let set = set.build().unwrap_or_else(|_| globset::GlobSet::empty());
     let mut disabled = vec![];
-    layered.retain(|(r, origin)| {
+    acc.layered.retain(|(r, origin)| {
         let keep = !set.is_match(&r.name);
         if !keep {
             disabled.push(format!("{}  ({origin})", r.name));
@@ -3405,18 +3418,20 @@ fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesReport {
         keep
     });
     let mut origins: Vec<(String, usize)> = vec![];
-    for (_, origin) in &layered {
+    for (_, origin) in &acc.layered {
         match origins.iter_mut().find(|(o, _)| o == origin) {
             Some((_, n)) => *n += 1,
             None => origins.push((origin.clone(), 1)),
         }
     }
     RulesReport {
-        rules: layered.into_iter().map(|(r, _)| r).collect(),
-        problems,
+        rules: acc.layered.into_iter().map(|(r, _)| r).collect(),
+        problems: acc.problems,
         origins,
-        replaced,
+        replaced: acc.replaced,
         disabled,
+        catalog: acc.catalog.unwrap_or(true),
+        disables: acc.disables,
     }
 }
 
@@ -3598,7 +3613,19 @@ struct RulesDoc {
     rules: Vec<ordo::model::Rule>,
     include: Vec<String>,
     disable: Vec<String>,
+    /// `catalog = false` in any rules file turns the built-in construct
+    /// catalog off for good, the way `--no-catalog` does for one run
+    catalog: Option<bool>,
     problems: Vec<String>,
+}
+
+/// Could these two rules ever fire on one file? An unscoped rule applies to
+/// every language, so it overlaps with anything.
+fn langs_overlap(a: &ordo::model::Rule, b: &ordo::model::Rule) -> bool {
+    match (&a.when.lang, &b.when.lang) {
+        (Some(x), Some(y)) => x.iter().any(|l| y.contains(l)),
+        _ => true,
+    }
 }
 
 fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
@@ -3610,12 +3637,15 @@ fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         #[serde(default)]
         disable: Vec<String>,
         #[serde(default)]
+        catalog: Option<bool>,
+        #[serde(default)]
         rule: Vec<toml::Value>,
     }
     let empty = |problems| RulesDoc {
         rules: vec![],
         include: vec![],
         disable: vec![],
+        catalog: None,
         problems,
     };
     let doc: RulesFile = match toml::from_str(text) {
@@ -3626,10 +3656,20 @@ fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
     let mut problems = vec![];
     for (i, v) in doc.rule.into_iter().enumerate() {
         if let Some(r) = rule_from_toml(v, i, base, &mut problems) {
-            // the engine keys hits by name; two rules sharing one within a
-            // file would be indistinguishable, so it is a mistake to report
-            if rules.iter().any(|x| x.name == r.name) {
-                problems.push(format!("rule `{}` is defined twice in this file", r.name));
+            // One construct often needs one rule per grammar — `magic-number`
+            // is a `comparison_operator` in python and a `binary_expression`
+            // in rust — and the engine keys its work by rule index, not name,
+            // so those coexist. What is still a mistake is two rules of the
+            // same name that could fire on the *same* file: then the review
+            // shows the name twice and nothing says which spoke.
+            if rules
+                .iter()
+                .any(|x| x.name == r.name && langs_overlap(x, &r))
+            {
+                problems.push(format!(
+                    "rule `{}` is defined twice in this file for the same language",
+                    r.name
+                ));
                 continue;
             }
             rules.push(r);
@@ -3639,6 +3679,7 @@ fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         rules,
         include: doc.include,
         disable: doc.disable,
+        catalog: doc.catalog,
         problems,
     }
 }
@@ -4191,6 +4232,12 @@ struct App {
     /// `None` means asked for and unavailable, which the why pane says out
     /// loud — a key that silently does nothing reads as broken
     churn_cache: HashMap<(String, usize, usize), Option<Churn>>,
+    /// whether the built-in construct catalog runs — `--no-catalog`, or
+    /// `catalog = false` in a rules file
+    catalog: bool,
+    /// `disable` globs from every rules file, forwarded to the engine so they
+    /// silence catalog entries as well as the caller's own rules
+    disables: Vec<String>,
     /// commits per file in `FILE_CHURN_WINDOW`, computed once at load. The
     /// cheap half of the signal: always shown, and `H` refines the selected
     /// hunk to its exact lines.
@@ -7342,7 +7389,7 @@ fn run(
     review_sha: Option<String>,
     uncommitted: bool,
     theme: Theme,
-    rules: Vec<ordo::model::Rule>,
+    rules: RuleSet,
     rules_report: Vec<String>,
     sarif: Vec<String>,
     coverage: Vec<String>,
@@ -7484,7 +7531,9 @@ fn run(
                         delta_gone,
                         collapsed: HashSet::new(),
                         ledger,
-                        rules: rules.clone(),
+                        rules: rules.rules.clone(),
+                        catalog: rules.catalog,
+                        disables: rules.disables.clone(),
                         strategy: "comprehension".to_string(),
                         rules_report: rules_report.clone(),
                         max_col: HashMap::new(),
@@ -9932,6 +9981,8 @@ fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
             full_context: false,
             only_comments: false,
             rules: app.rules.clone(),
+            catalog: app.catalog,
+            disable: app.disables.clone(),
         },
     };
     let out = ordo::run(input);
@@ -12472,6 +12523,53 @@ DA:1,1
         }
     }
 
+    /// `catalog = false` in a rules file has to reach the engine, and a rules
+    /// file that says nothing must leave the catalog alone.
+    #[test]
+    fn a_rules_file_can_switch_the_catalog_off() {
+        let base = Path::new(".");
+        assert_eq!(
+            parse_rules_doc("catalog = false\n", base).catalog,
+            Some(false),
+            "the file said no"
+        );
+        assert_eq!(
+            parse_rules_doc("[[rule]]\nname = \"x\"\nnote = \"y\"\n", base).catalog,
+            None,
+            "a file that says nothing does not vote"
+        );
+        assert_eq!(
+            parse_rules_doc("catalog = true\n", base).catalog,
+            Some(true)
+        );
+    }
+
+    /// Two rules of one name coexist only while no file could see both. The
+    /// engine keys its work by index, so `magic-number` can be a python rule
+    /// and a rust rule; two python ones are still a mistake.
+    #[test]
+    fn one_name_twice_is_a_mistake_only_when_the_languages_meet() {
+        let base = Path::new(".");
+        let two = |a: &str, b: &str| {
+            let text = format!(
+                "[[rule]]\nname = \"dup\"\n{a}\nnote = \"x\"\n\n\
+                 [[rule]]\nname = \"dup\"\n{b}\nnote = \"y\"\n"
+            );
+            parse_rules(&text, base)
+        };
+        let (rules, problems) = two("lang = \"python\"", "lang = \"rust\"");
+        assert_eq!(rules.len(), 2, "different grammars coexist: {problems:?}");
+        assert!(problems.is_empty(), "{problems:?}");
+
+        let (rules, problems) = two("lang = \"python\"", "lang = [\"python\", \"rust\"]");
+        assert_eq!(rules.len(), 1, "overlapping grammars clash");
+        assert!(problems[0].contains("same language"), "{problems:?}");
+
+        let (rules, problems) = two("", "lang = \"rust\"");
+        assert_eq!(rules.len(), 1, "an unscoped rule overlaps with everything");
+        assert!(problems[0].contains("same language"), "{problems:?}");
+    }
+
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
@@ -12762,6 +12860,8 @@ DA:1,1
             history_cache: HashMap::new(),
             churn_cache: HashMap::new(),
             file_churn: HashMap::new(),
+            catalog: true,
+            disables: vec![],
             jumps: vec![],
             rev: "HEAD".to_string(),
             marks_path: None,
