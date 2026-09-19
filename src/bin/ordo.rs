@@ -8411,11 +8411,27 @@ fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
     app.why_height = panes.why.unwrap_or(body).height.saturating_sub(2);
 }
 
-/// How wide a card is, and how far each later card steps outward from the
-/// centre. The step is what makes the two sides read as a fan rather than as
-/// two columns.
-const CARD_W: u16 = 42;
+/// The narrowest a card may be, and how far each later card steps outward from
+/// the centre. The step is what makes the two sides read as a fan rather than
+/// as two columns.
+const CARD_W_MIN: u16 = 42;
 const CARD_STEP: u16 = 3;
+/// The widest a card may be. A card is a glance at a definition, not a second
+/// code pane, and a line past this is being read rather than recognised.
+const CARD_W_MAX: u16 = 88;
+
+/// How wide a card should be on this frame.
+///
+/// `CARD_W` used to be a flat 42 whatever the terminal. On a 1080p-wide
+/// terminal that clustered every card around the centre with a third of the
+/// screen empty on each side, and still clipped the code at 40 columns. Each
+/// side gets half the frame; the fan's outward steps come out of that, and
+/// what is left is the card.
+fn card_width(area_w: u16, per_side: u16) -> u16 {
+    let half = area_w.saturating_sub(4) / 2;
+    let steps = per_side.saturating_sub(1) * CARD_STEP;
+    half.saturating_sub(steps + 2).clamp(CARD_W_MIN, CARD_W_MAX)
+}
 /// A card shows its definition's extent, clamped — past this nobody reads it
 /// in a glance, which is the whole point of the canvas.
 const CARD_ROWS: usize = 12;
@@ -8444,7 +8460,14 @@ fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
         height: body.height.saturating_sub(2),
     };
     let inner_w = area.width.saturating_sub(2);
-    let anchor_w = CARD_W.min(inner_w);
+    // the fan's widest side decides the card width, so both sides match
+    let per_side = {
+        let needs = cards.iter().filter(|c| c.needs).count() as u16;
+        let needed = cards.len() as u16 - needs;
+        needs.max(needed).max(1)
+    };
+    let card_w = card_width(area.width, per_side);
+    let anchor_w = card_w.min(inner_w);
     let anchor = Rect {
         x: area.x + 1 + (inner_w.saturating_sub(anchor_w)) / 2,
         y: area.y + 1,
@@ -8457,7 +8480,7 @@ fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
     let top = anchor.y + anchor.height + 1; // the rule under the anchor
     let mut rects = Vec::with_capacity(cards.len());
     if !fanned {
-        let w = inner_w.min(CARD_W.max(inner_w));
+        let w = inner_w.min(card_w.max(inner_w));
         for (i, _) in cards.iter().enumerate() {
             rects.push(Rect {
                 x: area.x + 1,
@@ -8484,24 +8507,24 @@ fn canvas_layout(body: Rect, cards: &[Card]) -> CanvasLayout {
             // nothing on the other side: centre the fan instead of leaving a void
             let i = li;
             li += 1;
-            (i, area.x + 1 + (area.width.saturating_sub(2 + CARD_W)) / 2)
+            (i, area.x + 1 + (area.width.saturating_sub(2 + card_w)) / 2)
         } else if c.needs {
             let i = li;
             li += 1;
-            let off = CARD_W + 2 + i * CARD_STEP;
+            let off = card_w + 2 + i * CARD_STEP;
             (i, centre.saturating_sub(off).max(area.x + 1))
         } else {
             let i = ri;
             ri += 1;
             (
                 i,
-                (centre + 2 + i * CARD_STEP).min(area.x + area.width - CARD_W - 1),
+                (centre + 2 + i * CARD_STEP).min(area.x + area.width - card_w - 1),
             )
         };
         rects.push(Rect {
             x,
             y: top + i * rows,
-            width: CARD_W.min(area.width.saturating_sub(2)),
+            width: card_w.min(area.width.saturating_sub(2)),
             height: rows,
         });
     }
@@ -12164,6 +12187,82 @@ DA:1,1
             .filter(|k| matches!(k, WhyKind::Edge(_)))
             .collect();
         assert!(matches!(edges[0], WhyKind::Edge(None)));
+    }
+
+    /// The canvas must fill the frame it is given without ever letting the two
+    /// sides collide. `CARD_W` was a flat 42 whatever the terminal, which on a
+    /// wide screen clustered every card around the centre with a third of the
+    /// screen empty either side and still clipped code at 40 columns.
+    #[test]
+    fn canvas_cards_grow_with_the_frame_and_never_cross_the_centre() {
+        let cards = |needs: usize, needed: usize| -> Vec<Card> {
+            (0..needs)
+                .map(|i| Card {
+                    idx: i,
+                    needs: true,
+                    label: "l".into(),
+                })
+                .chain((0..needed).map(|i| Card {
+                    idx: 100 + i,
+                    needs: false,
+                    label: "r".into(),
+                }))
+                .collect()
+        };
+        // `canvas_layout` insets by 2, so the frame must be SPLIT_COLS + 2
+        // before the fan engages
+        for width in [SPLIT_COLS + 2, 100, 120, 140, 180, 200, 240, 400] {
+            for (n, m) in [(1usize, 1usize), (3, 2), (5, 5)] {
+                let cs = cards(n, m);
+                let body = Rect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height: 44,
+                };
+                let l = canvas_layout(body, &cs);
+                assert!(l.fanned, "{width} is above SPLIT_COLS");
+                let centre = l.area.x + l.area.width / 2;
+                let right_edge = l.area.x + l.area.width;
+                for (card, r) in cs.iter().zip(&l.cards) {
+                    assert!(r.width >= CARD_W_MIN, "{width}: card too narrow {r:?}");
+                    assert!(r.width <= CARD_W_MAX, "{width}: card too wide {r:?}");
+                    if card.needs {
+                        assert!(
+                            r.x + r.width <= centre + 1,
+                            "{width}/{n}x{m}: a needs card crosses the centre: {r:?}"
+                        );
+                    } else {
+                        assert!(
+                            r.x >= centre,
+                            "{width}/{n}x{m}: a needed-by card crosses back: {r:?}"
+                        );
+                    }
+                    assert!(
+                        r.x + r.width <= right_edge,
+                        "{width}: card past the frame {r:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A wide frame must actually be used, not centred on with empty margins.
+    #[test]
+    fn a_wide_frame_widens_the_cards() {
+        assert_eq!(
+            card_width(100, 3),
+            CARD_W_MIN,
+            "narrow clamps to the minimum"
+        );
+        assert_eq!(card_width(400, 3), CARD_W_MAX, "wide clamps to the maximum");
+        let mid = card_width(140, 2);
+        assert!(
+            mid > CARD_W_MIN && mid < CARD_W_MAX,
+            "140 columns should land between the clamps, got {mid}"
+        );
+        // more cards per side means more fan, so each card gives up width
+        assert!(card_width(200, 6) < card_width(200, 2));
     }
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
