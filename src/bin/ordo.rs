@@ -750,6 +750,12 @@ enum LoadMsg {
 
 struct LoadResult {
     items: Vec<Item>,
+    /// exactly what `ordo::run` was given, kept so `:strategy` can re-run the
+    /// engine on it. Rebuilding it from `sources` was lossy — `.lines()` drops
+    /// the trailing newline and turns an absent side into an empty one, so a
+    /// deleted file came back as an emptied file and the group reasons changed
+    /// under a re-order that was supposed to be a no-op
+    changes: Vec<Change>,
     /// indices into `items` visible under the launch-time `--only-comments`
     /// state (`:only-comments`, `:all` and `:filter` narrow/widen this live
     /// from here — see `compute_view`)
@@ -879,6 +885,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     input.options.rules = rules.rules;
     input.options.catalog = rules.catalog;
     input.options.disable = rules.disables;
+    let changes = input.changes.clone();
     let out = ordo::run(input);
     // the engine records what it dropped and why; fold it into the same ledger
     // the path filter has been filling in, so `:audit` reads one set of numbers
@@ -1031,6 +1038,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     }
     let _ = tx.send(LoadMsg::Done(Box::new(LoadResult {
         items,
+        changes,
         file_churn: churn_by_file,
         view,
         comments_only: only_comments,
@@ -4628,6 +4636,11 @@ struct App {
     focus: Pane,
     keys: Keymap,
     pending: Option<Key>,
+    /// the engine's input for this review — see `LoadResult::changes`. The
+    /// text is also held line-split in `sources`, which the panes read; this
+    /// copy exists so a re-run is the same run, and both are bounded by the
+    /// size of the change under review
+    changes: Vec<Change>,
     sources: Sources,
     highlights: Highlights,
     cursor: Cursor,
@@ -7881,6 +7894,7 @@ fn run(
                     dirty = true;
                     let LoadResult {
                         items,
+                        changes,
                         file_churn,
                         view,
                         comments_only,
@@ -7905,6 +7919,7 @@ fn run(
                     let mut fresh = App {
                         reviewed,
                         items,
+                        changes,
                         view,
                         comments_only,
                         show_all: true,
@@ -10767,29 +10782,6 @@ fn parse_strategy(s: &str) -> Option<Strategy> {
     }
 }
 
-/// Rebuild the `Change` list `ordo::run` needs from `app.sources` — the full
-/// old/new content per path, already in memory from the initial load, so
-/// `:strategy` never re-reads git or re-fetches anything. Sorted by path for
-/// determinism: `Sources` is a `HashMap`, so the launch's own file order
-/// (which `Strategy::File` uses as its tiebreak) isn't preserved either way;
-/// alphabetical is a stable, predictable substitute.
-fn changes_from_sources(sources: &Sources) -> Vec<Change> {
-    let mut paths: Vec<&String> = sources.keys().collect();
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|path| {
-            let (old, new) = &sources[path];
-            Change {
-                path: path.clone(),
-                old: Some(old.join("\n")),
-                new: Some(new.join("\n")),
-                diff: None,
-            }
-        })
-        .collect()
-}
-
 /// `:strategy <name>` — re-runs `ordo::run` synchronously on the main thread
 /// rather than the worker-thread/`State::Loading` path `load` uses. The
 /// content is already fully in memory (no git, and the only re-parsing is
@@ -10807,15 +10799,16 @@ fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
         format!("unknown strategy '{name}' (want: comprehension, defs-first, file)")
     })?;
     let input = Input {
-        changes: changes_from_sources(&app.sources),
+        changes: app.changes.clone(),
+        // everything but the strategy and the live rule state is what the
+        // load ran with, which is the engine's own defaults: the client sets
+        // no other option, and re-stating them here is how they would drift
         options: Options {
             strategy,
-            cross_file: true,
-            full_context: false,
-            only_comments: false,
             rules: app.rules.clone(),
             catalog: app.catalog,
             disable: app.disables.clone(),
+            ..Options::default()
         },
     };
     let out = ordo::run(input);
@@ -13896,6 +13889,7 @@ DA:1,1
     fn test_app(why_len: usize) -> App {
         App {
             items: vec![test_item("a.rs")],
+            changes: vec![],
             reviewed: vec![false],
             view: vec![0],
             comments_only: false,
@@ -15251,6 +15245,58 @@ DA:1,1
             !app.highlights["a.rs"].is_empty(),
             "the stale highlight cache was not rebuilt for the new palette"
         );
+    }
+
+    /// `:strategy` on the strategy already in force must change nothing. It
+    /// used to rebuild the engine's input out of `app.sources`, where a
+    /// removed file (`new: None`) came back as an emptied one and every line
+    /// lost its trailing newline — so the group reasons changed and the
+    /// headers fell back to raw group ids.
+    #[test]
+    fn re_running_the_current_strategy_keeps_the_group_reasons() {
+        let changes: Vec<Change> = serde_json::from_value(serde_json::json!([
+            {"path": "gone.py", "old": "def helper(x):\n    return x\n", "new": null},
+            {"path": "use.py",
+             "old": "from gone import helper\n\ndef run():\n    return helper(1)\n",
+             "new": "def run():\n    return 1\n"}
+        ]))
+        .expect("changes");
+        let input = Input {
+            changes: changes.clone(),
+            options: Options {
+                strategy: Strategy::Comprehension,
+                cross_file: true,
+                ..Options::default()
+            },
+        };
+        let out = ordo::run(input);
+        let mut app = test_app(0);
+        app.changes = changes;
+        app.items = build_items(&out);
+        app.view = (0..app.items.len()).collect();
+        app.reviewed = vec![false; app.items.len()];
+        // the TUI holds the same content split into lines; the review must not
+        // be rebuilt out of it (that is the bug), so it is here to prove it is
+        // not what `:strategy` reads
+        app.sources = app
+            .changes
+            .iter()
+            .map(|c| {
+                let split = |t: &Option<String>| {
+                    t.as_ref()
+                        .map(|t| t.lines().map(String::from).collect())
+                        .unwrap_or_default()
+                };
+                (c.path.clone(), (split(&c.old), split(&c.new)))
+            })
+            .collect();
+        app.groups = group_reasons(&out);
+        app.strategy = "comprehension".to_string();
+        let before = app.groups.clone();
+        assert!(!before.is_empty(), "the fixture has to group something");
+
+        run_strategy(&mut app, "comprehension").expect("a no-op re-order");
+        assert_eq!(app.groups, before, "a no-op re-order changed the reasons");
     }
 
     /// The role rows and the palette are one setting between them: cycling the

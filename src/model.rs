@@ -9,7 +9,7 @@ pub struct Input {
     pub options: Options,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Change {
     pub path: String,
     #[serde(default)]
