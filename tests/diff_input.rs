@@ -1,6 +1,6 @@
 //! P9 diff-input: L1 (`old` + `diff` → apply → full semantics), plus graceful
 //! degradation when a diff can't be applied.
-use ordo::model::Input;
+use ordo::model::{Input, SymbolChange};
 
 fn run_pretty(v: serde_json::Value) -> String {
     let inp: Input = serde_json::from_value(v).unwrap();
@@ -128,4 +128,42 @@ fn l3_full_input_not_degraded_and_omitted() {
         !serde_json::to_string(&out).unwrap().contains("degraded"),
         "degraded omitted from JSON when false"
     );
+}
+
+#[test]
+fn a_reconstructed_old_side_reaches_the_ledger() {
+    // the rebuilt sides used to stay inside the hunk builder: the symbol stage
+    // then saw a file with no old definitions at all, so every pre-existing one
+    // was reported as a signature change and nothing was ever a body edit
+    let old = "class A:\n    def drain(self):\n        return 1\n";
+    let new = "class A:\n    def drain(self):\n        return 2\n";
+    let diff = "@@ -1,3 +1,3 @@\n class A:\n     def drain(self):\n-        return 1\n+        return 2\n";
+    let inp: Input = serde_json::from_value(serde_json::json!({
+        "changes": [{ "path": "a.py", "diff": diff }],
+        "options": { "full_context": true }
+    }))
+    .unwrap();
+    let out = ordo::run(inp);
+    let row = out
+        .ledger
+        .iter()
+        .find(|l| l.name == "A.drain")
+        .expect("A.drain in the ledger");
+    assert_eq!(
+        row.change,
+        SymbolChange::Body,
+        "its header is untouched"
+    );
+
+    // the same change sent as old/new must say exactly the same thing
+    let by_content = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": "a.py", "old": old, "new": new }]
+        }))
+        .unwrap(),
+    );
+    let names = |o: &ordo::model::Output| -> Vec<(String, SymbolChange)> {
+        o.ledger.iter().map(|l| (l.name.clone(), l.change)).collect()
+    };
+    assert_eq!(names(&by_content), names(&out));
 }
