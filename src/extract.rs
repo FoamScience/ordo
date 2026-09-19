@@ -7,6 +7,7 @@ use similar::TextDiff;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
+#[derive(Clone)]
 pub struct RawHunk {
     pub old_range: [usize; 2],
     pub new_range: [usize; 2],
@@ -143,6 +144,63 @@ pub fn compute_hunks(old: &str, new: &str) -> Vec<RawHunk> {
     hunks
 }
 
+/// A pure insertion is one contiguous run of added lines, so a whole added file
+/// arrives as a single hunk however much it holds: every construct in it shares
+/// one card, one rationale line and one reviewed mark. Cut such a hunk at the
+/// definitions inside it, so an added file reads construct by construct the way
+/// an edited one does.
+///
+/// Language-independent: a new file is one diff hunk in every language.
+fn split_insertions(defs: &[DefRec], hunks: &[RawHunk]) -> Vec<RawHunk> {
+    let mut out = Vec::with_capacity(hunks.len());
+    for h in hunks {
+        // an edit's hunks already follow the change, and an insertion short
+        // enough to read in one sitting is fine as one card — only a large one
+        // needs cutting (LARGE_LINES is the same "too big to take in at once"
+        // threshold the structural notes use).
+        let inserted = h.old_range[0] > h.old_range[1];
+        let Some(r0) = h.new_r0.filter(|r0| inserted && h.new_r1 - r0 > LARGE_LINES) else {
+            out.push(h.clone());
+            continue;
+        };
+        // every definition that starts inside the hunk, at any nesting depth: a
+        // c++ namespace or a class holds the ones a reviewer actually reads, and
+        // cutting only at the outermost construct would hand back one card.
+        let mut cuts: Vec<usize> = defs
+            .iter()
+            .filter(|d| d.s > r0 && d.s <= h.new_r1)
+            .map(|d| d.s)
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        if cuts.is_empty() {
+            out.push(h.clone());
+        } else {
+            out.extend(split_at(h, r0, &cuts));
+        }
+    }
+    out
+}
+
+/// Cut one hunk into consecutive pieces at `cuts` (0-based rows, all inside the
+/// hunk). Every piece keeps the original's empty old range: each is still an
+/// insertion at the same point in the old file.
+fn split_at(h: &RawHunk, r0: usize, cuts: &[usize]) -> Vec<RawHunk> {
+    let mut starts = vec![r0];
+    starts.extend_from_slice(cuts);
+    let mut out = Vec::with_capacity(starts.len());
+    for (i, s) in starts.iter().enumerate() {
+        let e = starts.get(i + 1).map_or(h.new_r1, |next| next - 1);
+        out.push(RawHunk {
+            old_range: h.old_range,
+            new_range: [s + 1, e + 1],
+            new_r0: Some(*s),
+            new_r1: e,
+        });
+    }
+    out
+}
+
 #[derive(Default)]
 struct Collected {
     import_rows: HashSet<usize>,
@@ -228,13 +286,22 @@ const MANY_PARAMS: usize = 6;
 
 /// Parse `new`, walk once, then classify each hunk. Returns None when the
 /// grammar can't parse (caller falls back to file order).
-pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Option<Vec<HunkSem>> {
+/// Returns the hunks the review is built from — the caller's, cut where an
+/// insertion covers more than one construct (see `split_insertions`) — paired
+/// with one `HunkSem` each.
+pub fn analyze(
+    spec: &LangSpec,
+    new: &str,
+    hunks: &[RawHunk],
+    path: &str,
+) -> Option<(Vec<RawHunk>, Vec<HunkSem>)> {
     let tree = lang::parse(spec, new)?;
     let src = new.as_bytes();
     let mut c = Collected::default();
     let mut stack: Vec<String> = vec![];
     walk(tree.root_node(), src, spec, &mut stack, &mut c);
     let adv = crate::advisories::advise(spec, tree.root_node(), src, path);
+    let hunks = split_insertions(&c.defs, hunks);
 
     let lines: Vec<&str> = new.lines().collect();
     // loop-invariant: does not depend on the hunk, so it's built once here
@@ -245,7 +312,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
         .flat_map(|(s, e, n)| (*s..=*e).map(move |r| (r, n.as_str())))
         .collect();
     let mut out = Vec::with_capacity(hunks.len());
-    for h in hunks {
+    for h in &hunks {
         let (r0, r1) = match h.new_r0 {
             Some(r0) => (r0, h.new_r1),
             None => {
@@ -551,7 +618,7 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
             uninit_members,
         });
     }
-    Some(out)
+    Some((hunks, out))
 }
 
 /// An `export` that declares nothing of its own — `export * from "./x"`,
