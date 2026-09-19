@@ -1,13 +1,14 @@
 //! ordo — comprehension-optimized ordering of code-change hunks.
 //! Public entry: [`run`] takes an [`Input`] and returns the v1 [`Output`].
 mod advisories;
+pub mod catalog;
 mod extract;
 mod lang;
 pub mod model;
 mod order;
 mod patch;
 pub mod refine;
-mod rules;
+pub mod rules;
 
 use extract::{analyze, compute_hunks, HunkSem, RawHunk};
 use lang::LangSpec;
@@ -53,60 +54,61 @@ pub fn run(input: Input) -> Output {
 
     classify_imports(&mut hunks, &input.changes, &symbols, &changed);
 
-    // ---- reviewing rules (Options.rules) ----
+    // ---- findings: the built-in construct catalog and the caller's rules ----
     uninit_members(&mut hunks, &input.changes);
 
     // Evaluated after the semantics they match on, and before the ordering they
     // can influence. A rule's `noise` and `priority` reach the hunk itself; its
     // notes ride along to the output.
-    let mut rule_engine = rules::Rules::new(&input.options.rules);
+    //
+    // The catalog rides the same engine: it is the same mechanism with a
+    // different `FindingSource`, so both sets share one parse per file.
+    let mut rule_engine = rules::Rules::with_catalog(catalog::rules(), &input.options.rules);
     let mut rule_hits: Vec<Vec<Vec<Finding>>> = vec![vec![]; n];
-    if !rule_engine.is_empty() {
-        for (fi, change) in input.changes.iter().enumerate() {
-            let path = &change.path;
-            let query_rows = match (lang::for_path(path), change.new.as_deref()) {
-                (Some(spec), Some(new)) => rule_engine.query_rows(spec, new),
-                _ => HashMap::new(),
+    for (fi, change) in input.changes.iter().enumerate() {
+        let path = &change.path;
+        let query_rows = match (lang::for_path(path), change.new.as_deref()) {
+            (Some(spec), Some(new)) => rule_engine.query_rows(spec, new),
+            _ => HashMap::new(),
+        };
+        let file_lines = (
+            change.old.as_deref().map(|o| o.lines().count()),
+            change.new.as_deref().map_or(0, |n| n.lines().count()),
+        );
+        let mut per_file = vec![];
+        for li in 0..hunks[fi].raw.len() {
+            let sem = &hunks[fi].sem[li];
+            let [r0, r1] = hunks[fi].raw[li].new_range;
+            let facts = rules::HunkFacts {
+                path,
+                rows: (r0, r1),
+                category: sem.category,
+                enclosing: sem.enclosing.as_deref(),
+                enclosing_kind: sem.enclosing_kind,
+                defines: &sem.defines,
+                uses: &sem.uses,
+                imports: &sem.imports,
+                noise: sem.noise,
+                comment: hunks[fi].comment[li],
+                def_lines: sem.def_lines,
+                def_params: sem.def_params,
+                nesting: sem.nesting,
+                file_lines,
+                recursive: sem.recursive,
+                container_members: &sem.container_members,
+                uninit_members: &sem.uninit_members,
             };
-            let file_lines = (
-                change.old.as_deref().map(|o| o.lines().count()),
-                change.new.as_deref().map_or(0, |n| n.lines().count()),
-            );
-            let mut per_file = vec![];
-            for li in 0..hunks[fi].raw.len() {
-                let sem = &hunks[fi].sem[li];
-                let [r0, r1] = hunks[fi].raw[li].new_range;
-                let facts = rules::HunkFacts {
-                    path,
-                    rows: (r0, r1),
-                    category: sem.category,
-                    enclosing: sem.enclosing.as_deref(),
-                    enclosing_kind: sem.enclosing_kind,
-                    defines: &sem.defines,
-                    uses: &sem.uses,
-                    imports: &sem.imports,
-                    noise: sem.noise,
-                    comment: hunks[fi].comment[li],
-                    def_lines: sem.def_lines,
-                    def_params: sem.def_params,
-                    nesting: sem.nesting,
-                    file_lines,
-                    recursive: sem.recursive,
-                    container_members: &sem.container_members,
-                    uninit_members: &sem.uninit_members,
-                };
-                per_file.push(rule_engine.hits(&facts, &query_rows));
-            }
-            rule_hits[fi] = per_file;
+            per_file.push(rule_engine.hits(&facts, &query_rows));
         }
-        rule_engine.finish();
-        for fi in 0..n {
-            for (li, hits) in rule_hits[fi].iter().enumerate() {
-                if rules::Rules::any_noise(hits, &input.options.rules) {
-                    hunks[fi].sem[li].noise = true;
-                }
-                hunks[fi].sem[li].priority = rules::Rules::priority(hits, &input.options.rules);
+        rule_hits[fi] = per_file;
+    }
+    rule_engine.finish();
+    for fi in 0..n {
+        for (li, hits) in rule_hits[fi].iter().enumerate() {
+            if rules::Rules::any_noise(hits, &input.options.rules) {
+                hunks[fi].sem[li].noise = true;
             }
+            hunks[fi].sem[li].priority = rules::Rules::priority(hits, &input.options.rules);
         }
     }
 

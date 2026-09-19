@@ -234,7 +234,7 @@ pub struct UseSite {
 /// produces the same output. The engine never reads a rule from disk: a client
 /// collects them (per-user, per-repo) and passes them in `Options.rules`, which
 /// keeps `ordo order` a function of its arguments.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     /// how the rule identifies itself in `hunks[].rules` — a short slug
     pub name: String,
@@ -273,14 +273,20 @@ pub struct Rule {
 /// with no conditions matches every hunk, which is occasionally what you want
 /// (a whole-changeset note) and otherwise a mistake the rule's own name makes
 /// obvious.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct When {
     /// glob against the file path, e.g. `src/security/**`
     #[serde(default)]
     pub path: Option<String>,
-    /// language name as `src/lang.rs` knows it (`python`, `cpp`, `markdown`, …)
+    /// whether the file is a test (`lang::is_test_path`) — `false` is how a
+    /// rule says "production code only", which no single glob states well
     #[serde(default)]
-    pub lang: Option<String>,
+    pub test: Option<bool>,
+    /// language name as `src/lang.rs` knows it (`python`, `cpp`, `markdown`, …).
+    /// A list matches any of them — one construct is often one rule across a
+    /// family (`goto` is C and C++; `any` is typescript and tsx)
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub lang: Option<Vec<String>>,
     #[serde(default)]
     pub category: Option<Category>,
     /// what holds the hunk; `definition` matches a plain definition

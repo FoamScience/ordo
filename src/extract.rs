@@ -427,10 +427,29 @@ pub fn analyze(spec: &LangSpec, new: &str, hunks: &[RawHunk], path: &str) -> Opt
                 m
             }
         };
+        // One hunk, one mention: a hunk holding eighteen `goto`s used to carry
+        // the same advisory eighteen times, and the why pane printed all of
+        // them. The construct is the finding; the count is not, and the rules
+        // engine has always reported once per hunk.
+        //
+        // Identical in every field, message included — `metaclass` says
+        // something different depending on what the class overrides, and two
+        // of those in one hunk are two things to read, not one repeated.
+        let mut seen: Vec<&Finding> = vec![];
         let advisories: Vec<Finding> = adv
             .iter()
             .filter(|(row, _)| r0 <= *row && *row <= r1)
-            .map(|(_, a)| a.clone())
+            .map(|(_, a)| a)
+            .filter(|a| {
+                let fresh = !seen
+                    .iter()
+                    .any(|s| s.name == a.name && s.level == a.level && s.message == a.message);
+                if fresh {
+                    seen.push(a);
+                }
+                fresh
+            })
+            .cloned()
             .collect();
         let mut symbols: Vec<Symbol> = c
             .sym_decls

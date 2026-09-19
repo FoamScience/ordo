@@ -1,0 +1,183 @@
+# The built-in construct catalog — C and C++.
+#
+# These are not style rules. Each one is a powerful or overusable construct
+# that a senior reviewer stops at, with an escalation ladder saying what the
+# lightest sufficient alternative is. `verdict` fires only where the pattern is
+# deterministically wrong.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Copy one
+# into your own ruleset if you want to change its wording or scope.
+#
+# Constructs the rule language cannot state faithfully stay as walkers in
+# `src/advisories.rs`; see the list at the end of that file's module doc.
+
+[[rule]]
+name = "goto"
+lang = ["c", "cpp"]
+kind = "goto_statement"
+note = '''
+goto — tangles control flow.
+1. structured loops / early return
+2. RAII / scope guards for cleanup (C++)
+3. a single cleanup label is the rare defensible case (C error paths)'''
+
+[[rule]]
+name = "unsafe-str-fn"
+lang = ["c", "cpp"]
+query = '''
+((call_expression function: (identifier) @f)
+ (#match? @f "^(strcpy|strcat|sprintf|vsprintf|gets|scanf)$"))
+'''
+verdict = '''
+unsafe string function — no bounds checking; the classic buffer overflow.
+1. bounded C → snprintf / strncpy / strncat with an explicit size (mind truncation)
+2. C++ → std::string / std::format / std::span
+3. never sized from attacker-controlled input'''
+
+[[rule]]
+name = "raw-new-delete"
+lang = "cpp"
+kind = ["new_expression", "delete_expression"]
+note = '''
+raw new/delete — ownership leaks on every early return or exception.
+1. value semantics / a container (vector, string)
+2. unique_ptr via make_unique (single owner)
+3. shared_ptr via make_shared (shared owner)
+4. raw new only inside a RAII wrapper you fully own'''
+
+[[rule]]
+name = "c-style-cast"
+lang = "cpp"
+kind = "cast_expression"
+note = '''
+C-style cast — silently selects static/const/reinterpret; the intent is invisible.
+1. numeric / derived→base → static_cast
+2. add or drop const → const_cast (rarely)
+3. bit reinterpret → reinterpret_cast / std::bit_cast
+Name the cast so the reader sees what was meant.'''
+
+[[rule]]
+name = "function-macro"
+lang = "cpp"
+kind = "preproc_function_def"
+note = '''
+function-like macro — no types, no scope, no debugger; textual substitution surprises.
+1. a constant → constexpr
+2. a function → inline / constexpr function
+3. generic code → a template
+4. macros only for token-pasting / conditional compilation'''
+
+[[rule]]
+name = "volatile"
+lang = "cpp"
+kind = "type_qualifier"
+text = "^volatile$"
+note = '''
+volatile as a threading primitive — gives no atomicity, ordering, or cross-thread visibility.
+1. std::atomic<T> for flags/counters
+2. a mutex-guarded value for compound invariants
+3. volatile only for memory-mapped I/O or sig_atomic_t signal handlers'''
+
+[[rule]]
+name = "lambda-ref-capture"
+lang = "cpp"
+kind = "lambda_expression"
+text = '^\[\s*&\s*[,\]]'
+note = '''
+[&] default-reference capture — dangles the moment the lambda outlives the scope (stored callback, thread, async).
+1. capture the few names you need explicitly (by value or ref)
+2. [=] or move-capture ([x = std::move(x)]) when it escapes
+3. [&] only for an immediately-used local lambda (sort comparator, for_each)'''
+
+[[rule]]
+name = "catch-by-value"
+lang = "cpp"
+query = '''
+(catch_clause parameters: (parameter_list (parameter_declaration
+  type: [(type_identifier) (qualified_identifier) (template_type)]
+  declarator: (identifier)))) @c
+'''
+note = '''
+catch by value — slices a derived exception to its base and copies (the copy can itself throw).
+1. catch (const E&)
+2. catch (const std::exception&) at boundaries
+3. catch by value only for a small error-code value type'''
+
+[[rule]]
+name = "manual-memory"
+lang = "cpp"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "(^|::)(malloc|calloc|realloc|free)$"))
+'''
+note = '''
+malloc/free in C++ — no constructor or destructor runs, no RAII.
+1. a value type or container
+2. make_unique / make_shared
+3. malloc only for C interop or placement-new arenas'''
+
+[[rule]]
+name = "mem-family"
+lang = "cpp"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "(^|::)(memcpy|memmove|memset|memcmp|bcopy|bzero)$"))
+'''
+note = '''
+memcpy/memset on objects — byte-blitting corrupts non-trivially-copyable types (vtables, ownership).
+1. std::copy / std::fill / assignment for objects
+2. std::span / vector assignment for buffers
+3. memcpy only for trivially-copyable data (guard with static_assert(is_trivially_copyable))'''
+
+[[rule]]
+name = "shell-exec"
+lang = "cpp"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "(^|::)(system|popen|execl|execlp|execle|execv|execvp|execvpe)$"))
+'''
+note = '''
+system/popen/exec* — shell-out with injection risk and awkward error handling.
+1. a library API for the task (<filesystem>, etc. — no shell)
+2. posix_spawn/exec with an explicit argv array (no shell parsing)
+3. system() only with a fully literal, non-interpolated command'''
+
+[[rule]]
+name = "alloca"
+lang = "cpp"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "(^|::)(alloca|_alloca|_malloca)$"))
+'''
+note = '''
+alloca — unchecked stack allocation; overflow is silent UB and the lifetime is the whole function.
+1. std::array when the bound is known at compile time
+2. std::vector / std::string (or a small-buffer type) for dynamic size
+3. alloca only for tiny, bounded, hot-path scratch'''
+
+[[rule]]
+name = "non-reentrant"
+lang = "cpp"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "(^|::)(rand|srand|strtok|localtime|gmtime|asctime|ctime)$"))
+'''
+note = '''
+non-reentrant C runtime — shared static buffers / poor quality; data races and clobbering.
+1. <random> (mt19937) for rand; std::string / string_view for strtok
+2. the _r/_s reentrant variant, or std::chrono + <format> for the time funcs
+3. the bare call (only single-threaded, non-security code)'''
+
+[[rule]]
+name = "setjmp-longjmp"
+lang = "cpp"
+query = '''
+((call_expression function: (_) @f)
+ (#match? @f "(^|::)(setjmp|_setjmp|sigsetjmp|longjmp|siglongjmp)$"))
+'''
+verdict = '''
+setjmp/longjmp in C++ — jumping across frames skips destructors of live objects: undefined behavior.
+1. exceptions for error propagation
+2. return values → std::optional / std::expected
+3. setjmp only in pure-C interop with trivially-destructible state'''

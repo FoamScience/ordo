@@ -22,9 +22,20 @@ The **engine reads neither**. `ordo::run` takes rules in `Options.rules`; a
 client (`ordo`) collects the files and passes them in. That keeps
 `ordo-engine order --json` a function of its arguments.
 
+## The construct catalog: the one ruleset that is always on
+
+`rulesets/catalog/*.toml` is written in exactly the grammar below, but it is
+compiled into the **engine** rather than bundled into the client, so it applies
+with no configuration at all and `ordo-engine order --json` reports it too. Its
+findings carry `source = "catalog"` instead of `"rule"`; nothing else differs.
+
+It holds the advanced-construct advisories (see
+[reviewing.md](reviewing.md)) — `goto`, `unsafe`, `any`, raw `new`/`delete`,
+mutable default arguments. Copy one into your own file to reword or narrow it.
+
 ## Presets: opting in, overriding, disabling
 
-Nothing is on by default. The rulesets under `rulesets/` are bundled into
+Nothing else is on by default. The rulesets under `rulesets/` are bundled into
 `ordo`, and a file opts in by name:
 
 ```toml
@@ -105,6 +116,7 @@ occasionally what you want, otherwise a mistake its name should make obvious.
 | --- | --- |
 | `path` | glob against the file path |
 | `path-not` | glob the file path must *not* match — third-party code, a framework carve-out |
+| `test` | whether the file is a test (`tests/`, `test_*`, `*_spec.*`, …) — `test = false` is how a rule says production code only |
 | `lang` | `python`, `cpp`, `markdown`, … as `src/lang.rs` names them |
 | `category` | `import` · `definition` · `other` |
 | `enclosing-kind` | what holds the hunk — `none` (nothing does) · `definition` · the region kinds in [cli.md](cli.md) |

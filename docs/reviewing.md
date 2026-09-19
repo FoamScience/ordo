@@ -340,7 +340,12 @@ registry.py:L2  metaclass (catalog) ⚠
 <summary><b>Advisory catalog</b> — a curated list, not a style linter</summary>
 
 Detection is deterministic tree-sitter, verdicts fire only when the pattern is
-concretely wrong (`src/advisories.rs`):
+concretely wrong. Most of the catalog is **data** — `rulesets/catalog/*.toml`,
+written in the same `[[rule]]` grammar as any ruleset and compiled into the
+engine (`src/catalog.rs`), so a construct can be read, copied into your own
+rules and reworded. It is always on; no `--rules` needed. What the rule
+language cannot state stays as a walker in `src/advisories.rs`, whose module
+doc lists each one and why:
 
 | lang | advisory (ladder) | ⚠ verdict (concretely wrong) |
 |---|---|---|

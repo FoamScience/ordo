@@ -1,0 +1,56 @@
+# The built-in construct catalog — JavaScript and TypeScript.
+#
+# These are not style rules. Each one is a powerful or overusable construct
+# that a senior reviewer stops at, with an escalation ladder saying what the
+# lightest sufficient alternative is. `verdict` fires only where the pattern is
+# deterministically wrong.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Copy one
+# into your own ruleset if you want to change its wording or scope.
+#
+# Constructs the rule language cannot state faithfully stay as walkers in
+# `src/advisories.rs`; see the list at the end of that file's module doc.
+
+[[rule]]
+name = "with"
+lang = ["javascript", "typescript", "tsx"]
+kind = "with_statement"
+verdict = '''
+`with` — ambiguous scope resolution; illegal in strict mode / modules.
+Destructure or alias the object explicitly instead.'''
+
+[[rule]]
+name = "any"
+lang = ["typescript", "tsx"]
+kind = "predefined_type"
+text = "^any$"
+note = '''
+`any` — opts out of type checking and infects everything it touches.
+1. write the real type
+2. `unknown` + narrow at the boundary
+3. a generic parameter
+4. any (last resort, isolate it)'''
+
+[[rule]]
+name = "eval"
+lang = ["javascript", "typescript", "tsx"]
+query = '''
+((call_expression function: (identifier) @f)
+ (#eq? @f "eval"))
+'''
+note = '''
+eval — arbitrary code execution and a performance deopt.
+1. parse data → JSON.parse
+2. dynamic property → obj[key]
+3. dynamic import → import()
+4. eval (avoid; never on untrusted input)'''
+
+[[rule]]
+name = "empty-catch"
+lang = ["javascript", "typescript", "tsx"]
+kind = 'catch_clause'
+text = '\{\s*\}\s*$'
+verdict = '''
+empty catch — the error is silently swallowed and failures vanish.
+Handle it, re-raise, or at minimum log; never an empty handler.'''

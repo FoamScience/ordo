@@ -1,0 +1,47 @@
+# The built-in construct catalog — Go.
+#
+# These are not style rules. Each one is a powerful or overusable construct
+# that a senior reviewer stops at, with an escalation ladder saying what the
+# lightest sufficient alternative is. `verdict` fires only where the pattern is
+# deterministically wrong.
+#
+# Unlike `rulesets/*.toml` these are ALWAYS ON: they are compiled into the
+# engine (see `src/catalog.rs`) rather than opted into with `--rules`. Copy one
+# into your own ruleset if you want to change its wording or scope.
+#
+# Constructs the rule language cannot state faithfully stay as walkers in
+# `src/advisories.rs`; see the list at the end of that file's module doc.
+
+[[rule]]
+name = "reflect"
+lang = "go"
+kind = "selector_expression"
+text = '^reflect\.'
+note = '''
+reflect — slow, unchecked at compile time, hard to read.
+1. interface + type switch
+2. generics (Go 1.18+)
+3. code generation
+4. reflect (last resort)'''
+
+[[rule]]
+name = "panic"
+lang = "go"
+test = false
+query = '''
+((call_expression function: (identifier) @f)
+ (#eq? @f "panic"))
+'''
+note = '''
+panic in library code — crashes the caller's whole process.
+Return an error and let the caller decide; reserve panic for truly unrecoverable state.'''
+
+[[rule]]
+name = "unsafe"
+lang = 'go'
+kind = 'selector_expression'
+text = '^unsafe\.'
+note = '''
+unsafe — bypasses Go's type and memory guarantees, breaks across releases.
+1. can encoding/binary, generics, or an interface do it?
+2. if not, isolate it and document why.'''

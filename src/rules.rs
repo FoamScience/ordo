@@ -28,6 +28,9 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 /// fires looks exactly like a convention nobody breaks.
 pub struct Compiled<'r> {
     pub rule: &'r Rule,
+    /// who this rule speaks for — the built-in construct catalog, or the
+    /// caller's own conventions
+    source: FindingSource,
     path: Option<GlobMatcher>,
     path_not: Option<GlobMatcher>,
     defines: Option<GlobMatcher>,
@@ -67,8 +70,16 @@ pub struct HunkFacts<'a> {
 
 pub struct Rules<'r> {
     compiled: Vec<Compiled<'r>>,
-    /// `rule: what was wrong` — surfaced in `Output.problems`
+    /// `rule: what was wrong`, for the caller's own rules — surfaced in
+    /// `Output.problems`, because the caller wrote them and can fix them
     pub problems: Vec<String>,
+    /// the same, for the built-in catalog. A catalog rule that fails to compile
+    /// is *our* bug; putting it in `Output.problems` would tell a reviewer
+    /// their rules file is broken when it is not. `tests/catalog.rs` asserts
+    /// this is empty, which is where it belongs.
+    pub catalog_problems: Vec<String>,
+    /// how many leading entries of `compiled` are the catalog's
+    catalog_len: usize,
     /// per language-less query rule: did it ever compile, and what did the
     /// first failure say. A query written for one grammar legitimately fails to
     /// parse under another, but one that parses under *none* of the languages
@@ -129,34 +140,72 @@ const KIND_NAMES: &[&str] = &[
     "document",
 ];
 
+/// Which problem list a rule's complaints belong in: the caller's if they
+/// wrote it, ours if it came from the built-in catalog.
+fn into<'a>(
+    own: bool,
+    caller: &'a mut Vec<String>,
+    catalog: &'a mut Vec<String>,
+) -> &'a mut Vec<String> {
+    if own {
+        caller
+    } else {
+        catalog
+    }
+}
+
 impl<'r> Rules<'r> {
     pub fn new(rules: &'r [Rule]) -> Rules<'r> {
+        Rules::with_catalog(&[], rules)
+    }
+
+    /// The built-in construct catalog and the caller's rules in one engine.
+    ///
+    /// They are the same mechanism and differ only in `FindingSource`, so they
+    /// share one pass: `query_rows` parses each file once for both, rather
+    /// than once per rule set.
+    pub fn with_catalog(catalog: &'r [Rule], rules: &'r [Rule]) -> Rules<'r> {
         let mut problems = vec![];
+        let mut catalog_problems = vec![];
         // A rule that never fires looks exactly like a convention nobody
         // breaks, so every way of writing one by accident is reported here:
         // a name that collides (the query cache and the noise/priority lookup
         // are both keyed by name), a language or container kind that does not
         // exist.
         let mut seen: Vec<&str> = vec![];
-        for rule in rules {
-            if seen.contains(&rule.name.as_str()) {
+        for (own, rule) in catalog
+            .iter()
+            .map(|r| (false, r))
+            .chain(rules.iter().map(|r| (true, r)))
+        {
+            // One construct can span grammars that spell it differently and
+            // warrant different guidance — `unsafe` is a Rust block and a Go
+            // package — so the catalog repeats a name on purpose. Two rules of
+            // the caller's own sharing one name is still a mistake worth
+            // reporting: both fire, and the review shows the name twice.
+            if own && seen.contains(&rule.name.as_str()) {
                 problems.push(format!("rule `{}`: duplicate rule name", rule.name));
             }
-            seen.push(&rule.name);
-            if let Some(l) = &rule.when.lang {
+            if own {
+                seen.push(&rule.name);
+            }
+            for l in rule.when.lang.iter().flatten() {
                 if !lang::all().iter().any(|s| s.name == l) {
-                    problems.push(format!("rule `{}`: unknown lang `{l}`", rule.name));
+                    into(own, &mut problems, &mut catalog_problems)
+                        .push(format!("rule `{}`: unknown lang `{l}`", rule.name));
                 }
             }
             for k in rule.unknown.keys() {
-                problems.push(format!("rule `{}`: unknown key `{k}`", rule.name));
+                into(own, &mut problems, &mut catalog_problems)
+                    .push(format!("rule `{}`: unknown key `{k}`", rule.name));
             }
             for k in rule.when.unknown.keys() {
-                problems.push(format!("rule `{}`: unknown condition `{k}`", rule.name));
+                into(own, &mut problems, &mut catalog_problems)
+                    .push(format!("rule `{}`: unknown condition `{k}`", rule.name));
             }
             if let Some(k) = &rule.when.enclosing_kind {
                 if !KIND_NAMES.contains(&k.as_str()) {
-                    problems.push(format!(
+                    into(own, &mut problems, &mut catalog_problems).push(format!(
                         "rule `{}`: unknown enclosing_kind `{k}` (one of {})",
                         rule.name,
                         KIND_NAMES.join(", ")
@@ -164,12 +213,15 @@ impl<'r> Rules<'r> {
                 }
             }
         }
-        let compiled = rules
+        let compiled = catalog
             .iter()
-            .map(|rule| {
+            .map(|r| (FindingSource::Catalog, r))
+            .chain(rules.iter().map(|r| (FindingSource::Rule, r)))
+            .map(|(source, rule)| {
                 let w = &rule.when;
                 Compiled {
                     rule,
+                    source,
                     path: glob(&w.path, "path", &rule.name, &mut problems),
                     path_not: glob(&w.path_not, "path_not", &rule.name, &mut problems),
                     defines: glob(&w.defines, "defines", &rule.name, &mut problems),
@@ -192,28 +244,34 @@ impl<'r> Rules<'r> {
                 }
             })
             .collect();
+        // a problem named after a catalog rule is ours; `Rules::new` compiles
+        // the catalog first, so everything reported while `own` was false
+        // belongs to us
         Rules {
             compiled,
             problems,
+            catalog_problems,
+            catalog_len: catalog.len(),
             tried: HashMap::new(),
             query_cache: HashMap::new(),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.compiled.is_empty()
-    }
-
-    /// Which rules match one hunk. `pattern_rows` holds, per rule name, the
+    /// Which rules match one hunk. `pattern_rows` holds, per rule *index*, the
     /// rows that rule's query or kind pattern matched in this file (see
     /// `query_rows`) — computed once per file rather than per hunk.
-    pub fn hits(&self, f: &HunkFacts, pattern_rows: &HashMap<&str, Vec<usize>>) -> Vec<Finding> {
+    ///
+    /// Keyed by index, not name, because a construct name is the *finding's*
+    /// name: `unsafe` is one advisory in Rust and another in Go, with its own
+    /// message each, and a name-keyed table could only hold one of them.
+    pub fn hits(&self, f: &HunkFacts, pattern_rows: &HashMap<usize, Vec<usize>>) -> Vec<Finding> {
         let lang = lang::for_path(f.path).map(|s| s.name);
         let (r0, r1) = f.rows;
         let (old_lines, new_lines) = f.file_lines;
         self.compiled
             .iter()
-            .filter(|c| {
+            .enumerate()
+            .filter(|(i, c)| {
                 let w = &c.rule.when;
                 let any = |m: &Option<GlobMatcher>, names: &[String]| match m {
                     Some(g) => names.iter().any(|n| g.is_match(n)),
@@ -221,7 +279,8 @@ impl<'r> Rules<'r> {
                 };
                 c.path.as_ref().is_none_or(|g| g.is_match(f.path))
                     && c.path_not.as_ref().is_none_or(|g| !g.is_match(f.path))
-                    && w.lang.as_deref().is_none_or(|l| lang == Some(l))
+                    && w.test.is_none_or(|t| t == lang::is_test_path(f.path))
+                    && w.lang.as_ref().is_none_or(|ls| ls.iter().any(|l| lang == Some(l.as_str())))
                     && w.category.is_none_or(|c2| c2 == f.category)
                     && w.enclosing_kind.as_deref().is_none_or(|k| kind_name(f.enclosing, f.enclosing_kind) == k)
                     && any(&c.defines, f.defines)
@@ -242,14 +301,14 @@ impl<'r> Rules<'r> {
                     && w.member_uninitialized.is_none_or(|b| b == !f.uninit_members.is_empty())
                     && (w.query.is_none() && w.kind.is_none()
                         || pattern_rows
-                            .get(c.rule.name.as_str())
+                            .get(i)
                             .is_some_and(|rs| rs.iter().any(|r| r0 <= *r && *r <= r1)))
             })
-            .flat_map(|c| {
+            .flat_map(|(_, c)| {
                 let mut out = vec![];
                 if let Some(m) = &c.rule.note {
                     out.push(Finding {
-                        source: FindingSource::Rule,
+                        source: c.source,
                         name: c.rule.name.clone(),
                         message: m.clone(),
                         level: Level::Note,
@@ -257,7 +316,7 @@ impl<'r> Rules<'r> {
                 }
                 if let Some(m) = &c.rule.warn {
                     out.push(Finding {
-                        source: FindingSource::Rule,
+                        source: c.source,
                         name: c.rule.name.clone(),
                         message: m.clone(),
                         level: Level::Warn,
@@ -265,7 +324,7 @@ impl<'r> Rules<'r> {
                 }
                 if let Some(m) = &c.rule.verdict {
                     out.push(Finding {
-                        source: FindingSource::Rule,
+                        source: c.source,
                         name: c.rule.name.clone(),
                         message: m.clone(),
                         level: Level::Verdict,
@@ -280,7 +339,7 @@ impl<'r> Rules<'r> {
                         (false, p) => format!("priority {p}"),
                     };
                     out.push(Finding {
-                        source: FindingSource::Rule,
+                        source: c.source,
                         name: c.rule.name.clone(),
                         message: what,
                         level: Level::Note,
@@ -292,15 +351,22 @@ impl<'r> Rules<'r> {
     }
 
     /// Whether any matching rule asks for this hunk to be treated as noise.
+    /// Only the caller's own rules may reclassify a hunk as noise. The lookup
+    /// is by name, and the catalog shares the finding list — without the source
+    /// filter, a user rule named `goto` would lend its `noise` to every hunk
+    /// the *catalog's* `goto` fired on.
     pub fn any_noise(hits: &[Finding], rules: &'r [Rule]) -> bool {
         hits.iter()
+            .filter(|h| h.source == FindingSource::Rule)
             .filter_map(|h| rules.iter().find(|r| r.name == h.name))
             .any(|r| r.noise)
     }
 
     /// The highest priority among matching rules — 0 when none has an opinion.
+    /// The caller's rules only, for the reason `any_noise` gives.
     pub fn priority(hits: &[Finding], rules: &'r [Rule]) -> i64 {
         hits.iter()
+            .filter(|h| h.source == FindingSource::Rule)
             .filter_map(|h| rules.iter().find(|r| r.name == h.name))
             .map(|r| r.priority)
             .max()
@@ -309,15 +375,21 @@ impl<'r> Rules<'r> {
 
     /// Run every query rule against one file, returning the rows each matched.
     /// Rows are 1-based, to line up with hunk ranges.
-    pub fn query_rows(&mut self, spec: &LangSpec, content: &str) -> HashMap<&'r str, Vec<usize>> {
-        let mut out: HashMap<&str, Vec<usize>> = HashMap::new();
+    pub fn query_rows(&mut self, spec: &LangSpec, content: &str) -> HashMap<usize, Vec<usize>> {
+        let mut out: HashMap<usize, Vec<usize>> = HashMap::new();
         // A query is written against one grammar. A rule that names its
         // language is only tried there — and a failure there is the author's
         // bug, so it is reported. A rule that names none is tried everywhere,
         // and a grammar it doesn't parse simply doesn't match: complaining
         // that a Rust query "does not compile for markdown" would bury the
         // real errors in noise.
-        let applies = |c: &Compiled| c.rule.when.lang.as_deref().is_none_or(|l| l == spec.name);
+        let applies = |c: &Compiled| {
+            c.rule
+                .when
+                .lang
+                .as_ref()
+                .is_none_or(|ls| ls.iter().any(|l| l == spec.name))
+        };
         let queries: Vec<(usize, &'r str, &'r str, bool)> = self
             .compiled
             .iter()
@@ -376,10 +448,15 @@ impl<'r> Rules<'r> {
                 Ok(q) => q,
                 Err(e) => {
                     if explicit {
-                        self.problems.push(format!(
+                        let msg = format!(
                             "rule `{name}`: query does not compile for {}: {e}",
                             spec.name
-                        ));
+                        );
+                        if i < self.catalog_len {
+                            self.catalog_problems.push(msg);
+                        } else {
+                            self.problems.push(msg);
+                        }
                     } else {
                         self.tried.entry(i).or_insert((false, e.clone()));
                     }
@@ -404,13 +481,13 @@ impl<'r> Rules<'r> {
         // `When`'s conditions are ANDed, and `kind` and `query` are two of
         // them: a rule carrying both used to fire on the union of what each
         // matched. Intersect instead, so both have to point at the same row.
-        for (i, c) in self.compiled.iter().enumerate() {
+        for i in 0..self.compiled.len() {
             let rows = match (by_kind.get(&i), by_query.get(&i)) {
                 (Some(k), Some(q)) => k.iter().filter(|r| q.contains(r)).copied().collect(),
                 (Some(rows), None) | (None, Some(rows)) => rows.clone(),
                 (None, None) => continue,
             };
-            out.insert(c.rule.name.as_str(), rows);
+            out.insert(i, rows);
         }
         out
     }
@@ -466,19 +543,25 @@ impl Rules<'_> {
     /// Call once every file has been seen: a language-less query rule that
     /// never compiled anywhere is reported now, when "nowhere" is finally known.
     pub fn finish(&mut self) {
-        let mut never: Vec<String> = self
+        let (ours, never): (Vec<_>, Vec<_>) = self
             .tried
             .iter()
             .filter(|(_, (ok, _))| !ok)
             .map(|(i, (_, err))| {
                 let name = &self.compiled[*i].rule.name;
-                format!(
-                    "rule `{name}`: query does not compile for any language in this change: {err}"
+                (
+                    *i < self.catalog_len,
+                    format!("rule `{name}`: query does not compile for any language in this change: {err}"),
                 )
             })
-            .collect();
-        never.sort();
-        self.problems.append(&mut never);
+            .partition(|(is_catalog, _)| *is_catalog);
+        let sorted = |v: Vec<(bool, String)>| {
+            let mut v: Vec<String> = v.into_iter().map(|(_, m)| m).collect();
+            v.sort();
+            v
+        };
+        self.problems.append(&mut sorted(never));
+        self.catalog_problems.append(&mut sorted(ours));
     }
 }
 

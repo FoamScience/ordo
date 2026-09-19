@@ -3387,7 +3387,9 @@ struct RuleToml {
     #[serde(default)]
     path_not: Option<String>,
     #[serde(default)]
-    lang: Option<String>,
+    test: Option<bool>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    lang: Option<Vec<String>>,
     #[serde(default)]
     category: Option<ordo::model::Category>,
     #[serde(default)]
@@ -3463,6 +3465,7 @@ fn rule_from_toml(
         unknown: Default::default(),
         path: parsed.path,
         path_not: parsed.path_not,
+        test: parsed.test,
         lang: parsed.lang,
         category: parsed.category,
         enclosing_kind: parsed.enclosing_kind,
@@ -13831,6 +13834,11 @@ mod docs {
             "glob the file path must *not* match — third-party code, a framework carve-out",
         ),
         (
+            "test",
+            true,
+            "whether the file is a test (`tests/`, `test_*`, `*_spec.*`, …) — `test = false` is how a rule says production code only",
+        ),
+        (
             "lang",
             true,
             "`python`, `cpp`, `markdown`, … as `src/lang.rs` names them",
@@ -14091,6 +14099,74 @@ mod docs {
         }
         out.push_str(rest);
         (out, seen)
+    }
+
+    /// `src/catalog.generated.json` is generated from `rulesets/catalog/*.toml`.
+    ///
+    /// The engine reads no files, so the catalog has to be compiled in; but a
+    /// catalog authored as JSON is a catalog nobody edits. The TOML is the
+    /// source, this is the compiler, and the drift check is the guarantee they
+    /// agree. Regenerate with `UPDATE_CATALOG_JSON=1`.
+    fn build_catalog_json() -> (String, Vec<String>) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("rulesets/catalog");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&root)
+            .expect("rulesets/catalog")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+            .collect();
+        files.sort();
+        let mut rules: Vec<ordo::model::Rule> = vec![];
+        let mut problems = vec![];
+        for f in &files {
+            let text = std::fs::read_to_string(f).expect("read catalog file");
+            let doc = parse_rules_doc(&text, &root);
+            problems.extend(
+                doc.problems
+                    .into_iter()
+                    .map(|p| format!("{}: {p}", f.display())),
+            );
+            rules.extend(doc.rules);
+        }
+        (
+            serde_json::to_string_pretty(&rules).expect("serialize catalog"),
+            problems,
+        )
+    }
+
+    #[test]
+    fn the_compiled_catalog_matches_the_toml_it_is_built_from() {
+        let (got, problems) = build_catalog_json();
+        assert!(problems.is_empty(), "catalog does not parse: {problems:?}");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/catalog.generated.json");
+        if update_requested("UPDATE_CATALOG_JSON") {
+            std::fs::write(&path, format!("{got}\n")).expect("write catalog.generated.json");
+            return;
+        }
+        let want = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            got.trim(),
+            want.trim(),
+            "src/catalog.generated.json is stale; regenerate with UPDATE_CATALOG_JSON=1"
+        );
+    }
+
+    /// Every catalog rule has to fire somewhere, or the catalog quietly shrank:
+    /// a query that stops compiling, or a `kind` a grammar renamed, looks
+    /// exactly like a construct nobody writes.
+    #[test]
+    fn every_catalog_rule_compiles_for_the_language_it_names() {
+        let engine = ordo::rules::Rules::with_catalog(ordo::catalog::rules(), &[]);
+        assert!(
+            engine.catalog_problems.is_empty(),
+            "{:?}",
+            engine.catalog_problems
+        );
+        assert!(engine.problems.is_empty(), "{:?}", engine.problems);
+        assert!(
+            ordo::catalog::problem().is_none(),
+            "{:?}",
+            ordo::catalog::problem()
+        );
     }
 
     #[test]
