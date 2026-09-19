@@ -2063,6 +2063,31 @@ fn cascade_line(app: &App, i: usize) -> Option<String> {
 /// The one-line delta for item `i`, or `None` when it reads exactly as it did
 /// last time — and when there was no last time, since "everything is new" on a
 /// first run is noise rather than information.
+/// The churn row for hunk `i`, or `None` when it has not been asked for.
+///
+/// Rendered here rather than in `why_rows` so that function stays a pure
+/// function of an `Item`, the same way `delta_line` and `cascade_line` do it.
+fn churn_line(app: &App, i: usize) -> Option<String> {
+    let it = app.items.get(i)?;
+    let key = (it.path.clone(), it.new_range[0], it.new_range[1]);
+    let Some(churn) = app.churn_cache.get(&key) else {
+        return None; // never asked; `H` asks
+    };
+    let Some(c) = churn else {
+        return Some("churn: unavailable (no commit to review from)".to_string());
+    };
+    let count = match (c.commits, c.capped) {
+        (0, _) => "these lines have not changed before".to_string(),
+        (1, false) => "these lines changed once before".to_string(),
+        (n, false) => format!("these lines changed {n} times before"),
+        (n, true) => format!("these lines changed at least {n} times before"),
+    };
+    Some(match &c.last {
+        Some((author, date)) => format!("{count} — last {date} by {author}"),
+        None => count,
+    })
+}
+
 fn delta_line(app: &App, i: usize) -> Option<&'static str> {
     if app.deltas.iter().all(|d| *d == Delta::New) {
         return None; // no previous run to compare against
@@ -2451,6 +2476,9 @@ enum Action {
     ParaNext,
     MarkPrev,
     MarkNext,
+    /// `H` — how often these lines have changed before, and who last touched
+    /// them. Explicit because it shells out to `git log -L` (see `hunk_churn`)
+    Churn,
     /// symbol under the cursor, in a floating popup
     Hover,
     /// `/` — open the text-search prompt
@@ -2630,6 +2658,7 @@ fn keymap(name: &str) -> Option<Keymap> {
                 (None, ch('}'), Action::ParaNext),
                 (None, ch('['), Action::MarkPrev),
                 (None, ch(']'), Action::MarkNext),
+                (None, ch('H'), Action::Churn),
                 // `z` prefix (vim's own convention for view-scrolling
                 // commands, e.g. zh/zl to scroll a `nowrap` window sideways)
                 (Some(ch('z')), ch('h'), Action::ScrollLeft),
@@ -2811,6 +2840,10 @@ fn action_help(a: Action) -> (Category, &'static str) {
         Action::ParaNext => (Category::Navigation, "jump to the next blank line"),
         Action::MarkPrev => (Category::Navigation, "jump to the previous use of a name added here"),
         Action::MarkNext => (Category::Navigation, "jump to the next use of a name added here"),
+        Action::Churn => (
+            Category::Review,
+            "how often these lines changed before, and who touched them last",
+        ),
         Action::Fold(Fold::Toggle) => (Category::Review, "fold/unfold the selected hunk's group"),
         Action::Fold(Fold::Open) => (Category::Review, "unfold the selected hunk's group"),
         Action::Fold(Fold::Close) => (Category::Review, "fold the selected hunk's group"),
@@ -2882,6 +2915,7 @@ const ACTION_NAMES: &[(&str, Action)] = &[
     ("para-next", Action::ParaNext),
     ("mark-prev", Action::MarkPrev),
     ("mark-next", Action::MarkNext),
+    ("churn", Action::Churn),
     ("hover", Action::Hover),
     ("search", Action::SearchOpen),
     ("symbol-next", Action::SymbolNext),
@@ -4105,6 +4139,12 @@ struct App {
     /// history-section lines, cached per (path, name, kind, scope) so
     /// repeated `K` on the same symbol doesn't re-shell-out to git
     history_cache: HashMap<(String, String, String, Option<String>), Vec<String>>,
+    /// per-hunk churn, cached per (path, new-side range) — see `Churn`. Only
+    /// ever filled on demand: `git log -L` costs ~0.2s on a large file and
+    /// the load path is already the slow one.
+    /// `None` means asked for and unavailable, which the why pane says out
+    /// loud — a key that silently does nothing reads as broken
+    churn_cache: HashMap<(String, usize, usize), Option<Churn>>,
     /// positions `JumpToEdge` jumped from, most-recent last; `JumpBack` pops
     /// one. Bounded by `JUMP_STACK_CAP`.
     jumps: Vec<(usize, Cursor)>,
@@ -6496,6 +6536,117 @@ fn classify_commit(sha: &str, path: &str, target: &Symbol) -> Option<String> {
 // rename before the window's oldest commit silently ends this symbol's
 // history there. This engine call is single-file, one commit at a time, so it
 // sees only same-file edits — a call site added in another file never shows.
+/// How often the lines this hunk changed have changed before, and who touched
+/// them last.
+///
+/// `HIGH_CHURN` in the engine counts hunks within *this* changeset. This is the
+/// other axis: a function edited nine times in three months reads differently
+/// from one untouched for two years, and a reviewer prioritises on that.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Churn {
+    /// commits touching these lines before the one under review, capped at
+    /// `CHURN_WINDOW` — `Some(n)` where n == CHURN_WINDOW means "at least"
+    commits: usize,
+    /// true when the count hit the window and the real number is higher
+    capped: bool,
+    /// author and date of the most recent commit before the reviewed one
+    last: Option<(String, String)>,
+}
+
+/// How far back `hunk_churn` counts. `git log -L` walks the whole history
+/// whichever way it is bounded (`-n` does not make it cheaper — measured), so
+/// this caps what is *reported*, not what is walked: past a handful of edits
+/// "at least N" is the same signal to a reviewer as an exact count.
+const CHURN_WINDOW: usize = 20;
+
+/// Churn for one hunk, by walking the history of its new-side lines.
+///
+/// Deliberately not computed during load. Measured on a 13k-line file with 211
+/// commits: 0.19s per hunk, and `-n` does not bound it because git still
+/// follows the range through every commit. A 296-hunk review would spend most
+/// of a minute on it, so this runs only when asked for (`H`), and caches.
+///
+/// The reviewed commit is itself the first entry `-L` reports; it is the change
+/// being read, not history, so it is dropped.
+/// Which side's line numbers the churn query follows, and whether the reviewed
+/// commit leads the log.
+///
+/// Reviewing a commit, the new side *is* the file at that commit, and that
+/// commit leads its own log — it is the change being read, not history, so it
+/// is dropped. Reviewing the uncommitted area the new side is the worktree,
+/// which is in no commit at all: the old side is HEAD, so that is what gets
+/// followed, and HEAD is real history that must be kept.
+struct ChurnQuery {
+    rows: [usize; 2],
+    drop_leading_rev: bool,
+}
+
+fn churn_query(it: &Item, uncommitted: bool) -> ChurnQuery {
+    if uncommitted {
+        ChurnQuery {
+            rows: it.old_range,
+            drop_leading_rev: false,
+        }
+    } else {
+        ChurnQuery {
+            rows: it.new_range,
+            drop_leading_rev: true,
+        }
+    }
+}
+
+fn hunk_churn(review_sha: &str, path: &str, q: &ChurnQuery) -> Churn {
+    let [r0, r1] = q.rows;
+    // a pure insertion has an empty old-side range (`[n, n - 1]`); there are no
+    // prior lines to follow, and git rejects an inverted range
+    if r0 == 0 || r0 > r1 {
+        return Churn {
+            commits: 0,
+            capped: false,
+            last: None,
+        };
+    }
+    let out = git(&[
+        "log",
+        "-L",
+        &format!("{r0},{r1}:{path}"),
+        "--no-patch",
+        "--format=%H%x09%an%x09%ad",
+        "--date=short",
+        review_sha,
+    ]);
+    churn_from_log(&out, review_sha, q.drop_leading_rev)
+}
+
+/// Parse `git log -L`'s rows into a `Churn`. Split out from the shelling so the
+/// part with the decisions in it — dropping the reviewed commit, and telling
+/// "exactly the window" from "more than it" — is testable without a repo.
+fn churn_from_log(out: &str, review_sha: &str, drop_leading_rev: bool) -> Churn {
+    let mut rows = out.lines().filter_map(|l| {
+        let mut f = l.split('\t');
+        Some((f.next()?, f.next()?.to_string(), f.next()?.to_string()))
+    });
+    let first = rows.next();
+    // `%H` is a full sha; `review_sha` may be the abbreviation the user typed
+    let leads = matches!(&first, Some((sha, _, _)) if sha.starts_with(review_sha));
+    let keep: Box<dyn Iterator<Item = (&str, String, String)>> =
+        match (first, drop_leading_rev && leads) {
+            (_, true) | (None, _) => Box::new(rows),
+            (Some(f), false) => Box::new(std::iter::once(f).chain(rows)),
+        };
+    // one past the window, so "exactly CHURN_WINDOW" is not reported as "at
+    // least CHURN_WINDOW"
+    let taken: Vec<(&str, String, String)> = keep.take(CHURN_WINDOW + 1).collect();
+    let capped = taken.len() > CHURN_WINDOW;
+    Churn {
+        commits: taken.len().min(CHURN_WINDOW),
+        capped,
+        last: taken
+            .first()
+            .map(|(_, author, date)| (author.clone(), date.clone())),
+    }
+}
+
 fn compute_history(review_sha: &str, path: &str, target: &Symbol) -> Vec<String> {
     let earlier_all = commit_list(&["rev-list", review_sha, "--", path]);
     let earlier = bound_earlier(earlier_all, review_sha, HISTORY_WINDOW);
@@ -7215,6 +7366,7 @@ fn run(
                         review_sha: review_sha.clone(),
                         uncommitted,
                         history_cache: HashMap::new(),
+                        churn_cache: HashMap::new(),
                         jumps: Vec::new(),
                         rev: rev.clone(),
                         marks_path,
@@ -7518,6 +7670,7 @@ fn apply(app: &mut App, a: Action) -> bool {
         Action::ParaNext if app.focus == Pane::Code => cursor_move(app, para_next),
         Action::MarkPrev if app.focus == Pane::Code => mark_move(app, false),
         Action::MarkNext if app.focus == Pane::Code => mark_move(app, true),
+        Action::Churn => fill_churn(app),
         Action::CursorLeft
         | Action::CursorRight
         | Action::WordNext
@@ -7629,6 +7782,26 @@ fn popup_scroll(app: &mut App, by: isize) {
     if let Some(p) = app.popup.as_mut() {
         p.scroll = (p.scroll as isize + by).clamp(0, last_line(p.lines.len()) as isize) as u16;
     }
+}
+
+/// Fill `churn_cache` for the selected hunk, so the why pane can show how
+/// often these lines have changed before.
+///
+/// On demand, never during load: `git log -L` costs ~0.2s on a large file (see
+/// `hunk_churn`). Cached per (path, range), so a second `H` on the same hunk
+/// is instant and a repeat costs nothing.
+fn fill_churn(app: &mut App) {
+    let it = &app.items[app.sel];
+    let key = (it.path.clone(), it.new_range[0], it.new_range[1]);
+    if app.churn_cache.contains_key(&key) {
+        return;
+    }
+    let query = churn_query(it, app.uncommitted);
+    let churn = app
+        .review_sha
+        .clone()
+        .map(|sha| hunk_churn(&sha, &it.path, &query));
+    app.churn_cache.insert(key, churn);
 }
 
 /// Step the cursor to the next (or previous) row `uses_at` marks — the same
@@ -7774,15 +7947,27 @@ fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
 /// a dep line whose target is currently filtered out renders — and resolves
 /// — the same as one that was never part of the review) so it doubles as the
 /// source of truth for what `why_sel` is currently sitting on.
-fn why_rows(
-    it: &Item,
-    view: &[usize],
-    theme: &Theme,
-    note: Option<&str>,
-    out_of_order: &[String],
-    delta: Option<&str>,
-    cascade: Option<&str>,
-) -> Vec<WhyRow> {
+/// What the app knows about a hunk that the `Item` itself does not: how it
+/// compares to the last run, where it sits in the order, and anything asked
+/// for on demand. Bundled so `why_rows` keeps taking the hunk and its
+/// annotations rather than a growing list of loose options.
+#[derive(Default)]
+struct WhyContext<'a> {
+    note: Option<&'a str>,
+    out_of_order: &'a [String],
+    delta: Option<&'a str>,
+    cascade: Option<&'a str>,
+    churn: Option<&'a str>,
+}
+
+fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContext) -> Vec<WhyRow> {
+    let WhyContext {
+        note,
+        out_of_order,
+        delta,
+        cascade,
+        churn,
+    } = *ctx;
     let mut rows = vec![];
     if let Some(c) = cascade {
         rows.push(WhyRow {
@@ -7840,6 +8025,15 @@ fn why_rows(
                 kind: WhyKind::Text,
             });
         }
+    }
+    // Churn sits with coverage: both answer "how much weight does this hunk
+    // deserve" rather than "what does it do".
+    if let Some(c) = churn {
+        rows.push(WhyRow {
+            text: c.to_string(),
+            style: Style::default().fg(theme.mark),
+            kind: WhyKind::Text,
+        });
     }
     // Coverage leads the derived rows: "nothing here ran" changes how the rest
     // of the hunk should be read.
@@ -7910,10 +8104,13 @@ fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
         &app.items[app.sel],
         &app.view,
         &app.theme,
-        note_for(app, app.sel),
-        &out_of_order_labels(app, app.sel),
-        delta_line(app, app.sel),
-        cascade_line(app, app.sel).as_deref(),
+        &WhyContext {
+            note: note_for(app, app.sel),
+            out_of_order: &out_of_order_labels(app, app.sel),
+            delta: delta_line(app, app.sel),
+            cascade: cascade_line(app, app.sel).as_deref(),
+            churn: churn_line(app, app.sel).as_deref(),
+        },
     );
     match rows.get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
@@ -8185,10 +8382,13 @@ fn set_geometry(app: &mut App, area: Rect) {
         &app.items[app.sel],
         &app.view,
         &app.theme,
-        note_for(app, app.sel),
-        &out_of_order_labels(app, app.sel),
-        delta_line(app, app.sel),
-        cascade_line(app, app.sel).as_deref(),
+        &WhyContext {
+            note: note_for(app, app.sel),
+            out_of_order: &out_of_order_labels(app, app.sel),
+            delta: delta_line(app, app.sel),
+            cascade: cascade_line(app, app.sel).as_deref(),
+            churn: churn_line(app, app.sel).as_deref(),
+        },
     )
     .iter()
     .map(|r| r.text.chars().count())
@@ -8589,10 +8789,13 @@ fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         it,
         &app.view,
         &app.theme,
-        note_for(app, app.sel),
-        &out_of_order_labels(app, app.sel),
-        delta_line(app, app.sel),
-        cascade_line(app, app.sel).as_deref(),
+        &WhyContext {
+            note: note_for(app, app.sel),
+            out_of_order: &out_of_order_labels(app, app.sel),
+            delta: delta_line(app, app.sel),
+            cascade: cascade_line(app, app.sel).as_deref(),
+            churn: churn_line(app, app.sel).as_deref(),
+        },
     );
 
     let why_widths: Vec<usize> = why_content.iter().map(|r| r.text.chars().count()).collect();
@@ -11916,10 +12119,7 @@ DA:1,1
             &it,
             &[0, 1, 2, 3],
             &Theme::terminal("dark", false),
-            None,
-            &[],
-            None,
-            None,
+            &WhyContext::default(),
         );
         let edges: Vec<&WhyKind> = rows
             .iter()
@@ -11939,10 +12139,7 @@ DA:1,1
             &it,
             &[0, 1, 2],
             &Theme::terminal("dark", false),
-            None,
-            &[],
-            None,
-            None,
+            &WhyContext::default(),
         );
         let edges: Vec<&WhyKind> = rows
             .iter()
@@ -11950,6 +12147,203 @@ DA:1,1
             .filter(|k| matches!(k, WhyKind::Edge(_)))
             .collect();
         assert!(matches!(edges[0], WhyKind::Edge(None)));
+    }
+
+    const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+    fn log(rows: &[(&str, &str, &str)]) -> String {
+        rows.iter()
+            .map(|(s, a, d)| format!("{s}\t{a}\t{d}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The reviewed commit leads its own `git log -L` output. It is the change
+    /// being read, not history, so it must not be counted — but only when the
+    /// query was made against it (see `churn_query`).
+    #[test]
+    fn the_reviewed_commit_is_not_counted_as_its_own_history() {
+        let out = log(&[
+            (SHA_A, "Ada", "2026-09-10"),
+            (SHA_B, "Bob", "2026-09-01"),
+            (SHA_C, "Cy", "2026-08-01"),
+        ]);
+        let c = churn_from_log(&out, SHA_A, true);
+        assert_eq!(c.commits, 2, "the reviewed commit is dropped");
+        assert_eq!(c.last, Some(("Bob".to_string(), "2026-09-01".to_string())));
+
+        // an uncommitted review follows the old side against HEAD, and HEAD is
+        // real history — dropping it would lose an edit
+        let c = churn_from_log(&out, SHA_A, false);
+        assert_eq!(c.commits, 3);
+        assert_eq!(c.last, Some(("Ada".to_string(), "2026-09-10".to_string())));
+
+        // the reviewed commit did not touch these exact lines, so it does not
+        // lead: nothing may be dropped
+        let c = churn_from_log(&out, SHA_C, true);
+        assert_eq!(c.commits, 3);
+    }
+
+    /// `review_sha` is the rev the user typed, which may be abbreviated, while
+    /// `%H` is always full.
+    #[test]
+    fn an_abbreviated_review_sha_still_matches_the_leading_commit() {
+        let out = log(&[(SHA_A, "Ada", "2026-09-10"), (SHA_B, "Bob", "2026-09-01")]);
+        assert_eq!(churn_from_log(&out, &SHA_A[..8], true).commits, 1);
+    }
+
+    /// "exactly the window" and "more than the window" are different claims.
+    #[test]
+    fn the_window_distinguishes_exactly_from_at_least() {
+        let rows: Vec<(String, &str, &str)> = (0..CHURN_WINDOW + 4)
+            .map(|i| (format!("{i:040}"), "Ada", "2026-09-01"))
+            .collect();
+        let as_refs: Vec<(&str, &str, &str)> =
+            rows.iter().map(|(s, a, d)| (&s[..], *a, *d)).collect();
+
+        let exact = log(&as_refs[..CHURN_WINDOW]);
+        let c = churn_from_log(&exact, "none", false);
+        assert_eq!((c.commits, c.capped), (CHURN_WINDOW, false));
+
+        let over = log(&as_refs);
+        let c = churn_from_log(&over, "none", false);
+        assert_eq!((c.commits, c.capped), (CHURN_WINDOW, true));
+    }
+
+    #[test]
+    fn no_history_and_malformed_rows_report_nothing_rather_than_guessing() {
+        let c = churn_from_log("", "none", true);
+        assert_eq!((c.commits, c.capped, c.last), (0, false, None));
+        // a row without the three tab-separated fields is skipped, not counted
+        let c = churn_from_log("garbage\nalso garbage", "none", false);
+        assert_eq!(c.commits, 0);
+    }
+
+    /// A pure insertion has an empty old-side range; git rejects an inverted
+    /// range, so it must never be asked.
+    #[test]
+    fn an_insertion_has_no_old_lines_to_follow() {
+        let mut it = test_item("a.rs");
+        it.old_range = [2, 1]; // what the engine emits for a pure insert
+        it.new_range = [2, 2];
+        let q = churn_query(&it, true);
+        assert_eq!(q.rows, [2, 1]);
+        let c = hunk_churn("HEAD", "a.rs", &q);
+        assert_eq!((c.commits, c.last), (0, None));
+    }
+
+    /// The side the query follows is the one the rev actually contains.
+    #[test]
+    fn a_commit_review_follows_the_new_side_and_an_uncommitted_one_the_old() {
+        let mut it = test_item("a.rs");
+        it.old_range = [10, 20];
+        it.new_range = [30, 40];
+        let q = churn_query(&it, false);
+        assert_eq!((q.rows, q.drop_leading_rev), ([30, 40], true));
+        let q = churn_query(&it, true);
+        assert_eq!((q.rows, q.drop_leading_rev), ([10, 20], false));
+    }
+
+    /// The churn row's wording, which is the whole user-visible surface of
+    /// `H`: a count a reviewer reads at a glance, and an honest "at least"
+    /// once the window caps it.
+    #[test]
+    fn the_churn_row_says_how_often_and_who_last() {
+        let mut app = test_app(0);
+        let key = |app: &App| {
+            let it = &app.items[0];
+            (it.path.clone(), it.new_range[0], it.new_range[1])
+        };
+        // never asked: no row at all, rather than a row saying nothing
+        assert_eq!(churn_line(&app, 0), None);
+
+        let k = key(&app);
+        let put = |app: &mut App, c: Option<Churn>| {
+            app.churn_cache.insert(k.clone(), c);
+        };
+        let last = || Some(("Ada".to_string(), "2026-09-01".to_string()));
+
+        put(
+            &mut app,
+            Some(Churn {
+                commits: 0,
+                capped: false,
+                last: None,
+            }),
+        );
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("these lines have not changed before")
+        );
+
+        put(
+            &mut app,
+            Some(Churn {
+                commits: 1,
+                capped: false,
+                last: last(),
+            }),
+        );
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("these lines changed once before — last 2026-09-01 by Ada")
+        );
+
+        put(
+            &mut app,
+            Some(Churn {
+                commits: 9,
+                capped: false,
+                last: last(),
+            }),
+        );
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("these lines changed 9 times before — last 2026-09-01 by Ada")
+        );
+
+        // capped: the count is a floor, and must not be stated as exact
+        put(
+            &mut app,
+            Some(Churn {
+                commits: CHURN_WINDOW,
+                capped: true,
+                last: last(),
+            }),
+        );
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some(
+                &format!(
+                "these lines changed at least {CHURN_WINDOW} times before — last 2026-09-01 by Ada"
+            )[..]
+            )
+        );
+
+        // asked and unavailable says so; a key that silently does nothing
+        // reads as broken
+        put(&mut app, None);
+        assert_eq!(
+            churn_line(&app, 0).as_deref(),
+            Some("churn: unavailable (no commit to review from)")
+        );
+    }
+
+    /// `H` must never shell out twice for the same hunk, and must record the
+    /// unavailable case so it is not retried on every keypress.
+    #[test]
+    fn asking_for_churn_without_a_review_commit_is_recorded_not_retried() {
+        let mut app = test_app(0);
+        app.review_sha = None;
+        fill_churn(&mut app);
+        let it = &app.items[0];
+        let k = (it.path.clone(), it.new_range[0], it.new_range[1]);
+        assert_eq!(app.churn_cache.get(&k), Some(&None));
+        assert_eq!(app.churn_cache.len(), 1);
+        fill_churn(&mut app);
+        assert_eq!(app.churn_cache.len(), 1);
     }
 
     fn test_app(why_len: usize) -> App {
@@ -11984,6 +12378,7 @@ DA:1,1
             review_sha: None,
             uncommitted: false,
             history_cache: HashMap::new(),
+            churn_cache: HashMap::new(),
             jumps: vec![],
             rev: "HEAD".to_string(),
             marks_path: None,

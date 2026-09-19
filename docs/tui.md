@@ -23,6 +23,12 @@ Where a name the hunk introduces is used, the code gutter carries a `▸` on tha
 row (the engine's `hunks[].uses_at`), and `]`/`[` step between them — positions
 belong in the code, not as a list of line numbers in the why pane.
 
+`H` asks how often the selected hunk's lines have changed before, and who
+touched them last. It is a keypress rather than something the load computes:
+`git log -L` follows a line range through the whole history, which measured
+~0.2s on a 13k-line file and is not bounded by `-n`, so a few hundred hunks
+would cost most of a minute up front. The answer is cached per hunk.
+
 Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
 removed line is paired with the added line it became, and only the differing
 part carries the strong tint —
@@ -140,6 +146,7 @@ always drives the code pane.
 | cycle to the previous match | `N` | `S-F3` |
 | **review** | | |
 | toggle reviewed on the selected hunk | `x` | `Space`, `Enter` |
+| how often these lines changed before, and who touched them last | `H` |  |
 | fold/unfold the selected hunk's group | `za` | `C-k C-l` |
 | unfold the selected hunk's group | `zo` |  |
 | fold the selected hunk's group | `zc` |  |
