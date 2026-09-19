@@ -1169,6 +1169,31 @@ fn opens_include_guard(node: Node, src: &[u8]) -> bool {
     first_directive.is_some_and(|d| include_guard_name(d, src).is_some())
 }
 
+/// c and c++ have no nested functions, so a `function_definition` inside a
+/// function body is the grammar's reading of a call whose last argument is a
+/// macro wrapping a lambda — `Kokkos::parallel_for(n, KOKKOS_LAMBDA(int i){…})`
+/// parses as a definition named after the callee. A local class's methods are a
+/// real nesting, so the climb stops at any class, struct or namespace body.
+fn is_misparsed_call(node: Node, spec: &LangSpec) -> bool {
+    if !matches!(spec.name, "c" | "cpp") || node.kind() != "function_definition" {
+        return false;
+    }
+    let mut parent = node.parent();
+    while let Some(n) = parent {
+        match n.kind() {
+            "compound_statement" => return true,
+            "field_declaration_list"
+            | "declaration_list"
+            | "class_specifier"
+            | "struct_specifier"
+            | "namespace_definition"
+            | "translation_unit" => return false,
+            _ => parent = n.parent(),
+        }
+    }
+    false
+}
+
 fn region_label(
     node: Node,
     src: &[u8],
@@ -1493,7 +1518,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
     if include_guard_name(node, src).is_some() {
         return;
     }
-    if spec.is_def(kind) {
+    if spec.is_def(kind) && !is_misparsed_call(node, spec) {
         let er = end_row(node, spec);
         // A def with no name of its own names no container, so it is
         // transparent: descend without pushing a scope. This covers a c++
@@ -1528,11 +1553,24 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         for name in cmake_params(node, src) {
             c.bound.insert(name);
         }
-        c.def_rows.insert(sr);
-        if lang::is_type_kind(kind) {
-            c.type_rows.insert(sr);
+        // A c++ namespace is a scope, not a declaration: it qualifies the names
+        // under it (which is why it is a def at all) but nothing references
+        // `particode` the way it references a function, and every added file in
+        // a project reopens the same one — as a definition it filled the ledger
+        // and paired every pair of new files with a def→use edge.
+        //
+        // Deliberately only c++: a rust `mod` or a python module is declared
+        // once, is imported by name, and is navigated to, so those stay
+        // definitions. (`namespace_definition` is unique to the c++ grammar,
+        // verified against tree-sitter-cpp-0.23.4.)
+        let scope_only = kind == "namespace_definition";
+        if !scope_only {
+            c.def_rows.insert(sr);
+            if lang::is_type_kind(kind) {
+                c.type_rows.insert(sr);
+            }
+            c.decls.push((sr, sr, own.clone()));
         }
-        c.decls.push((sr, sr, own.clone()));
         // prose and config only: a def kind that is *also* a member kind
         // (markdown's `section`, a config format's key) registers itself as a
         // member of its enclosing container too, so a new subsection or key
@@ -1560,7 +1598,7 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
         let delegates = node
             .child_by_field_name("definition")
             .is_some_and(|d| spec.is_def(d.kind()));
-        if !delegates {
+        if !delegates && !scope_only {
             // scope excludes a duplicate trailing entry (the wrapper's own
             // push for this same symbol, not a genuine enclosing scope)
             let scope_stack = if dup {
@@ -1580,7 +1618,11 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             name: stack.join(lang::scope_sep(spec)),
             depth,
             params,
-            kind: ContainerKind::Definition,
+            kind: if scope_only {
+                ContainerKind::Namespace
+            } else {
+                ContainerKind::Definition
+            },
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
@@ -1864,6 +1906,14 @@ fn declarator_ident(node: Node) -> Option<Node> {
     }
     if let Some(d) = node.child_by_field_name("declarator") {
         return declarator_ident(d);
+    }
+    // a c++ `operator()` or `~Foo` declarator is the method's own name, though
+    // neither spells it with an identifier node. Without this the declarator
+    // resolved to nothing and the definition fell back to being named after
+    // its return type — which, for `KOKKOS_FUNCTION void operator()(…)`, is
+    // the macro in front of it.
+    if matches!(node.kind(), "operator_name" | "destructor_name") {
+        return Some(node);
     }
     lang::is_ident(node.kind()).then_some(node)
 }
@@ -2605,9 +2655,24 @@ fn bound_name(node: Node, src: &[u8]) -> Option<String> {
         // or a value returned/nested inside a function body must not borrow
         // the name of whatever the call result or outer function is bound
         // to. Stop the climb rather than crossing into that unrelated scope.
+        //
+        // A c++ namespace body and class body are spelled `declaration_list`
+        // and `field_declaration_list`: scopes, but the `binds` test below
+        // matches them on the word "declaration" and then takes the first
+        // identifier of the *previous* sibling — which named every templated
+        // function after its neighbour's leading token, commonly `nodiscard`.
+        // (A list is not always a scope: lua reaches a real binding through an
+        // `expression_list`, so this names the scope kinds rather than
+        // rejecting every `*_list`.)
         if matches!(
             k,
-            "arguments" | "statement_block" | "class_body" | "program" | "block"
+            "arguments"
+                | "statement_block"
+                | "class_body"
+                | "program"
+                | "block"
+                | "declaration_list"
+                | "field_declaration_list"
         ) {
             return None;
         }

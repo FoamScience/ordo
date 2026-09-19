@@ -225,3 +225,33 @@ fn every_documented_rule_condition_is_one_the_engine_reads() {
         );
     }
 }
+
+#[test]
+fn every_container_kind_is_declared_in_the_schema() {
+    // the enum drifted silently once: a new kind reached `enclosing_kind` while
+    // the published schema still rejected it, so the engine's own output failed
+    // validation against its own contract
+    let schema = schema();
+    // the output field is omitted for a plain definition, so only the rule
+    // predicate — which a rule may write `enclosing_kind = "definition"` —
+    // carries that one
+    for (path, skip_definition) in [
+        ("/$defs/input/properties/options/properties/rules/items/properties/when/properties/enclosing_kind/enum", false),
+        ("/$defs/output/properties/files/items/properties/hunks/items/properties/enclosing_kind/enum", true),
+    ] {
+        let declared = schema
+            .pointer(path)
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| panic!("schema has no enum at {path}"));
+        for kind in ordo::model::ContainerKind::ALL {
+            if skip_definition && *kind == ordo::model::ContainerKind::Definition {
+                continue;
+            }
+            let name = serde_json::to_value(kind).expect("kind serialises");
+            assert!(
+                declared.contains(&name),
+                "{name} is emitted but {path} does not declare it"
+            );
+        }
+    }
+}

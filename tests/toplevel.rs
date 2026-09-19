@@ -717,3 +717,148 @@ fn a_new_side_of_nothing_but_blank_lines_reads_as_a_removal() {
         rationales(&out)
     );
 }
+
+#[test]
+fn a_namespace_is_a_scope_not_a_declaration() {
+    // every added file in a project reopens the same namespace: as a definition
+    // it filled the ledger and paired unrelated new files with def→use edges
+    let out = one(
+        "a.H",
+        "namespace particode\n{\nint a = 1;\n}\n",
+        "namespace particode\n{\nint a = 2;\n}\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(
+        h.enclosing.as_deref(),
+        Some("particode"),
+        "it still names the scope"
+    );
+    assert!(
+        !h.defines.iter().any(|d| d == "particode"),
+        "{:?}",
+        h.defines
+    );
+    assert!(!out.ledger.iter().any(|l| l.name == "particode"));
+}
+
+#[test]
+fn a_templated_function_is_not_named_after_its_neighbours_attribute() {
+    // `bound_name` climbed out of the `declaration_list` that is a namespace
+    // body and took the first identifier of the function above — so every
+    // `[[nodiscard]] template<…>` function in the file was called `nodiscard`
+    let body = "\
+namespace particode
+{
+
+[[nodiscard]] inline int f(int x)
+{
+    return x;
+}
+
+template<class T>
+[[nodiscard]] inline int g(int x)
+{
+    return x;
+}
+
+}
+";
+    let out = one("a.H", "", body);
+    let defines: Vec<&String> = out.files[0]
+        .hunks
+        .iter()
+        .flat_map(|h| h.defines.iter())
+        .collect();
+    assert!(!defines.iter().any(|d| *d == "nodiscard"), "{defines:?}");
+    assert!(defines.iter().any(|d| *d == "g"), "{defines:?}");
+}
+
+#[test]
+fn a_macro_wrapped_lambda_argument_is_a_call_not_a_definition() {
+    // `Kokkos::parallel_for(n, KOKKOS_LAMBDA(int i){…})` parses as a nested
+    // `function_definition` named after the callee — c++ has no nested
+    // functions, so it is a call, and `parallel_for` is a use
+    let new = "\
+inline void fill(int n)
+{
+    Kokkos::parallel_for(name, n, KOKKOS_LAMBDA(const int i)
+    {
+        self(i) = -1;
+    });
+}
+";
+    let out = one("a.H", "inline void fill(int n)\n{\n}\n", new);
+    let h = &out.files[0].hunks[0];
+    assert!(
+        !h.defines.iter().any(|d| d == "parallel_for"),
+        "{:?}",
+        h.defines
+    );
+    assert!(h.uses.iter().any(|u| u == "parallel_for"), "{:?}", h.uses);
+}
+
+#[test]
+fn a_local_class_keeps_its_methods() {
+    // a class declared inside a function body is a real nesting: its methods
+    // are definitions, and the misparse rule must not reach them
+    let new = "\
+void run()
+{
+    struct Local
+    {
+        int twice(int x) { return 2 * x; }
+    };
+}
+";
+    let out = one("a.C", "void run()\n{\n}\n", new);
+    let defines: Vec<&String> = out.files[0]
+        .hunks
+        .iter()
+        .flat_map(|h| h.defines.iter())
+        .collect();
+    assert!(defines.iter().any(|d| *d == "twice"), "{defines:?}");
+}
+
+#[test]
+fn an_operator_method_is_named_after_the_operator_not_its_return_type() {
+    // `KOKKOS_FUNCTION void operator()(…)`: the declarator is an `operator_name`
+    // with no identifier in it, so the definition used to be named after the
+    // token in front of its return type — the macro
+    let out = one(
+        "a.H",
+        "struct K\n{\n};\n",
+        "struct K\n{\n    KOKKOS_FUNCTION void operator()(const int i) const { dst(i) = i; }\n};\n",
+    );
+    let defines: Vec<&String> = out.files[0]
+        .hunks
+        .iter()
+        .flat_map(|h| h.defines.iter())
+        .collect();
+    assert!(defines.iter().any(|d| *d == "operator()"), "{defines:?}");
+    assert!(
+        !defines.iter().any(|d| *d == "KOKKOS_FUNCTION"),
+        "{defines:?}"
+    );
+}
+
+#[test]
+fn a_destructor_is_named_after_the_type_it_destroys() {
+    let out = one(
+        "a.H",
+        "struct K
+{
+};
+",
+        "struct K
+{
+    ~K() { release(); }
+};
+",
+    );
+    let defines: Vec<&String> = out.files[0]
+        .hunks
+        .iter()
+        .flat_map(|h| h.defines.iter())
+        .collect();
+    assert!(defines.iter().any(|d| *d == "~K"), "{defines:?}");
+}

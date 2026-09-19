@@ -580,6 +580,7 @@ fn kind_name(enclosing: Option<&str>, k: Option<ContainerKind>) -> &'static str 
         Some(ContainerKind::Definition) => "definition",
         Some(ContainerKind::Test) => "test",
         Some(ContainerKind::Region) => "region",
+        Some(ContainerKind::Namespace) => "namespace",
         Some(ContainerKind::Preamble) => "preamble",
         Some(ContainerKind::FrontMatter) => "front-matter",
         Some(ContainerKind::Binding) => "binding",

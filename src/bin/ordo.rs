@@ -16027,18 +16027,7 @@ mod docs {
     /// without this table gaining a row.
     fn container_kinds_table() -> String {
         use ordo::model::ContainerKind::{self, *};
-        // `Definition` first: it is the omitted case, and the only kind that
-        // is a symbol. The rest follow the enum's own order.
-        const ALL: &[ContainerKind] = &[
-            Definition,
-            Test,
-            Region,
-            Preamble,
-            FrontMatter,
-            Document,
-            Binding,
-            Call,
-        ];
+        const ALL: &[ContainerKind] = ContainerKind::ALL;
         let describe = |k: ContainerKind| -> (&'static str, &'static str) {
             match k {
                 Definition => ("a definition — a function, class, macro, …", "`parse_cfg`"),
@@ -16047,6 +16036,7 @@ mod docs {
                     "`describe \"cli\" > it \"parses flags\"`",
                 ),
                 Region => ("conditional compilation", "`#ifdef CURL_DISABLE_HTTP`"),
+                Namespace => ("a namespace: it qualifies what it holds", "`particode`"),
                 Preamble => ("prose before a document's first heading", "`preamble`"),
                 FrontMatter => ("a document's `---` metadata block", "`front matter`"),
                 Document => (

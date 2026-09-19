@@ -1053,7 +1053,9 @@ fn a_qualified_name_split_across_lines_is_joined() {
             "old": "namespace Foam { namespace kt { } }\n",
             "new": "namespace Foam { namespace kt {\nFoam::scalar Foam::kt::\nSchaeffer::nu\n(\n    int a\n) const\n{\n    return 1;\n}\n} }\n" }]
     }));
-    assert_eq!(rats, vec!["adds kt::Schaeffer::nu; edits Foam, kt"]);
+    // the namespaces qualify the name but are not themselves reported: a
+    // namespace is a scope, not a declaration anyone references
+    assert_eq!(rats, vec!["adds kt::Schaeffer::nu"]);
 }
 
 #[test]
