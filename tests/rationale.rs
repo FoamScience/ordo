@@ -395,6 +395,60 @@ fn p13_def_smells_size_and_params() {
     assert_eq!(notes, vec!["large definition (66 lines)", "7 params"]);
 }
 
+/// A note is a measurement of the hunk, so each kind is worth saying once,
+/// with the worst value. Saying it per definition buried a `:why` pane under
+/// the same sentence forty times over.
+#[test]
+fn p13_def_smells_are_one_note_per_kind() {
+    // four definitions nested 4, 5, 6 and 7 deep — one hunk, one complaint
+    let mut src = String::new();
+    for d in 0..8 {
+        src.push_str(&format!("{}def f{d}(x):\n", "    ".repeat(d)));
+    }
+    src.push_str(&format!("{}return x\n", "    ".repeat(8)));
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": "a.py", "old": "", "new": src }]
+        }))
+        .unwrap(),
+    );
+    let notes: Vec<String> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().flat_map(|h| h.notes.clone()))
+        .filter(|n| n.starts_with("deeply nested"))
+        .collect();
+    assert_eq!(
+        notes.len(),
+        1,
+        "one note for four deeply nested definitions: {notes:?}"
+    );
+    assert!(notes[0].contains("depth 7"), "the worst depth: {notes:?}");
+}
+
+/// Every JSON key is a `pair`, which the engine reads as a definition — so a
+/// nested object once reported itself as deeply nested once per key. Data has
+/// no code shape to measure.
+#[test]
+fn p13_def_smells_skip_data_formats() {
+    let deep = "{\n \"a\": {\n  \"b\": {\n   \"c\": {\n    \"d\": {\n     \"e\": 1\n    }\n   }\n  }\n }\n}\n";
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [{ "path": "a.json", "old": "", "new": deep }]
+        }))
+        .unwrap(),
+    );
+    let notes: Vec<String> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().flat_map(|h| h.notes.clone()))
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "a JSON object is not a code smell: {notes:?}"
+    );
+}
+
 #[test]
 fn p14_metaclass_advisories() {
     let out = ordo::run(serde_json::from_value(serde_json::json!({

@@ -139,3 +139,16 @@ fn content_before_the_first_heading_has_no_enclosing_section() {
         "headless leading section must not be anonymous: {rats:?}"
     );
 }
+
+/// A section is a def here, so the code-shape notes (`large definition`,
+/// `deeply nested`) once measured prose: a long chapter read as an overlong
+/// function. Prose has no such shape.
+#[test]
+fn a_long_section_is_not_a_large_definition() {
+    let body: String = (0..80).map(|i| format!("Line {i}.\n")).collect();
+    let notes: Vec<String> = one("README.md", "", &format!("# Title\n\n{body}"))
+        .into_iter()
+        .flat_map(|h| h.notes)
+        .collect();
+    assert!(notes.is_empty(), "prose measured as code: {notes:?}");
+}
