@@ -1803,4 +1803,3 @@ fn formatting_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool 
         _ => o.unwrap_or_default().is_empty() && n.unwrap_or_default().is_empty(),
     }
 }
-
