@@ -266,6 +266,16 @@ pub fn order_all(
         }
         for u in &sem[i].uses {
             guse[gi].insert(u.clone());
+            // `from lib import helper as h` then `h()`: the definition is
+            // called `helper` in the file that has it, so the alias alone can
+            // never match one. Record the origin too, and leave the hunk's own
+            // `uses` saying what the source says.
+            if let Some((origin, _)) = symbols
+                .get(coord[i].0)
+                .and_then(|f| f.imported_from.get(u.as_str()))
+            {
+                guse[gi].insert(origin.clone());
+            }
         }
     }
 
@@ -299,6 +309,18 @@ pub fn order_all(
             }
         }
     }
+    // gfile/grow depend only on group membership, which is fixed by this
+    // point — precompute once instead of re-walking every member hunk on
+    // every sort/min_by_key comparison below.
+    let gfile_v: Vec<usize> = (0..g).map(|gi| gfile(gi, &groups)).collect();
+    let grow_v: Vec<usize> = (0..g).map(|gi| grow(gi, &groups)).collect();
+    let bind = Binding {
+        definers: &definers,
+        scoped: &scoped,
+        group_file: &gfile_v,
+        paths,
+        symbols,
+    };
     let mut edges: Vec<(usize, usize, String)> = vec![];
     let mut gedges: Vec<(usize, usize)> = vec![];
     for a in 0..g {
@@ -311,7 +333,7 @@ pub fn order_all(
                 if b == a || (!cross_file && gfile(a, &groups) != gfile(b, &groups)) {
                     continue;
                 }
-                if !resolves(a, b, s, &definers, &scoped, |x| gfile(x, &groups)) {
+                if !bind.resolves(a, b, s) {
                     continue;
                 }
                 reached.entry(b).or_insert(s);
@@ -496,7 +518,13 @@ pub fn order_all(
         groups: &groups,
         definers: &definers,
         users: &users,
-        scoped: &scoped,
+        bind: Binding {
+            definers: &definers,
+            scoped: &scoped,
+            group_file: &gfile_v,
+            paths,
+            symbols,
+        },
         group_file: &gfile_v,
         group_row: &grow_v,
         paths,
@@ -569,18 +597,100 @@ fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
 /// The two groups are NOT interchangeable: it is the *definer's* scope that
 /// decides, so `definer` and `user` must be passed the way round their names
 /// say (pinned by `a_use_side_scope_does_not_block_the_edge`).
-fn resolves(
-    definer: usize,
-    user: usize,
-    s: &str,
-    definers: &HashMap<&str, Vec<usize>>,
-    scoped: &HashSet<(usize, &str)>,
-    file_of: impl Fn(usize) -> usize,
-) -> bool {
-    if definers.get(s).is_some_and(|d| d.len() > 1) {
-        return false;
+/// The def→use gate: everything an edge from `definer` to `user` for symbol
+/// `s` has to survive. Bundled because it needs five tables and a method reads
+/// better than six arguments at two call sites.
+struct Binding<'a> {
+    definers: &'a HashMap<&'a str, Vec<usize>>,
+    scoped: &'a HashSet<(usize, &'a str)>,
+    group_file: &'a [usize],
+    paths: &'a [String],
+    symbols: &'a [crate::FileSymbols],
+}
+
+impl Binding<'_> {
+    /// Can a use in group `b` be attributed to the definition of `s` in group
+    /// `a`?
+    ///
+    /// Two shapes make that a guess rather than a fact, and a guess sends the
+    /// reviewer to the wrong definition:
+    ///
+    ///   * several groups define `s` — nothing here says which one the use
+    ///     means;
+    ///   * `s` is declared inside another definition (a class member, a name in
+    ///     a namespace) and the use is in a different file — resolving that
+    ///     needs the qualifications and overload rules this engine does not
+    ///     read.
+    ///
+    /// Both are common in c++ header code, where short member names (`View`,
+    /// `name`, `at`, `i`) repeat in every class, but neither is
+    /// language-specific.
+    ///
+    /// An import narrows the first of those rather than widening it: when the
+    /// using file says `from two import save`, the definers in any other module
+    /// are not candidates at all, so one surviving candidate is an answer even
+    /// though the name is defined twice in the change.
+    ///
+    /// The two groups are NOT interchangeable: it is the *definer's* scope that
+    /// decides, so `definer` and `user` must be passed the way round their
+    /// names say (pinned by `a_use_side_scope_does_not_block_the_edge`).
+    fn resolves(&self, definer: usize, user: usize, s: &str) -> bool {
+        let all = self.definers.get(s).map_or(&[][..], Vec::as_slice);
+        match self.module_for(user, s) {
+            Some(module) => {
+                let mut ok = all
+                    .iter()
+                    .filter(|&&d| module_matches(&self.paths[self.group_file[d]], module));
+                // exactly one definer answers to the module the import names
+                if ok.next() != Some(&definer) || ok.next().is_some() {
+                    return false;
+                }
+            }
+            None if all.len() > 1 => return false,
+            None => {}
+        }
+        !(self.scoped.contains(&(definer, s)) && self.group_file[definer] != self.group_file[user])
     }
-    !(scoped.contains(&(definer, s)) && file_of(definer) != file_of(user))
+
+    /// Does the using file's own import statement allow `definer` to be where
+    /// `s` comes from? The narrow half of `resolves`: it rules out a definer
+    /// the source contradicts, and says nothing about ambiguity. The
+    /// definer-side provenance wants exactly this and not the rest — a name a
+    /// dozen files define is still unambiguous to a reader when the use is
+    /// three lines below it.
+    fn import_allows(&self, user: usize, definer: usize, s: &str) -> bool {
+        match self.module_for(user, s) {
+            Some(m) => module_matches(&self.paths[self.group_file[definer]], m),
+            None => true,
+        }
+    }
+
+    /// The module the using group's file imports `s` from, when it says.
+    /// `imported_from` is keyed by the name as written *and* by the origin
+    /// (see `FileSymbols::of`), so this stays one lookup inside the edge loop.
+    fn module_for(&self, user: usize, s: &str) -> Option<&str> {
+        let f = self.symbols.get(*self.group_file.get(user)?)?;
+        f.imported_from.get(s).and_then(|(_, m)| m.as_deref())
+    }
+}
+
+/// Does `path` hold the module an import names? Compared on the last segment
+/// only: `from pkg.utils import x` is answered by `pkg/utils.py`, `utils.py`
+/// or `a/b/utils.ts`, and by nothing called anything else. A module that names
+/// no file in the change matches nothing, which is the point — it says the
+/// definition is somewhere the reviewer was not shown.
+fn module_matches(path: &str, module: &str) -> bool {
+    let want = module
+        .rsplit(['.', '/', ':'])
+        .find(|seg| !seg.is_empty())
+        .unwrap_or(module);
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    // `.d.ts` and `.test.js` leave a second extension on the stem
+    let stem = stem.split('.').next().unwrap_or(stem);
+    !want.is_empty() && want == stem
 }
 
 struct RatCtx<'a> {
@@ -590,9 +700,10 @@ struct RatCtx<'a> {
     /// the answer is O(hunks × groups).
     definers: &'a HashMap<&'a str, Vec<usize>>,
     users: &'a HashMap<&'a str, Vec<usize>>,
-    /// (group, symbol) pairs whose symbol is declared inside another
-    /// definition rather than at file scope — see `resolves`
-    scoped: &'a HashSet<(usize, &'a str)>,
+    /// the edge gate — which holds the `scoped` and `definers` tables it
+    /// needs — so the rationale layer answers the same question the graph did
+    /// rather than rebuilding it per call
+    bind: Binding<'a>,
     group_file: &'a [usize],
     group_row: &'a [usize],
     paths: &'a [String],
@@ -620,11 +731,13 @@ impl RatCtx<'_> {
     // ...and `other` really is where `sym` comes from, by the same rule the
     // def→use graph uses: the rationale must not name a definition the graph
     // refused to draw an edge to
+    /// Provenance from the definition's side: `mine` defines `sym`, `other`
+    /// uses it. Only the import gate applies — see `Binding::import_allows`.
+    fn used_by(&self, mine: usize, other: usize, sym: &str) -> bool {
+        self.ok(mine, other) && self.bind.import_allows(other, mine, sym)
+    }
     fn ok_for(&self, mine: usize, other: usize, sym: &str) -> bool {
-        self.ok(mine, other)
-            && resolves(other, mine, sym, self.definers, self.scoped, |x| {
-                self.group_file[x]
-            })
+        self.ok(mine, other) && self.bind.resolves(other, mine, sym)
     }
     // markdown (currently the only prose language): rationale wording says
     // "section" instead of naming a construct kind.
@@ -891,11 +1004,15 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         let mut out = join_frags(&frags);
         // provenance: a defined symbol used by another group. Name it only when
         // several constructs are listed (otherwise "used by X" is unambiguous).
+        // a definer the using file's import contradicts must not claim the use
+        // (`used in caller.py` when the caller imports the name from elsewhere).
+        // Only that: the graph's ambiguity rule does not belong here, and
+        // applying it dropped 274 provenance phrases in one corpus repo.
         if let Some((d, b)) = real.iter().find_map(|d| {
             ctx.users(d)
                 .iter()
                 .copied()
-                .find(|&b| ctx.ok(mine, b))
+                .find(|&b| ctx.used_by(mine, b, d))
                 .map(|b| ((*d).clone(), b))
         }) {
             let prov = if ctx.group_file[b] != my_file {

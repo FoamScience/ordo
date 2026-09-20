@@ -3007,6 +3007,141 @@ pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>) {
     ((o.defs, o.imports), o.bodies)
 }
 
+/// What an import binds, and where that name comes from: the name this file
+/// now has, the symbol the *defining* file calls it, and the module it was
+/// taken from. `from lib import helper as h` is `("h", "helper", Some("lib"))`.
+///
+/// `import_bound_names` answers only the first of those, which is all the
+/// hunk's own `imports` list needs. An edge needs the other two: a definition
+/// is matched by the name its own file gives it, and the module is what says
+/// which file that is (see `order::Binding`).
+pub struct ImportBinding {
+    /// the name this file now has
+    pub bound: String,
+    /// what the defining file calls it — the only name an edge can match on
+    pub origin: String,
+    /// the module it was taken from, when the statement names one
+    pub module: Option<String>,
+}
+
+/// Every symbol-level import binding in a file, for the languages that spell
+/// one. `import os` binds a module rather than a symbol and is not one of
+/// these: there is no definition in the change it could be matched against.
+pub fn import_bindings(spec: &LangSpec, content: &str) -> Vec<ImportBinding> {
+    let mut out = vec![];
+    if let Some(tree) = lang::parse(spec, content) {
+        collect_import_bindings(tree.root_node(), content.as_bytes(), spec, &mut out);
+    }
+    out
+}
+
+fn collect_import_bindings(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<ImportBinding>) {
+    if import_origins(node, src, spec, out) {
+        return; // an import's insides are not another import
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        collect_import_bindings(ch, src, spec, out);
+    }
+}
+
+/// The bindings one import statement introduces, or `false` when this node is
+/// not an import this understands. Node kinds and field names verified against
+/// tree-sitter-{python-0.23.6,javascript-0.23.1,typescript-0.23.2,rust-0.23}'s
+/// node-types.json; the `alias`/`name` field pairing is a shared convention
+/// across all four.
+fn import_origins(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<ImportBinding>) -> bool {
+    let text = |n: Node| n.utf8_text(src).ok().map(str::to_string);
+    let last = |n: Node| {
+        let mut c = n.walk();
+        let parts: Vec<Node> = n.named_children(&mut c).collect();
+        parts.last().copied().and_then(text).or_else(|| text(n))
+    };
+    match (spec.name, node.kind()) {
+        // `from a.b import c, d as e` binds c from a.b and e (really d) from a.b
+        ("python" | "xonsh", "import_from_statement") => {
+            // `from . import helper` names the package, not a module: there is
+            // no file name in it to match a definer against, so it constrains
+            // nothing and the name match stands on its own
+            let module = node
+                .child_by_field_name("module_name")
+                // a bare `from . import x` is an `import_prefix` and nothing
+                // else; a `from .pkg import x` carries the dotted name beside
+                // it, which is the part that can name a file
+                .filter(|m| m.kind() != "relative_import" || m.named_child_count() > 1)
+                .and_then(last);
+            let mut cur = node.walk();
+            for n in node.children_by_field_name("name", &mut cur) {
+                let (bound, origin) = match n.kind() {
+                    "aliased_import" => (
+                        n.child_by_field_name("alias").and_then(text),
+                        n.child_by_field_name("name").and_then(last),
+                    ),
+                    _ => (last(n), last(n)),
+                };
+                if let (Some(bound), Some(origin)) = (bound, origin) {
+                    out.push(ImportBinding {
+                        bound,
+                        origin,
+                        module: module.clone(),
+                    });
+                }
+            }
+            true
+        }
+        // `import { a, b as c } from './x'`
+        ("javascript" | "typescript" | "tsx", "import_statement") => {
+            let module = node
+                .child_by_field_name("source")
+                .and_then(text)
+                .map(|t| unquote(t.trim()).to_string());
+            let mut found = false;
+            let mut stack = vec![node];
+            while let Some(n) = stack.pop() {
+                if n.kind() == "import_specifier" {
+                    let origin = n.child_by_field_name("name").and_then(text);
+                    let bound = n
+                        .child_by_field_name("alias")
+                        .and_then(text)
+                        .or_else(|| origin.clone());
+                    if let (Some(bound), Some(origin)) = (bound, origin) {
+                        out.push(ImportBinding {
+                            bound,
+                            origin,
+                            module: module.clone(),
+                        });
+                        found = true;
+                    }
+                    continue;
+                }
+                let mut cur = n.walk();
+                stack.extend(n.named_children(&mut cur));
+            }
+            found
+        }
+        // `use a::b as c` — the module is the path without its last segment
+        ("rust", "use_as_clause") => {
+            let path = node.child_by_field_name("path");
+            let origin = path.and_then(last);
+            let bound = node.child_by_field_name("alias").and_then(text);
+            let module = path.and_then(text).and_then(|p| {
+                p.rsplit_once("::")
+                    .map(|(head, _)| head.trim().to_string())
+                    .filter(|m| !m.is_empty())
+            });
+            if let (Some(bound), Some(origin)) = (bound, origin) {
+                out.push(ImportBinding {
+                    bound,
+                    origin,
+                    module,
+                });
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
     let mut out = vec![];
     let mut cur = node.walk();

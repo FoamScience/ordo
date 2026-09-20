@@ -5,6 +5,15 @@
 
 - **Symbol resolution is approximate** — name match with an optional
   cross-file union, no full scope/type analysis. `cross_file` is a toggle.
+  One thing it *does* read is the import statement: an alias resolves to the
+  symbol its own file names (`from lib import helper as h`), and a definer in
+  a module the import does not name is not a candidate at all, even when it is
+  the only file in the change defining that name. Languages that spell an
+  alias — python, javascript, typescript, rust — get this; elsewhere a name
+  still matches a name. The trade is deliberate: a re-export (`from .api
+  import helper`, defined in `core.py`) now resolves to nothing rather than to
+  `core.py`, because the engine reads the import it was given and does not
+  follow it.
 - **`diff` input** reaches full semantics whenever full new content is
   derivable: `new` given, `old`+`diff` (applied), an added file, or a
   caller-asserted full-context patch (`full_context` / `--full-context`, e.g.
