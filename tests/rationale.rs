@@ -1191,3 +1191,46 @@ fn a_lone_pair_that_shares_its_body_is_a_rename() {
     }));
     assert_eq!(rats, vec!["renames foo → bar"]);
 }
+
+/// The last-resort rationale used to be the bare word "change", which tells a
+/// reviewer nothing. Every hunk the grammar finds no construct in still knows
+/// what it did to the file — a `#define` (macros are not definitions), a
+/// continuation line inside a shell command, the prose ahead of a document's
+/// first heading.
+#[test]
+fn a_hunk_with_no_construct_still_says_what_it_did() {
+    let rat = |path: &str, old: &str, new: &str| -> Vec<String> {
+        ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [{ "path": path, "old": old, "new": new }]
+            }))
+            .unwrap(),
+        )
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().map(|h| h.rationale.clone()))
+        .collect()
+    };
+
+    // an inserted continuation line inside a command: nothing is declared
+    let added = rat(
+        "ci.sh",
+        "run \\\n  --a \\\n  --b\n",
+        "run \\\n  --a \\\n  --new \\\n  --b\n",
+    );
+    assert!(added.iter().all(|r| r != "change"), "{added:?}");
+    assert!(
+        added.iter().any(|r| r.starts_with("adds 1 line")),
+        "{added:?}"
+    );
+
+    // the prose ahead of an added document's first named section — the shape
+    // that made ordo say "change" about 64 lines of a new README
+    let body: String = (0..70).map(|i| format!("line {i}\n")).collect();
+    let doc = rat("doc.md", "", &format!("#\n\n{body}\n## Real\n\ncontent\n"));
+    assert!(doc.iter().all(|r| r != "change"), "{doc:?}");
+    assert!(
+        doc.iter().any(|r| r.starts_with("adds 73 lines")),
+        "{doc:?}"
+    );
+}
