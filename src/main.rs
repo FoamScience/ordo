@@ -3,15 +3,18 @@ use std::io::Read;
 use std::process::exit;
 
 const USAGE: &str = "usage:
-  ordo-engine order  [--only-comments] --json < input.json > output.json
+  ordo-engine order  [--only-comments] [--sarif] --json < input.json > output.json
   ordo-engine pack   [--only-comments] --json < input.json  # compact LLM-ready review context
-  ordo-engine review [--full-context] [patch]               # patch from arg or stdin
+  ordo-engine review [--full-context] [--sarif] [patch]     # patch from arg or stdin
   ordo-engine --version
 
 --full-context: the patch is a complete diff (git diff -U100000), so modified
                 files get full semantics instead of positional order.
 --only-comments: drop every non-comment/docstring hunk before ordering, so
-                 order/groups/edges/clusters cover only comment changes.";
+                 order/groups/edges/clusters cover only comment changes.
+--sarif: print the findings as SARIF 2.1.0 instead of the engine's own JSON,
+         for whatever already reads analyzer output. Findings only — SARIF has
+         no vocabulary for the reading order or the def→use graph.";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -42,10 +45,13 @@ fn main() {
 /// docs/diff-input-design.md); additions get full semantics either way.
 fn review(args: &[String]) {
     let mut full_context = false;
+    let mut as_sarif = false;
     let mut path: Option<&str> = None;
     for a in args {
         if a == "--full-context" {
             full_context = true;
+        } else if a == "--sarif" {
+            as_sarif = true;
         } else if a.starts_with('-') {
             eprintln!("ordo-engine review: unknown flag '{a}'\n{USAGE}");
             exit(2);
@@ -76,7 +82,12 @@ fn review(args: &[String]) {
             ..Default::default()
         },
     };
-    emit(ordo::run(input));
+    let out = ordo::run(input);
+    if as_sarif {
+        println!("{}", ordo::sarif(&out));
+    } else {
+        emit(out);
+    }
 }
 
 fn read_stdin() -> String {
@@ -88,14 +99,16 @@ fn read_stdin() -> String {
     buf
 }
 
-/// `--only-comments` is the only flag `order`/`pack` take; anything else
+/// `--only-comments` is the only flag `order`/`pack` share; anything else
 /// starting with `-` is a typo, and silently ordering the whole diff instead of
-/// the comment subset the caller asked for is worse than refusing.
-fn only_comments_flag(args: &[String]) -> bool {
+/// the comment subset the caller asked for is worse than refusing. `--sarif`
+/// is `order`'s alone: `pack` renders review context, which SARIF has no
+/// vocabulary for, so accepting and ignoring it would be the same lie.
+fn only_comments_flag(args: &[String], sarif_ok: bool) -> bool {
     for a in args {
         // `--json` names the input format these two already require; it is
         // accepted so the documented invocation works, and means nothing.
-        if a != "--only-comments" && a != "--json" {
+        if a != "--only-comments" && a != "--json" && !(sarif_ok && a == "--sarif") {
             eprintln!("ordo-engine: unknown flag '{a}'\n{USAGE}");
             exit(2);
         }
@@ -116,12 +129,19 @@ fn read_input(only_comments: bool) -> ordo::model::Input {
 }
 
 fn order(args: &[String]) {
-    emit(ordo::run(read_input(only_comments_flag(args))));
+    let as_sarif = args.iter().any(|a| a == "--sarif");
+    let input = read_input(only_comments_flag(args, true));
+    let out = ordo::run(input);
+    if as_sarif {
+        println!("{}", ordo::sarif(&out));
+    } else {
+        emit(out);
+    }
 }
 
 /// `ordo-engine pack --json < input.json` — compact, LLM-ready review context.
 fn pack(args: &[String]) {
-    let input = read_input(only_comments_flag(args));
+    let input = read_input(only_comments_flag(args, false));
     print!("{}", ordo::pack(&ordo::run(input)));
 }
 

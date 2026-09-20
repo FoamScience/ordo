@@ -44,6 +44,27 @@ is alphabetical and so usually first. Only prose files move; a data or config
 file (a schema, a lockfile, a `package.json`) often drives the code around it
 and keeps its place. Set it to `false` for a docs-led change.
 
+`--sarif` (on `ordo-engine order` and `ordo-engine review`) prints the findings
+as SARIF 2.1.0 instead of the engine's own JSON, so ordo's catalog hits, rule
+hits and any analyzer results a client placed reach whatever already reads
+analyzer output — GitHub code scanning, an IDE, a dashboard. Each finding
+becomes one `runs[].results[]` entry located at its hunk (the resolution ordo
+works at), levels map `note`/`warning`/`error` onto note/warn/verdict, and every
+rule that fired is declared once under `tool.driver.rules`.
+
+Each result carries a `partialFingerprints` entry keyed on the rule, the file
+and the enclosing definition rather than on a line, so a consumer that tracks
+alerts across commits (GitHub code scanning among them) does not re-raise every
+finding when something above it moves. What the engine could not analyse — a
+context-limited diff, a file with no grammar, a rule that failed to compile —
+is reported as `invocations[].toolExecutionNotifications`, so an empty
+`results` on a degraded patch cannot be read as a clean review.
+
+It is the findings and nothing else: SARIF describes results at locations and
+has no vocabulary for a reading order, a def→use edge or a group, so a caller
+that wants those reads the engine's own output (or `ordo-engine pack`, which
+takes no `--sarif`).
+
 Each file entry also carries `dropped`: the hunks removed before ordering
 (pure imports, and non-comment hunks under `only_comments`) with the range each
 covered. `hunks` + `dropped` is exactly what the diff produced, so "did ordo

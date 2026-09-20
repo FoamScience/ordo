@@ -1279,6 +1279,139 @@ fn changeset_notes(files: &[FileOut], ledger: &[LedgerEntry]) -> Vec<String> {
     notes
 }
 
+/// Render the findings as SARIF 2.1.0, so ordo's advisories land in whatever
+/// already reads analyzer output — GitHub code scanning, an IDE, a dashboard.
+///
+/// Deliberately the *findings* only. SARIF describes results at locations; it
+/// has no vocabulary for a reading order, a def→use edge or a group, and
+/// inventing one in a `properties` bag would produce a file nothing consumes.
+/// A caller that wants the ordering reads `Output` (or `pack`).
+///
+/// A finding is located at its hunk, since that is the resolution ordo works
+/// at: the region spans the whole hunk rather than claiming a line the engine
+/// never identified.
+pub fn sarif(out: &Output) -> String {
+    let level = |l: Level| match l {
+        Level::Note => "note",
+        Level::Warn => "warning",
+        Level::Verdict => "error",
+    };
+    let mut results = vec![];
+    let mut rules: Vec<serde_json::Value> = vec![];
+    let mut seen: HashSet<&str> = HashSet::new();
+    for file in &out.files {
+        for hunk in &file.hunks {
+            for f in &hunk.findings {
+                if seen.insert(&f.name) {
+                    rules.push(serde_json::json!({
+                        "id": f.name,
+                        // one sentence, as SARIF asks: a catalog message is a
+                        // numbered remedy list, and a consumer puts this in a
+                        // rule index beside forty others
+                        "shortDescription": { "text": first_sentence(&f.message) },
+                        "fullDescription": { "text": f.message },
+                        "properties": { "source": f.source.as_str() },
+                    }));
+                }
+                results.push(serde_json::json!({
+                    "ruleId": f.name,
+                    "level": level(f.level),
+                    "message": { "text": f.message },
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": { "uri": file.path },
+                            "region": {
+                                "startLine": hunk.new_range[0],
+                                "endLine": hunk.new_range[1],
+                            },
+                        },
+                    }],
+                    // what the finding is *about*, not where it sits today:
+                    // a consumer (GitHub code scanning among them) matches an
+                    // alert across commits on this, and a line number would
+                    // re-raise everything on the next edit above it
+                    "partialFingerprints": {
+                        "ordo/v1": fingerprint(&[
+                            &f.name,
+                            &file.path,
+                            hunk.enclosing.as_deref().unwrap_or(""),
+                        ]),
+                    },
+                    "properties": {
+                        "source": f.source.as_str(),
+                        "rationale": hunk.rationale,
+                    },
+                }));
+            }
+        }
+    }
+    // what the engine could not do is part of the report: an empty `results`
+    // on a patch that could not be analysed must not read as a clean review
+    let mut notifications: Vec<serde_json::Value> = out
+        .problems
+        .iter()
+        .map(|p| serde_json::json!({ "level": "warning", "message": { "text": p } }))
+        .collect();
+    for f in out.files.iter().filter(|f| f.degraded || f.unsupported) {
+        let why = if f.unsupported {
+            "no grammar for this file type — no structural analysis"
+        } else {
+            "context-limited diff — positional order only, no semantics"
+        };
+        notifications.push(serde_json::json!({
+            "level": "warning",
+            "message": { "text": format!("{}: {why}", f.path) },
+            "locations": [{ "physicalLocation": {
+                "artifactLocation": { "uri": f.path },
+            }}],
+        }));
+    }
+    let doc = serde_json::json!({
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [{
+            "tool": { "driver": {
+                "name": "ordo",
+                "version": env!("CARGO_PKG_VERSION"),
+                "informationUri": env!("CARGO_PKG_REPOSITORY"),
+                "rules": rules,
+            }},
+            "invocations": [{
+                "executionSuccessful": true,
+                "toolExecutionNotifications": notifications,
+            }],
+            "results": results,
+        }],
+    });
+    serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// The first sentence of a message, for a field a consumer shows in a list.
+fn first_sentence(text: &str) -> String {
+    let line = text.lines().next().unwrap_or("").trim();
+    match line.find(". ") {
+        Some(i) => line[..=i].trim_end().to_string(),
+        None => line.to_string(),
+    }
+}
+
+/// A stable identity for a finding, as hex. FNV-1a rather than `DefaultHasher`,
+/// whose output is explicitly not stable across Rust releases — a fingerprint
+/// that changes with the compiler would re-raise every alert on a toolchain
+/// bump.
+fn fingerprint(parts: &[&str]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in parts {
+        for b in p.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x1000_0000_01b3);
+        }
+        h ^= 0xff;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 /// P12.4: render a compact, deterministic review pack from the engine output —
 /// reading order + rationale + independent parts + def→use edges — as LLM-ready
 /// context an AI reviewer would otherwise re-derive per run.
