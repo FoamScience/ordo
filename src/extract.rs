@@ -159,7 +159,10 @@ fn split_insertions(defs: &[DefRec], hunks: &[RawHunk]) -> Vec<RawHunk> {
         // needs cutting (LARGE_LINES is the same "too big to take in at once"
         // threshold the structural notes use).
         let inserted = h.old_range[0] > h.old_range[1];
-        let Some(r0) = h.new_r0.filter(|r0| inserted && h.new_r1 - r0 > LARGE_LINES) else {
+        let Some(r0) = h
+            .new_r0
+            .filter(|r0| inserted && h.new_r1 - r0 > LARGE_LINES)
+        else {
             out.push(h.clone());
             continue;
         };
@@ -1135,8 +1138,12 @@ fn include_guard_name(node: Node, src: &[u8]) -> Option<String> {
         // a header whose body defeats the parser yields one top-level `ERROR`
         // holding the flattened directives; deeper down, an ERROR says nothing
         // about scope
-        "ERROR" => parent.parent().is_some_and(|g| g.kind() == "translation_unit"),
-        "preproc_ifdef" => parent.parent().is_some_and(|g| g.kind() == "translation_unit"),
+        "ERROR" => parent
+            .parent()
+            .is_some_and(|g| g.kind() == "translation_unit"),
+        "preproc_ifdef" => parent
+            .parent()
+            .is_some_and(|g| g.kind() == "translation_unit"),
         _ => false,
     };
     if !at_file_scope {
@@ -1144,7 +1151,9 @@ fn include_guard_name(node: Node, src: &[u8]) -> Option<String> {
     }
     let text = |n: Node| n.utf8_text(src).ok().map(str::trim);
     let name = text(node.child_by_field_name("name")?)?;
-    let tested = prev_directive(node).filter(|s| s.kind() == "identifier").and_then(text)?;
+    let tested = prev_directive(node)
+        .filter(|s| s.kind() == "identifier")
+        .and_then(text)?;
     (tested == name).then(|| name.to_string())
 }
 
