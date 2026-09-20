@@ -1019,7 +1019,19 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         let n = o1 - o0 + 1;
         return format!("removes {n} line{}", if n == 1 { "" } else { "s" });
     }
-    "change".to_string()
+    // nothing above found a construct to name. Say what the hunk did to the
+    // file — a direction and a size — rather than the bare word "change",
+    // which told a reviewer nothing at all. Reached by a hunk the grammar
+    // recognises nothing in: a `#define` (not a definition since macros left
+    // `defines`), a continuation line inside a shell command, the prose ahead
+    // of an added document's first heading.
+    let n = s.new_len.max(1);
+    let plural = if n == 1 { "" } else { "s" };
+    if o1 < o0 {
+        format!("adds {n} line{plural}")
+    } else {
+        format!("edits {n} line{plural}")
+    }
 }
 
 // comment-only wording, verb/preposition matched the way P15's detail_phrases

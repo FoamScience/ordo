@@ -59,6 +59,9 @@ pub struct HunkSem {
     pub old_range: [usize; 2],
     /// hunk adds no new lines (pure deletion) — drives removal wording
     pub new_empty: bool,
+    /// how many new-side lines the hunk covers, so a hunk that introduces no
+    /// construct can still say what it did instead of the bare word "change"
+    pub new_len: usize,
     /// longest definition the hunk starts, in lines, and the most parameters
     /// one takes — the facts a `max-lines` / `max-params` rule reads
     pub def_lines: usize,
@@ -107,6 +110,7 @@ impl HunkSem {
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
             new_empty: h.new_r0.is_none(),
+            new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
             def_lines: 0,
             def_params: 0,
             nesting: 0,
@@ -613,6 +617,7 @@ pub fn analyze(
             // to say for itself as a pure deletion, and the same wording fits:
             // what a reviewer wants to know is what left
             new_empty: (r0..=r1).all(|r| lines.get(r).is_none_or(|l| l.trim().is_empty())),
+            new_len: r1 - r0 + 1,
             def_lines,
             def_params,
             nesting,
