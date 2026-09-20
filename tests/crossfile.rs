@@ -107,7 +107,12 @@ fn a_class_member_is_not_resolved_from_another_file() {
         "{:?}",
         out.edges
     );
-    let rats: Vec<&str> = out.files.iter().flat_map(|f| f.hunks.iter()).map(|h| h.rationale.as_str()).collect();
+    let rats: Vec<&str> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter())
+        .map(|h| h.rationale.as_str())
+        .collect();
     assert!(
         !rats.iter().any(|r| r.contains("uses key, defined in")),
         "the rationale must not claim what the graph refused: {rats:?}"
@@ -153,4 +158,152 @@ fn a_use_side_scope_does_not_block_the_edge() {
         "{:?}",
         out.edges
     );
+}
+
+/// An alias is the name this file has; the definition keeps the name its own
+/// file gave it. Matching the two on the bare text means an aliased import is
+/// invisible to the graph — the identical change without `as h` gets an edge.
+#[test]
+fn an_aliased_import_still_reaches_its_definition() {
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "lib.py", "old": "def helper(x):\n    return x\n",
+                  "new": "def helper(x, y):\n    return x + y\n" },
+                { "path": "use.py",
+                  "old": "from lib import helper as h\n\ndef run():\n    return h(1)\n",
+                  "new": "from lib import helper as h\n\ndef run():\n    return h(1, 2)\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert_eq!(out.edges.len(), 1, "{:?}", out.edges);
+}
+
+/// The import says which file answers for a name. Without reading it, any
+/// changed file defining the same name is fair game, and the rationale asserts
+/// a provenance the source contradicts.
+#[test]
+fn a_definer_the_import_does_not_name_is_not_the_definition() {
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "one.py", "old": "def save(x):\n    return x\n",
+                  "new": "def save(x, y):\n    return x + y\n" },
+                { "path": "caller.py",
+                  "old": "from two import save\n\ndef go():\n    return save(1)\n",
+                  "new": "from two import save\n\ndef go():\n    return save(1, 2)\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert!(out.edges.is_empty(), "{:?}", out.edges);
+    let rats: Vec<&String> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().map(|h| &h.rationale))
+        .collect();
+    assert!(
+        !rats
+            .iter()
+            .any(|r| r.contains("one.py") || r.contains("caller.py")),
+        "neither file may claim the other: {rats:?}"
+    );
+}
+
+/// Two files defining one name is ambiguous only until something disambiguates
+/// it. The import does, so the edge the ambiguity rule used to suppress is
+/// exactly the one that should be drawn.
+#[test]
+fn an_import_disambiguates_a_name_two_files_define() {
+    let out = ordo::run(
+        serde_json::from_value(serde_json::json!({
+            "changes": [
+                { "path": "one.py", "old": "def save(x):\n    return x\n",
+                  "new": "def save(x, y):\n    return x + y\n" },
+                { "path": "two.py", "old": "def save(x):\n    return x\n",
+                  "new": "def save(x, y):\n    return x - y\n" },
+                { "path": "caller.py",
+                  "old": "from one import save\n\ndef go():\n    return save(1)\n",
+                  "new": "from one import save\n\ndef go():\n    return save(1, 2)\n" }
+            ]
+        }))
+        .unwrap(),
+    );
+    assert_eq!(out.edges.len(), 1, "{:?}", out.edges);
+    let rats: Vec<&String> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter().map(|h| &h.rationale))
+        .collect();
+    assert!(
+        rats.iter()
+            .any(|r| r.contains("uses save, defined in one.py")),
+        "{rats:?}"
+    );
+    // and the file the import does not name stays out of it
+    assert_eq!(
+        rats.iter().filter(|r| r.contains("caller.py")).count(),
+        1,
+        "only the imported-from file may claim the use: {rats:?}"
+    );
+}
+
+/// The `alias`/`name` field pairing is a convention the grammars share, so the
+/// same fix has to hold outside python — javascript spells it
+/// `import { helper as h }`, rust `use path::helper as h`.
+#[test]
+fn an_alias_reaches_its_definition_in_every_language_that_spells_one() {
+    let cases = [
+        (
+            "lib.js",
+            "export function helper(x) { return x; }\n",
+            "export function helper(x, y) { return x + y; }\n",
+            "use.js",
+            "import { helper as h } from './lib';\n\nfunction run() { return h(1); }\n",
+            "import { helper as h } from './lib';\n\nfunction run() { return h(1, 2); }\n",
+        ),
+        (
+            "lib.rs",
+            "pub fn helper(x: i32) -> i32 { x }\n",
+            "pub fn helper(x: i32, y: i32) -> i32 { x + y }\n",
+            "main.rs",
+            "use crate::lib::helper as h;\n\nfn run() -> i32 { h(1) }\n",
+            "use crate::lib::helper as h;\n\nfn run() -> i32 { h(1, 2) }\n",
+        ),
+    ];
+    for (dp, do_, dn, up, uo, un) in cases {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [
+                    { "path": dp, "old": do_, "new": dn },
+                    { "path": up, "old": uo, "new": un }
+                ]
+            }))
+            .unwrap(),
+        );
+        assert_eq!(out.edges.len(), 1, "{dp}: {:?}", out.edges);
+    }
+}
+
+/// `from . import helper` names the package, not a module. Reading it as one
+/// leaves a module with no file name in it, which matches nothing and drops
+/// every edge the name match would have found.
+#[test]
+fn a_package_relative_import_names_no_module_and_blocks_nothing() {
+    for imp in ["from . import helper", "from .. import helper"] {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": [
+                    { "path": "pkg/lib.py", "old": "def helper(x):\n    return x\n",
+                      "new": "def helper(x, y):\n    return x + y\n" },
+                    { "path": "pkg/use.py",
+                      "old": format!("{imp}\n\ndef run():\n    return helper(1)\n"),
+                      "new": format!("{imp}\n\ndef run():\n    return helper(1, 2)\n") }
+                ]
+            }))
+            .unwrap(),
+        );
+        assert_eq!(out.edges.len(), 1, "`{imp}`: {:?}", out.edges);
+    }
 }

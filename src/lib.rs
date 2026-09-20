@@ -170,6 +170,7 @@ pub fn run(input: Input) -> Output {
         &facts,
         input.options.strategy,
         input.options.cross_file,
+        input.options.docs_last,
     );
 
     // what the ordering decided about each hunk, at the hunk
@@ -1136,6 +1137,11 @@ pub(crate) struct FileSymbols {
     /// the same for the new side
     new_defs: HashSet<String>,
     pub(crate) new_imports: HashSet<String>,
+    /// name this file binds → (the symbol its own file calls it, the module it
+    /// came from). An edge can only be matched on the origin, and only the
+    /// module says which file is allowed to answer for it — see
+    /// `order::Binding`
+    pub(crate) imported_from: HashMap<String, (String, Option<String>)>,
     /// old-side (name, row) for defs and imports — positions, not just names
     pub(crate) old_rows: extract::SymbolRows,
     /// header and body text per definition, for rename and move matching
@@ -1163,6 +1169,20 @@ impl FileSymbols {
         let (new_defs, new_imports): (HashSet<String>, HashSet<String>) =
             (set(&new_rows.0), set(&new_rows.1));
         FileSymbols {
+            imported_from: new.map_or(HashMap::new(), |(n, sp)| {
+                let mut out: HashMap<String, (String, Option<String>)> = HashMap::new();
+                for b in extract::import_bindings(sp, n) {
+                    let (bound, origin, module) = (b.bound, b.origin, b.module);
+                    // the origin is a key too: a use registered under it (see
+                    // `order_all`'s `guse`) has to find the same module without
+                    // searching, and a name bound directly outranks one that is
+                    // only some other alias's origin
+                    out.entry(origin.clone())
+                        .or_insert_with(|| (origin.clone(), module.clone()));
+                    out.insert(bound, (origin, module));
+                }
+                out
+            }),
             old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
             old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
             old_locals: old.map_or(HashSet::new(), |(o, sp)| extract::local_names(sp, o)),
