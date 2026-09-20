@@ -493,6 +493,12 @@ fn help_topic(topic: Option<&str>) -> i32 {
 }
 
 fn parse_args() -> Result<ParsedArgs, i32> {
+    parse_argv(std::env::args().skip(1).collect())
+}
+
+/// The flag loop, over a vector rather than the process's own arguments, so a
+/// test can hand it a command line. `parse_args` is the one-line caller.
+fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
     let mut rev: Option<String> = None;
     let mut globs: Vec<String> = vec![];
     let mut skip_generated = true;
@@ -516,7 +522,6 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     let mut force = false;
     // `ordo help [<topic>]` short-circuits everything else: it takes an
     // argument the flag loop below would otherwise read as a revision.
-    let argv: Vec<String> = std::env::args().skip(1).collect();
     if let Some(first) = argv.first() {
         if first == "help" || first == "--help" || first == "-h" {
             return Err(help_topic(argv.get(1).map(String::as_str)));
@@ -914,16 +919,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let mut items = build_items(&out);
     // analyzer findings land on the hunk that contains their line, so they
     // arrive in the reading order rather than as a separate flat list
-    let findings: Vec<Finding> = sarif
-        .iter()
-        .flat_map(|p| match std::fs::read_to_string(p) {
-            Ok(text) => parse_sarif(&text),
-            Err(e) => {
-                note_command_failure("sarif", &[p.as_str()], &e.to_string());
-                vec![]
-            }
-        })
-        .collect();
+    let findings: Vec<Finding> = sarif_findings(&sarif).into_iter().collect();
     // straight onto the local ledger: `filter.tally` was snapshotted above, so
     // anything written back to it now would never reach the screen
     ledger.findings_seen += findings.len();
@@ -1088,6 +1084,25 @@ struct Finding {
     path: String,
     /// 1-based, as SARIF writes it and as hunk ranges are kept
     line: usize,
+}
+
+/// Every finding in the `--sarif` files given, in the order the paths were.
+///
+/// A file that cannot be read is reported through `note_command_failure` and
+/// contributes nothing: an unreadable analyzer report must not stop a review,
+/// but it must not vanish either — `:audit` and the post-run notes say it was
+/// asked for and did not arrive.
+fn sarif_findings(paths: &[String]) -> Vec<Finding> {
+    paths
+        .iter()
+        .flat_map(|p| match std::fs::read_to_string(p) {
+            Ok(text) => parse_sarif(&text),
+            Err(e) => {
+                note_command_failure("sarif", &[p.as_str()], &e.to_string());
+                vec![]
+            }
+        })
+        .collect()
 }
 
 /// Read `runs[].results[]` out of a SARIF document.
@@ -11343,6 +11358,113 @@ DA:1,1
         // both findings sit outside it; neither may vanish silently
         assert_eq!(place_findings(&mut items, &parse_sarif(SARIF)), 2);
         assert!(items[0].findings.is_empty());
+    }
+
+    /// One run per tool is the normal shape in CI — semgrep and clippy in one
+    /// document — and the driver name is what a finding is labelled with, so
+    /// reading only the first run silently drops half the report.
+    #[test]
+    fn every_run_in_a_sarif_file_is_read() {
+        let two = r#"{"version":"2.1.0","runs":[
+          {"tool":{"driver":{"name":"semgrep"}},
+           "results":[{"ruleId":"no-eval","level":"error","message":{"text":"eval"},
+             "locations":[{"physicalLocation":{
+                "artifactLocation":{"uri":"src/a.py"},"region":{"startLine":3}}}]}]},
+          {"tool":{"driver":{"name":"clippy"}},
+           "results":[{"ruleId":"needless_range_loop","level":"warning","message":{"text":"range"},
+             "locations":[{"physicalLocation":{
+                "artifactLocation":{"uri":"src/b.rs"},"region":{"startLine":7}}}]}]}
+        ]}"#;
+        let f = parse_sarif(two);
+        assert_eq!(f.len(), 2, "{f:?}");
+        let tools: Vec<&str> = f.iter().map(|x| x.tool.as_str()).collect();
+        assert_eq!(
+            tools,
+            vec!["semgrep", "clippy"],
+            "each run keeps its driver"
+        );
+    }
+
+    /// A region without `startLine` cannot be placed on a hunk, and a result
+    /// with no `region` at all is a file-level finding — neither may be
+    /// invented a line number, and neither may take the whole file down.
+    #[test]
+    fn a_result_with_no_line_is_skipped_rather_than_placed_at_zero() {
+        let no_line = r#"{"runs":[{"tool":{"driver":{"name":"t"}},"results":[
+          {"ruleId":"a","message":{"text":"no region"},
+           "locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/a.py"}}}]},
+          {"ruleId":"b","message":{"text":"empty region"},
+           "locations":[{"physicalLocation":{
+              "artifactLocation":{"uri":"src/a.py"},"region":{}}}]},
+          {"ruleId":"c","message":{"text":"real"},
+           "locations":[{"physicalLocation":{
+              "artifactLocation":{"uri":"src/a.py"},"region":{"startLine":4}}}]}
+        ]}]}"#;
+        let f = parse_sarif(no_line);
+        assert_eq!(f.len(), 1, "only the located result survives: {f:?}");
+        assert_eq!((f[0].rule.as_str(), f[0].line), ("c", 4));
+    }
+
+    /// `--sarif` may be given more than once, in either spelling. The flag
+    /// loop is the only thing standing between a reviewer's command line and
+    /// the reader that is already tested.
+    #[test]
+    fn the_sarif_flag_collects_every_path_in_both_spellings() {
+        let argv: Vec<String> = ["--sarif", "a.json", "--sarif=b.json", "--sarif", "c.json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let parsed = parse_argv(argv).expect("accepted");
+        assert_eq!(parsed.sarif, vec!["a.json", "b.json", "c.json"]);
+    }
+
+    /// An unreadable analyzer report must not stop the review, and must not
+    /// vanish either: the run is reported the way every other failed command
+    /// is, and the readable files still contribute.
+    #[test]
+    fn an_unreadable_sarif_file_is_reported_and_the_rest_still_load() {
+        let dir = std::env::temp_dir().join(format!("ordo-sarif-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmp");
+        let good = dir.join("good.sarif");
+        std::fs::write(&good, SARIF).expect("write");
+        let missing = dir.join("nope.sarif");
+
+        let paths = vec![missing.display().to_string(), good.display().to_string()];
+        let found = sarif_findings(&paths);
+        assert_eq!(found.len(), 2, "the readable file still counts: {found:?}");
+        assert!(
+            command_failures()
+                .iter()
+                .any(|l| l.starts_with("sarif ") && l.contains("nope.sarif")),
+            "the unreadable one is reported: {:?}",
+            command_failures()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `:audit` accounts for every finding that could not be placed. Without
+    /// the line, a reviewer reads an analyzer report as fully covered when
+    /// some of it landed on lines this change never touched.
+    #[test]
+    fn audit_accounts_for_findings_that_landed_outside_the_change() {
+        let items = vec![test_item("src/a.py")];
+        let ledger = Ledger {
+            findings_seen: 5,
+            findings_unplaced: 2,
+            ..Ledger::default()
+        };
+        let rows = build_audit(&items, 1, &Hidden::default(), &ledger, None);
+        assert!(
+            rows.iter()
+                .any(|r| r.contains('2') && r.contains("analyzer findings")),
+            "{rows:?}"
+        );
+        // …and says nothing at all when no analyzer was run
+        let quiet = build_audit(&items, 1, &Hidden::default(), &Ledger::default(), None);
+        assert!(
+            !quiet.iter().any(|r| r.contains("analyzer findings")),
+            "{quiet:?}"
+        );
     }
 
     fn card(needs: bool) -> Card {
