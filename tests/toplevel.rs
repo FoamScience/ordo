@@ -195,7 +195,11 @@ fn an_include_guard_defines_nothing_and_uses_nothing() {
         "#ifndef particode_H\n#define particode_H\nint a = 2;\n#endif\n",
     );
     let h = &out.files[0].hunks[0];
-    assert!(!h.defines.iter().any(|d| d == "particode_H"), "{:?}", h.defines);
+    assert!(
+        !h.defines.iter().any(|d| d == "particode_H"),
+        "{:?}",
+        h.defines
+    );
     assert!(!h.uses.iter().any(|u| u == "particode_H"), "{:?}", h.uses);
     assert!(!out.ledger.iter().any(|l| l.name == "particode_H"));
 }
