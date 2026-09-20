@@ -3,120 +3,120 @@
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 82,
-    "longest_rationale": 233,
+    "hunks": 95,
+    "longest_rationale": 152,
     "unsupported_files": 0,
-    "with_details": 14,
-    "with_symbols": 13
+    "with_details": 18,
+    "with_symbols": 20
   },
   "click": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 4272,
-    "longest_rationale": 231,
+    "hunks": 5729,
+    "longest_rationale": 222,
     "unsupported_files": 0,
-    "with_details": 491,
-    "with_symbols": 954
+    "with_details": 677,
+    "with_symbols": 1983
   },
   "cobra": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 1848,
-    "longest_rationale": 201,
+    "hunks": 2109,
+    "longest_rationale": 194,
     "unsupported_files": 0,
-    "with_details": 154,
-    "with_symbols": 241
+    "with_details": 299,
+    "with_symbols": 478
   },
   "curl": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 3316,
-    "longest_rationale": 221,
+    "hunks": 4593,
+    "longest_rationale": 214,
     "unsupported_files": 0,
-    "with_details": 154,
-    "with_symbols": 483
+    "with_details": 163,
+    "with_symbols": 1455
   },
   "excalidraw": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 8751,
+    "hunks": 10636,
     "longest_rationale": 239,
     "unsupported_files": 0,
-    "with_details": 1972,
-    "with_symbols": 720
+    "with_details": 2008,
+    "with_symbols": 1523
   },
   "execa": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 14171,
-    "longest_rationale": 240,
+    "hunks": 17376,
+    "longest_rationale": 238,
     "unsupported_files": 0,
-    "with_details": 2595,
-    "with_symbols": 2676
+    "with_details": 3181,
+    "with_symbols": 4079
   },
   "junit5": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 562,
+    "hunks": 628,
     "longest_rationale": 222,
     "unsupported_files": 0,
     "with_details": 4,
-    "with_symbols": 129
+    "with_symbols": 190
   },
   "lazy": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 3461,
-    "longest_rationale": 201,
+    "hunks": 3534,
+    "longest_rationale": 177,
     "unsupported_files": 0,
-    "with_details": 2194,
-    "with_symbols": 195
+    "with_details": 2195,
+    "with_symbols": 257
   },
   "nvm": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 419,
+    "hunks": 593,
     "longest_rationale": 176,
     "unsupported_files": 0,
-    "with_details": 56,
-    "with_symbols": 59
+    "with_details": 230,
+    "with_symbols": 233
   },
   "openfoam": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 11990,
-    "longest_rationale": 239,
+    "hunks": 13841,
+    "longest_rationale": 240,
     "unsupported_files": 0,
-    "with_details": 683,
-    "with_symbols": 1126
+    "with_details": 747,
+    "with_symbols": 2331
   },
   "ripgrep": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 1155,
+    "hunks": 1492,
     "longest_rationale": 235,
     "unsupported_files": 0,
     "with_details": 49,
-    "with_symbols": 156
+    "with_symbols": 464
   },
   "vue": {
     "anonymous": 0,
     "bare_change": 0,
     "degraded_files": 0,
-    "hunks": 885,
-    "longest_rationale": 229,
+    "hunks": 1250,
+    "longest_rationale": 203,
     "unsupported_files": 0,
-    "with_details": 76,
-    "with_symbols": 163
+    "with_details": 80,
+    "with_symbols": 398
   }
 }
