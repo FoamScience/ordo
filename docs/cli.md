@@ -36,6 +36,14 @@ every non-comment hunk before ordering, so `order`/`groups`/`edges`/`clusters`
 cover only comment/docstring changes — a lightweight pass over documentation
 edits without the noise of the surrounding code.
 
+`options.docs_last` (on by default) sorts a docs-only hunk after the code it
+describes: a reviewer judges a doc against the code, and the engine cannot see
+that relation because prose carries no symbols — a markdown hunk has no
+incoming edge and would otherwise land wherever the file order puts it, which
+is alphabetical and so usually first. Only prose files move; a data or config
+file (a schema, a lockfile, a `package.json`) often drives the code around it
+and keeps its place. Set it to `false` for a docs-led change.
+
 Each file entry also carries `dropped`: the hunks removed before ordering
 (pure imports, and non-comment hunks under `only_comments`) with the range each
 covered. `hunks` + `dropped` is exactly what the diff produced, so "did ordo

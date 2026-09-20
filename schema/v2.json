@@ -251,6 +251,10 @@
               "type": "boolean",
               "description": "whether the built-in construct catalog runs; true by default \u2014 it is what a reviewer gets with no configuration"
             },
+            "docs_last": {
+              "type": "boolean",
+              "description": "sort docs-only (prose) hunks after the code they describe; true by default \u2014 data and config files keep their place"
+            },
             "disable": {
               "type": "array",
               "items": {

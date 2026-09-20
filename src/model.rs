@@ -47,6 +47,13 @@ pub struct Options {
     /// conventions and nothing else.
     #[serde(default = "catalog_default")]
     pub catalog: bool,
+    /// Where a docs-only hunk sorts: after the code it describes (the
+    /// default) or in file order like anything else. A reviewer judges a doc
+    /// against the code, so the code comes first — but a doc *is* the change
+    /// in a docs-led project, hence the switch. Only prose files move; a
+    /// config or data file often drives the code around it and stays put.
+    #[serde(default = "docs_last_default")]
+    pub docs_last: bool,
     /// Rule names not to report, as globs — applied to the catalog as well as
     /// to `rules`. A catalog entry is a rule like any other, so silencing one
     /// by name is the same gesture whoever wrote it.
@@ -55,6 +62,10 @@ pub struct Options {
 }
 
 fn catalog_default() -> bool {
+    true
+}
+
+fn docs_last_default() -> bool {
     true
 }
 impl Default for Options {
@@ -66,6 +77,7 @@ impl Default for Options {
             only_comments: false,
             rules: vec![],
             catalog: catalog_default(),
+            docs_last: docs_last_default(),
             disable: vec![],
         }
     }

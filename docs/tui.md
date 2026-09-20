@@ -315,6 +315,7 @@ Keys are configurable in the same file, on top of whichever preset is in use:
 
 ```toml
 preset = "vim"            # the preset to start from (--keys still wins)
+docs_last = true          # a docs-only hunk sorts after the code it describes
 
 [binds]
 "C-n" = "next"            # add or replace a binding
