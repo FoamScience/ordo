@@ -379,6 +379,8 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
 struct ParsedArgs {
     rev: String,
     keys: Keymap,
+    /// whether a docs-only hunk sorts after the code (tui.toml `docs_last`)
+    docs_last: bool,
     filter: Filter,
     only_comments: bool,
     theme: Theme,
@@ -654,6 +656,7 @@ fn parse_args() -> Result<ParsedArgs, i32> {
     Ok(ParsedArgs {
         rev: rev.unwrap_or_else(|| "HEAD".to_string()),
         keys,
+        docs_last: cfg.as_ref().and_then(|c| c.docs_last).unwrap_or(true),
         filter,
         only_comments,
         theme,
@@ -687,6 +690,7 @@ fn main() -> std::io::Result<()> {
     let ParsedArgs {
         rev,
         keys,
+        docs_last,
         filter,
         only_comments,
         theme,
@@ -722,6 +726,7 @@ fn main() -> std::io::Result<()> {
     run(
         rev,
         keys,
+        docs_last,
         target,
         filter,
         only_comments,
@@ -811,6 +816,8 @@ fn group_reasons(out: &Output) -> HashMap<String, String> {
 /// positional arguments whose order nothing checks.
 struct LoadSpec {
     target: Target,
+    /// whether a docs-only hunk sorts after the code (see `model::Options`)
+    docs_last: bool,
     filter: Filter,
     only_comments: bool,
     rev: String,
@@ -829,6 +836,7 @@ struct LoadSpec {
 fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let LoadSpec {
         target,
+        docs_last,
         filter,
         only_comments,
         rev,
@@ -885,6 +893,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     input.options.rules = rules.rules;
     input.options.catalog = rules.catalog;
     input.options.disable = rules.disables;
+    input.options.docs_last = docs_last;
     let changes = input.changes.clone();
     let out = ordo::run(input);
     // the engine records what it dropped and why; fold it into the same ledger
@@ -3098,6 +3107,8 @@ struct KeyConfig {
     binds: Vec<(Option<Key>, Key, Option<Action>)>,
     /// `[theme] name = "…"`, and any per-role `#rrggbb` overrides on top of it
     theme: Option<String>,
+    /// `docs_last` — whether a docs-only hunk sorts after the code
+    docs_last: Option<bool>,
     colors: Vec<(String, Color)>,
     problems: Vec<String>,
 }
@@ -3878,6 +3889,12 @@ fn config_schema(app: &App) -> Vec<ConfigSection> {
                 ),
             },
             ConfigField {
+                key: "docs_last".to_string(),
+                label: "docs read last".to_string(),
+                help: "a docs-only hunk sorts after the code it describes".to_string(),
+                kind: FieldKind::Flag(app.docs_last),
+            },
+            ConfigField {
                 key: "theme".to_string(),
                 label: "theme".to_string(),
                 help: "the palette; the roles below override it".to_string(),
@@ -4267,6 +4284,7 @@ fn parse_key_config(text: &str) -> KeyConfig {
         preset: None,
         binds: vec![],
         theme: None,
+        docs_last: None,
         colors: vec![],
         problems: vec![],
     };
@@ -4299,6 +4317,12 @@ fn parse_key_config(text: &str) -> KeyConfig {
         match section {
             Section::Top => match k.as_str() {
                 "preset" => cfg.preset = Some(v),
+                "docs_last" => match v.parse() {
+                    Ok(b) => cfg.docs_last = Some(b),
+                    Err(_) => cfg
+                        .problems
+                        .push(format!("line {}: `docs_last` wants true or false", n + 1)),
+                },
                 // `theme` reads naturally at the top of the file as well as
                 // inside `[theme]`, and a config is read, not just written
                 "theme" => cfg.theme = Some(v),
@@ -4636,6 +4660,9 @@ struct App {
     focus: Pane,
     keys: Keymap,
     pending: Option<Key>,
+    /// whether a docs-only hunk sorts after the code it describes; a `:config`
+    /// setting, so a re-order has to be told about it
+    docs_last: bool,
     /// the engine's input for this review — see `LoadResult::changes`. The
     /// text is also held line-split in `sources`, which the panes read; this
     /// copy exists so a re-run is the same run, and both are bounded by the
@@ -7820,6 +7847,7 @@ enum State {
 fn run(
     rev: String,
     keys: Keymap,
+    docs_last: bool,
     target: Target,
     filter: Filter,
     only_comments: bool,
@@ -7851,6 +7879,7 @@ fn run(
     thread::spawn(move || {
         load(
             LoadSpec {
+                docs_last,
                 target,
                 filter,
                 only_comments,
@@ -7920,6 +7949,7 @@ fn run(
                         reviewed,
                         items,
                         changes,
+                        docs_last,
                         view,
                         comments_only,
                         show_all: true,
@@ -8141,6 +8171,7 @@ fn run(
                                 thread::spawn(move || {
                                     load(
                                         LoadSpec {
+                                            docs_last,
                                             target,
                                             filter: filt,
                                             only_comments,
@@ -9228,9 +9259,21 @@ fn config_toggle(app: &mut App) {
     let rules_changed = c.field(c.sel).is_some_and(|f| {
         f.key.starts_with("disable:") || f.key.starts_with("section:") || f.key == "catalog"
     });
+    // where docs sort is the engine's decision too, so changing it means
+    // asking the engine again — the same re-run a catalog switch needs
+    let docs_last = match c.field(c.sel) {
+        Some(f) if f.key == "docs_last" => match f.kind {
+            FieldKind::Flag(v) => Some(v),
+            _ => None,
+        },
+        _ => None,
+    };
     let (catalog, disables) = config_rule_state(c);
     let (_, preset) = config_general(c);
-    if rules_changed {
+    if let Some(v) = docs_last {
+        app.docs_last = v;
+    }
+    if rules_changed || docs_last.is_some() {
         app.catalog = catalog;
         app.disables = disables;
         let _ = run_strategy(app, app.strategy.clone().as_str());
@@ -10807,6 +10850,7 @@ fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
             strategy,
             rules: app.rules.clone(),
             catalog: app.catalog,
+            docs_last: app.docs_last,
             disable: app.disables.clone(),
             ..Options::default()
         },
@@ -13890,6 +13934,7 @@ DA:1,1
         App {
             items: vec![test_item("a.rs")],
             changes: vec![],
+            docs_last: true,
             reviewed: vec![false],
             view: vec![0],
             comments_only: false,

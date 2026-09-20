@@ -154,10 +154,26 @@ fn src_frags(pairs: &[(&str, &str)], verb: &str, sep: &str, rel: &str) -> Vec<St
     }
 }
 
-/// A group's sort key: rule priority (descending), then file, then source row,
-/// then the group index — which makes every key distinct, so a sorted set of
-/// them doubles as the ready queue in the topological sort.
-type GroupKey = (std::cmp::Reverse<i64>, usize, usize, usize);
+/// A group's sort key: rule priority (descending), then whether it is prose
+/// (see `docs_rank`), then file, then source row, then the group index — which
+/// makes every key distinct, so a sorted set of them doubles as the ready queue
+/// in the topological sort.
+type GroupKey = (std::cmp::Reverse<i64>, u8, usize, usize, usize);
+
+/// Where a file's hunks sort among the ones nothing forces an order on.
+///
+/// A doc describes code, so a reviewer reads the code first and judges the doc
+/// against it. The engine cannot see that relation — prose carries no symbols,
+/// so a markdown hunk never has an incoming edge and lands wherever the file
+/// order puts it, which is alphabetical and so usually first. This is the one
+/// place that says otherwise.
+///
+/// Only prose moves. A data or config file (a schema, a lockfile, a
+/// `package.json`) frequently drives the code around it and keeps its place.
+fn docs_rank(path: &str, docs_last: bool) -> u8 {
+    let prose = crate::lang::for_path(path).is_some_and(|s| s.prose);
+    u8::from(prose && docs_last)
+}
 
 /// How a removal reads. The pipeline decides *what* left; this decides how to
 /// say it, which is the only place wording belongs.
@@ -195,6 +211,7 @@ pub fn order_all(
     facts: &FileFacts,
     strategy: Strategy,
     cross_file: bool,
+    docs_last: bool,
 ) -> OrderedAll {
     let FileFacts { symbols, changed } = *facts;
     // ---- flatten all files into a global hunk list ----
@@ -403,18 +420,15 @@ pub fn order_all(
         }
     }
 
-    // gfile/grow depend only on group membership, which is fixed by this
-    // point — precompute once instead of re-walking every member hunk on
-    // every sort/min_by_key comparison below (and again further down for
-    // group_file/group_row, which are the same values).
-    let gfile_v: Vec<usize> = (0..g).map(|gi| gfile(gi, &groups)).collect();
-    let grow_v: Vec<usize> = (0..g).map(|gi| grow(gi, &groups)).collect();
-
     // ---- order groups per strategy ----
+    // every strategy answers to `docs_last`: it says where a doc belongs
+    // relative to code, which is as true of a file-order read as of a
+    // comprehension one
+    let docs = |gi: usize| docs_rank(&paths[gfile_v[gi]], docs_last);
     let group_order: Vec<usize> = match strategy {
         Strategy::File => {
             let mut v: Vec<usize> = (0..g).collect();
-            v.sort_by_key(|&gi| (gfile_v[gi], grow_v[gi], gi));
+            v.sort_by_key(|&gi| (docs(gi), gfile_v[gi], grow_v[gi], gi));
             v
         }
         Strategy::DefsFirst => {
@@ -429,7 +443,7 @@ pub fn order_all(
                 })
                 .collect();
             let mut v: Vec<usize> = (0..g).collect();
-            v.sort_by_key(|&gi| (gcat_v[gi], gfile_v[gi], grow_v[gi], gi));
+            v.sort_by_key(|&gi| (docs(gi), gcat_v[gi], gfile_v[gi], grow_v[gi], gi));
             v
         }
         Strategy::Comprehension => {
@@ -463,7 +477,15 @@ pub fn order_all(
             // membership, not on which groups are done/ready), so it is
             // computed once here rather than per ready-set comparison.
             let key_v: Vec<GroupKey> = (0..g)
-                .map(|gi| (std::cmp::Reverse(gprio_v[gi]), gfile_v[gi], grow_v[gi], gi))
+                .map(|gi| {
+                    (
+                        std::cmp::Reverse(gprio_v[gi]),
+                        docs(gi),
+                        gfile_v[gi],
+                        grow_v[gi],
+                        gi,
+                    )
+                })
                 .collect();
             // The ready set is carried across iterations rather than rebuilt by
             // scanning every group on each of the g rounds: a group joins it
@@ -486,7 +508,7 @@ pub fn order_all(
                     Some(k) => *k,
                     None => break,
                 };
-                let pick = key.3;
+                let pick = key.4;
                 ready.remove(&key);
                 left.remove(&key);
                 order.push(pick);

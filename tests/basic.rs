@@ -147,3 +147,58 @@ fn a_dependency_cycle_still_orders_every_hunk_once() {
     ids.dedup();
     assert_eq!(ids.len(), before, "a hunk was ordered twice: {ids:?}");
 }
+
+/// A doc describes code, so the code is read first and the doc judged against
+/// it. Prose carries no symbols, so nothing in the graph forces that — a
+/// markdown hunk lands wherever the file order puts it, which is alphabetical
+/// and so usually first. `docs_last` is the switch; only prose moves, and
+/// every strategy answers to it.
+#[test]
+fn docs_sort_after_the_code_unless_told_otherwise() {
+    let changes = serde_json::json!([
+        { "path": "README.md", "old": "# Tool\n\nDocs.\n", "new": "# Tool\n\nDocs, updated.\n" },
+        { "path": "pkg.json", "old": "{\n  \"v\": \"1\"\n}\n", "new": "{\n  \"v\": \"2\"\n}\n" },
+        { "path": "src/core.py", "old": "def run(x):\n    return x\n",
+          "new": "def run(x, y):\n    return x + y\n" },
+        // sorts after README.md alphabetically, and is a use rather than a
+        // definition — so it shares a rank with the doc under every strategy
+        // and only `docs_last` can separate the two
+        { "path": "src/use.py", "old": "from core import run\n\ndef go():\n    return run(1)\n",
+          "new": "from core import run\n\ndef go():\n    return run(1, 2)\n" }
+    ]);
+    let order = |strategy: &str, docs_last: bool| -> Vec<String> {
+        let out = ordo::run(
+            serde_json::from_value(serde_json::json!({
+                "changes": changes,
+                "options": { "docs_last": docs_last, "strategy": strategy }
+            }))
+            .unwrap(),
+        );
+        out.order.iter().map(|o| o.path.clone()).collect()
+    };
+    let at = |v: &[String], p: &str| v.iter().position(|x| x == p).expect(p);
+
+    for strategy in ["comprehension", "defs-first", "file"] {
+        // the default: the README is read after the code it describes
+        let last = order(strategy, true);
+        assert_eq!(
+            last.last().map(String::as_str),
+            Some("README.md"),
+            "{strategy}: {last:?}"
+        );
+        // …and a data file is not prose: `pkg.json` keeps its place, because a
+        // config change often drives the code around it
+        assert!(
+            at(&last, "pkg.json") < at(&last, "README.md"),
+            "{strategy}: {last:?}"
+        );
+
+        // off, the file order decides again, and git hands them over
+        // alphabetically — README.md ahead of src/use.py
+        let first = order(strategy, false);
+        assert!(
+            at(&first, "README.md") < at(&first, "src/use.py"),
+            "{strategy}: {first:?}"
+        );
+    }
+}
