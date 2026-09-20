@@ -60,7 +60,8 @@ fn splitting_an_added_file_keeps_its_def_use_edges() {
     let filler: String = (0..20)
         .map(|i| format!("def pad{i}():\n    return {i}\n\n\n"))
         .collect();
-    let new = format!("{filler}def helper(x):\n    return x\n\n\ndef caller():\n    return helper(1)\n");
+    let new =
+        format!("{filler}def helper(x):\n    return x\n\n\ndef caller():\n    return helper(1)\n");
     let out = run("a.py", "", &new);
     let hunk_of = |name: &str| {
         out.files[0]

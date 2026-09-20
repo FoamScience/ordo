@@ -137,7 +137,8 @@ fn a_reconstructed_old_side_reaches_the_ledger() {
     // was reported as a signature change and nothing was ever a body edit
     let old = "class A:\n    def drain(self):\n        return 1\n";
     let new = "class A:\n    def drain(self):\n        return 2\n";
-    let diff = "@@ -1,3 +1,3 @@\n class A:\n     def drain(self):\n-        return 1\n+        return 2\n";
+    let diff =
+        "@@ -1,3 +1,3 @@\n class A:\n     def drain(self):\n-        return 1\n+        return 2\n";
     let inp: Input = serde_json::from_value(serde_json::json!({
         "changes": [{ "path": "a.py", "diff": diff }],
         "options": { "full_context": true }
@@ -149,11 +150,7 @@ fn a_reconstructed_old_side_reaches_the_ledger() {
         .iter()
         .find(|l| l.name == "A.drain")
         .expect("A.drain in the ledger");
-    assert_eq!(
-        row.change,
-        SymbolChange::Body,
-        "its header is untouched"
-    );
+    assert_eq!(row.change, SymbolChange::Body, "its header is untouched");
 
     // the same change sent as old/new must say exactly the same thing
     let by_content = ordo::run(
@@ -163,7 +160,10 @@ fn a_reconstructed_old_side_reaches_the_ledger() {
         .unwrap(),
     );
     let names = |o: &ordo::model::Output| -> Vec<(String, SymbolChange)> {
-        o.ledger.iter().map(|l| (l.name.clone(), l.change)).collect()
+        o.ledger
+            .iter()
+            .map(|l| (l.name.clone(), l.change))
+            .collect()
     };
     assert_eq!(names(&by_content), names(&out));
 }
