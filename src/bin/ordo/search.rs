@@ -1,6 +1,15 @@
 // --------------------------------------------------------------------- search
-
-use super::*;
+use crate::code_view::identifier_at;
+use crate::code_view::node_text;
+use crate::code_view::parse_cached;
+use crate::follow_hscroll;
+use crate::follow_scroll;
+use crate::highlight::highlight_spec;
+use crate::App;
+use crate::Cursor;
+use crate::Search;
+use crate::SearchKind;
+use tree_sitter::Node;
 
 // inverse of `char_byte`: the char index a byte offset falls at within one line
 pub(super) fn byte_to_char_col(line: &str, byte_col: usize) -> usize {

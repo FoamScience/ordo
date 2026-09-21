@@ -1,6 +1,17 @@
 // ------------------------------------------------------------ reviewing rules
-
-use super::*;
+use crate::code_view::theme;
+use crate::code_view::theme_names;
+use crate::config::config_path;
+use crate::config::key_label;
+use crate::keys::action_help;
+use crate::keys::keymap;
+use crate::keys::theme_role_color;
+use crate::keys::ACTION_NAMES;
+use crate::keys::THEME_ROLES;
+use ratatui::style::Color;
+use std::fmt::Write as _;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Where rules come from, in the order they are read: this user's own, then the
 /// repository's. Both apply — a personal preference and a team convention are

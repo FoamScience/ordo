@@ -1,6 +1,45 @@
 // ------------------------------------------------------------------ config UI
-
-use super::*;
+use crate::code_view::theme;
+use crate::code_view::theme_names;
+use crate::code_view::Theme;
+use crate::commands::run_strategy;
+use crate::draw::centred;
+use crate::highlight::highlight_file;
+use crate::keys::action_help;
+use crate::keys::apply_theme_colors;
+use crate::keys::category_label;
+use crate::keys::keymap;
+use crate::keys::parse_hex;
+use crate::keys::theme_role_color;
+use crate::keys::Category;
+use crate::keys::Key;
+use crate::keys::Keymap;
+use crate::keys::ACTION_NAMES;
+use crate::keys::KEYMAP_NAMES;
+use crate::keys::THEME_ROLES;
+use crate::marks::write_atomic;
+use crate::rules::init_config;
+use crate::rules::user_rules_path;
+use crate::rules::PRESETS;
+use crate::App;
+use crate::Popup;
+use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyModifiers;
+use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::Frame;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// What a setting is, which decides how `:config` shows and changes it.
 #[derive(Clone, Debug, PartialEq)]

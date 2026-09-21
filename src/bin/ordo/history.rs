@@ -1,6 +1,13 @@
 // ------------------------------------------------------------ cross-commit history
-
-use super::*;
+use crate::git::git;
+use crate::App;
+use crate::Item;
+use ordo::model::Change;
+use ordo::model::HunkOut;
+use ordo::model::Input;
+use ordo::model::Options;
+use ordo::model::Symbol;
+use std::collections::HashMap;
 
 // bound on how many candidate commits per direction (earlier/later) get run
 // through the engine — a long-lived file's full history would otherwise stall

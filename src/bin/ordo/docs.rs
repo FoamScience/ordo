@@ -1,6 +1,11 @@
 // ------------------------------------------------------ generated doc blocks
 
 use super::*;
+use crate::commands::*;
+use crate::config::*;
+use crate::keys::*;
+use crate::rules::*;
+use std::path::Path;
 
 /// Whether a `UPDATE_*` escape hatch is actually switched on. Testing
 /// `is_ok()` meant any value armed it, so `UPDATE_DOCS=0` rewrote the

@@ -1,6 +1,15 @@
 // ---------------------------------------------------------- reviewed-mark persistence
-
-use super::*;
+use crate::history::FILE_CHURN_WINDOW;
+use crate::view_pos;
+use crate::App;
+use crate::Item;
+use crate::Sources;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Hand-rolled FNV-1a 64-bit. Deliberately not `DefaultHasher` — its output is
 /// explicitly unspecified across Rust releases, so a toolchain upgrade would
