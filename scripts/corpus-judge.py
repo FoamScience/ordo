@@ -28,6 +28,11 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+try:
+    from typesafe_sdk import Noul, TypeSafeClient
+except ImportError:  # --report-only needs no judge
+    Noul = TypeSafeClient = None
+
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "target/release/ordo-engine"
 QUESTIONS = {
@@ -134,6 +139,121 @@ def summarise(out_path, report_path):
             print(f"  {b:12} {f['rate']:3d}% (n={f['n']})")
 
 
+def hunk_questions(h):
+    """The nouls one hunk is asked: faithful, matches_commit, noise when
+    flagged, one per finding."""
+    qs = {"faithful": Noul(instructions=QUESTIONS["faithful"]),
+          "matches_commit": Noul(instructions=QUESTIONS["matches_commit"])}
+    if h.get("noise"):
+        qs["noise_correct"] = Noul(instructions=QUESTIONS["noise_correct"])
+    for x in h.get("findings", []):
+        qs[f"finding:{x['name']}"] = Noul(
+            instructions=f"Is this reviewer warning warranted for this code? Warning: {x['message']}")
+    return qs
+
+
+class Sweep:
+    """A budgeted walk of the corpus: produces (key, meta, text, questions)
+    items, asks the judge from a pool of `workers` threads, appends scores to
+    `out`, and stops the walk once the input-token budget is spent."""
+
+    def __init__(self, client, corpus, out_path, per_repo, max_tokens, workers):
+        self.client, self.corpus, self.per_repo = client, corpus, per_repo
+        self.max_tokens, self.workers = max_tokens, workers
+        self.done, spent = set(), 0
+        if out_path.exists():
+            for l in out_path.read_text().splitlines():
+                if l.strip():
+                    r = json.loads(l)
+                    self.done.add(r["key"])
+                    spent += r.get("tokens", 0)
+        self.out = out_path.open("a")
+        self.lock = threading.Lock()
+        # the budget is the whole sweep's, so a resumed run starts from what
+        # the earlier runs already spent
+        self.spent, self.used, self.n, self.stop = spent, spent, 0, False
+        self.t0 = time.time()
+
+    def ask(self, item):
+        key, meta, text, qs = item
+        if self.stop:
+            return
+        for attempt in range(5):
+            try:
+                res = self.client.system_one(text, qs)
+                break
+            except Exception:
+                if attempt == 4:
+                    raise
+                time.sleep(2 ** attempt)
+        got = {k: v.noul for k, v in res.nouls.items()}
+        tokens = res.usage.input_tokens  # the billed side; output is free
+        self.record(key, meta, got, tokens)
+
+    def record(self, key, meta, got, tokens):
+        """One hunk's scores to `out`, under the lock the pool's threads share."""
+        with self.lock:
+            self._record(key, meta, got, tokens)
+
+    def _record(self, key, meta, got, tokens):
+        self.used += tokens
+        self.n += 1
+        self.out.write(json.dumps({
+            **meta, "key": key,
+            "scores": {k: got[k] for k in QUESTIONS if k in got},
+            "findings": {k.split(":", 1)[1]: v for k, v in got.items() if k.startswith("finding:")},
+            "tokens": tokens,
+        }) + "\n")
+        self.out.flush()
+        if self.n % 200 == 0:
+            print(f"  {self.n} hunks, {self.used} input tokens, {time.time() - self.t0:.0f}s", file=sys.stderr)
+        if self.max_tokens and self.used >= self.max_tokens and not self.stop:
+            print(f"token budget reached: {self.used} >= {self.max_tokens}", file=sys.stderr)
+            self.stop = True
+
+    def items(self):
+        for name, lang, sha, subject in walk(self.corpus, self.per_repo):
+            if self.stop:
+                return
+            repo = self.corpus / name
+            parent, o = commit_output(repo, sha)
+            if not o:
+                continue
+            for f in o["files"]:
+                if f.get("unsupported") or f.get("degraded"):
+                    continue
+                for h in f["hunks"]:
+                    key = f"{name}:{sha[:8]}:{f['path']}:{h['new_range'][0]}"
+                    if key in self.done:
+                        continue
+                    diff = hunk_diff(repo, parent, sha, f["path"], h["new_range"])
+                    if diff is None:
+                        continue
+                    text = f"commit message: {subject}\nrationale: {h['rationale']}\ndiff:\n{diff[:6000]}"
+                    meta = {"repo": name, "lang": lang, "path": f["path"],
+                            "template": template(h["rationale"]), "enclosing_kind": h.get("enclosing_kind"),
+                            "rationale": h["rationale"], "noise": h.get("noise", False)}
+                    yield key, meta, text, hunk_questions(h)
+
+    def run(self):
+        workers = self.workers
+        # bounded submission so the producer (git + ordo, cheap) never runs far
+        # ahead of the budget check
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending = []
+            for item in self.items():
+                pending.append(pool.submit(self.ask, item))
+                if len(pending) >= workers * 4:
+                    for fut in pending[:workers * 2]:
+                        fut.result()
+                    pending = pending[workers * 2:]
+            for fut in pending:
+                fut.result()
+        self.out.close()
+        print(f"judged {self.n} new hunks, {self.used - self.spent} tokens this run, "
+              f"{self.used} in total, {time.time() - self.t0:.0f}s")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-tokens", type=int, default=0, help="stop once usage crosses this")
@@ -147,100 +267,10 @@ def main():
     if a.report_only:
         return summarise(a.out, a.report)
 
-    from typesafe_sdk import Noul, TypeSafeClient
     client = TypeSafeClient(api_key=os.environ["TYPESAFE_API_KEY"], base_url=a.base_url) \
         if a.base_url else TypeSafeClient(api_key=os.environ["TYPESAFE_API_KEY"])
     corpus = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus"))
-    done, spent = set(), 0
-    if a.out.exists():
-        for l in a.out.read_text().splitlines():
-            if l.strip():
-                r = json.loads(l)
-                done.add(r["key"])
-                spent += r.get("tokens", 0)
-    out = a.out.open("a")
-    lock = threading.Lock()
-    # the budget is the whole sweep's, so a resumed run starts from what the
-    # earlier runs already spent
-    state = {"used": spent, "n": 0, "stop": False}
-    t0 = time.time()
-
-    def ask(item):
-        key, meta, text, qs = item
-        if state["stop"]:
-            return
-        for attempt in range(5):
-            try:
-                res = client.system_one(text, qs)
-                break
-            except Exception:
-                if attempt == 4:
-                    raise
-                time.sleep(2 ** attempt)
-        got = {k: v.noul for k, v in res.nouls.items()}
-        tokens = res.usage.input_tokens  # the billed side; output is free
-        with lock:
-            state["used"] += tokens
-            state["n"] += 1
-            out.write(json.dumps({
-                **meta, "key": key,
-                "scores": {k: got[k] for k in QUESTIONS if k in got},
-                "findings": {k.split(":", 1)[1]: v for k, v in got.items() if k.startswith("finding:")},
-                "tokens": tokens,
-            }) + "\n")
-            out.flush()
-            if state["n"] % 200 == 0:
-                print(f"  {state['n']} hunks, {state['used']} input tokens, {time.time() - t0:.0f}s", file=sys.stderr)
-            if a.max_tokens and state["used"] >= a.max_tokens and not state["stop"]:
-                print(f"token budget reached: {state['used']} >= {a.max_tokens}", file=sys.stderr)
-                state["stop"] = True
-
-    def items():
-        for name, lang, sha, subject in walk(corpus, a.per_repo):
-            if state["stop"]:
-                return
-            repo = corpus / name
-            parent, o = commit_output(repo, sha)
-            if not o:
-                continue
-            for f in o["files"]:
-                if f.get("unsupported") or f.get("degraded"):
-                    continue
-                for h in f["hunks"]:
-                    key = f"{name}:{sha[:8]}:{f['path']}:{h['new_range'][0]}"
-                    if key in done:
-                        continue
-                    diff = hunk_diff(repo, parent, sha, f["path"], h["new_range"])
-                    if diff is None:
-                        continue
-                    text = f"commit message: {subject}\nrationale: {h['rationale']}\ndiff:\n{diff[:6000]}"
-                    qs = {"faithful": Noul(instructions=QUESTIONS["faithful"]),
-                          "matches_commit": Noul(instructions=QUESTIONS["matches_commit"])}
-                    if h.get("noise"):
-                        qs["noise_correct"] = Noul(instructions=QUESTIONS["noise_correct"])
-                    for x in h.get("findings", []):
-                        qs[f"finding:{x['name']}"] = Noul(
-                            instructions=f"Is this reviewer warning warranted for this code? Warning: {x['message']}")
-                    meta = {"repo": name, "lang": lang, "path": f["path"],
-                            "template": template(h["rationale"]), "enclosing_kind": h.get("enclosing_kind"),
-                            "rationale": h["rationale"], "noise": h.get("noise", False)}
-                    yield key, meta, text, qs
-
-    # bounded submission so the producer (git + ordo, cheap) never runs far
-    # ahead of the budget check
-    with ThreadPoolExecutor(max_workers=a.workers) as pool:
-        pending = []
-        for item in items():
-            pending.append(pool.submit(ask, item))
-            if len(pending) >= a.workers * 4:
-                for fut in pending[:a.workers * 2]:
-                    fut.result()
-                pending = pending[a.workers * 2:]
-        for fut in pending:
-            fut.result()
-    used, n = state["used"], state["n"]
-    out.close()
-    print(f"judged {n} new hunks, {used - spent} tokens this run, {used} in total, {time.time() - t0:.0f}s")
+    Sweep(client, corpus, a.out, a.per_repo, a.max_tokens, a.workers).run()
     summarise(a.out, a.report)
 
 

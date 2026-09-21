@@ -44,57 +44,62 @@ def apply(path, target=GOLD):
     print(f"applied {n} label sets to {target}")
 
 
+def pending(r):
+    L = r["labels"]
+    return any(v is None for k, v in L.items() if k != "findings") or \
+        any(v is None for v in L["findings"].values())
+
+
+def show(r, i, total):
+    print("=" * 78)
+    print(f"[{i + 1}/{total}] {r['key']}  ({r['lang']})")
+    print(f"commit:    {r['subject']}")
+    print(f"rationale: {r['rationale']}")
+    for d in r["details"]:
+        print(f"  detail:  {d}")
+    if r["noise"]:
+        print("noise:     yes (ordo says formatting/generated)")
+    for f in r["findings"]:
+        print(f"finding:   [{f['level']}] {f['name']}: {f['message']}")
+    print("-" * 78)
+    print(r["diff"])
+    print("-" * 78)
+
+
+def label(r):
+    """Ask for every null label of one hunk; `s` leaves the rest of it null.
+    True when the labeler asked to quit."""
+    L = r["labels"]
+    questions = [("faithful", "does the rationale accurately describe this diff?"),
+                 ("matches_commit", "is the rationale consistent with the commit message?")]
+    if r["noise"]:
+        questions.append(("noise_correct", "is this hunk really pure formatting/generated?"))
+    for key, q in questions:
+        if L[key] is not None:
+            continue
+        a = ask(q)
+        if a in ("q", "s"):
+            return a == "q"
+        L[key] = a == "y"
+    for name in L["findings"]:
+        if L["findings"][name] is not None:
+            continue
+        a = ask(f"is the finding '{name}' warranted here?")
+        if a in ("q", "s"):
+            return a == "q"
+        L["findings"][name] = a == "y"
+    return False
+
+
 def main():
     if len(sys.argv) in (3, 4) and sys.argv[1] == "--apply":
         return apply(sys.argv[2], *(Path(a) for a in sys.argv[3:]))
     rows = [json.loads(l) for l in GOLD.read_text().splitlines() if l.strip()]
-
-    def pending(r):
-        L = r["labels"]
-        return any(v is None for k, v in L.items() if k != "findings") or \
-            any(v is None for v in L["findings"].values())
-
     todo = [r for r in rows if pending(r)]
     print(f"{len(todo)} of {len(rows)} hunks unlabeled\n")
     for i, r in enumerate(todo):
-        L = r["labels"]
-        print("=" * 78)
-        print(f"[{i + 1}/{len(todo)}] {r['key']}  ({r['lang']})")
-        print(f"commit:    {r['subject']}")
-        print(f"rationale: {r['rationale']}")
-        for d in r["details"]:
-            print(f"  detail:  {d}")
-        if r["noise"]:
-            print("noise:     yes (ordo says formatting/generated)")
-        for f in r["findings"]:
-            print(f"finding:   [{f['level']}] {f['name']}: {f['message']}")
-        print("-" * 78)
-        print(r["diff"])
-        print("-" * 78)
-        questions = [("faithful", "does the rationale accurately describe this diff?"),
-                     ("matches_commit", "is the rationale consistent with the commit message?")]
-        if r["noise"]:
-            questions.append(("noise_correct", "is this hunk really pure formatting/generated?"))
-        quit_ = skip = False
-        for key, q in questions:
-            if L[key] is not None:
-                continue
-            a = ask(q)
-            if a == "q":
-                quit_ = True; break
-            if a == "s":
-                skip = True; break
-            L[key] = a == "y"
-        if not (quit_ or skip):
-            for name in L["findings"]:
-                if L["findings"][name] is not None:
-                    continue
-                a = ask(f"is the finding '{name}' warranted here?")
-                if a == "q":
-                    quit_ = True; break
-                if a == "s":
-                    break
-                L["findings"][name] = a == "y"
+        show(r, i, len(todo))
+        quit_ = label(r)
         GOLD.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rows))
         if quit_:
             break

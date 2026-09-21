@@ -80,6 +80,82 @@ def template(rationale):
     return rationale.split(" ", 1)[0] if rationale else "change"
 
 
+def hunk_entry(name, lang, sha, subject, f, h, old, new):
+    return {
+        "key": f"{name}:{sha[:8]}:{f['path']}:{h['new_range'][0]}",
+        "repo": name, "lang": lang, "sha": sha, "subject": subject,
+        "path": f["path"], "template": template(h["rationale"]),
+        "rationale": h["rationale"], "details": h.get("details", []),
+        "noise": h.get("noise", False), "comment": h.get("comment", False),
+        "findings": [{"name": x["name"], "message": x["message"], "level": x["level"]}
+                     for x in h.get("findings", [])],
+        "diff": hunk_diff(old, new, h["old_range"], h["new_range"]),
+    }
+
+
+def draw_pool(corpus, per_repo, taken):
+    """Every hunk ordo emits on the newest `per_repo` commits of each corpus
+    repo, minus the keys in `taken`."""
+    pool = []
+    for name, lang, rev in repos():
+        repo = corpus / name
+        if not repo.is_dir():
+            continue
+        listing = git(repo, "rev-list", "--max-count", str(per_repo), "--format=%s", rev).splitlines()
+        shas = [(listing[i][7:], listing[i + 1]) for i in range(0, len(listing) - 1, 2)
+                if listing[i].startswith("commit ")]
+        for sha, subject in shas:
+            blobs, out = commit_output(repo, sha)
+            if not out:
+                continue
+            for f in out["files"]:
+                if f.get("unsupported") or f.get("degraded"):
+                    continue
+                old, new = blobs[f["path"]]
+                pool.extend(hunk_entry(name, lang, sha, subject, f, h, old, new) for h in f["hunks"])
+        print(f"  {name:12} pool={len(pool)}")
+    return [h for h in pool if h["key"] not in taken]
+
+
+def stratify(pool, n, seed):
+    """`n` hunks: the rare strata first (findings, noise), then round-robin
+    over template x language until full."""
+    pool = list(pool)
+    rng = random.Random(seed)
+    rng.shuffle(pool)
+    picked, seen = [], set()
+
+    def take(pred, want):
+        for h in pool:
+            if len(picked) >= n or want <= 0:
+                return
+            if h["key"] not in seen and pred(h):
+                seen.add(h["key"]); picked.append(h); want -= 1
+
+    take(lambda h: h["findings"], n // 8)
+    take(lambda h: h["noise"], n // 10)
+    cells = defaultdict(list)
+    for h in pool:
+        cells[(h["template"], h["lang"])].append(h)
+    keys = sorted(cells)
+    while len(picked) < n and any(cells[k] for k in keys):
+        for k in keys:
+            while cells[k] and cells[k][-1]["key"] in seen:
+                cells[k].pop()
+            if cells[k] and len(picked) < n:
+                h = cells[k].pop(); seen.add(h["key"]); picked.append(h)
+    return picked
+
+
+def unlabeled_rows(picked):
+    """The draw as gold.jsonl rows: every label null, sorted by key."""
+    rows = [{**h, "labels": {"faithful": None, "matches_commit": None,
+                             **({"noise_correct": None} if h["noise"] else {}),
+                             "findings": {x["name"]: None for x in h["findings"]}}}
+            for h in picked]
+    return sorted(rows, key=lambda h: h["key"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=200)
@@ -91,73 +167,12 @@ def main():
     a = ap.parse_args()
     taken = {json.loads(l)["key"] for f in a.exclude for l in f.read_text().splitlines() if l.strip()}
     corpus = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus"))
-
-    pool = []
-    for name, lang, rev in repos():
-        repo = corpus / name
-        if not repo.is_dir():
-            continue
-        listing = git(repo, "rev-list", "--max-count", str(a.per_repo), "--format=%s", rev).splitlines()
-        shas = [(listing[i][7:], listing[i + 1]) for i in range(0, len(listing) - 1, 2)
-                if listing[i].startswith("commit ")]
-        for sha, subject in shas:
-            blobs, out = commit_output(repo, sha)
-            if not out:
-                continue
-            for f in out["files"]:
-                if f.get("unsupported") or f.get("degraded"):
-                    continue
-                old, new = blobs[f["path"]]
-                for h in f["hunks"]:
-                    diff = hunk_diff(old, new, h["old_range"], h["new_range"])
-                    pool.append({
-                        "key": f"{name}:{sha[:8]}:{f['path']}:{h['new_range'][0]}",
-                        "repo": name, "lang": lang, "sha": sha, "subject": subject,
-                        "path": f["path"], "template": template(h["rationale"]),
-                        "rationale": h["rationale"], "details": h.get("details", []),
-                        "noise": h.get("noise", False), "comment": h.get("comment", False),
-                        "findings": [{"name": x["name"], "message": x["message"], "level": x["level"]}
-                                     for x in h.get("findings", [])],
-                        "diff": diff,
-                    })
-        print(f"  {name:12} pool={len(pool)}")
-
-    pool = [h for h in pool if h["key"] not in taken]
-    rng = random.Random(a.seed)
-    rng.shuffle(pool)
-    picked, seen = [], set()
-
-    def take(pred, n):
-        for h in pool:
-            if len(picked) >= a.n or n <= 0:
-                return
-            if h["key"] not in seen and pred(h):
-                seen.add(h["key"]); picked.append(h); n -= 1
-
-    # the rare strata first, then round-robin over template x language until full
-    take(lambda h: h["findings"], a.n // 8)
-    take(lambda h: h["noise"], a.n // 10)
-    cells = defaultdict(list)
-    for h in pool:
-        cells[(h["template"], h["lang"])].append(h)
-    keys = sorted(cells)
-    while len(picked) < a.n and any(cells[k] for k in keys):
-        for k in keys:
-            while cells[k] and cells[k][-1]["key"] in seen:
-                cells[k].pop()
-            if cells[k] and len(picked) < a.n:
-                h = cells[k].pop(); seen.add(h["key"]); picked.append(h)
-
-    for h in picked:
-        h["labels"] = {"faithful": None, "matches_commit": None,
-                       **({"noise_correct": None} if h["noise"] else {}),
-                       "findings": {x["name"]: None for x in h["findings"]}}
-    picked.sort(key=lambda h: h["key"])
-    a.out.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in picked))
+    rows = unlabeled_rows(stratify(draw_pool(corpus, a.per_repo, taken), a.n, a.seed))
+    a.out.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in rows))
     by = defaultdict(int)
-    for h in picked:
+    for h in rows:
         by[h["template"]] += 1
-    print(f"wrote {len(picked)} hunks to {a.out}: "
+    print(f"wrote {len(rows)} hunks to {a.out}: "
           + ", ".join(f"{k}={v}" for k, v in sorted(by.items())))
 
 
