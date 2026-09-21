@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Draw the gold set: ~200 corpus hunks, stratified so every rationale template,
-every language, noise hunks and hunks carrying findings all appear.
+every language, noise hunks and hunks carrying findings all appear. Each entry
+carries ordo's own hunk as a diff, not git's: the rationale describes exactly
+those lines and the label must judge exactly those lines.
 
 Writes corpus/gold.jsonl with the labels left null; scripts/gold-label.py fills
 them in. Deterministic for a given corpus and seed, so a re-draw after a
 manifest bump produces the same picks where the commits still exist.
 
 Usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/gold-sample.py [--n 200] [--per-repo 60]
+       ... --n 2000 --seed 2 --exclude corpus/gold.jsonl --out silver.jsonl   # a training draw
 """
 import argparse
 import json
@@ -48,20 +51,29 @@ def commit_output(repo, sha):
                         "new": git(repo, "show", f"{sha}:{p}")} for p in names]}
     r = subprocess.run([ENGINE, "order", "--json"], input=json.dumps(inp),
                        capture_output=True, text=True)
-    return parent, json.loads(r.stdout)
+    blobs = {c["path"]: (c["old"].splitlines(), c["new"].splitlines()) for c in inp["changes"]}
+    return blobs, json.loads(r.stdout)
 
 
-def hunk_diff(repo, parent, sha, path, new_range):
-    """The -U3 hunk of `git diff` that contains the hunk's first new line, or
-    None when git and ordo disagree about where the change is — such a hunk
-    cannot be labeled against the right text and is left out of the pool."""
-    text = git(repo, "diff", "-U3", parent, sha, "--", path)
-    for m in re.finditer(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@.*$", text, re.M):
-        start, count = int(m.group(1)), int(m.group(2) or 1)
-        if start <= new_range[0] <= start + max(count, 1):
-            end = text.find("\n@@ ", m.end())
-            return text[m.start():end if end > 0 else None]
-    return None
+def hunk_diff(old, new, old_range, new_range, ctx=3):
+    """ordo's own hunk as a unified diff, with context from the blobs. The git
+    -U3 hunk is wider than what ordo describes (git merges a blank-line removal
+    or a lone import line into its neighbour), so a labeler shown git's hunk
+    judges text the rationale never claimed to cover."""
+    o0, o1 = old_range
+    n0, n1 = new_range
+    removed = old[o0 - 1:o1] if o0 <= o1 else []
+    added = new[n0 - 1:n1] if n0 <= n1 else []
+    # context: the new-side neighbourhood, or the old side for a pure deletion
+    if n0 <= n1:
+        before = new[max(0, n0 - 1 - ctx):n0 - 1]
+        after = new[n1:n1 + ctx]
+    else:
+        before = old[max(0, o0 - 1 - ctx):o0 - 1]
+        after = old[o1:o1 + ctx]
+    head = f"@@ -{o0},{max(0, o1 - o0 + 1)} +{n0},{max(0, n1 - n0 + 1)} @@"
+    body = [" " + l for l in before] + ["-" + l for l in removed] + ["+" + l for l in added] + [" " + l for l in after]
+    return "\n".join([head] + body)
 
 
 def template(rationale):
@@ -73,10 +85,14 @@ def main():
     ap.add_argument("--n", type=int, default=200)
     ap.add_argument("--per-repo", type=int, default=60, help="commits swept per repo")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--exclude", type=Path, action="append", default=[],
+                    help="jsonl whose keys must not be drawn again (keeps a training draw off the gold set)")
     a = ap.parse_args()
+    taken = {json.loads(l)["key"] for f in a.exclude for l in f.read_text().splitlines() if l.strip()}
     corpus = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus"))
 
-    pool, unlocated = [], 0
+    pool = []
     for name, lang, rev in repos():
         repo = corpus / name
         if not repo.is_dir():
@@ -85,17 +101,15 @@ def main():
         shas = [(listing[i][7:], listing[i + 1]) for i in range(0, len(listing) - 1, 2)
                 if listing[i].startswith("commit ")]
         for sha, subject in shas:
-            parent, out = commit_output(repo, sha)
+            blobs, out = commit_output(repo, sha)
             if not out:
                 continue
             for f in out["files"]:
                 if f.get("unsupported") or f.get("degraded"):
                     continue
+                old, new = blobs[f["path"]]
                 for h in f["hunks"]:
-                    diff = hunk_diff(repo, parent, sha, f["path"], h["new_range"])
-                    if diff is None:
-                        unlocated += 1
-                        continue
+                    diff = hunk_diff(old, new, h["old_range"], h["new_range"])
                     pool.append({
                         "key": f"{name}:{sha[:8]}:{f['path']}:{h['new_range'][0]}",
                         "repo": name, "lang": lang, "sha": sha, "subject": subject,
@@ -108,6 +122,7 @@ def main():
                     })
         print(f"  {name:12} pool={len(pool)}")
 
+    pool = [h for h in pool if h["key"] not in taken]
     rng = random.Random(a.seed)
     rng.shuffle(pool)
     picked, seen = [], set()
@@ -138,14 +153,12 @@ def main():
                        **({"noise_correct": None} if h["noise"] else {}),
                        "findings": {x["name"]: None for x in h["findings"]}}
     picked.sort(key=lambda h: h["key"])
-    OUT.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in picked))
+    a.out.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in picked))
     by = defaultdict(int)
     for h in picked:
         by[h["template"]] += 1
-    print(f"wrote {len(picked)} hunks to {OUT.relative_to(ROOT)}: "
+    print(f"wrote {len(picked)} hunks to {a.out}: "
           + ", ".join(f"{k}={v}" for k, v in sorted(by.items())))
-    if unlocated:
-        print(f"skipped {unlocated} hunks whose -U3 diff hunk could not be located")
 
 
 if __name__ == "__main__":

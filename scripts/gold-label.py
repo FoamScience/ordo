@@ -5,9 +5,11 @@ Shows the diff, the commit subject and ordo's claims; asks y/n per claim.
 `s` skips the hunk for now, `q` saves and quits. Progress is written after
 every hunk, so a session can stop and resume at any point.
 
-Usage: scripts/gold-label.py
+Usage: scripts/gold-label.py                      # interactive
+       scripts/gold-label.py --apply labels.jsonl [target.jsonl]  # merge {key, labels} lines produced elsewhere
 """
 import json
+import sys
 from pathlib import Path
 
 GOLD = Path(__file__).resolve().parent.parent / "corpus/gold.jsonl"
@@ -20,7 +22,31 @@ def ask(prompt):
             return r
 
 
+def apply(path, target=GOLD):
+    rows = [json.loads(l) for l in target.read_text().splitlines() if l.strip()]
+    by = {r["key"]: r for r in rows}
+    n = 0
+    for l in Path(path).read_text().splitlines():
+        if not l.strip():
+            continue
+        got = json.loads(l)
+        r = by.get(got["key"])
+        if r is None:
+            print(f"unknown key {got['key']}", file=sys.stderr)
+            continue
+        for k, v in got["labels"].items():
+            if k == "findings":
+                r["labels"]["findings"].update({f: v[f] for f in v if f in r["labels"]["findings"]})
+            elif k in r["labels"]:
+                r["labels"][k] = v
+        n += 1
+    target.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rows))
+    print(f"applied {n} label sets to {target}")
+
+
 def main():
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "--apply":
+        return apply(sys.argv[2], *(Path(a) for a in sys.argv[3:]))
     rows = [json.loads(l) for l in GOLD.read_text().splitlines() if l.strip()]
 
     def pending(r):
