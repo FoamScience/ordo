@@ -111,11 +111,11 @@ pub(super) struct RulesReport {
     /// false when any rules file said `catalog = false`
     pub(super) catalog: bool,
     /// bundled rulesets named by `include`
-    pub(super) includes: Vec<String>,
+    includes: Vec<String>,
     /// the `disable` globs themselves, forwarded to the engine so they reach
     /// the construct catalog too — a catalog entry is a rule, and silencing it
     /// by name is the same gesture
-    pub(super) disables: Vec<String>,
+    disables: Vec<String>,
 }
 
 impl RulesReport {
@@ -171,18 +171,18 @@ impl RulesReport {
 /// from, every `disable` glob, every name a later file replaced, whether the
 /// catalog was switched off, and anything that went wrong.
 #[derive(Default)]
-pub(super) struct Layering {
-    pub(super) layered: Vec<(ordo::model::Rule, String)>,
-    pub(super) disables: Vec<String>,
-    pub(super) replaced: Vec<String>,
-    pub(super) problems: Vec<String>,
+struct Layering {
+    layered: Vec<(ordo::model::Rule, String)>,
+    disables: Vec<String>,
+    replaced: Vec<String>,
+    problems: Vec<String>,
     /// `None` until a file says; `Some(false)` turns the catalog off
-    pub(super) catalog: Option<bool>,
+    catalog: Option<bool>,
     /// bundled rulesets pulled in by `include`
-    pub(super) includes: Vec<String>,
+    includes: Vec<String>,
 }
 
-pub(super) fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut Layering) {
+fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut Layering) {
     if depth > 8 {
         acc.problems.push(format!(
             "{origin}: include nesting deeper than 8 — a cycle?"
@@ -314,9 +314,7 @@ pub(super) fn load_rules(
 /// `kind = "x"` and `kind = ["x", "y"]` both read; a one-entry list is the
 /// common case and shouldn't need brackets. Mirrors `model::string_or_vec`,
 /// which is private to that module.
-pub(super) fn string_or_vec<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Vec<String>>, D::Error> {
+fn string_or_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
     use serde::Deserialize;
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -337,70 +335,70 @@ pub(super) fn string_or_vec<'de, D: serde::Deserializer<'de>>(
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct RuleToml {
-    pub(super) name: String,
+    name: String,
     #[serde(default)]
-    pub(super) note: Option<String>,
+    note: Option<String>,
     #[serde(default)]
-    pub(super) warn: Option<String>,
+    warn: Option<String>,
     #[serde(default)]
-    pub(super) verdict: Option<String>,
+    verdict: Option<String>,
     #[serde(default)]
-    pub(super) noise: bool,
+    noise: bool,
     #[serde(default)]
-    pub(super) priority: i64,
+    priority: i64,
 
     #[serde(default)]
-    pub(super) path: Option<String>,
+    path: Option<String>,
     #[serde(default)]
-    pub(super) path_not: Option<String>,
+    path_not: Option<String>,
     #[serde(default)]
-    pub(super) test: Option<bool>,
+    test: Option<bool>,
     #[serde(default, deserialize_with = "string_or_vec")]
-    pub(super) lang: Option<Vec<String>>,
+    lang: Option<Vec<String>>,
     #[serde(default)]
-    pub(super) category: Option<ordo::model::Category>,
+    category: Option<ordo::model::Category>,
     #[serde(default)]
-    pub(super) enclosing_kind: Option<String>,
+    enclosing_kind: Option<String>,
     #[serde(default)]
-    pub(super) defines: Option<String>,
+    defines: Option<String>,
     #[serde(default)]
-    pub(super) uses: Option<String>,
+    uses: Option<String>,
     #[serde(default)]
-    pub(super) imports: Option<String>,
+    imports: Option<String>,
     #[serde(default)]
-    pub(super) noise_when: Option<bool>,
+    noise_when: Option<bool>,
     #[serde(default)]
-    pub(super) comment: Option<bool>,
+    comment: Option<bool>,
     #[serde(default)]
-    pub(super) query: Option<String>,
+    query: Option<String>,
     #[serde(default)]
-    pub(super) query_file: Option<String>,
+    query_file: Option<String>,
     #[serde(default, deserialize_with = "string_or_vec")]
-    pub(super) kind: Option<Vec<String>>,
+    kind: Option<Vec<String>>,
     #[serde(default, deserialize_with = "string_or_vec")]
-    pub(super) with: Option<Vec<String>>,
+    with: Option<Vec<String>>,
     #[serde(default, deserialize_with = "string_or_vec")]
-    pub(super) without: Option<Vec<String>>,
+    without: Option<Vec<String>>,
     #[serde(default)]
-    pub(super) text: Option<String>,
+    text: Option<String>,
     #[serde(default)]
-    pub(super) text_not: Option<String>,
+    text_not: Option<String>,
     #[serde(default)]
-    pub(super) max_params: Option<usize>,
+    max_params: Option<usize>,
     #[serde(default)]
-    pub(super) max_lines: Option<usize>,
+    max_lines: Option<usize>,
     #[serde(default)]
-    pub(super) max_nesting: Option<usize>,
+    max_nesting: Option<usize>,
     #[serde(default)]
-    pub(super) max_file_lines: Option<usize>,
+    max_file_lines: Option<usize>,
     #[serde(default)]
-    pub(super) recursive: Option<bool>,
+    recursive: Option<bool>,
     #[serde(default)]
-    pub(super) container_with: Option<String>,
+    container_with: Option<String>,
     #[serde(default)]
-    pub(super) container_without: Option<String>,
+    container_without: Option<String>,
     #[serde(default)]
-    pub(super) member_uninitialized: Option<bool>,
+    member_uninitialized: Option<bool>,
 }
 
 /// Convert one already-parsed `[[rule]]` table into a `Rule`, independently of
@@ -408,7 +406,7 @@ pub(super) struct RuleToml {
 /// must not cost the file its other, good rules. `query-file` is read
 /// relative to `base` and lands in `When.query`, same as an inline `query`;
 /// a missing file is a problem, not a panic.
-pub(super) fn rule_from_toml(
+fn rule_from_toml(
     v: toml::Value,
     idx: usize,
     base: &Path,
@@ -483,8 +481,8 @@ pub(super) fn rule_from_toml(
 /// One rules file, read: its rules, what it includes, what it disables.
 pub(super) struct RulesDoc {
     pub(super) rules: Vec<ordo::model::Rule>,
-    pub(super) include: Vec<String>,
-    pub(super) disable: Vec<String>,
+    include: Vec<String>,
+    disable: Vec<String>,
     /// `catalog = false` in any rules file turns the built-in construct
     /// catalog off for good, the way `--no-catalog` does for one run
     pub(super) catalog: Option<bool>,
@@ -493,7 +491,7 @@ pub(super) struct RulesDoc {
 
 /// Could these two rules ever fire on one file? An unscoped rule applies to
 /// every language, so it overlaps with anything.
-pub(super) fn langs_overlap(a: &ordo::model::Rule, b: &ordo::model::Rule) -> bool {
+fn langs_overlap(a: &ordo::model::Rule, b: &ordo::model::Rule) -> bool {
     match (&a.when.lang, &b.when.lang) {
         (Some(x), Some(y)) => x.iter().any(|l| y.contains(l)),
         _ => true,

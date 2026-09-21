@@ -12,9 +12,9 @@ use std::collections::HashMap;
 // bound on how many candidate commits per direction (earlier/later) get run
 // through the engine — a long-lived file's full history would otherwise stall
 // the UI on a single `K` press
-pub(super) const HISTORY_WINDOW: usize = 10;
+const HISTORY_WINDOW: usize = 10;
 
-pub(super) fn commit_list(args: &[&str]) -> Vec<String> {
+fn commit_list(args: &[&str]) -> Vec<String> {
     git(args)
         .lines()
         .map(str::trim)
@@ -23,7 +23,7 @@ pub(super) fn commit_list(args: &[&str]) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn short_sha(sha: &str) -> String {
+fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
 }
 
@@ -74,7 +74,7 @@ pub(super) fn bound_later(mut shas: Vec<String>, window: usize) -> Vec<String> {
 /// `content`. Runs the engine as though the whole file were freshly added, so
 /// every definition in it — not just ones inside a hunk that happens to be
 /// selected — shows up in some hunk's `symbols`, keyed to its own row.
-pub(super) fn symbol_identity(
+fn symbol_identity(
     path: &str,
     content: &str,
     name: &str,
@@ -125,7 +125,7 @@ pub(super) fn label_for(h: &HunkOut, target: &Symbol) -> String {
 /// None when this commit touched `path` but never reached `target` itself (a
 /// path-based window can't help but include unrelated changes to the file;
 /// see `earlier`/`later` in `compute_history`).
-pub(super) fn classify_commit(sha: &str, path: &str, target: &Symbol) -> Option<String> {
+fn classify_commit(sha: &str, path: &str, target: &Symbol) -> Option<String> {
     let parent = git(&["rev-parse", "--verify", "-q", &format!("{sha}^")]);
     let parent = parent.trim();
     let old = if parent.is_empty() {
@@ -317,7 +317,7 @@ pub(super) fn churn_from_log(out: &str, review_sha: &str, drop_leading_rev: bool
     }
 }
 
-pub(super) fn compute_history(review_sha: &str, path: &str, target: &Symbol) -> Vec<String> {
+fn compute_history(review_sha: &str, path: &str, target: &Symbol) -> Vec<String> {
     let earlier_all = commit_list(&["rev-list", review_sha, "--", path]);
     let earlier = bound_earlier(earlier_all, review_sha, HISTORY_WINDOW);
     let later_all = commit_list(&["rev-list", &format!("{review_sha}..HEAD"), "--", path]);
@@ -333,7 +333,7 @@ pub(super) fn compute_history(review_sha: &str, path: &str, target: &Symbol) -> 
 // One direction's rows in `compute_history`'s output: `tag` labels only the
 // first commit that actually classifies, matching the reading-order convention
 // where a repeated column reads as blank rather than restating itself.
-pub(super) fn history_lines_for(
+fn history_lines_for(
     shas: &[String],
     tag: &str,
     path: &str,

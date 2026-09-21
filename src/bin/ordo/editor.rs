@@ -70,7 +70,7 @@ pub(super) fn build_command(
 /// since — cheap to check by comparing that revision's blob for the path
 /// against the file on disk; a mismatch is reported as approximate rather
 /// than silently sending the user to an unrelated line.
-pub(super) fn edit_target(app: &App) -> (String, usize, bool) {
+fn edit_target(app: &App) -> (String, usize, bool) {
     let it = &app.items[app.sel];
     let line = it.new_range[0].max(1);
     if app.uncommitted {
@@ -93,7 +93,7 @@ pub(super) fn edit_target(app: &App) -> (String, usize, bool) {
 /// with inherited stdio, then re-enters and forces a full redraw — the shared
 /// body behind `ge`'s editor handoff and `:quickfix`'s vim handoff, so there
 /// is exactly one terminal save/restore path.
-pub(super) fn run_suspended(
+fn run_suspended(
     terminal: &mut ratatui::DefaultTerminal,
     program: &str,
     args: &[String],
@@ -172,7 +172,7 @@ pub(super) fn qf_kind(warn: bool, reviewed: bool) -> Option<char> {
 /// only escape a single-quoted vim string recognises) and folds out any
 /// literal newline, which would otherwise split the `-S` script mid-statement
 /// — vim's `\n` escape only exists inside double-quoted strings.
-pub(super) fn vim_single_quote(s: &str) -> String {
+fn vim_single_quote(s: &str) -> String {
     s.replace('\'', "''").replace(['\n', '\r'], " ")
 }
 
@@ -243,7 +243,7 @@ pub(super) fn is_vim_family(spec: &[String]) -> bool {
 /// cfirst` selects its first entry — `silent!` because an empty export makes
 /// bare `cfirst` raise `E42: No Errors` and strand the user at a
 /// press-enter prompt.
-pub(super) fn quickfix_command(spec: &[String], path: &Path) -> Option<(String, Vec<String>)> {
+fn quickfix_command(spec: &[String], path: &Path) -> Option<(String, Vec<String>)> {
     let (program, extra) = spec.split_first()?;
     let mut args = extra.to_vec();
     args.push("-S".to_string());

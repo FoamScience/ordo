@@ -57,8 +57,8 @@ pub(super) enum FieldKind {
 pub(super) struct ConfigField {
     /// the config key this writes, e.g. `theme.accent`, `binds.j`, `catalog`
     pub(super) key: String,
-    pub(super) label: String,
-    pub(super) help: String,
+    label: String,
+    help: String,
     pub(super) kind: FieldKind,
 }
 
@@ -67,7 +67,7 @@ pub(super) struct ConfigSection {
     pub(super) title: String,
     /// which file this section is written to, shown in the UI so a reviewer
     /// knows what `:config` is about to edit
-    pub(super) file: String,
+    file: String,
     pub(super) fields: Vec<ConfigField>,
 }
 
@@ -239,7 +239,7 @@ pub(super) struct ConfigUi {
     /// (section, field) for every navigable row, in display order
     pub(super) rows: Vec<(usize, usize)>,
     pub(super) sel: usize,
-    pub(super) scroll: u16,
+    scroll: u16,
     /// something changed and has not been written
     pub(super) dirty: bool,
     /// the text being typed into the selected field; `None` unless editing.
@@ -287,7 +287,7 @@ impl ConfigUi {
         self.sections.get(i)?.fields.get(j)
     }
 
-    pub(super) fn field_mut(&mut self, at: usize) -> Option<&mut ConfigField> {
+    fn field_mut(&mut self, at: usize) -> Option<&mut ConfigField> {
         let (i, j) = *self.rows.get(at)?;
         self.sections.get_mut(i)?.fields.get_mut(j)
     }
@@ -342,7 +342,7 @@ impl ConfigUi {
     }
 
     /// Set every rule of one catalog section.
-    pub(super) fn set_section(&mut self, section: &str, on: bool) {
+    fn set_section(&mut self, section: &str, on: bool) {
         let names: Vec<String> = ordo::catalog::sections()
             .iter()
             .find(|s| s.name == section)
@@ -360,7 +360,7 @@ impl ConfigUi {
     }
 
     /// A section reads on while any of its rules is on.
-    pub(super) fn sync_sections(&mut self) {
+    fn sync_sections(&mut self) {
         let on: Vec<(String, bool)> = ordo::catalog::sections()
             .iter()
             .map(|s| {
@@ -632,7 +632,7 @@ pub(super) fn move_config(app: &mut App, by: isize) {
 /// because what the reviewer is looking at is the answer to those settings.
 /// Swap the palette. Syntax colours are baked into the highlight cache at load
 /// time, so what is already on screen has to be highlighted again.
-pub(super) fn swap_theme(app: &mut App, t: Theme) {
+fn swap_theme(app: &mut App, t: Theme) {
     app.theme = t;
     let paths: Vec<String> = app.highlights.keys().cloned().collect();
     for path in paths {
@@ -691,7 +691,7 @@ pub(super) fn config_commit_edit(app: &mut App) {
 /// The palette the config screen currently describes — the chosen theme with
 /// the filled-in role rows on top — applied if it isn't what's on screen.
 /// Both a theme swap and a single edited colour arrive here.
-pub(super) fn config_apply_theme(app: &mut App) {
+fn config_apply_theme(app: &mut App) {
     let Some(c) = app.config.as_ref() else { return };
     let (name, _) = config_general(c);
     let colors: Vec<(String, Color)> = c
@@ -719,7 +719,7 @@ pub(super) fn config_apply_theme(app: &mut App) {
 }
 
 /// The catalog switch and the `disable` list the current UI state implies.
-pub(super) fn config_rule_state(c: &ConfigUi) -> (bool, Vec<String>) {
+fn config_rule_state(c: &ConfigUi) -> (bool, Vec<String>) {
     let mut catalog = true;
     let mut disables = vec![];
     for f in c.sections.iter().flat_map(|s| &s.fields) {
@@ -847,13 +847,13 @@ fn write_rules_file(path: &Path, c: &ConfigUi, changed: &[&ConfigField]) -> Resu
 }
 
 /// A TOML array of strings, on one line.
-pub(super) fn toml_list(items: &[String]) -> String {
+fn toml_list(items: &[String]) -> String {
     let inner: Vec<String> = items.iter().map(|i| format!("\"{i}\"")).collect();
     format!("[{}]", inner.join(", "))
 }
 
 /// The bundled rulesets the current UI state includes.
-pub(super) fn config_includes(c: &ConfigUi) -> Vec<String> {
+fn config_includes(c: &ConfigUi) -> Vec<String> {
     c.sections
         .iter()
         .flat_map(|s| &s.fields)
@@ -865,7 +865,7 @@ pub(super) fn config_includes(c: &ConfigUi) -> Vec<String> {
 }
 
 /// The preset and theme the current UI state implies.
-pub(super) fn config_general(c: &ConfigUi) -> (String, String) {
+fn config_general(c: &ConfigUi) -> (String, String) {
     let pick = |key: &str| {
         c.sections
             .iter()

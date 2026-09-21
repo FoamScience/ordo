@@ -23,7 +23,7 @@ pub(super) fn git(args: &[&str]) -> String {
 // branch differently on it — but it is no longer silent: the command and the
 // first line of its stderr are recorded (see `COMMAND_FAILURES`) and shown in
 // the empty-review message and in `:audit`.
-pub(super) fn run_cmd(bin: &str, args: &[&str]) -> String {
+fn run_cmd(bin: &str, args: &[&str]) -> String {
     let Ok(out) = Command::new(bin).args(args).output() else {
         note_command_failure(bin, args, "could not be run");
         return String::new();
@@ -46,7 +46,7 @@ pub(super) fn run_cmd(bin: &str, args: &[&str]) -> String {
 /// left no trace at all, so a bad revision or an unreadable object arrived as
 /// "nothing to review". Collected here and drained into the empty-review
 /// message and `:audit`.
-pub(super) static COMMAND_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static COMMAND_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub(super) fn note_command_failure(bin: &str, args: &[&str], why: &str) {
     // `but` is optional by design — its absence is the normal case on a repo
@@ -77,7 +77,7 @@ pub(super) fn command_failures() -> Vec<String> {
 
 // Same, with the arg list fed on stdin — for `check-attr --stdin`, where the
 // path list can outgrow what a command line takes.
-pub(super) fn git_stdin(args: &[&str], input: &str) -> String {
+fn git_stdin(args: &[&str], input: &str) -> String {
     use std::io::Write;
     let mut child = match Command::new("git")
         .args(args)
@@ -108,7 +108,7 @@ pub(super) fn git_stdin(args: &[&str], input: &str) -> String {
 // same as the old per-file `git show` path. Stdin is written and dropped
 // (closing it) before stdout is read, to avoid deadlocking on a full pipe
 // buffer with a large spec list.
-pub(super) fn git_cat_file_batch(specs: &[String]) -> HashMap<String, String> {
+fn git_cat_file_batch(specs: &[String]) -> HashMap<String, String> {
     use std::io::{Read, Write};
     let mut result = HashMap::with_capacity(specs.len());
     if specs.is_empty() {
@@ -178,7 +178,7 @@ pub(super) fn git_cat_file_batch(specs: &[String]) -> HashMap<String, String> {
 
 // GitButler CLI: empty string if `but` isn't installed or the call fails, so the
 // plain-git path is unaffected on non-GitButler repos.
-pub(super) fn but(args: &[&str]) -> String {
+fn but(args: &[&str]) -> String {
     run_cmd("but", args)
 }
 
@@ -218,15 +218,15 @@ pub(super) fn declared_generated(paths: &[String]) -> std::collections::HashSet<
 /// `but --json status` — the whole workspace in one call: the uncommitted
 /// changes, each stack's branches and their commits, and the merge base. None
 /// when `but` is missing or the repo isn't GitButler-managed.
-pub(super) fn workspace() -> Option<serde_json::Value> {
+fn workspace() -> Option<serde_json::Value> {
     serde_json::from_str(&but(&["--json", "status"])).ok()
 }
 
-pub(super) fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
+fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
     v.get(key).and_then(|v| v.as_str()).unwrap_or_default()
 }
 
-pub(super) fn branches(ws: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+fn branches(ws: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
     ws.get("stacks")
         .and_then(|s| s.as_array())
         .map(|v| v.as_slice())
@@ -240,10 +240,10 @@ pub(super) fn branches(ws: &serde_json::Value) -> impl Iterator<Item = &serde_js
 /// reviews as the range spanning its own commits, which is what reviewing one
 /// branch of a stack means. Takes precedence over git's reading of the same
 /// name, where a branch is only its tip commit.
-pub(super) fn branch_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
+fn branch_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
     let b = branches(ws).find(|b| field(b, "cliId") == arg || field(b, "name") == arg)?;
     let commits = b.get("commits")?.as_array()?;
-    pub(super) fn commit_id(c: &serde_json::Value) -> Option<&str> {
+    fn commit_id(c: &serde_json::Value) -> Option<&str> {
         Some(field(c, "commitId")).filter(|s| !s.is_empty())
     }
     // `but` lists a branch newest-first, so the range runs from below the last
@@ -258,7 +258,7 @@ pub(super) fn branch_target(ws: &serde_json::Value, arg: &str) -> Option<Target>
 
 /// A workspace commit by its CLI ID, or by a prefix of its change ID or commit
 /// ID — the same identifiers `but status` accepts.
-pub(super) fn commit_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
+fn commit_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
     let c = branches(ws)
         .filter_map(|b| b.get("commits")?.as_array())
         .flatten()
@@ -431,7 +431,7 @@ pub(super) fn gather_range(
 // plus `uncommittedChanges`, each entry's `filePath`. Shared by `gather_uncommitted`
 // and `gather_worktree_range`'s untracked-file branch — neither sorts nor dedups
 // here, that's each caller's own business.
-pub(super) fn workspace_change_paths(ws: &serde_json::Value) -> Vec<String> {
+fn workspace_change_paths(ws: &serde_json::Value) -> Vec<String> {
     let assigned = ws
         .get("stacks")
         .and_then(|s| s.as_array())

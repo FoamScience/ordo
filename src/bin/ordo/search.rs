@@ -119,7 +119,7 @@ pub(super) fn cycle_index(index: usize, len: usize, dir: isize) -> usize {
 }
 
 // move the cursor to `search`'s current match and scroll to follow, then store it
-pub(super) fn jump_search(app: &mut App, mut search: Search, forward: bool, inclusive: bool) {
+fn jump_search(app: &mut App, mut search: Search, forward: bool, inclusive: bool) {
     if !search.matches.is_empty() {
         let idx = if forward {
             seek_forward(&search.matches, app.cursor, inclusive)

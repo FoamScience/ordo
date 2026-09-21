@@ -18,7 +18,7 @@ pub(super) struct Finding {
     /// `Warn` for error/warning, `Note` for note/none, so an analyzer result
     /// presses exactly as hard as a rule hit saying the same thing
     pub(super) level: ordo::model::Level,
-    pub(super) message: String,
+    message: String,
     pub(super) path: String,
     /// 1-based, as SARIF writes it and as hunk ranges are kept
     pub(super) line: usize,
@@ -98,7 +98,7 @@ pub(super) fn parse_sarif(text: &str) -> Vec<Finding> {
 /// A SARIF `artifactLocation.uri` as a repo-relative path. Handles the
 /// `file://` form and a leading `./`; an absolute path is left alone here and
 /// matched by suffix when the finding is placed.
-pub(super) fn normalise_uri(uri: &str) -> String {
+fn normalise_uri(uri: &str) -> String {
     let p = uri.strip_prefix("file://").unwrap_or(uri);
     p.strip_prefix("./").unwrap_or(p).to_string()
 }

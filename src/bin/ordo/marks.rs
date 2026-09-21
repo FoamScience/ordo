@@ -40,7 +40,7 @@ pub(super) fn fnv1a(bytes: &[u8]) -> u64 {
 /// position-based key would drop marks on edits that never touched the hunk
 /// itself. This case is rare, and its failure is visible (two rows tick
 /// together at once) rather than silent.
-pub(super) fn symbol_identity_key(item: &Item) -> String {
+fn symbol_identity_key(item: &Item) -> String {
     if !item.symbols.is_empty() {
         symbols_identity(&item.symbols)
     } else {
@@ -50,7 +50,7 @@ pub(super) fn symbol_identity_key(item: &Item) -> String {
 
 /// name + kind + scope for each symbol, order-independent — the identity both
 /// `mark_key` and `note_key` are built on.
-pub(super) fn symbols_identity(symbols: &[ordo::model::Symbol]) -> String {
+fn symbols_identity(symbols: &[ordo::model::Symbol]) -> String {
     let mut syms = symbols.to_vec();
     syms.sort();
     syms.iter()
@@ -71,7 +71,7 @@ pub(super) fn symbols_identity(symbols: &[ordo::model::Symbol]) -> String {
 /// false "already reviewed" is far worse than a lost one, which is the whole
 /// point of covering both sides rather than just the new one. `None` when the
 /// item's file content isn't loaded (nothing to hash).
-pub(super) fn hunk_content_hash(item: &Item, sources: &Sources) -> Option<u64> {
+fn hunk_content_hash(item: &Item, sources: &Sources) -> Option<u64> {
     let (ol, nl) = sources.get(&item.path)?;
     let [o0, o1] = item.old_range;
     let [n0, n1] = item.new_range;
@@ -255,7 +255,7 @@ pub(super) fn cascade_line(app: &App, i: usize) -> Option<String> {
 /// last time — and when there was no last time, since "everything is new" on a
 /// first run is noise rather than information.
 /// `FILE_CHURN_WINDOW` as prose — "6.months" is a git argument, not English.
-pub(super) fn churn_window_phrase() -> String {
+fn churn_window_phrase() -> String {
     FILE_CHURN_WINDOW.replace('.', " ")
 }
 
@@ -327,7 +327,7 @@ pub(super) fn out_of_order_labels(app: &App, i: usize) -> Vec<String> {
 /// Dependencies of item `i` that are part of this review but not yet reviewed
 /// — the hunks defining what `i` uses. Marking `i` reviewed while any of these
 /// are outstanding means a call was approved before its callee.
-pub(super) fn unreviewed_deps(app: &App, i: usize) -> Vec<usize> {
+fn unreviewed_deps(app: &App, i: usize) -> Vec<usize> {
     app.items[i]
         .edges
         .iter()
@@ -391,7 +391,7 @@ pub(super) fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-pub(super) fn cache_home() -> Option<PathBuf> {
+fn cache_home() -> Option<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
         let p = PathBuf::from(x.trim());
         // the XDG spec says a relative value is invalid and must be ignored;
@@ -419,7 +419,7 @@ pub(super) fn marks_file_path(repo_root: &str) -> Option<PathBuf> {
 #[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(super) struct Snap {
     /// hex hash of both sides of the hunk
-    pub(super) c: String,
+    c: String,
     /// its position in the reading order
     pub(super) p: usize,
     /// keys of the hunks defining what it uses
@@ -443,7 +443,7 @@ pub(super) enum Delta {
 
 /// A hunk's identity across runs: its symbol, and the file it lives in. Not
 /// the content and not the revision — those are what the delta is measuring.
-pub(super) fn snap_key(item: &Item) -> String {
+fn snap_key(item: &Item) -> String {
     format!(
         "{:016x}",
         fnv1a(format!("{}\u{0}{}", item.path, symbol_identity_key(item)).as_bytes())

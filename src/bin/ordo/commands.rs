@@ -389,7 +389,7 @@ pub(super) fn open_command_bar(app: &mut App, text: String) {
 /// one `git for-each-ref` — shelled out here, lazily, only when
 /// `recompute_candidates` is actually completing an `:e ` argument, never at
 /// startup.
-pub(super) fn rev_completions() -> Vec<String> {
+fn rev_completions() -> Vec<String> {
     let mut v = vec!["zz".to_string(), "HEAD".to_string()];
     let out = git(&["for-each-ref", "--format=%(refname:short)"]);
     v.extend(
@@ -403,7 +403,7 @@ pub(super) fn rev_completions() -> Vec<String> {
 
 /// Recomputes the open command bar's completion menu for its current text —
 /// called after every edit (typing, backspace, accepting a completion).
-pub(super) fn recompute_candidates(app: &mut App) {
+fn recompute_candidates(app: &mut App) {
     let text = match &app.command {
         Some(bar) => bar.text.clone(),
         None => return,
@@ -443,7 +443,7 @@ pub(super) fn recompute_candidates(app: &mut App) {
     }
 }
 
-pub(super) fn cycle_candidate(app: &mut App, dir: isize) {
+fn cycle_candidate(app: &mut App, dir: isize) {
     let Some(bar) = app.command.as_mut() else {
         return;
     };
@@ -493,7 +493,7 @@ pub(super) enum CommandOutcome {
 /// `Enter` on the command bar: with a candidate highlighted, splice it into
 /// the line (doesn't run anything yet — a second `Enter` does); with nothing
 /// highlighted, run the line and close the bar.
-pub(super) fn accept_command(app: &mut App) -> CommandOutcome {
+fn accept_command(app: &mut App) -> CommandOutcome {
     let Some(bar) = app.command.as_ref() else {
         return CommandOutcome::None;
     };
@@ -552,7 +552,7 @@ pub(super) fn handle_command_key(
     CommandOutcome::None
 }
 
-pub(super) fn parse_strategy(s: &str) -> Option<Strategy> {
+fn parse_strategy(s: &str) -> Option<Strategy> {
     match s {
         "comprehension" => Some(Strategy::Comprehension),
         "defs-first" => Some(Strategy::DefsFirst),
@@ -644,7 +644,7 @@ pub(super) fn set_filters(
     Ok(())
 }
 
-pub(super) fn run_goto(app: &mut App, path: &str) -> Result<(), String> {
+fn run_goto(app: &mut App, path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("usage: :goto <path>".to_string());
     }
