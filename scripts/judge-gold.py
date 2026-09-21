@@ -41,6 +41,48 @@ def fmt(x):
     return "   n/a" if x is None else f"{x:6.2f}"
 
 
+def questions_for(r):
+    """The nouls a labeled row answers: one per labeled question, one per finding."""
+    L = r["labels"]
+    qs = {k: Noul(instructions=v) for k, v in QUESTIONS.items()
+          if k in L and L[k] is not None}
+    for name in L["findings"]:
+        msg = next((f["message"] for f in r["findings"] if f["name"] == name), name)
+        qs[f"finding:{name}"] = Noul(
+            instructions=f"Is this reviewer warning warranted for this code? Warning: {msg}")
+    return qs
+
+
+def judge(client, text, qs):
+    """One System One call, retried on 429/529 and transport errors with backoff."""
+    for attempt in range(5):
+        try:
+            return client.system_one(text, qs)
+        except Exception:
+            if attempt == 4:
+                raise
+            time.sleep(2 ** attempt)
+
+
+def report(judge, n_req, secs, scored, per_rule):
+    print(f"judge={judge}  hunks={n_req}  {secs:.0f}s")
+    print(f"{'question':16} {'n':>5} {'agree@.5':>9} {'AUC':>6}  {'mean(yes)':>9} {'mean(no)':>8}")
+    for k in ("faithful", "matches_commit", "noise_correct", "findings"):
+        p = scored.get(k)
+        if not p:
+            continue
+        agree = sum((s >= 0.5) == l for s, l in p) / len(p)
+        yes = [s for s, l in p if l]
+        no = [s for s, l in p if not l]
+        print(f"{k:16} {len(p):5d} {agree:9.2f} {fmt(auc(p))}  "
+              f"{sum(yes) / len(yes) if yes else float('nan'):9.2f} {sum(no) / len(no) if no else float('nan'):8.2f}")
+    if per_rule:
+        print("per rule (n, agree@.5, AUC):")
+        for name, p in sorted(per_rule.items(), key=lambda kv: -len(kv[1])):
+            agree = sum((s >= 0.5) == l for s, l in p) / len(p)
+            print(f"  {name:20} {len(p):3d} {agree:5.2f} {fmt(auc(p))}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default=None, help="jeff, or unset for jev")
@@ -62,24 +104,12 @@ def main():
     n_req = 0
     for i, r in enumerate(rows):
         L = r["labels"]
-        text = (f"commit message: {r['subject']}\nrationale: {r['rationale']}\n"
-                f"diff:\n{r['diff'][:6000]}")
-        qs = {k: Noul(instructions=v) for k, v in QUESTIONS.items()
-              if k in L and L[k] is not None}
-        for name in L["findings"]:
-            msg = next((f["message"] for f in r["findings"] if f["name"] == name), name)
-            qs[f"finding:{name}"] = Noul(
-                instructions=f"Is this reviewer warning warranted for this code? Warning: {msg}")
+        qs = questions_for(r)
         if not qs:
             continue
-        for attempt in range(5):
-            try:
-                res = client.system_one(text, qs)
-                break
-            except Exception:  # 429/529 and transport errors: back off, retry
-                if attempt == 4:
-                    raise
-                time.sleep(2 ** attempt)
+        text = (f"commit message: {r['subject']}\nrationale: {r['rationale']}\n"
+                f"diff:\n{r['diff'][:6000]}")
+        res = judge(client, text, qs)
         n_req += 1
         got = {k: v.noul for k, v in res.nouls.items()}
         for k in QUESTIONS:
@@ -94,25 +124,7 @@ def main():
             out.write(json.dumps({"key": r["key"], "scores": got}) + "\n")
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{len(rows)} ({time.time() - t0:.0f}s)", file=sys.stderr)
-
-    print(f"judge={'jev' if not a.base_url else a.base_url}  hunks={n_req}  {time.time() - t0:.0f}s")
-    print(f"{'question':16} {'n':>5} {'agree@.5':>9} {'AUC':>6}  {'mean(yes)':>9} {'mean(no)':>8}")
-    for k in ("faithful", "matches_commit", "noise_correct", "findings"):
-        p = scored.get(k)
-        if not p:
-            continue
-        agree = sum((s >= 0.5) == l for s, l in p) / len(p)
-        yes = [s for s, l in p if l]
-        no = [s for s, l in p if not l]
-        a_ = auc(p)
-        print(f"{k:16} {len(p):5d} {agree:9.2f} {fmt(a_)}  "
-              f"{sum(yes) / len(yes) if yes else float('nan'):9.2f} {sum(no) / len(no) if no else float('nan'):8.2f}")
-    if per_rule:
-        print("per rule (n, agree@.5, AUC):")
-        for name, p in sorted(per_rule.items(), key=lambda kv: -len(kv[1])):
-            agree = sum((s >= 0.5) == l for s, l in p) / len(p)
-            a_ = auc(p)
-            print(f"  {name:20} {len(p):3d} {agree:5.2f} {fmt(a_)}")
+    report('jev' if not a.base_url else a.base_url, n_req, time.time() - t0, scored, per_rule)
 
 
 if __name__ == "__main__":
