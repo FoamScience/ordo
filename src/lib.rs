@@ -15,6 +15,7 @@ use lang::LangSpec;
 use model::*;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use tree_sitter::Node;
 
 pub use lang::is_generated_path;
@@ -89,7 +90,6 @@ pub fn run(input: Input) -> Output {
     let mut hunks = build_hunks(&input, &templates);
 
     let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
-    let n = input.changes.len();
     // per-file old/new symbol data (rows for positions, sets for membership,
     // bodies for rename/move matching) — drives #3/#5/#7 and P12.1 moves.
     let symbols: Vec<FileSymbols> = input.changes.iter().map(FileSymbols::of).collect();
@@ -98,68 +98,8 @@ pub fn run(input: Input) -> Output {
 
     classify_imports(&mut hunks, &input.changes, &symbols, &changed);
 
-    // ---- findings: the built-in construct catalog and the caller's rules ----
     uninit_members(&mut hunks, &input.changes);
-
-    // Evaluated after the semantics they match on, and before the ordering they
-    // can influence. A rule's `noise` and `priority` reach the hunk itself; its
-    // notes ride along to the output.
-    //
-    // The catalog rides the same engine: it is the same mechanism with a
-    // different `FindingSource`, so both sets share one parse per file.
-    // The catalog is on unless the caller says otherwise, and a `disable` glob
-    // silences a catalog entry the same way it silences one of their own: a
-    // catalog rule is a rule, and the name is the name.
-    let mut catalog_problems = vec![];
-    let catalog = catalog_for(&input.options, &mut catalog_problems);
-    let mut rule_engine = rules::Rules::with_catalog(&catalog, &input.options.rules);
-    let mut rule_hits: Vec<Vec<Vec<Finding>>> = vec![vec![]; n];
-    for (fi, change) in input.changes.iter().enumerate() {
-        let path = &change.path;
-        let query_rows = match (lang::for_path(path), change.new.as_deref()) {
-            (Some(spec), Some(new)) => rule_engine.query_rows(spec, new),
-            _ => HashMap::new(),
-        };
-        let file_lines = (
-            change.old.as_deref().map(|o| o.lines().count()),
-            change.new.as_deref().map_or(0, |n| n.lines().count()),
-        );
-        let mut per_file = vec![];
-        for li in 0..hunks[fi].raw.len() {
-            let sem = &hunks[fi].sem[li];
-            let [r0, r1] = hunks[fi].raw[li].new_range;
-            let facts = rules::HunkFacts {
-                path,
-                rows: (r0, r1),
-                category: sem.category,
-                enclosing: sem.enclosing.as_deref(),
-                enclosing_kind: sem.enclosing_kind,
-                defines: &sem.defines,
-                uses: &sem.uses,
-                imports: &sem.imports,
-                noise: sem.noise,
-                comment: hunks[fi].comment[li],
-                def_lines: sem.def_lines,
-                def_params: sem.def_params,
-                nesting: sem.nesting,
-                file_lines,
-                recursive: sem.recursive,
-                container_members: &sem.container_members,
-                uninit_members: &sem.uninit_members,
-            };
-            per_file.push(rule_engine.hits(&facts, &query_rows));
-        }
-        rule_hits[fi] = per_file;
-    }
-    rule_engine.finish();
-    for fi in 0..n {
-        for (li, hits) in rule_hits[fi].iter().enumerate() {
-            if rules::Rules::any_noise(hits, &input.options.rules) {
-                hunks[fi].sem[li].noise = true;
-            }
-            hunks[fi].sem[li].priority = rules::Rules::priority(hits, &input.options.rules);
-        }
-    }
+    let (rule_hits, problems) = apply_rules(&mut hunks, &input);
 
     let facts = order::FileFacts {
         symbols: &symbols,
@@ -173,28 +113,10 @@ pub fn run(input: Input) -> Output {
         input.options.cross_file,
         input.options.docs_last,
     );
-
-    // what the ordering decided about each hunk, at the hunk
-    let mut placed: Vec<Vec<HunkPlace>> = hunks
-        .iter()
-        .map(|f| vec![HunkPlace::default(); f.raw.len()])
-        .collect();
-    for (i, &(fi, li)) in ordered.coord.iter().enumerate() {
-        placed[fi][li].id = format!("h{i}");
-        placed[fi][li].global = i;
-    }
+    let placed = placements(&ordered, &hunks);
     let gids: Vec<String> = (0..ordered.groups.len())
         .map(|gi| format!("g{gi}"))
         .collect();
-
-    // rank within that file across the global reading order
-    let mut file_counter = vec![0usize; hunks.len()];
-    for &i in &ordered.perm {
-        let (fi, li) = ordered.coord[i];
-        placed[fi][li].in_file = file_counter[fi];
-        file_counter[fi] += 1;
-    }
-
     // global reading order
     let order: Vec<OrderItem> = ordered
         .perm
@@ -207,55 +129,33 @@ pub fn run(input: Input) -> Output {
             }
         })
         .collect();
-
-    // per-file hunk metadata
-    let mut files: Vec<FileOut> = vec![];
-    for (fi, change) in input.changes.iter().enumerate() {
-        let mut out_hunks = vec![];
-        for (li, place) in placed[fi].iter().enumerate() {
-            let gi = place.global;
-            out_hunks.push(HunkOut {
-                id: place.id.clone(),
-                old_range: hunks[fi].raw[li].old_range,
-                new_range: hunks[fi].raw[li].new_range,
-                category: hunks[fi].sem[li].category,
-                enclosing: hunks[fi].sem[li].enclosing.clone(),
-                enclosing_kind: hunks[fi].sem[li].enclosing_kind,
-                defines: hunks[fi].sem[li].defines.clone(),
-                uses: hunks[fi].sem[li].uses.clone(),
-                group: gids[ordered.group_idx[gi]].clone(),
-                order_index: place.in_file,
-                rationale: ordered.rationale[gi].clone(),
-                noise: hunks[fi].sem[li].noise,
-                comment: hunks[fi].comment[li],
-                details: hunks[fi].sem[li].details.clone(),
-                notes: hunks[fi].sem[li].notes.clone(),
-                symbols: hunks[fi].sem[li].symbols.clone(),
-                // one list: the construct catalog, the caller's rules, and
-                // anything a client adds later, all say the same kind of thing
-                findings: hunks[fi].sem[li]
-                    .advisories
-                    .iter()
-                    .cloned()
-                    .chain(rule_hits[fi].get(li).into_iter().flatten().cloned())
-                    .collect(),
-                uses_at: order::introduced_bindings(&hunks[fi].sem[li], &symbols[fi].old_locals)
-                    .filter(|b| !b.uses.is_empty())
-                    .map(|b| UseSite {
-                        name: b.name.clone(),
-                        rows: b.uses.clone(),
-                    })
-                    .collect(),
-            });
-        }
-        files.push(FileOut {
-            path: change.path.clone(),
-            hunks: out_hunks,
-            degraded: hunks[fi].degraded,
-            unsupported: lang::for_path(&change.path).is_none(),
-            dropped: std::mem::take(&mut hunks[fi].dropped),
-        });
-    }
+    let mut files: Vec<FileOut> = input
+        .changes
+        .iter()
+        .enumerate()
+        .map(|(fi, change)| {
+            let hunks_out = (0..placed[fi].len())
+                .map(|li| {
+                    hunk_out(
+                        &hunks[fi],
+                        li,
+                        &placed[fi][li],
+                        &ordered,
+                        &gids,
+                        &rule_hits[fi],
+                        &symbols[fi],
+                    )
+                })
+                .collect();
+            FileOut {
+                path: change.path.clone(),
+                hunks: hunks_out,
+                degraded: hunks[fi].degraded,
+                unsupported: lang::for_path(&change.path).is_none(),
+                dropped: std::mem::take(&mut hunks[fi].dropped),
+            }
+        })
+        .collect();
 
     let hid = |gi: usize| {
         let (fi, li) = ordered.coord[gi];
@@ -280,7 +180,6 @@ pub fn run(input: Input) -> Output {
             why: why.clone(),
         })
         .collect();
-
     let clusters: Vec<Vec<String>> = ordered
         .clusters
         .iter()
@@ -301,22 +200,161 @@ pub fn run(input: Input) -> Output {
         groups: groups_out,
         edges: edges_out,
         clusters,
-        problems: {
-            // one file kind repeats across a changeset; a broken rule should
-            // be reported once, not once per file
-            let mut p = rule_engine.problems.clone();
-            // a catalog that failed to parse is our bug, not a fault in the
-            // caller's rules — but they still deserve to know this run is
-            // missing every construct advisory
-            p.extend(catalog::problem().map(str::to_string));
-            // and a `disable` glob nobody can parse silences nothing
-            p.extend(catalog_problems);
-            p.sort();
-            p.dedup();
-            p
-        },
+        problems,
         notes,
         ledger,
+    }
+}
+
+/// The built-in construct catalog and the caller's rules, evaluated against
+/// every hunk: after the semantics they match on, before the ordering they can
+/// influence. A rule's `noise` and `priority` reach the hunk itself; its
+/// findings come back per file and hunk, to ride along to the output, with
+/// the problems every rule set reported — once per rule, not once per file.
+///
+/// The catalog rides the same engine: it is the same mechanism with a
+/// different `FindingSource`, so both sets share one parse per file. The
+/// catalog is on unless the caller says otherwise, and a `disable` glob
+/// silences a catalog entry the same way it silences one of their own: a
+/// catalog rule is a rule, and the name is the name.
+fn apply_rules(hunks: &mut [PerFileHunks], input: &Input) -> (Vec<Vec<Vec<Finding>>>, Vec<String>) {
+    let mut catalog_problems = vec![];
+    let catalog = catalog_for(&input.options, &mut catalog_problems);
+    let mut engine = rules::Rules::with_catalog(&catalog, &input.options.rules);
+    let mut rule_hits: Vec<Vec<Vec<Finding>>> = vec![];
+    for (fi, change) in input.changes.iter().enumerate() {
+        let query_rows = match (lang::for_path(&change.path), change.new.as_deref()) {
+            (Some(spec), Some(new)) => engine.query_rows(spec, new),
+            _ => HashMap::new(),
+        };
+        let file_lines = (
+            change.old.as_deref().map(|o| o.lines().count()),
+            change.new.as_deref().map_or(0, |n| n.lines().count()),
+        );
+        let per_file: Vec<Vec<Finding>> = (0..hunks[fi].raw.len())
+            .map(|li| {
+                engine.hits(
+                    &hunk_facts(&hunks[fi], li, &change.path, file_lines),
+                    &query_rows,
+                )
+            })
+            .collect();
+        rule_hits.push(per_file);
+    }
+    engine.finish();
+    for (fi, per_file) in rule_hits.iter().enumerate() {
+        for (li, hits) in per_file.iter().enumerate() {
+            if rules::any_noise(hits, &input.options.rules) {
+                hunks[fi].sem[li].noise = true;
+            }
+            hunks[fi].sem[li].priority = rules::priority(hits, &input.options.rules);
+        }
+    }
+    let mut problems = engine.problems.clone();
+    // a catalog that failed to parse is our bug, not a fault in the caller's
+    // rules — but they still deserve to know this run is missing every
+    // construct advisory
+    problems.extend(catalog::problem().map(str::to_string));
+    // and a `disable` glob nobody can parse silences nothing
+    problems.extend(catalog_problems);
+    problems.sort();
+    problems.dedup();
+    (rule_hits, problems)
+}
+
+/// What a rule can ask about one hunk.
+fn hunk_facts<'a>(
+    f: &'a PerFileHunks,
+    li: usize,
+    path: &'a str,
+    file_lines: (Option<usize>, usize),
+) -> rules::HunkFacts<'a> {
+    let sem = &f.sem[li];
+    let [r0, r1] = f.raw[li].new_range;
+    rules::HunkFacts {
+        path,
+        rows: (r0, r1),
+        category: sem.category,
+        enclosing: sem.enclosing.as_deref(),
+        enclosing_kind: sem.enclosing_kind,
+        defines: &sem.defines,
+        uses: &sem.uses,
+        imports: &sem.imports,
+        noise: sem.noise,
+        comment: f.comment[li],
+        def_lines: sem.def_lines,
+        def_params: sem.def_params,
+        nesting: sem.nesting,
+        file_lines,
+        recursive: sem.recursive,
+        container_members: &sem.container_members,
+        uninit_members: &sem.uninit_members,
+    }
+}
+
+/// What the ordering decided about each hunk, at the hunk: its id, its global
+/// index, and its rank within its file across the global reading order.
+fn placements(ordered: &order::OrderedAll, hunks: &[PerFileHunks]) -> Vec<Vec<HunkPlace>> {
+    let mut placed: Vec<Vec<HunkPlace>> = hunks
+        .iter()
+        .map(|f| vec![HunkPlace::default(); f.raw.len()])
+        .collect();
+    for (i, &(fi, li)) in ordered.coord.iter().enumerate() {
+        placed[fi][li].id = format!("h{i}");
+        placed[fi][li].global = i;
+    }
+    let mut file_counter = vec![0usize; hunks.len()];
+    for &i in &ordered.perm {
+        let (fi, li) = ordered.coord[i];
+        placed[fi][li].in_file = file_counter[fi];
+        file_counter[fi] += 1;
+    }
+    placed
+}
+
+/// One hunk of the output, from everything the passes learned about it.
+fn hunk_out(
+    f: &PerFileHunks,
+    li: usize,
+    place: &HunkPlace,
+    ordered: &order::OrderedAll,
+    gids: &[String],
+    rule_hits: &[Vec<Finding>],
+    symbols: &FileSymbols,
+) -> HunkOut {
+    let (sem, gi) = (&f.sem[li], place.global);
+    HunkOut {
+        id: place.id.clone(),
+        old_range: f.raw[li].old_range,
+        new_range: f.raw[li].new_range,
+        category: sem.category,
+        enclosing: sem.enclosing.clone(),
+        enclosing_kind: sem.enclosing_kind,
+        defines: sem.defines.clone(),
+        uses: sem.uses.clone(),
+        group: gids[ordered.group_idx[gi]].clone(),
+        order_index: place.in_file,
+        rationale: ordered.rationale[gi].clone(),
+        noise: sem.noise,
+        comment: f.comment[li],
+        details: sem.details.clone(),
+        notes: sem.notes.clone(),
+        symbols: sem.symbols.clone(),
+        // one list: the construct catalog, the caller's rules, and anything a
+        // client adds later, all say the same kind of thing
+        findings: sem
+            .advisories
+            .iter()
+            .cloned()
+            .chain(rule_hits.get(li).into_iter().flatten().cloned())
+            .collect(),
+        uses_at: order::introduced_bindings(sem, &symbols.old_locals)
+            .filter(|b| !b.uses.is_empty())
+            .map(|b| UseSite {
+                name: b.name.clone(),
+                rows: b.uses.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -427,126 +465,124 @@ fn classify_imports(
     symbols: &[FileSymbols],
     changed: &[FileChanges],
 ) {
-    let n = changes.len();
-    // A hunk that only deletes has no new side to classify from, so a removed
-    // import used to read as a plain `other` hunk while an added one was an
-    // import. Classify a pure deletion from the side it actually has.
-    for fi in 0..n {
-        let (Some(spec), Some(old_src)) = (
-            lang::for_path(&changes[fi].path),
-            changes[fi].old.as_deref(),
-        ) else {
-            continue;
-        };
-        let rows = extract::import_row_set(spec, old_src);
-        if rows.is_empty() {
-            continue;
-        }
-        let old_lines: Vec<&str> = old_src.lines().collect();
-        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
-        for (li, sem) in sems.iter_mut().enumerate() {
-            let [o0, o1] = sem.old_range;
-            let [n0, n1] = raw[li].new_range;
-            let deletes_only = n0 > n1;
-            if deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r)) {
-                sem.category = Category::Import;
-                sem.noise = true;
-                // What left: an import recorded on a deleted row, or — for one
-                // member dropped from a multi-line `import { a, b }`, which
-                // sits rows below the statement its removal is recorded
-                // against — a deleted line that is just that name. A name the
-                // new side still imports is a moved import, and the residue it
-                // leaves behind stays "formatting only".
-                let deleted = &old_lines[o0 - 1..o1.min(old_lines.len())];
-                let member_line = |nm: &str| {
-                    deleted.iter().any(|l| {
-                        let l = l.trim().trim_end_matches(',').trim();
-                        l == nm || l.ends_with(&format!(" as {nm}"))
-                    })
-                };
-                let mut gone: Vec<String> = symbols[fi]
-                    .old_rows
-                    .1
-                    .iter()
-                    .filter(|(nm, row)| {
-                        !symbols[fi].new_imports.contains(nm)
-                            && ((o0..=o1).contains(row) || member_line(nm))
-                    })
-                    .map(|(nm, _)| nm.clone())
-                    .collect();
-                gone.sort();
-                gone.dedup();
-                sem.imports = gone;
-            }
-        }
+    for fi in 0..changes.len() {
+        name_deleted_imports(&mut hunks[fi], &changes[fi], &symbols[fi]);
+        mark_moved_imports(&mut hunks[fi], &changes[fi]);
+        mark_import_residue(&mut hunks[fi], &changes[fi], &symbols[fi], &changed[fi]);
     }
+}
 
-    // A pure-import hunk whose statements all existed in the old file is a
-    // reordering, not an arrival: "moves import pg" rather than "changes".
-    for fi in 0..n {
-        let (Some(spec), Some(old_src)) = (
-            lang::for_path(&changes[fi].path),
-            changes[fi].old.as_deref(),
-        ) else {
-            continue;
-        };
-        let Some(new_src) = changes[fi].new.as_deref() else {
-            continue;
-        };
-        let before = extract::import_statements(spec, old_src);
-        if before.is_empty() {
-            continue;
-        }
-        let new_lines: Vec<&str> = new_src.lines().collect();
-        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
-        for (li, sem) in sems.iter_mut().enumerate() {
-            if sem.category != Category::Import {
-                continue;
-            }
-            let [r0, r1] = raw[li].new_range;
-            if r0 == 0 || r0 > r1 {
-                continue;
-            }
-            // every non-blank line of the hunk has to be an import the old file
-            // already had; one new line among them makes this an arrival
-            let mut lines = (r0..=r1)
-                .filter_map(|r| new_lines.get(r - 1))
-                .map(|l| extract::squeeze(l))
-                .filter(|l| !l.is_empty())
-                .peekable();
-            sem.import_moved = lines.peek().is_some() && lines.all(|l| before.contains(&l));
-        }
+// A hunk that only deletes has no new side to classify from, so a removed
+// import used to read as a plain `other` hunk while an added one was an
+// import. Classify a pure deletion from the side it actually has.
+fn name_deleted_imports(f: &mut PerFileHunks, change: &Change, symbols: &FileSymbols) {
+    let (Some(spec), Some(old_src)) = (lang::for_path(&change.path), change.old.as_deref()) else {
+        return;
+    };
+    let rows = extract::import_row_set(spec, old_src);
+    if rows.is_empty() {
+        return;
     }
-
-    // An import line that moved, leaving a blank line behind, reads as a bare
-    // change: the new side carries no rows to classify by, and the old side is
-    // where the meaning was. ordo already treats pure-import hunks as
-    // bookkeeping, so the residue of reordering them is formatting. A genuinely
-    // deleted import is excluded below — that one is named.
-    for fi in 0..n {
-        let Some(new) = changes[fi].new.as_deref() else {
+    let old_lines: Vec<&str> = old_src.lines().collect();
+    let PerFileHunks { raw, sem: sems, .. } = f;
+    for (li, sem) in sems.iter_mut().enumerate() {
+        let [o0, o1] = sem.old_range;
+        let [n0, n1] = raw[li].new_range;
+        let deletes_only = n0 > n1;
+        if !(deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r))) {
             continue;
+        }
+        sem.category = Category::Import;
+        sem.noise = true;
+        // What left: an import recorded on a deleted row, or — for one member
+        // dropped from a multi-line `import { a, b }`, which sits rows below
+        // the statement its removal is recorded against — a deleted line that
+        // is just that name. A name the new side still imports is a moved
+        // import, and the residue it leaves behind stays "formatting only".
+        let deleted = &old_lines[o0 - 1..o1.min(old_lines.len())];
+        let member_line = |nm: &str| {
+            deleted.iter().any(|l| {
+                let l = l.trim().trim_end_matches(',').trim();
+                l == nm || l.ends_with(&format!(" as {nm}"))
+            })
         };
-        let new_lines: Vec<&str> = new.lines().collect();
-        let import_rows: HashSet<usize> = symbols[fi].old_rows.1.iter().map(|(_, r)| *r).collect();
-        let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
-        for (li, sem) in sems.iter_mut().enumerate() {
-            let [o0, o1] = sem.old_range;
-            if sem.noise || o0 == 0 || o0 > o1 {
-                continue;
-            }
-            let [n0, n1] = raw[li].new_range;
-            let new_blank = n0 > n1
-                || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
-            // a *deleted* import is a real removal and is named as such; this
-            // is only the residue of one that moved, where nothing was removed
-            let named = changed[fi]
-                .removals
-                .iter()
-                .any(|r| r.row >= o0 && r.row <= o1);
-            if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
-                sem.noise = true;
-            }
+        let mut gone: Vec<String> = symbols
+            .old_rows
+            .1
+            .iter()
+            .filter(|(nm, row)| {
+                !symbols.new_imports.contains(nm) && ((o0..=o1).contains(row) || member_line(nm))
+            })
+            .map(|(nm, _)| nm.clone())
+            .collect();
+        gone.sort();
+        gone.dedup();
+        sem.imports = gone;
+    }
+}
+
+// A pure-import hunk whose statements all existed in the old file is a
+// reordering, not an arrival: "moves import pg" rather than "changes".
+fn mark_moved_imports(f: &mut PerFileHunks, change: &Change) {
+    let (Some(spec), Some(old_src), Some(new_src)) = (
+        lang::for_path(&change.path),
+        change.old.as_deref(),
+        change.new.as_deref(),
+    ) else {
+        return;
+    };
+    let before = extract::import_statements(spec, old_src);
+    if before.is_empty() {
+        return;
+    }
+    let new_lines: Vec<&str> = new_src.lines().collect();
+    let PerFileHunks { raw, sem: sems, .. } = f;
+    for (li, sem) in sems.iter_mut().enumerate() {
+        let [r0, r1] = raw[li].new_range;
+        if sem.category != Category::Import || r0 == 0 || r0 > r1 {
+            continue;
+        }
+        // every non-blank line of the hunk has to be an import the old file
+        // already had; one new line among them makes this an arrival
+        let mut lines = (r0..=r1)
+            .filter_map(|r| new_lines.get(r - 1))
+            .map(|l| extract::squeeze(l))
+            .filter(|l| !l.is_empty())
+            .peekable();
+        sem.import_moved = lines.peek().is_some() && lines.all(|l| before.contains(&l));
+    }
+}
+
+// An import line that moved, leaving a blank line behind, reads as a bare
+// change: the new side carries no rows to classify by, and the old side is
+// where the meaning was. ordo already treats pure-import hunks as
+// bookkeeping, so the residue of reordering them is formatting. A genuinely
+// deleted import is excluded — that one is named.
+fn mark_import_residue(
+    f: &mut PerFileHunks,
+    change: &Change,
+    symbols: &FileSymbols,
+    changed: &FileChanges,
+) {
+    let Some(new) = change.new.as_deref() else {
+        return;
+    };
+    let new_lines: Vec<&str> = new.lines().collect();
+    let import_rows: HashSet<usize> = symbols.old_rows.1.iter().map(|(_, r)| *r).collect();
+    let PerFileHunks { raw, sem: sems, .. } = f;
+    for (li, sem) in sems.iter_mut().enumerate() {
+        let [o0, o1] = sem.old_range;
+        if sem.noise || o0 == 0 || o0 > o1 {
+            continue;
+        }
+        let [n0, n1] = raw[li].new_range;
+        let new_blank =
+            n0 > n1 || (n0..=n1).all(|r| new_lines.get(r - 1).is_some_and(|l| l.trim().is_empty()));
+        // a *deleted* import is a real removal and is named as such; this is
+        // only the residue of one that moved, where nothing was removed
+        let named = changed.removals.iter().any(|r| r.row >= o0 && r.row <= o1);
+        if new_blank && !named && (o0..=o1).all(|r| import_rows.contains(&r)) {
+            sem.noise = true;
         }
     }
 }
@@ -615,17 +651,45 @@ fn uninit_members(hunks: &mut [PerFileHunks], changes: &[Change]) {
 fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges> {
     let n = symbols.len();
     let mut changed: Vec<FileChanges> = (0..n).map(|_| FileChanges::default()).collect();
-    let body_of = |list: &[extract::Body], name: &str| {
-        list.iter()
-            .find(|(nm, _, _, _)| nm == name)
-            .map(|(_, _, b, _)| b.clone())
-    };
-    let header_of = |list: &[extract::Body], name: &str| {
-        list.iter()
-            .find(|(nm, _, _, _)| nm == name)
-            .map(|(_, h, _, _)| h.clone())
-    };
-    // P12.1: index freshly-appeared new defs by (name, body) → file, for moves
+    let appeared = appeared_defs(symbols);
+    for fi in 0..n {
+        let fs = &symbols[fi];
+        let (od, nd) = (&fs.old_defs, &fs.new_defs);
+        let mut removed_d: Vec<String> = od.difference(nd).cloned().collect();
+        let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
+        removed_d.sort();
+        added_d.sort();
+        let ren = renames(fs, &removed_d, &added_d);
+        let renamed_old: HashSet<String> = ren.values().cloned().collect();
+        let mut moved_to: HashMap<String, String> = HashMap::new();
+        for (name, tgt) in moves_out(fs, fi, &removed_d, &renamed_old, &appeared) {
+            changed[tgt]
+                .moved_in
+                .insert(name.clone(), paths[fi].clone());
+            moved_to.insert(name, paths[tgt].clone());
+        }
+        changed[fi].relocated = relocations(fs, &added_d, &ren);
+        changed[fi].body_only = body_only(fs);
+        changed[fi].removals = removals(fs, &paths[fi], &renamed_old, &moved_to);
+        changed[fi].rename = ren;
+    }
+    changed
+}
+
+fn body_of<'a>(list: &'a [extract::Body], name: &str) -> Option<&'a str> {
+    list.iter()
+        .find(|(nm, _, _, _)| nm == name)
+        .map(|(_, _, b, _)| b.as_str())
+}
+
+fn header_of<'a>(list: &'a [extract::Body], name: &str) -> Option<&'a str> {
+    list.iter()
+        .find(|(nm, _, _, _)| nm == name)
+        .map(|(_, h, _, _)| h.as_str())
+}
+
+/// P12.1: freshly-appeared new defs by (name, body) → file, for moves
+fn appeared_defs(symbols: &[FileSymbols]) -> HashMap<(String, String), usize> {
     let mut appeared: HashMap<(String, String), usize> = HashMap::new();
     for (fi, fs) in symbols.iter().enumerate() {
         for (name, _, body, _) in &fs.new_body {
@@ -634,153 +698,158 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
             }
         }
     }
+    appeared
+}
 
-    for fi in 0..n {
-        let fs = &symbols[fi];
-        let (nd, ni) = (&fs.new_defs, &fs.new_imports);
-        let od = &fs.old_defs;
-        let (odr, oir) = &fs.old_rows;
-        let (ob, nb) = (&fs.old_body, &fs.new_body);
-        let mut removed_d: Vec<String> = od.difference(nd).cloned().collect();
-        let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
-        removed_d.sort();
-        added_d.sort();
+/// #7 rename (same file): new name → old name, by body match, then a
+/// lone-pair fallback
+fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<String, String> {
+    let (ob, nb) = (&fs.old_body, &fs.new_body);
+    let mut ren = HashMap::new();
+    if removed.is_empty() || added.is_empty() {
+        return ren;
+    }
+    for r in removed {
+        let rb = match body_of(ob, r) {
+            Some(b) if b.len() >= 8 => b,
+            _ => continue,
+        };
+        if let Some(a) = added
+            .iter()
+            .find(|a| !ren.contains_key(*a) && body_of(nb, a) == Some(rb))
+        {
+            ren.insert(a.clone(), r.clone());
+        }
+    }
+    let rem_left: Vec<&String> = removed
+        .iter()
+        .filter(|r| !ren.values().any(|v| v == *r))
+        .collect();
+    let add_left: Vec<&String> = added.iter().filter(|a| !ren.contains_key(*a)).collect();
+    // The bodies did not match exactly, so the pair is a rename only if the
+    // two are recognisably the same code. Without this, deleting `foo` and
+    // adding an unrelated `bar` in one file reads as "renames foo → bar" and
+    // then earns a bogus incomplete-rename note.
+    if rem_left.len() == 1 && add_left.len() == 1 && similar(ob, rem_left[0], nb, add_left[0]) {
+        ren.insert(add_left[0].clone(), rem_left[0].clone());
+    }
+    ren
+}
 
-        // #7 rename (same file): body match, then lone-pair fallback
-        let mut ren = HashMap::new();
-        if !removed_d.is_empty() && !added_d.is_empty() {
-            for r in &removed_d {
-                let rb = match body_of(ob, r) {
-                    Some(b) if b.len() >= 8 => b,
-                    _ => continue,
-                };
-                if let Some(a) = added_d.iter().find(|a| {
-                    !ren.contains_key(*a) && body_of(nb, a).as_deref() == Some(rb.as_str())
-                }) {
-                    ren.insert(a.clone(), r.clone());
-                }
-            }
-            let rem_left: Vec<&String> = removed_d
-                .iter()
-                .filter(|r| !ren.values().any(|v| v == *r))
-                .collect();
-            let add_left: Vec<&String> = added_d.iter().filter(|a| !ren.contains_key(*a)).collect();
-            // The bodies did not match exactly, so the pair is a rename only if
-            // the two are recognisably the same code. Without this, deleting
-            // `foo` and adding an unrelated `bar` in one file reads as
-            // "renames foo → bar" and then earns a bogus incomplete-rename note.
-            if rem_left.len() == 1
-                && add_left.len() == 1
-                && similar(ob, rem_left[0], nb, add_left[0])
-            {
-                ren.insert(add_left[0].clone(), rem_left[0].clone());
+/// P12.1 moves: a removed (non-renamed) def whose body reappears same-name in
+/// another file → that file's index
+fn moves_out(
+    fs: &FileSymbols,
+    fi: usize,
+    removed: &[String],
+    renamed_old: &HashSet<String>,
+    appeared: &HashMap<(String, String), usize>,
+) -> HashMap<String, usize> {
+    let mut moved_out = HashMap::new();
+    for r in removed.iter().filter(|r| !renamed_old.contains(*r)) {
+        let rb = match body_of(&fs.old_body, r) {
+            Some(b) if b.len() >= 8 => b,
+            _ => continue,
+        };
+        if let Some(&tgt) = appeared.get(&(r.clone(), rb.to_string())) {
+            if tgt != fi {
+                moved_out.insert(r.clone(), tgt);
             }
         }
-        let renamed_old: HashSet<String> = ren.values().cloned().collect();
+    }
+    moved_out
+}
 
-        // P12.1 moves: a removed (non-renamed) def whose body reappears same-name in another file
-        let mut moved_out: HashMap<String, usize> = HashMap::new();
-        for r in &removed_d {
-            if renamed_old.contains(r) {
+/// P16 relocation: an added def whose body-lines overlap a still-present old
+/// def → it was extracted/relocated out of that def (body may differ)
+fn relocations(
+    fs: &FileSymbols,
+    added: &[String],
+    ren: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut reloc = HashMap::new();
+    for a in added.iter().filter(|a| !ren.contains_key(*a)) {
+        let al = match fs.new_body.iter().find(|(nm, _, _, _)| nm == a) {
+            Some((_, _, _, l)) if l.len() >= 3 => l,
+            _ => continue,
+        };
+        let aset: HashSet<&String> = al.iter().collect();
+        let mut best: Option<(&String, usize)> = None;
+        for (x, _, _, xl) in &fs.old_body {
+            if x == a || !fs.new_defs.contains(x) {
                 continue;
             }
-            let rb = match body_of(ob, r) {
-                Some(b) if b.len() >= 8 => b,
-                _ => continue,
-            };
-            if let Some(&tgt) = appeared.get(&(r.clone(), rb)) {
-                if tgt != fi {
-                    moved_out.insert(r.clone(), tgt);
-                    changed[tgt].moved_in.insert(r.clone(), paths[fi].clone());
-                }
+            let shared = xl.iter().filter(|l| aset.contains(*l)).count();
+            if shared >= 3 && shared * 2 >= al.len() && best.is_none_or(|(_, s)| shared > s) {
+                best = Some((x, shared));
             }
         }
-
-        // P16 relocation: an added def whose body-lines overlap a still-present
-        // old def → it was extracted/relocated out of that def (body may differ).
-        let mut reloc = HashMap::new();
-        for a in &added_d {
-            if ren.contains_key(a) {
-                continue;
-            }
-            let al = match nb
-                .iter()
-                .find(|(nm, _, _, _)| nm == a)
-                .map(|(_, _, _, l)| l)
-            {
-                Some(l) if l.len() >= 3 => l,
-                _ => continue,
-            };
-            let aset: HashSet<&String> = al.iter().collect();
-            let mut best: Option<(&String, usize)> = None;
-            for (x, _, _, xl) in ob {
-                if x == a || !nd.contains(x) {
-                    continue;
-                }
-                let shared = xl.iter().filter(|l| aset.contains(*l)).count();
-                if shared >= 3 && shared * 2 >= al.len() && best.is_none_or(|(_, s)| shared > s) {
-                    best = Some((x, shared));
-                }
-            }
-            if let Some((x, _)) = best {
-                reloc.insert(a.clone(), x.clone());
-            }
+        if let Some((x, _)) = best {
+            reloc.insert(a.clone(), x.clone());
         }
-        changed[fi].relocated = reloc;
+    }
+    reloc
+}
 
-        // #4: an existing def whose signature is unchanged → body-only edit, not
-        // a signature change. Positive-only: unknown headers keep "changes signature of".
-        for name in od.intersection(nd) {
-            match (header_of(ob, name), header_of(nb, name)) {
-                (Some(o), Some(m)) if o == m => {
-                    changed[fi].body_only.insert(name.clone());
-                }
-                _ => {}
-            }
+/// #4: an existing def whose signature is unchanged → body-only edit, not a
+/// signature change. Positive-only: unknown headers keep "changes signature
+/// of".
+fn body_only(fs: &FileSymbols) -> HashSet<String> {
+    fs.old_defs
+        .intersection(&fs.new_defs)
+        .filter(|name| {
+            let (o, m) = (header_of(&fs.old_body, name), header_of(&fs.new_body, name));
+            o.is_some() && o == m
+        })
+        .cloned()
+        .collect()
+}
+
+/// #7 delete / #5 import remove / P12.1 move-out (else "removes"), plus a
+/// removed file-scope binding: not a definition, but naming it beats the
+/// "removes N lines" fallback a module constant would get otherwise
+fn removals(
+    fs: &FileSymbols,
+    path: &str,
+    renamed_old: &HashSet<String>,
+    moved_to: &HashMap<String, String>,
+) -> Vec<Removal> {
+    let (odr, oir) = &fs.old_rows;
+    let (od, nd, ni) = (&fs.old_defs, &fs.new_defs, &fs.new_imports);
+    let prose = lang::for_path(path).is_some_and(|s| s.prose);
+    let mut rem = vec![];
+    for (name, row) in odr {
+        if nd.contains(name) || renamed_old.contains(name) {
+            continue;
         }
-
-        // #7 delete / #5 import remove / P12.1 move-out (else "removes")
-        let mut rem = vec![];
-        for (name, row) in odr {
-            if nd.contains(name) || renamed_old.contains(name) {
-                continue;
-            }
-            let prose = lang::for_path(&paths[fi]).is_some_and(|s| s.prose);
-            let kind = match moved_out.get(name) {
-                Some(&tgt) => RemovalKind::MovedTo(paths[tgt].clone()),
-                None if prose => RemovalKind::Section,
-                None => RemovalKind::Def,
-            };
+        let kind = match moved_to.get(name) {
+            Some(tgt) => RemovalKind::MovedTo(tgt.clone()),
+            None if prose => RemovalKind::Section,
+            None => RemovalKind::Def,
+        };
+        rem.push(Removal {
+            row: *row,
+            name: name.clone(),
+            kind,
+        });
+    }
+    for (name, row) in oir.iter().filter(|(name, _)| !ni.contains(name)) {
+        rem.push(Removal {
+            row: *row,
+            name: name.clone(),
+            kind: RemovalKind::Import,
+        });
+    }
+    for (name, row) in &fs.old_binds {
+        if !fs.new_binds.contains(name) && !nd.contains(name) && !od.contains(name) {
             rem.push(Removal {
                 row: *row,
                 name: name.clone(),
-                kind,
+                kind: RemovalKind::Def,
             });
         }
-        for (name, row) in oir {
-            if !ni.contains(name) {
-                rem.push(Removal {
-                    row: *row,
-                    name: name.clone(),
-                    kind: RemovalKind::Import,
-                });
-            }
-        }
-        // a removed file-scope binding: not a definition, but naming it beats
-        // the "removes N lines" fallback a module constant would get otherwise
-        for (name, row) in &fs.old_binds {
-            if !fs.new_binds.contains(name) && !nd.contains(name) && !od.contains(name) {
-                rem.push(Removal {
-                    row: *row,
-                    name: name.clone(),
-                    kind: RemovalKind::Def,
-                });
-            }
-        }
-        changed[fi].rename = ren;
-        changed[fi].removals = rem;
     }
-    changed
+    rem
 }
 
 /// P23.2: a definition whose signature changed, against the calls to it in
@@ -800,7 +869,34 @@ fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]
     if changed.is_empty() {
         return;
     }
-    // the new arity of everything in the change, and every call to anything
+    let CallTable { sigs, calls } = signature_table(changes);
+    for e in changed {
+        let Some(Some(sig)) = sigs.get(&e.name) else {
+            continue; // its arity could not be stated exactly, or is ambiguous
+        };
+        let Some(note) = arity_note(&e.name, sig, &calls, changes) else {
+            continue;
+        };
+        // the note belongs on the hunk that changed the signature — that is
+        // where a reviewer is standing when the question arises
+        for f in files.iter_mut() {
+            if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
+                h.notes.push(note);
+                break;
+            }
+        }
+    }
+}
+
+/// the new arity of everything in the change, and every call to anything
+struct CallTable {
+    /// name → its arity, `None` once two files disagree on it
+    sigs: HashMap<String, Option<extract::SigInfo>>,
+    /// (file index, call) for every call in the change
+    calls: Vec<(usize, extract::CallSite)>,
+}
+
+fn signature_table(changes: &[Change]) -> CallTable {
     let mut sigs: HashMap<String, Option<extract::SigInfo>> = HashMap::new();
     let mut calls: Vec<(usize, extract::CallSite)> = vec![];
     for (fi, c) in changes.iter().enumerate() {
@@ -828,54 +924,51 @@ fn arity_check(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Change]
                 }
             }
         }
-        for cs in extract::call_sites(spec, new) {
-            calls.push((fi, cs));
-        }
-    }
-
-    for e in changed {
-        let Some(Some(sig)) = sigs.get(&e.name) else {
-            continue; // its arity could not be stated exactly, or is ambiguous
-        };
-        let bad: Vec<(usize, &extract::CallSite)> = calls
-            .iter()
-            .filter(|(_, c)| c.name == e.name && (c.argc < sig.required || c.argc > sig.total))
-            .map(|(fi, c)| (*fi, c))
-            .collect();
-        let total_calls = calls.iter().filter(|(_, c)| c.name == e.name).count();
-        if bad.is_empty() {
-            continue;
-        }
-        let where_ = bad
-            .iter()
-            .take(3)
-            .map(|(fi, c)| format!("{}:L{}", changes[*fi].path, c.row + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let more = if bad.len() > 3 {
-            format!(" and {} more", bad.len() - 3)
-        } else {
-            String::new()
-        };
-        let expected = if sig.required == sig.total {
-            format!("{}", sig.required)
-        } else {
-            format!("{}–{}", sig.required, sig.total)
-        };
-        let note = format!(
-            "{} of {total_calls} call sites in this change do not pass {expected} arguments to {} ({where_}{more})",
-            bad.len(),
-            e.name
+        calls.extend(
+            extract::call_sites(spec, new)
+                .into_iter()
+                .map(|cs| (fi, cs)),
         );
-        // the note belongs on the hunk that changed the signature — that is
-        // where a reviewer is standing when the question arises
-        for f in files.iter_mut() {
-            if let Some(h) = f.hunks.iter_mut().find(|h| h.id == e.at) {
-                h.notes.push(note);
-                break;
-            }
-        }
     }
+    CallTable { sigs, calls }
+}
+
+/// The note for a signature whose callers in the change do not all fit it,
+/// when any does not.
+fn arity_note(
+    name: &str,
+    sig: &extract::SigInfo,
+    calls: &[(usize, extract::CallSite)],
+    changes: &[Change],
+) -> Option<String> {
+    let bad: Vec<&(usize, extract::CallSite)> = calls
+        .iter()
+        .filter(|(_, c)| c.name == name && (c.argc < sig.required || c.argc > sig.total))
+        .collect();
+    if bad.is_empty() {
+        return None;
+    }
+    let total_calls = calls.iter().filter(|(_, c)| c.name == name).count();
+    let where_ = bad
+        .iter()
+        .take(3)
+        .map(|(fi, c)| format!("{}:L{}", changes[*fi].path, c.row + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = if bad.len() > 3 {
+        format!(" and {} more", bad.len() - 3)
+    } else {
+        String::new()
+    };
+    let expected = if sig.required == sig.total {
+        format!("{}", sig.required)
+    } else {
+        format!("{}–{}", sig.required, sig.total)
+    };
+    Some(format!(
+        "{} of {total_calls} call sites in this change do not pass {expected} arguments to {name} ({where_}{more})",
+        bad.len()
+    ))
 }
 
 /// P23.2: a rename that did not finish. Rename detection already says
@@ -945,13 +1038,6 @@ fn build_ledger(
     order: &[OrderItem],
     facts: &order::FileFacts,
 ) -> Vec<LedgerEntry> {
-    // global reading position of every hunk, so the ledger can be sorted the
-    // way the review is
-    let pos: HashMap<&str, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, o)| (o.hunk.as_str(), i))
-        .collect();
     // fan-in: which hunks use a given name, anywhere in the change
     let mut users: HashMap<&str, Vec<&str>> = HashMap::new();
     for f in files {
@@ -961,60 +1047,99 @@ fn build_ledger(
             }
         }
     }
-
-    let mut out: Vec<(usize, LedgerEntry)> = vec![];
-    let mut seen: HashSet<(String, String, Option<String>)> = HashSet::new();
+    let mut ledger = Ledger {
+        // global reading position of every hunk, so the ledger can be sorted
+        // the way the review is
+        pos: order
+            .iter()
+            .enumerate()
+            .map(|(i, o)| (o.hunk.as_str(), i))
+            .collect(),
+        users,
+        seen: HashSet::new(),
+        out: vec![],
+    };
     for (fi, f) in files.iter().enumerate() {
+        ledger.symbol_entries(f, &facts.changed[fi], &facts.symbols[fi]);
+        ledger.body_edit_entries(f, &facts.changed[fi]);
+        ledger.removal_entries(f, &facts.changed[fi]);
+    }
+    ledger.out.sort_by_key(|(p, _)| *p);
+    ledger.out.into_iter().map(|(_, e)| e).collect()
+}
+
+/// The ledger as it is built: one entry per symbol, each with its reading
+/// position, for `build_ledger` to sort by.
+struct Ledger<'a> {
+    pos: HashMap<&'a str, usize>,
+    users: HashMap<&'a str, Vec<&'a str>>,
+    /// (path, name, scope) already entered — one line per symbol, not per
+    /// hunk that touches it
+    seen: HashSet<(String, String, Option<String>)>,
+    out: Vec<(usize, LedgerEntry)>,
+}
+
+impl Ledger<'_> {
+    /// the hunks using `name`; a symbol never counts as using itself, so the
+    /// hunk it sits in is left out when given
+    fn used_by(&self, name: &str, except: Option<&str>) -> Vec<String> {
+        self.users
+            .get(name)
+            .map(|v| {
+                v.iter()
+                    .filter(|id| except.is_none_or(|e| **id != e))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn push(&mut self, at: &str, entry: LedgerEntry) {
+        let pos = self.pos.get(at).copied().unwrap_or(usize::MAX);
+        self.out.push((pos, entry));
+    }
+
+    fn symbol_entries(&mut self, f: &FileOut, c: &FileChanges, symbols: &FileSymbols) {
         for h in &f.hunks {
             for sym in &h.symbols {
                 let key = (f.path.clone(), sym.name.clone(), sym.scope.clone());
-                if !seen.insert(key) {
-                    continue; // one line per symbol, not per hunk that touches it
+                if !self.seen.insert(key) {
+                    continue;
                 }
                 let n = sym.name.as_str();
-                let c = &facts.changed[fi];
                 let (change, from) = if let Some(src) = c.relocated.get(n).cloned() {
                     (SymbolChange::Extracted, Some(src))
                 } else if let Some(src) = c.moved_in.get(n).cloned() {
                     (SymbolChange::Moved, Some(src))
                 } else if let Some(old) = c.rename.get(n).cloned() {
                     (SymbolChange::Renamed, Some(old))
-                } else if !facts.symbols[fi].old_defs.contains(n) {
+                } else if !symbols.old_defs.contains(n) {
                     (SymbolChange::Added, None)
-                } else if facts.changed[fi].body_only.contains(n) {
+                } else if c.body_only.contains(n) {
                     (SymbolChange::Body, None)
                 } else {
                     (SymbolChange::Signature, None)
                 };
-                // a symbol never counts as using itself
-                let used_by: Vec<String> = users
-                    .get(n)
-                    .map(|v| {
-                        v.iter()
-                            .filter(|id| **id != h.id.as_str())
-                            .map(|s| s.to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                out.push((
-                    pos.get(h.id.as_str()).copied().unwrap_or(usize::MAX),
-                    LedgerEntry {
-                        name: sym.name.clone(),
-                        kind: Some(sym.kind.clone()),
-                        scope: sym.scope.clone(),
-                        path: f.path.clone(),
-                        at: h.id.clone(),
-                        change,
-                        from,
-                        used_by,
-                    },
-                ));
+                let entry = LedgerEntry {
+                    name: sym.name.clone(),
+                    kind: Some(sym.kind.clone()),
+                    scope: sym.scope.clone(),
+                    path: f.path.clone(),
+                    at: h.id.clone(),
+                    change,
+                    from,
+                    used_by: self.used_by(n, Some(&h.id)),
+                };
+                self.push(&h.id, entry);
             }
         }
-        // A body-only edit introduces no symbol — the def's declaration line is
-        // not in the hunk — so it is found through the container instead: a
-        // hunk whose enclosing is a plain definition (`enclosing_kind` is None)
-        // and which declares nothing of its own edited that definition's body.
+    }
+
+    // A body-only edit introduces no symbol — the def's declaration line is
+    // not in the hunk — so it is found through the container instead: a
+    // hunk whose enclosing is a plain definition (`enclosing_kind` is None)
+    // and which declares nothing of its own edited that definition's body.
+    fn body_edit_entries(&mut self, f: &FileOut, c: &FileChanges) {
         for h in &f.hunks {
             if !h.symbols.is_empty() || h.enclosing_kind.is_some() {
                 continue;
@@ -1022,45 +1147,36 @@ fn build_ledger(
             let Some(name) = h.enclosing.as_deref() else {
                 continue;
             };
-            if !seen.insert((f.path.clone(), name.to_string(), None)) {
+            if !self.seen.insert((f.path.clone(), name.to_string(), None)) {
                 continue;
             }
             let bare = order::bare_name(name);
-            let change = if facts.changed[fi].body_only.contains(bare) {
+            let change = if c.body_only.contains(bare) {
                 SymbolChange::Body
             } else {
                 SymbolChange::Signature
             };
-            let used_by: Vec<String> = users
-                .get(bare)
-                .map(|v| {
-                    v.iter()
-                        .filter(|id| **id != h.id.as_str())
-                        .map(|s| s.to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            out.push((
-                pos.get(h.id.as_str()).copied().unwrap_or(usize::MAX),
-                LedgerEntry {
-                    name: name.to_string(),
-                    kind: None,
-                    scope: None,
-                    path: f.path.clone(),
-                    at: h.id.clone(),
-                    change,
-                    from: None,
-                    used_by,
-                },
-            ));
+            let entry = LedgerEntry {
+                name: name.to_string(),
+                kind: None,
+                scope: None,
+                path: f.path.clone(),
+                at: h.id.clone(),
+                change,
+                from: None,
+                used_by: self.used_by(bare, Some(&h.id)),
+            };
+            self.push(&h.id, entry);
         }
-        // A removed symbol has no defining node left to read a kind off, so
-        // the entry is built from `facts.removals` — the same set the
-        // rationale layer names, which already excludes a symbol that left
-        // because it was renamed or moved to another file. An import is not a
-        // symbol the ledger tracks, and a move is reported as `Moved` from
-        // the arriving side.
-        for r in &facts.changed[fi].removals {
+    }
+
+    // A removed symbol has no defining node left to read a kind off, so the
+    // entry is built from `c.removals` — the same set the rationale layer
+    // names, which already excludes a symbol that left because it was renamed
+    // or moved to another file. An import is not a symbol the ledger tracks,
+    // and a move is reported as `Moved` from the arriving side.
+    fn removal_entries(&mut self, f: &FileOut, c: &FileChanges) {
+        for r in &c.removals {
             if !matches!(r.kind, RemovalKind::Def | RemovalKind::Section) {
                 continue;
             }
@@ -1077,30 +1193,22 @@ fn build_ledger(
             else {
                 continue;
             };
-            if !seen.insert((f.path.clone(), r.name.clone(), None)) {
+            if !self.seen.insert((f.path.clone(), r.name.clone(), None)) {
                 continue;
             }
-            let used_by: Vec<String> = users
-                .get(r.name.as_str())
-                .map(|v| v.iter().map(|s| s.to_string()).collect())
-                .unwrap_or_default();
-            out.push((
-                pos.get(at.id.as_str()).copied().unwrap_or(usize::MAX),
-                LedgerEntry {
-                    name: r.name.clone(),
-                    kind: None,
-                    scope: None,
-                    path: f.path.clone(),
-                    at: at.id.clone(),
-                    change: SymbolChange::Removed,
-                    from: None,
-                    used_by,
-                },
-            ));
+            let entry = LedgerEntry {
+                name: r.name.clone(),
+                kind: None,
+                scope: None,
+                path: f.path.clone(),
+                at: at.id.clone(),
+                change: SymbolChange::Removed,
+                from: None,
+                used_by: self.used_by(&r.name, None),
+            };
+            self.push(&at.id, entry);
         }
     }
-    out.sort_by_key(|(p, _)| *p);
-    out.into_iter().map(|(_, e)| e).collect()
 }
 
 /// What one file's two sides declare, as the later passes ask about it.
@@ -1317,11 +1425,6 @@ fn changeset_notes(files: &[FileOut], ledger: &[LedgerEntry]) -> Vec<String> {
 /// at: the region spans the whole hunk rather than claiming a line the engine
 /// never identified.
 pub fn sarif(out: &Output) -> String {
-    let level = |l: Level| match l {
-        Level::Note => "note",
-        Level::Warn => "warning",
-        Level::Verdict => "error",
-    };
     let mut results = vec![];
     let mut rules: Vec<serde_json::Value> = vec![];
     let mut seen: HashSet<&str> = HashSet::new();
@@ -1329,45 +1432,9 @@ pub fn sarif(out: &Output) -> String {
         for hunk in &file.hunks {
             for f in &hunk.findings {
                 if seen.insert(&f.name) {
-                    rules.push(serde_json::json!({
-                        "id": f.name,
-                        // one sentence, as SARIF asks: a catalog message is a
-                        // numbered remedy list, and a consumer puts this in a
-                        // rule index beside forty others
-                        "shortDescription": { "text": first_sentence(&f.message) },
-                        "fullDescription": { "text": f.message },
-                        "properties": { "source": f.source.as_str() },
-                    }));
+                    rules.push(sarif_rule(f));
                 }
-                results.push(serde_json::json!({
-                    "ruleId": f.name,
-                    "level": level(f.level),
-                    "message": { "text": f.message },
-                    "locations": [{
-                        "physicalLocation": {
-                            "artifactLocation": { "uri": file.path },
-                            "region": {
-                                "startLine": hunk.new_range[0],
-                                "endLine": hunk.new_range[1],
-                            },
-                        },
-                    }],
-                    // what the finding is *about*, not where it sits today:
-                    // a consumer (GitHub code scanning among them) matches an
-                    // alert across commits on this, and a line number would
-                    // re-raise everything on the next edit above it
-                    "partialFingerprints": {
-                        "ordo/v1": fingerprint(&[
-                            &f.name,
-                            &file.path,
-                            hunk.enclosing.as_deref().unwrap_or(""),
-                        ]),
-                    },
-                    "properties": {
-                        "source": f.source.as_str(),
-                        "rationale": hunk.rationale,
-                    },
-                }));
+                results.push(sarif_result(file, hunk, f));
             }
         }
     }
@@ -1412,6 +1479,54 @@ pub fn sarif(out: &Output) -> String {
     serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
 }
 
+fn sarif_rule(f: &Finding) -> serde_json::Value {
+    serde_json::json!({
+        "id": f.name,
+        // one sentence, as SARIF asks: a catalog message is a numbered remedy
+        // list, and a consumer puts this in a rule index beside forty others
+        "shortDescription": { "text": first_sentence(&f.message) },
+        "fullDescription": { "text": f.message },
+        "properties": { "source": f.source.as_str() },
+    })
+}
+
+fn sarif_result(file: &FileOut, hunk: &HunkOut, f: &Finding) -> serde_json::Value {
+    let level = match f.level {
+        Level::Note => "note",
+        Level::Warn => "warning",
+        Level::Verdict => "error",
+    };
+    serde_json::json!({
+        "ruleId": f.name,
+        "level": level,
+        "message": { "text": f.message },
+        "locations": [{
+            "physicalLocation": {
+                "artifactLocation": { "uri": file.path },
+                "region": {
+                    "startLine": hunk.new_range[0],
+                    "endLine": hunk.new_range[1],
+                },
+            },
+        }],
+        // what the finding is *about*, not where it sits today: a consumer
+        // (GitHub code scanning among them) matches an alert across commits
+        // on this, and a line number would re-raise everything on the next
+        // edit above it
+        "partialFingerprints": {
+            "ordo/v1": fingerprint(&[
+                &f.name,
+                &file.path,
+                hunk.enclosing.as_deref().unwrap_or(""),
+            ]),
+        },
+        "properties": {
+            "source": f.source.as_str(),
+            "rationale": hunk.rationale,
+        },
+    })
+}
+
 /// The first sentence of a message, for a field a consumer shows in a list.
 fn first_sentence(text: &str) -> String {
     let line = text.lines().next().unwrap_or("").trim();
@@ -1442,8 +1557,7 @@ fn fingerprint(parts: &[&str]) -> String {
 /// reading order + rationale + independent parts + def→use edges — as LLM-ready
 /// context an AI reviewer would otherwise re-derive per run.
 pub fn pack(out: &Output) -> String {
-    use std::fmt::Write;
-    let by_id: HashMap<&str, (&str, &HunkOut)> = out
+    let by_id: ById = out
         .files
         .iter()
         .flat_map(|f| {
@@ -1452,12 +1566,6 @@ pub fn pack(out: &Output) -> String {
                 .map(move |h| (h.id.as_str(), (f.path.as_str(), h)))
         })
         .collect();
-    let loc = |id: &str| {
-        by_id
-            .get(id)
-            .map(|(p, h)| format!("{p}:L{}", h.new_range[0]))
-            .unwrap_or_else(|| id.to_string())
-    };
     let total: usize = out.files.iter().map(|f| f.hunks.len()).sum();
 
     let mut s = String::new();
@@ -1475,49 +1583,8 @@ pub fn pack(out: &Output) -> String {
             let _ = writeln!(s, "- {n}");
         }
     }
-    // the ledger is what the change *did*, one line per symbol; it is read
-    // before any hunk, so it sits between the changeset notes and the order
-    if !out.ledger.is_empty() {
-        let _ = writeln!(s, "\n## ledger — {} symbol(s)", out.ledger.len());
-        for e in &out.ledger {
-            let change = format!("{:?}", e.change).to_lowercase();
-            let from = match (&e.from, e.change) {
-                (Some(f), model::SymbolChange::Renamed) => format!(" from {f}"),
-                (Some(f), model::SymbolChange::Moved) => format!(" from {f}"),
-                (Some(f), model::SymbolChange::Extracted) => format!(" from {f}"),
-                _ => String::new(),
-            };
-            // fan-in is the number a reviewer acts on; the ids are in the JSON
-            let fan = match e.used_by.len() {
-                0 => String::new(),
-                1 => ", used by 1 hunk".to_string(),
-                n => format!(", used by {n} hunks"),
-            };
-            let _ = writeln!(s, "{} {} — {change}{from}{fan}", loc(&e.at), e.name);
-        }
-    }
-    let _ = writeln!(s, "\n## reading order");
-    for o in &out.order {
-        if let Some((path, h)) = by_id.get(o.hunk.as_str()) {
-            let cat = format!("{:?}", h.category).to_lowercase();
-            let noise = if h.noise { " · noise" } else { "" };
-            let notes = if h.notes.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", h.notes.join("; "))
-            };
-            let details = if h.details.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", h.details.join("; "))
-            };
-            let _ = writeln!(
-                s,
-                "{path}:L{} [{cat}{noise}] {}{details}{notes}",
-                h.new_range[0], h.rationale
-            );
-        }
-    }
+    pack_ledger(&mut s, out, &by_id);
+    pack_order(&mut s, out, &by_id);
     if out.clusters.len() > 1 {
         let _ = writeln!(
             s,
@@ -1525,17 +1592,90 @@ pub fn pack(out: &Output) -> String {
             out.clusters.len()
         );
         for (i, c) in out.clusters.iter().enumerate() {
-            let locs: Vec<String> = c.iter().map(|id| loc(id)).collect();
+            let locs: Vec<String> = c.iter().map(|id| loc(&by_id, id)).collect();
             let _ = writeln!(s, "part {}: {}", i + 1, locs.join(", "));
         }
     }
     if !out.edges.is_empty() {
         let _ = writeln!(s, "\n## dependencies");
         for e in &out.edges {
-            let _ = writeln!(s, "{} → {}   {}", loc(&e.from), loc(&e.to), e.why);
+            let _ = writeln!(
+                s,
+                "{} → {}   {}",
+                loc(&by_id, &e.from),
+                loc(&by_id, &e.to),
+                e.why
+            );
         }
     }
-    // everything anyone noticed, whoever noticed it
+    pack_findings(&mut s, out);
+    s
+}
+
+/// hunk id → (path, hunk)
+type ById<'a> = HashMap<&'a str, (&'a str, &'a HunkOut)>;
+
+/// `path:Lrow` for a hunk id, or the id itself when it is unknown
+fn loc(by_id: &ById, id: &str) -> String {
+    by_id
+        .get(id)
+        .map(|(p, h)| format!("{p}:L{}", h.new_range[0]))
+        .unwrap_or_else(|| id.to_string())
+}
+
+// the ledger is what the change *did*, one line per symbol; it is read
+// before any hunk, so it sits between the changeset notes and the order
+fn pack_ledger(s: &mut String, out: &Output, by_id: &ById) {
+    if out.ledger.is_empty() {
+        return;
+    }
+    let _ = writeln!(s, "\n## ledger — {} symbol(s)", out.ledger.len());
+    for e in &out.ledger {
+        let change = format!("{:?}", e.change).to_lowercase();
+        let from = match (&e.from, e.change) {
+            (Some(f), model::SymbolChange::Renamed) => format!(" from {f}"),
+            (Some(f), model::SymbolChange::Moved) => format!(" from {f}"),
+            (Some(f), model::SymbolChange::Extracted) => format!(" from {f}"),
+            _ => String::new(),
+        };
+        // fan-in is the number a reviewer acts on; the ids are in the JSON
+        let fan = match e.used_by.len() {
+            0 => String::new(),
+            1 => ", used by 1 hunk".to_string(),
+            n => format!(", used by {n} hunks"),
+        };
+        let _ = writeln!(s, "{} {} — {change}{from}{fan}", loc(by_id, &e.at), e.name);
+    }
+}
+
+fn pack_order(s: &mut String, out: &Output, by_id: &ById) {
+    let _ = writeln!(s, "\n## reading order");
+    for o in &out.order {
+        let Some((path, h)) = by_id.get(o.hunk.as_str()) else {
+            continue;
+        };
+        let cat = format!("{:?}", h.category).to_lowercase();
+        let noise = if h.noise { " · noise" } else { "" };
+        let notes = if h.notes.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", h.notes.join("; "))
+        };
+        let details = if h.details.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", h.details.join("; "))
+        };
+        let _ = writeln!(
+            s,
+            "{path}:L{} [{cat}{noise}] {}{details}{notes}",
+            h.new_range[0], h.rationale
+        );
+    }
+}
+
+// everything anyone noticed, whoever noticed it
+fn pack_findings(s: &mut String, out: &Output) {
     let found: Vec<(String, &Finding)> = out
         .files
         .iter()
@@ -1547,20 +1687,20 @@ pub fn pack(out: &Output) -> String {
             })
         })
         .collect();
-    if !found.is_empty() {
-        let _ = writeln!(s, "\n## findings");
-        for (at, a) in found {
-            let mark = match a.level {
-                Level::Verdict | Level::Warn => " ⚠",
-                Level::Note => "",
-            };
-            let _ = writeln!(s, "{at}  {} ({}){mark}", a.name, a.source.as_str());
-            for line in a.message.lines() {
-                let _ = writeln!(s, "  {line}");
-            }
+    if found.is_empty() {
+        return;
+    }
+    let _ = writeln!(s, "\n## findings");
+    for (at, a) in found {
+        let mark = match a.level {
+            Level::Verdict | Level::Warn => " ⚠",
+            Level::Note => "",
+        };
+        let _ = writeln!(s, "{at}  {} ({}){mark}", a.name, a.source.as_str());
+        for line in a.message.lines() {
+            let _ = writeln!(s, "  {line}");
         }
     }
-    s
 }
 
 /// Compute hunks + semantics for one change. Full semantics whenever complete
@@ -1715,35 +1855,33 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
             )
         })
         .collect();
-    // P15 detail layer: what the hunk did to the members of its container. The
-    // container name is already on the hunk as `enclosing`; only the old side's
-    // members need a second parse.
     if let Some(spec) = lang::for_path(&change.path) {
-        let old_members = old
-            .map(|o| extract::member_rows(spec, o))
-            .unwrap_or_default();
-        let phrases: Vec<Vec<String>> = raw
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                order::detail_phrases(
-                    &sems[i],
-                    h,
-                    &old_members,
-                    spec.prose,
-                    spec.prose || spec.data,
-                )
-            })
-            .collect();
-        for (i, d) in phrases.into_iter().enumerate() {
-            sems[i].details = d;
-        }
+        fill_details(&raw, &mut sems, old, spec);
     }
     let switched: Vec<Option<SideShift>> = raw
         .iter()
         .map(|h| side_shift(h, &old_lines, &new_lines, ext))
         .collect();
     (raw, sems, degraded, comment_only, switched)
+}
+
+/// P15 detail layer: what the hunk did to the members of its container. The
+/// container name is already on the hunk as `enclosing`; only the old side's
+/// members need a second parse.
+fn fill_details(raw: &[RawHunk], sems: &mut [HunkSem], old: Option<&str>, spec: &lang::LangSpec) {
+    let old_members = old
+        .map(|o| extract::member_rows(spec, o))
+        .unwrap_or_default();
+    let phrases: Vec<Vec<String>> = raw
+        .iter()
+        .zip(sems.iter())
+        .map(|(h, sem)| {
+            order::detail_phrases(sem, h, &old_members, spec.prose, spec.prose || spec.data)
+        })
+        .collect();
+    for (sem, d) in sems.iter_mut().zip(phrases) {
+        sem.details = d;
+    }
 }
 
 // A hunk whose changed lines are all comments: every non-blank line on
@@ -1828,31 +1966,32 @@ fn collect_comment_lines(node: Node, lang_name: &str, out: &mut HashSet<usize>) 
                     matches!(p.kind(), "function_definition" | "class_definition")
                 }));
         if is_doc_container {
-            let mut cur = node.walk();
-            let mut prev: Option<Node> = None;
-            for stmt in node.named_children(&mut cur) {
-                // the module/class/function's first statement is always a
-                // docstring candidate; any later one only counts as the
-                // "attribute docstring" convention (Sphinx/attrs) — a bare
-                // string immediately after the assignment it documents. A
-                // string elsewhere (after a `for`/`if`/`return`/…) is data or
-                // dead code, not a comment, so it's left alone.
-                let is_attr_doc_site = prev.is_some_and(|p| {
-                    p.kind() == "expression_statement"
-                        && p.named_child(0).is_some_and(|a| a.kind() == "assignment")
-                });
-                if (prev.is_none() || is_attr_doc_site) && is_bare_string_stmt(stmt) {
-                    for row in stmt.start_position().row..=stmt.end_position().row {
-                        out.insert(row + 1);
-                    }
-                }
-                prev = Some(stmt);
-            }
+            python_docstring_rows(node, out);
         }
     }
     let mut c = node.walk();
     for child in node.children(&mut c) {
         collect_comment_lines(child, lang_name, out);
+    }
+}
+
+// the module/class/function's first statement is always a docstring
+// candidate; any later one only counts as the "attribute docstring"
+// convention (Sphinx/attrs) — a bare string immediately after the assignment
+// it documents. A string elsewhere (after a `for`/`if`/`return`/…) is data or
+// dead code, not a comment, so it's left alone.
+fn python_docstring_rows(container: Node, out: &mut HashSet<usize>) {
+    let mut cur = container.walk();
+    let mut prev: Option<Node> = None;
+    for stmt in container.named_children(&mut cur) {
+        let is_attr_doc_site = prev.is_some_and(|p| {
+            p.kind() == "expression_statement"
+                && p.named_child(0).is_some_and(|a| a.kind() == "assignment")
+        });
+        if (prev.is_none() || is_attr_doc_site) && is_bare_string_stmt(stmt) {
+            out.extend((stmt.start_position().row..=stmt.end_position().row).map(|r| r + 1));
+        }
+        prev = Some(stmt);
     }
 }
 
