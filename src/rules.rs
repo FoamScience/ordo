@@ -140,18 +140,34 @@ const KIND_NAMES: &[&str] = &[
     "document",
 ];
 
-/// Which problem list a rule's complaints belong in: the caller's if they
-/// wrote it, ours if it came from the built-in catalog.
-fn into<'a>(
-    own: bool,
-    caller: &'a mut Vec<String>,
-    catalog: &'a mut Vec<String>,
-) -> &'a mut Vec<String> {
-    if own {
-        caller
-    } else {
-        catalog
+/// Everything in a rule that names something that does not exist: a
+/// language, a key, a condition, a container kind.
+fn unknown_parts(rule: &Rule) -> Vec<String> {
+    let mut out = vec![];
+    for l in rule.when.lang.iter().flatten() {
+        if !lang::all().iter().any(|s| s.name == l) {
+            out.push(format!("rule `{}`: unknown lang `{l}`", rule.name));
+        }
     }
+    for k in rule.unknown.keys() {
+        out.push(format!("rule `{}`: unknown key `{k}`", rule.name));
+    }
+    for k in rule.when.unknown.keys() {
+        out.push(format!("rule `{}`: unknown condition `{k}`", rule.name));
+    }
+    if let Some(k) = rule
+        .when
+        .enclosing_kind
+        .as_deref()
+        .filter(|k| !KIND_NAMES.contains(k))
+    {
+        out.push(format!(
+            "rule `{}`: unknown enclosing_kind `{k}` (one of {})",
+            rule.name,
+            KIND_NAMES.join(", ")
+        ));
+    }
+    out
 }
 
 impl<'r> Rules<'r> {
@@ -189,60 +205,18 @@ impl<'r> Rules<'r> {
             if own {
                 seen.push(&rule.name);
             }
-            for l in rule.when.lang.iter().flatten() {
-                if !lang::all().iter().any(|s| s.name == l) {
-                    into(own, &mut problems, &mut catalog_problems)
-                        .push(format!("rule `{}`: unknown lang `{l}`", rule.name));
-                }
-            }
-            for k in rule.unknown.keys() {
-                into(own, &mut problems, &mut catalog_problems)
-                    .push(format!("rule `{}`: unknown key `{k}`", rule.name));
-            }
-            for k in rule.when.unknown.keys() {
-                into(own, &mut problems, &mut catalog_problems)
-                    .push(format!("rule `{}`: unknown condition `{k}`", rule.name));
-            }
-            if let Some(k) = &rule.when.enclosing_kind {
-                if !KIND_NAMES.contains(&k.as_str()) {
-                    into(own, &mut problems, &mut catalog_problems).push(format!(
-                        "rule `{}`: unknown enclosing_kind `{k}` (one of {})",
-                        rule.name,
-                        KIND_NAMES.join(", ")
-                    ));
-                }
-            }
+            let sink = if own {
+                &mut problems
+            } else {
+                &mut catalog_problems
+            };
+            sink.extend(unknown_parts(rule));
         }
         let compiled = catalog
             .iter()
             .map(|r| (FindingSource::Catalog, r))
             .chain(rules.iter().map(|r| (FindingSource::Rule, r)))
-            .map(|(source, rule)| {
-                let w = &rule.when;
-                Compiled {
-                    rule,
-                    source,
-                    path: glob(&w.path, "path", &rule.name, &mut problems),
-                    path_not: glob(&w.path_not, "path_not", &rule.name, &mut problems),
-                    defines: glob(&w.defines, "defines", &rule.name, &mut problems),
-                    uses: glob(&w.uses, "uses", &rule.name, &mut problems),
-                    imports: glob(&w.imports, "imports", &rule.name, &mut problems),
-                    container_with: glob(
-                        &w.container_with,
-                        "container_with",
-                        &rule.name,
-                        &mut problems,
-                    ),
-                    container_without: glob(
-                        &w.container_without,
-                        "container_without",
-                        &rule.name,
-                        &mut problems,
-                    ),
-                    text: regex(&w.text, "text", &rule.name, &mut problems),
-                    text_not: regex(&w.text_not, "text_not", &rule.name, &mut problems),
-                }
-            })
+            .map(|(source, rule)| Compiled::new(rule, source, &mut problems))
             .collect();
         // a problem named after a catalog rule is ours; `Rules::new` compiles
         // the catalog first, so everything reported while `own` was false
@@ -266,111 +240,17 @@ impl<'r> Rules<'r> {
     /// message each, and a name-keyed table could only hold one of them.
     pub fn hits(&self, f: &HunkFacts, pattern_rows: &HashMap<usize, Vec<usize>>) -> Vec<Finding> {
         let lang = lang::for_path(f.path).map(|s| s.name);
-        let (r0, r1) = f.rows;
-        let (old_lines, new_lines) = f.file_lines;
         self.compiled
             .iter()
             .enumerate()
             .filter(|(i, c)| {
-                let w = &c.rule.when;
-                let any = |m: &Option<GlobMatcher>, names: &[String]| match m {
-                    Some(g) => names.iter().any(|n| g.is_match(n)),
-                    None => true,
-                };
-                c.path.as_ref().is_none_or(|g| g.is_match(f.path))
-                    && c.path_not.as_ref().is_none_or(|g| !g.is_match(f.path))
-                    && w.test.is_none_or(|t| t == lang::is_test_path(f.path))
-                    && w.lang.as_ref().is_none_or(|ls| ls.iter().any(|l| lang == Some(l.as_str())))
-                    && w.category.is_none_or(|c2| c2 == f.category)
-                    && w.enclosing_kind.as_deref().is_none_or(|k| kind_name(f.enclosing, f.enclosing_kind) == k)
-                    && any(&c.defines, f.defines)
-                    && any(&c.uses, f.uses)
-                    && any(&c.imports, f.imports)
-                    && w.noise.is_none_or(|n| n == f.noise)
-                    && w.comment.is_none_or(|n| n == f.comment)
-                    && w.max_params.is_none_or(|m| f.def_params > m)
-                    && w.max_lines.is_none_or(|m| f.def_lines > m)
-                    && w.max_nesting.is_none_or(|m| f.nesting > m)
-                    // the file crossed the limit in this change — not every
-                    // hunk of a file that was already over it
-                    && w.max_file_lines
-                        .is_none_or(|m| new_lines > m && old_lines.is_none_or(|o| o <= m))
-                    && w.recursive.is_none_or(|r| r == f.recursive)
-                    && c.container_with.as_ref().is_none_or(|g| f.container_members.iter().any(|n| g.is_match(n)))
-                    && c.container_without.as_ref().is_none_or(|g| !f.container_members.iter().any(|n| g.is_match(n)))
-                    && w.member_uninitialized.is_none_or(|b| b == !f.uninit_members.is_empty())
-                    && (w.query.is_none() && w.kind.is_none()
-                        || pattern_rows
-                            .get(i)
-                            .is_some_and(|rs| rs.iter().any(|r| r0 <= *r && *r <= r1)))
+                c.in_scope(f, lang)
+                    && c.shape_matches(f)
+                    && c.names_match(f)
+                    && c.pattern_matches(f.rows, pattern_rows.get(i))
             })
-            .flat_map(|(_, c)| {
-                let mut out = vec![];
-                if let Some(m) = &c.rule.note {
-                    out.push(Finding {
-                        source: c.source,
-                        name: c.rule.name.clone(),
-                        message: m.clone(),
-                        level: Level::Note,
-                    });
-                }
-                if let Some(m) = &c.rule.warn {
-                    out.push(Finding {
-                        source: c.source,
-                        name: c.rule.name.clone(),
-                        message: m.clone(),
-                        level: Level::Warn,
-                    });
-                }
-                if let Some(m) = &c.rule.verdict {
-                    out.push(Finding {
-                        source: c.source,
-                        name: c.rule.name.clone(),
-                        message: m.clone(),
-                        level: Level::Verdict,
-                    });
-                }
-                // a rule that only sets `noise` or `priority` still reports
-                // itself: otherwise a hunk sorts oddly with nothing to explain it
-                if out.is_empty() {
-                    let what = match (c.rule.noise, c.rule.priority) {
-                        (true, 0) => "marked skippable".to_string(),
-                        (true, p) => format!("marked skippable, priority {p}"),
-                        (false, p) => format!("priority {p}"),
-                    };
-                    out.push(Finding {
-                        source: c.source,
-                        name: c.rule.name.clone(),
-                        message: what,
-                        level: Level::Note,
-                    });
-                }
-                out
-            })
+            .flat_map(|(_, c)| c.findings())
             .collect()
-    }
-
-    /// Whether any matching rule asks for this hunk to be treated as noise.
-    /// Only the caller's own rules may reclassify a hunk as noise. The lookup
-    /// is by name, and the catalog shares the finding list — without the source
-    /// filter, a user rule named `goto` would lend its `noise` to every hunk
-    /// the *catalog's* `goto` fired on.
-    pub fn any_noise(hits: &[Finding], rules: &'r [Rule]) -> bool {
-        hits.iter()
-            .filter(|h| h.source == FindingSource::Rule)
-            .filter_map(|h| rules.iter().find(|r| r.name == h.name))
-            .any(|r| r.noise)
-    }
-
-    /// The highest priority among matching rules — 0 when none has an opinion.
-    /// The caller's rules only, for the reason `any_noise` gives.
-    pub fn priority(hits: &[Finding], rules: &'r [Rule]) -> i64 {
-        hits.iter()
-            .filter(|h| h.source == FindingSource::Rule)
-            .filter_map(|h| rules.iter().find(|r| r.name == h.name))
-            .map(|r| r.priority)
-            .max()
-            .unwrap_or(0)
     }
 
     /// Run every query rule against one file, returning the rows each matched.
@@ -413,69 +293,24 @@ impl<'r> Rules<'r> {
         let Some(tree) = lang::parse(spec, content) else {
             return out;
         };
-        // kind rules: "this hunk introduces a node of kind K, with children X
-        // and without children Y" — one walk of the tree, every rule checked
-        // at every node. Children include anonymous tokens, so `without =
-        // "virtual"` reads a keyword an anchor never could.
-        let mut by_kind: HashMap<usize, Vec<usize>> = HashMap::new();
-        if !kind_rules.is_empty() {
-            let mut kind_hits: Vec<Vec<usize>> = vec![vec![]; kind_rules.len()];
-            let mut stack = vec![tree.root_node()];
-            while let Some(node) = stack.pop() {
-                for (slot, (_, c)) in kind_rules.iter().enumerate() {
-                    if c.introduces(node, content.as_bytes()) {
-                        kind_hits[slot].push(node_row(node));
-                    }
-                }
-                let mut cur = node.walk();
-                for ch in node.named_children(&mut cur) {
-                    stack.push(ch);
-                }
-            }
-            for ((i, _), mut rows) in kind_rules.iter().zip(kind_hits) {
-                rows.sort_unstable();
-                rows.dedup();
-                by_kind.insert(*i, rows);
-            }
-        }
+        let by_kind = kind_rows(&kind_rules, tree.root_node(), content.as_bytes());
         let mut by_query: HashMap<usize, Vec<usize>> = HashMap::new();
         for (i, name, src, explicit) in queries {
             let compiled = self
                 .query_cache
                 .entry((i, spec.name))
                 .or_insert_with(|| Query::new(&language, src).map_err(|e| e.to_string()));
-            let query = match compiled {
-                Ok(q) => q,
+            let rows = match compiled {
+                Ok(q) => query_matches(q, tree.root_node(), content.as_bytes()),
                 Err(e) => {
-                    if explicit {
-                        let msg = format!(
-                            "rule `{name}`: query does not compile for {}: {e}",
-                            spec.name
-                        );
-                        if i < self.catalog_len {
-                            self.catalog_problems.push(msg);
-                        } else {
-                            self.problems.push(msg);
-                        }
-                    } else {
-                        self.tried.entry(i).or_insert((false, e.clone()));
-                    }
+                    let e = e.clone();
+                    self.query_failed(i, name, spec.name, explicit, e);
                     continue;
                 }
             };
             if !explicit {
                 self.tried.insert(i, (true, String::new()));
             }
-            let mut cursor = QueryCursor::new();
-            let mut rows = vec![];
-            let mut it = cursor.matches(query, tree.root_node(), content.as_bytes());
-            while let Some(m) = it.next() {
-                for cap in m.captures {
-                    rows.push(node_row(cap.node));
-                }
-            }
-            rows.sort_unstable();
-            rows.dedup();
             by_query.insert(i, rows);
         }
         // `When`'s conditions are ANDed, and `kind` and `query` are two of
@@ -491,9 +326,192 @@ impl<'r> Rules<'r> {
         }
         out
     }
+
+    /// A query that did not compile for `lang`: the author's bug when the
+    /// rule named that language, else one more grammar it was not for.
+    fn query_failed(&mut self, i: usize, name: &str, lang: &str, explicit: bool, err: String) {
+        if !explicit {
+            self.tried.entry(i).or_insert((false, err));
+            return;
+        }
+        let msg = format!("rule `{name}`: query does not compile for {lang}: {err}");
+        if i < self.catalog_len {
+            self.catalog_problems.push(msg);
+        } else {
+            self.problems.push(msg);
+        }
+    }
 }
 
-impl Compiled<'_> {
+/// kind rules: "this hunk introduces a node of kind K, with children X and
+/// without children Y" — one walk of the tree, every rule checked at every
+/// node. Children include anonymous tokens, so `without = "virtual"` reads a
+/// keyword an anchor never could. Rows per rule index, sorted and unique.
+fn kind_rows(
+    kind_rules: &[(usize, &Compiled)],
+    root: Node,
+    src: &[u8],
+) -> HashMap<usize, Vec<usize>> {
+    if kind_rules.is_empty() {
+        return HashMap::new();
+    }
+    let mut hits: Vec<Vec<usize>> = vec![vec![]; kind_rules.len()];
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        for (slot, (_, c)) in kind_rules.iter().enumerate() {
+            if c.introduces(node, src) {
+                hits[slot].push(node_row(node));
+            }
+        }
+        let mut cur = node.walk();
+        stack.extend(node.named_children(&mut cur));
+    }
+    kind_rules
+        .iter()
+        .zip(hits)
+        .map(|((i, _), rows)| (*i, unique_rows(rows)))
+        .collect()
+}
+
+/// The rows a compiled query matches under `root`, sorted and unique.
+fn query_matches(query: &Query, root: Node, src: &[u8]) -> Vec<usize> {
+    let mut cursor = QueryCursor::new();
+    let mut rows = vec![];
+    let mut it = cursor.matches(query, root, src);
+    while let Some(m) = it.next() {
+        rows.extend(m.captures.iter().map(|cap| node_row(cap.node)));
+    }
+    unique_rows(rows)
+}
+
+fn unique_rows(mut rows: Vec<usize>) -> Vec<usize> {
+    rows.sort_unstable();
+    rows.dedup();
+    rows
+}
+
+/// A child by kind (`init_declarator`), by keyword token (`virtual`), or by
+/// field name (`default_value`) — whichever the grammar exposes.
+fn has_child(node: Node, want: &str) -> bool {
+    if node.child_by_field_name(want).is_some() {
+        return true;
+    }
+    let mut cur = node.walk();
+    // bound, not returned: the iterator borrows `cur` past a tail expression
+    let found = node.children(&mut cur).any(|ch| ch.kind() == want);
+    found
+}
+
+impl<'r> Compiled<'r> {
+    fn new(rule: &'r Rule, source: FindingSource, problems: &mut Vec<String>) -> Compiled<'r> {
+        let w = &rule.when;
+        let mut matcher =
+            |pattern: &Option<String>, name: &str| glob(pattern, name, &rule.name, problems);
+        let path = matcher(&w.path, "path");
+        let path_not = matcher(&w.path_not, "path_not");
+        let defines = matcher(&w.defines, "defines");
+        let uses = matcher(&w.uses, "uses");
+        let imports = matcher(&w.imports, "imports");
+        let container_with = matcher(&w.container_with, "container_with");
+        let container_without = matcher(&w.container_without, "container_without");
+        Compiled {
+            rule,
+            source,
+            path,
+            path_not,
+            defines,
+            uses,
+            imports,
+            container_with,
+            container_without,
+            text: regex(&w.text, "text", &rule.name, problems),
+            text_not: regex(&w.text_not, "text_not", &rule.name, problems),
+        }
+    }
+
+    /// where the hunk is: its path, whether it is a test, its language
+    fn in_scope(&self, f: &HunkFacts, lang: Option<&str>) -> bool {
+        let w = &self.rule.when;
+        self.path.as_ref().is_none_or(|g| g.is_match(f.path))
+            && self.path_not.as_ref().is_none_or(|g| !g.is_match(f.path))
+            && w.test.is_none_or(|t| t == lang::is_test_path(f.path))
+            && w.lang
+                .as_ref()
+                .is_none_or(|ls| ls.iter().any(|l| lang == Some(l.as_str())))
+    }
+
+    /// what kind of hunk it is and what it measures
+    fn shape_matches(&self, f: &HunkFacts) -> bool {
+        let w = &self.rule.when;
+        let (old_lines, new_lines) = f.file_lines;
+        w.category.is_none_or(|c| c == f.category)
+            && w.enclosing_kind.as_deref().is_none_or(|k| kind_name(f.enclosing, f.enclosing_kind) == k)
+            && w.noise.is_none_or(|n| n == f.noise)
+            && w.comment.is_none_or(|n| n == f.comment)
+            && w.max_params.is_none_or(|m| f.def_params > m)
+            && w.max_lines.is_none_or(|m| f.def_lines > m)
+            && w.max_nesting.is_none_or(|m| f.nesting > m)
+            // the file crossed the limit in this change — not every hunk of a
+            // file that was already over it
+            && w.max_file_lines.is_none_or(|m| new_lines > m && old_lines.is_none_or(|o| o <= m))
+            && w.recursive.is_none_or(|r| r == f.recursive)
+    }
+
+    /// the names it defines, uses and imports, and what its container holds
+    fn names_match(&self, f: &HunkFacts) -> bool {
+        let hit = |m: &Option<GlobMatcher>, names: &[String]| {
+            m.as_ref().map(|g| names.iter().any(|n| g.is_match(n)))
+        };
+        let any = |m, names| hit(m, names).unwrap_or(true);
+        let none = |m, names| !hit(m, names).unwrap_or(false);
+        let w = &self.rule.when;
+        any(&self.defines, f.defines)
+            && any(&self.uses, f.uses)
+            && any(&self.imports, f.imports)
+            && any(&self.container_with, f.container_members)
+            && none(&self.container_without, f.container_members)
+            && w.member_uninitialized
+                .is_none_or(|b| b == !f.uninit_members.is_empty())
+    }
+
+    /// the rule's query or kind pattern matched a row of the hunk, when it
+    /// has one (`matched` is what `query_rows` found for it in this file)
+    fn pattern_matches(&self, (r0, r1): (usize, usize), matched: Option<&Vec<usize>>) -> bool {
+        let w = &self.rule.when;
+        (w.query.is_none() && w.kind.is_none())
+            || matched.is_some_and(|rs| rs.iter().any(|r| r0 <= *r && *r <= r1))
+    }
+
+    /// What a matching rule says: one finding per message level it carries.
+    /// A rule that only sets `noise` or `priority` still reports itself —
+    /// otherwise a hunk sorts oddly with nothing to explain it.
+    fn findings(&self) -> Vec<Finding> {
+        let rule = self.rule;
+        let finding = |message: String, level: Level| Finding {
+            source: self.source,
+            name: rule.name.clone(),
+            message,
+            level,
+        };
+        let mut out: Vec<Finding> = [
+            (&rule.note, Level::Note),
+            (&rule.warn, Level::Warn),
+            (&rule.verdict, Level::Verdict),
+        ]
+        .into_iter()
+        .filter_map(|(m, level)| m.clone().map(|m| finding(m, level)))
+        .collect();
+        if out.is_empty() {
+            let what = match (rule.noise, rule.priority) {
+                (true, 0) => "marked skippable".to_string(),
+                (true, p) => format!("marked skippable, priority {p}"),
+                (false, p) => format!("priority {p}"),
+            };
+            out.push(finding(what, Level::Note));
+        }
+        out
+    }
+
     /// Does `node` satisfy this rule's `kind` / `with` / `without` / `text`?
     fn introduces(&self, node: Node, src: &[u8]) -> bool {
         let w = &self.rule.when;
@@ -501,41 +519,24 @@ impl Compiled<'_> {
         if !kinds.iter().any(|k| k == node.kind()) {
             return false;
         }
-        // a child by kind (`init_declarator`), by keyword token (`virtual`),
-        // or by field name (`default_value`) — whichever the grammar exposes
-        let has = |want: &str| {
-            if node.child_by_field_name(want).is_some() {
-                return true;
-            }
-            let mut cur = node.walk();
-            let mut found = false;
-            for ch in node.children(&mut cur) {
-                if ch.kind() == want {
-                    found = true;
-                    break;
-                }
-            }
-            found
-        };
-        if w.with.as_ref().is_some_and(|ws| !ws.iter().all(|k| has(k))) {
+        if w.with
+            .as_ref()
+            .is_some_and(|ws| !ws.iter().all(|k| has_child(node, k)))
+        {
             return false;
         }
         if w.without
             .as_ref()
-            .is_some_and(|ws| ws.iter().any(|k| has(k)))
+            .is_some_and(|ws| ws.iter().any(|k| has_child(node, k)))
         {
             return false;
         }
-        if self.text.is_some() || self.text_not.is_some() {
-            let text = node.utf8_text(src).unwrap_or("");
-            if self.text.as_ref().is_some_and(|r| !r.is_match(text)) {
-                return false;
-            }
-            if self.text_not.as_ref().is_some_and(|r| r.is_match(text)) {
-                return false;
-            }
+        if self.text.is_none() && self.text_not.is_none() {
+            return true;
         }
-        true
+        let text = node.utf8_text(src).unwrap_or("");
+        self.text.as_ref().is_none_or(|r| r.is_match(text))
+            && self.text_not.as_ref().is_none_or(|r| !r.is_match(text))
     }
 }
 
@@ -563,6 +564,29 @@ impl Rules<'_> {
         self.problems.append(&mut sorted(never));
         self.catalog_problems.append(&mut sorted(ours));
     }
+}
+
+/// The caller's own rules among `hits`. Only those may reclassify a hunk as
+/// noise or rank it: the lookup is by name, and the catalog shares the
+/// finding list — without the source filter, a user rule named `goto` would
+/// lend its `noise` to every hunk the *catalog's* `goto` fired on.
+fn own_rules<'r>(hits: &'r [Finding], rules: &'r [Rule]) -> impl Iterator<Item = &'r Rule> {
+    hits.iter()
+        .filter(|h| h.source == FindingSource::Rule)
+        .filter_map(|h| rules.iter().find(|r| r.name == h.name))
+}
+
+/// Whether any matching rule asks for this hunk to be treated as noise.
+pub fn any_noise(hits: &[Finding], rules: &[Rule]) -> bool {
+    own_rules(hits, rules).any(|r| r.noise)
+}
+
+/// The highest priority among matching rules — 0 when none has an opinion.
+pub fn priority(hits: &[Finding], rules: &[Rule]) -> i64 {
+    own_rules(hits, rules)
+        .map(|r| r.priority)
+        .max()
+        .unwrap_or(0)
 }
 
 fn node_row(n: Node) -> usize {
