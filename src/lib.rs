@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 pub use lang::is_generated_path;
+pub use lang::is_test_path;
 
 /// Every registered language as (name, member node kinds) — the language
 /// registry as the generated docs read it, so `docs/languages.md` and the

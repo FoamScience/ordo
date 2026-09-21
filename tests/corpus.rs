@@ -21,7 +21,7 @@ use std::path::Path;
 use ordo::model::{Category, Output};
 
 mod common;
-use common::{commit_input, corpus_dir, git, parse_manifest, Repo};
+use common::{commit_input, corpus_dir, git, parse_manifest, range_input, Repo};
 
 /// Whether a `UPDATE_*` escape hatch is actually switched on.
 ///
@@ -150,6 +150,25 @@ struct Metrics {
     longest_rationale: usize,
     degraded_files: usize,
     unsupported_files: usize,
+    /// commits whose subject says fix/revert — a proxy for "this change
+    /// corrects a defect", the only defect ground truth git offers for free
+    fix_commits: usize,
+    /// ...of which at least one non-noise hunk carries a finding. Compare with
+    /// `other_with_finding` over `hunks`: a catalog that fires no more often on
+    /// fixes than elsewhere is not pointing at defects.
+    fix_with_finding: usize,
+    other_commits: usize,
+    other_with_finding: usize,
+    /// ...of which the first non-noise hunk in `order` is production code, not
+    /// a test: the fix is read before the test that pins it
+    fix_code_first: usize,
+    /// consecutive parent/child commit pairs touching disjoint files, squashed
+    /// into one input — each is a PR that should split into two clusters
+    pairs: usize,
+    /// ...where some cluster mixes hunks from both. Every such merge is a
+    /// cross-file edge between two independent commits; an upper bound on
+    /// false edges, since the child may legitimately use what the parent added.
+    merged: usize,
 }
 
 impl Metrics {
@@ -164,6 +183,13 @@ impl Metrics {
             ("longest_rationale", self.longest_rationale, Dir::Down),
             ("degraded_files", self.degraded_files, Dir::Down),
             ("unsupported_files", self.unsupported_files, Dir::Down),
+            ("fix_commits", self.fix_commits, Dir::Any),
+            ("fix_with_finding", self.fix_with_finding, Dir::Any),
+            ("other_commits", self.other_commits, Dir::Any),
+            ("other_with_finding", self.other_with_finding, Dir::Any),
+            ("fix_code_first", self.fix_code_first, Dir::Up),
+            ("pairs", self.pairs, Dir::Any),
+            ("merged", self.merged, Dir::Down),
         ]
     }
 }
@@ -244,20 +270,114 @@ fn check_invariants(label: &str, out: &Output) {
     }
 }
 
+fn is_fix_subject(subject: &str) -> bool {
+    subject.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        matches!(
+            w.to_ascii_lowercase().as_str(),
+            "fix" | "fixes" | "fixed" | "revert" | "reverts"
+        )
+    })
+}
+
+/// One-commit signals git can vouch for: does a finding land on this change,
+/// and is production code the first thing a reader is shown. A commit with no
+/// code hunk at all (docs, comments, pure noise) can satisfy neither and is
+/// left out of both buckets.
+fn fix_signals(out: &Output, m: &mut Metrics, fix: bool) {
+    let by_id: BTreeMap<&str, &ordo::model::HunkOut> = out
+        .files
+        .iter()
+        .flat_map(|f| f.hunks.iter())
+        .map(|h| (h.id.as_str(), h))
+        .collect();
+    let Some(first) = out.order.iter().find(|o| {
+        by_id
+            .get(o.hunk.as_str())
+            .is_some_and(|h| !h.noise && !h.comment)
+    }) else {
+        return;
+    };
+    let has_finding = by_id.values().any(|h| !h.noise && !h.findings.is_empty());
+    if fix {
+        m.fix_commits += 1;
+        m.fix_with_finding += has_finding as usize;
+        m.fix_code_first += !ordo::is_test_path(&first.path) as usize;
+    } else {
+        m.other_commits += 1;
+        m.other_with_finding += has_finding as usize;
+    }
+}
+
+/// Squash `child` onto its parent `sha` and ask whether ordo keeps them apart.
+/// Only pairs touching disjoint file sets count: a shared file blends both
+/// commits' lines into one hunk, and no cluster boundary can fall inside it.
+/// The file sets are the engine's own — what it turned into hunks for each
+/// commit alone — so a file it skipped cannot make a pair look shared.
+fn pair_signals(
+    repo: &str,
+    dir: &Path,
+    (child, child_files): (&str, &[String]),
+    sha: &str,
+    sha_out: &Output,
+    parent: &str,
+    m: &mut Metrics,
+) {
+    if sha_out.files.iter().any(|f| child_files.contains(&f.path)) {
+        return;
+    }
+    let Some(input) = range_input(dir, parent, child) else {
+        return;
+    };
+    let out = ordo::run(input);
+    let from_child: BTreeMap<&str, bool> = out
+        .files
+        .iter()
+        .flat_map(|f| {
+            f.hunks
+                .iter()
+                .map(move |h| (h.id.as_str(), f.path.as_str()))
+        })
+        .map(|(id, path)| (id, child_files.iter().any(|p| p == path)))
+        .collect();
+    let mixed = out.clusters.iter().any(|c| {
+        let mut owners = c.iter().filter_map(|id| from_child.get(id.as_str()));
+        owners.clone().any(|o| *o) && owners.any(|o| !*o)
+    });
+    m.pairs += 1;
+    m.merged += mixed as usize;
+    if mixed {
+        // named so a rise in `merged` can be chased to the pair that caused it
+        eprintln!("{repo}: merged pair {}..{}", &sha[..8], &child[..8]);
+    }
+}
+
 fn sweep(dir: &Path, repo: &Repo) -> Metrics {
-    let shas = git(
+    // `--format=%s` interleaves `commit <sha>` / subject lines
+    let listing = git(
         dir,
         &[
             "rev-list",
             "--max-count",
             &repo.max_commits.to_string(),
+            "--format=%s",
             &repo.rev,
         ],
     );
+    let mut lines = listing.lines();
+    let mut shas: Vec<(&str, &str)> = vec![];
+    while let Some(l) = lines.next() {
+        if let Some(sha) = l.strip_prefix("commit ") {
+            shas.push((sha, lines.next().unwrap_or("")));
+        }
+    }
     let mut m = Metrics::default();
     let mut swept = 0usize;
-    for sha in shas.lines() {
+    // the previously swept commit — its sha, its parent, the files the engine
+    // saw — kept for one iteration in case this commit turns out to be that parent
+    let mut child: Option<(&str, String, Vec<String>)> = None;
+    for (sha, subject) in shas {
         let Some((parent, input)) = commit_input(dir, sha) else {
+            child = None;
             continue;
         };
         let out = ordo::run(input);
@@ -265,6 +385,15 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
         check_invariants(&label, &out);
         check_coverage(&label, dir, &parent, sha, &out);
         swept += 1;
+        fix_signals(&out, &mut m, is_fix_subject(subject));
+        if let Some((c, _, c_files)) = child.as_ref().filter(|(_, c_parent, _)| c_parent == sha) {
+            pair_signals(&repo.name, dir, (c, c_files), sha, &out, &parent, &mut m);
+        }
+        child = Some((
+            sha,
+            parent,
+            out.files.iter().map(|f| f.path.clone()).collect(),
+        ));
         for f in &out.files {
             m.degraded_files += f.degraded as usize;
             m.unsupported_files += f.unsupported as usize;
@@ -340,6 +469,18 @@ fn corpora_hold_their_invariants_and_do_not_regress() {
             m.with_details,
             m.with_symbols,
             m.longest_rationale
+        );
+        let pct = |a: usize, b: usize| (a * 100).checked_div(b).unwrap_or(0);
+        eprintln!(
+            "corpus: {:10} fix commits={} finding on fix={}% on other={}% code first={}% \
+             pairs={} merged={}",
+            "",
+            m.fix_commits,
+            pct(m.fix_with_finding, m.fix_commits),
+            pct(m.other_with_finding, m.other_commits),
+            pct(m.fix_code_first, m.fix_commits),
+            m.pairs,
+            m.merged
         );
 
         if let Some(before) = baseline.get(&repo.name) {
