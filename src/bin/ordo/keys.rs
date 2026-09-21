@@ -131,7 +131,7 @@ pub(super) enum Fold {
 
 pub(super) type Key = (KeyCode, KeyModifiers);
 /// An optional prefix key (for chords like `C-w C-w`), the key, and its action.
-pub(super) type Bind = (Option<Key>, Key, Action);
+type Bind = (Option<Key>, Key, Action);
 
 pub(super) fn ch(c: char) -> Key {
     (KeyCode::Char(c), KeyModifiers::NONE)
@@ -142,7 +142,7 @@ pub(super) fn ctrl(c: char) -> Key {
 pub(super) fn plain(c: KeyCode) -> Key {
     (c, KeyModifiers::NONE)
 }
-pub(super) fn ctrlk(c: KeyCode) -> Key {
+fn ctrlk(c: KeyCode) -> Key {
     (c, KeyModifiers::CONTROL)
 }
 
@@ -584,7 +584,7 @@ pub(super) fn parse_key(text: &str) -> Option<Key> {
 /// A binding as a config writes it: one key, or two separated by a space for a
 /// chord (`g d`, `C-w l`, `z a`). Chords are written with the space so `zh` and
 /// `z h` can't be confused — the former is not a key at all.
-pub(super) fn parse_bind_keys(text: &str) -> Option<(Option<Key>, Key)> {
+fn parse_bind_keys(text: &str) -> Option<(Option<Key>, Key)> {
     let parts: Vec<&str> = text.split_whitespace().collect();
     match parts.as_slice() {
         [one] => Some((None, parse_key(one)?)),
@@ -697,7 +697,7 @@ theme_roles! {
 
 /// Which section of the config the reader is in.
 #[derive(PartialEq, Eq)]
-pub(super) enum Section {
+enum Section {
     Top,
     Binds,
     Theme,

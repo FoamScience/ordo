@@ -212,36 +212,36 @@ impl Theme {
 /// Every field of `Theme` is derived here, so a palette is eleven lines rather
 /// than twenty-five, and two themes can't disagree about which colour plays
 /// which role.
-pub(super) struct Palette {
-    pub(super) name: &'static str,
-    pub(super) fg: u32,
-    pub(super) dim: u32,
+struct Palette {
+    name: &'static str,
+    fg: u32,
+    dim: u32,
     /// the palette's own "surface"/"current line" tone — the selection tint
-    pub(super) surface: u32,
-    pub(super) red: u32,
-    pub(super) green: u32,
-    pub(super) yellow: u32,
-    pub(super) blue: u32,
-    pub(super) magenta: u32,
-    pub(super) cyan: u32,
-    pub(super) orange: u32,
+    surface: u32,
+    red: u32,
+    green: u32,
+    yellow: u32,
+    blue: u32,
+    magenta: u32,
+    cyan: u32,
+    orange: u32,
     /// how far to lift a tint off the background: dark palettes need a floor,
     /// light ones need to stay pale
-    pub(super) light: bool,
+    light: bool,
 }
 
 impl Palette {
     /// Mix `a` toward `b` by `w`/256 — how a diff tint is derived from a
     /// palette colour rather than guessed at per theme.
-    pub(super) const fn mix(a: u32, b: u32, w: u32) -> Color {
-        const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u8 {
+    const fn mix(a: u32, b: u32, w: u32) -> Color {
+        pub(super) const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u8 {
             let (x, y) = ((a >> sh) & 0xff, (b >> sh) & 0xff);
             ((x * (256 - w) + y * w) / 256) as u8
         }
         Color::Rgb(ch(a, b, w, 16), ch(a, b, w, 8), ch(a, b, w, 0))
     }
 
-    pub(super) fn theme(&self) -> Theme {
+    fn theme(&self) -> Theme {
         // a tint is the accent mixed into the page: toward black on a dark
         // palette, toward white on a light one
         let ground = if self.light { 0xffffff } else { 0x000000 };
@@ -288,7 +288,7 @@ impl Palette {
 }
 
 /// The built-in truecolor palettes, as each project publishes them.
-pub(super) const PALETTES: &[Palette] = &[
+const PALETTES: &[Palette] = &[
     Palette {
         name: "catppuccin-mocha",
         fg: 0xcdd6f4,
@@ -504,13 +504,13 @@ pub(super) fn theme(name: &str) -> Option<Theme> {
     }
 }
 
-pub(super) const BAR: &str = "▎";
+const BAR: &str = "▎";
 
 // Re-style the char range [start, end) of the whole line's rendered spans
 // (prefix included), splitting spans at the boundaries as needed. `style_fn`
 // maps a span's existing style to its overlaid one, so the caller decides
 // whether to tint a background, reverse it, etc.
-pub(super) fn overlay_range(
+fn overlay_range(
     spans: Vec<Span<'static>>,
     start: usize,
     end: usize,
@@ -590,7 +590,7 @@ pub(super) fn slice_range(
 // rendered spans, prefix included) — the cursor cell. Past the last rendered
 // char (an empty line, or a column beyond it) it appends one blank reversed
 // cell so the cursor is still visible.
-pub(super) fn overlay_cursor(spans: Vec<Span<'static>>, target: usize) -> Vec<Span<'static>> {
+fn overlay_cursor(spans: Vec<Span<'static>>, target: usize) -> Vec<Span<'static>> {
     let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     if target >= total {
         let mut out = spans;
@@ -933,14 +933,14 @@ pub(super) fn def_kinds(path: &str) -> &'static [&'static str] {
 // A definition's name — the `name` field where the grammar has one; C/C++
 // function definitions don't (the identifier is buried in `declarator`), so
 // fall back to hunting one down there, skipping the parameter list.
-pub(super) fn def_name(n: Node, src: &str) -> Option<String> {
+fn def_name(n: Node, src: &str) -> Option<String> {
     if let Some(name) = n.child_by_field_name("name") {
         return Some(node_text(name, src));
     }
     find_identifier(n.child_by_field_name("declarator")?, src)
 }
 
-pub(super) fn find_identifier(n: Node, src: &str) -> Option<String> {
+fn find_identifier(n: Node, src: &str) -> Option<String> {
     if n.kind() == "identifier" || n.kind() == "field_identifier" {
         return Some(node_text(n, src));
     }
@@ -983,7 +983,7 @@ pub(super) fn signature(n: Node, src: &str) -> String {
         .to_string()
 }
 
-pub(super) fn python_docstring(n: Node, src: &str) -> Option<String> {
+fn python_docstring(n: Node, src: &str) -> Option<String> {
     let body = n.child_by_field_name("body")?;
     let first = body.named_child(0)?;
     if first.kind() != "expression_statement" {
@@ -995,7 +995,7 @@ pub(super) fn python_docstring(n: Node, src: &str) -> Option<String> {
 
 // the run of `//` / `/** */` comment nodes immediately preceding the
 // definition, stopping at the first blank line or non-comment sibling
-pub(super) fn leading_comment(n: Node, src: &str) -> Option<String> {
+fn leading_comment(n: Node, src: &str) -> Option<String> {
     let mut lines = vec![];
     let mut cur = n.prev_sibling();
     let mut expect_row = n.start_position().row;
@@ -1078,7 +1078,7 @@ pub(super) fn identifier_at<'a>(
 /// its declaration or on a use of it further down the body. A parameter has no
 /// definition to find, and reporting "not defined in this file" sends the
 /// reviewer looking through other files for something that was never there.
-pub(super) fn parameter_owner(node: Node, kinds: &[&str], src: &str) -> Option<String> {
+fn parameter_owner(node: Node, kinds: &[&str], src: &str) -> Option<String> {
     let name = node_text(node, src);
     let mut cur = node;
     loop {
@@ -1098,7 +1098,7 @@ pub(super) fn parameter_owner(node: Node, kinds: &[&str], src: &str) -> Option<S
 }
 
 /// Every identifier text inside a subtree.
-pub(super) fn subtree_names(node: Node, src: &str) -> Vec<String> {
+fn subtree_names(node: Node, src: &str) -> Vec<String> {
     let mut out = vec![];
     let mut cur = node.walk();
     let mut stack = vec![node];
@@ -1112,7 +1112,7 @@ pub(super) fn subtree_names(node: Node, src: &str) -> Vec<String> {
 }
 
 /// The leftmost identifier node beginning at or after `col` on `row`.
-pub(super) fn first_identifier_on_line<'a>(
+fn first_identifier_on_line<'a>(
     parsed: &'a ParsedFile,
     row: usize,
     col: usize,

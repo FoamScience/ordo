@@ -63,15 +63,15 @@ pub(super) enum WhyKind {
 }
 
 pub(super) struct WhyRow {
-    pub(super) text: String,
-    pub(super) style: Style,
+    text: String,
+    style: Style,
     pub(super) kind: WhyKind,
 }
 
 // Actionable dep lines get a distinct look: bold+underlined when the target
 // resolves to a hunk in this review, dimmed when it doesn't — honest at a
 // glance about there being nothing to jump to.
-pub(super) fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
+fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
     if target.is_some() {
         Style::default()
             .fg(theme.category)
@@ -92,11 +92,11 @@ pub(super) fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
 /// annotations rather than a growing list of loose options.
 #[derive(Default)]
 pub(super) struct WhyContext<'a> {
-    pub(super) note: Option<&'a str>,
-    pub(super) out_of_order: &'a [String],
-    pub(super) delta: Option<&'a str>,
-    pub(super) cascade: Option<&'a str>,
-    pub(super) churn: Option<&'a str>,
+    note: Option<&'a str>,
+    out_of_order: &'a [String],
+    delta: Option<&'a str>,
+    cascade: Option<&'a str>,
+    churn: Option<&'a str>,
 }
 
 pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContext) -> Vec<WhyRow> {
@@ -239,7 +239,7 @@ fn finding_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
 }
 
 // the dep-line target at `app.why_sel`, if the cursor is on one at all
-pub(super) fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
+fn edge_at_cursor(app: &App) -> Option<Option<usize>> {
     match why_content(app).get(app.why_sel)?.kind {
         WhyKind::Edge(target) => Some(target),
         WhyKind::Text => None,
@@ -326,7 +326,7 @@ pub(super) fn preview_edge(app: &mut App) {
 ///
 /// Rebuilt every frame rather than stored, so a reload or a filter change can
 /// never leave the canvas showing a hunk that is no longer there.
-pub(super) fn cards_for(app: &App, anchor: usize) -> Vec<Card> {
+fn cards_for(app: &App, anchor: usize) -> Vec<Card> {
     let Some(it) = app.items.get(anchor) else {
         return vec![];
     };
@@ -354,7 +354,7 @@ pub(super) fn cards_for(app: &App, anchor: usize) -> Vec<Card> {
 
 /// What to call a card: the symbol it defines, else the definition holding it,
 /// else the file. A card is identified by what a reviewer would say out loud.
-pub(super) fn card_name(it: &Item) -> String {
+fn card_name(it: &Item) -> String {
     it.symbols
         .first()
         .map(|s| s.name.clone())
@@ -449,7 +449,7 @@ pub(super) fn jump_back(app: &mut App) {
 /// and the movement keys the code pane's title used to carry and truncate.
 /// The focused pane's own digit is emphasised, so focus is legible without
 /// hunting for the highlighted border.
-pub(super) fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
+fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out = vec![];
     let mut panes: Vec<(u8, Pane, &str)> = vec![
@@ -518,7 +518,7 @@ pub(super) fn set_geometry(app: &mut App, area: Rect) {
 /// have if the next keypress brought it back, so paging never runs against a
 /// zero — and `body` is not a guess there: it is exactly the rect that pane
 /// gets when it is zoomed to.
-pub(super) fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
+fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
     let code = panes.code.unwrap_or(body);
     app.code_height = code.height.saturating_sub(2);
     app.code_width = (code.width as usize)
@@ -532,12 +532,12 @@ pub(super) fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
 /// the centre. The step is what makes the two sides read as a fan rather than
 /// as two columns.
 pub(super) const CARD_W_MIN: u16 = 42;
-pub(super) const CARD_STEP: u16 = 3;
+const CARD_STEP: u16 = 3;
 /// The shortest a card may be: a border plus two rows of code.
 pub(super) const CARD_H_MIN: u16 = 4;
 /// The shortest the anchor may be. A one-line hunk gets a border and one blank
 /// row rather than a three-row sliver; past that its own height decides.
-pub(super) const ANCHOR_H_MIN: u16 = CARD_H_MIN;
+const ANCHOR_H_MIN: u16 = CARD_H_MIN;
 /// A card shows its definition's extent, clamped — past this nobody reads it
 /// in a glance, which is the whole point of the canvas.
 pub(super) const CARD_ROWS: usize = 12;
@@ -661,7 +661,7 @@ pub(super) fn canvas_layout(
 ///
 /// They share the space rather than taking a fixed slice of it: one card on a
 /// side gets the whole column, four get a quarter each.
-pub(super) fn stacked_height(avail: u16, n: u16) -> u16 {
+fn stacked_height(avail: u16, n: u16) -> u16 {
     if n == 0 {
         return CARD_H_MIN;
     }
@@ -687,7 +687,7 @@ pub(super) fn centred(body: Rect, w: u16, h: u16) -> Rect {
 }
 
 /// Render the dependency canvas over the panes.
-pub(super) fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
+fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
     let Some(c) = app.canvas.as_ref() else { return };
     let cards = cards_for(app, c.anchor);
     if cards.is_empty() {
@@ -783,7 +783,7 @@ pub(super) fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
 
 /// One framed card: a few rows of the target hunk, rendered by the same
 /// `code_view` the code pane uses, so syntax and diff tint are identical.
-pub(super) fn card_widget(
+fn card_widget(
     f: &mut Frame,
     app: &App,
     rect: Rect,
@@ -886,7 +886,7 @@ pub(super) fn pane_rects(body: Rect, focus: Pane, zoom: bool, why_widths: &[usiz
 }
 
 /// The body rect — everything above the footer row.
-pub(super) fn body_of(area: Rect) -> Rect {
+fn body_of(area: Rect) -> Rect {
     Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area)[0]
 }
 
@@ -897,12 +897,12 @@ pub(super) const SPLIT_COLS: u16 = 96;
 
 /// Below this nothing can be laid out honestly, so say so rather than draw a
 /// frame of truncated stubs.
-pub(super) const MIN_COLS: u16 = 56;
-pub(super) const MIN_ROWS: u16 = 12;
+const MIN_COLS: u16 = 56;
+const MIN_ROWS: u16 = 12;
 
 /// What a terminal too small for any layout gets: the requirement, what it
 /// currently is, and nothing else.
-pub(super) fn draw_too_small(f: &mut Frame, area: Rect, theme: &Theme) {
+fn draw_too_small(f: &mut Frame, area: Rect, theme: &Theme) {
     let lines = vec![
         Line::from(Span::styled(
             format!("ordo needs {MIN_COLS}×{MIN_ROWS}"),
@@ -939,7 +939,7 @@ pub(super) fn draw_too_small(f: &mut Frame, area: Rect, theme: &Theme) {
 /// panes stay separated by the gap the border occupied, the layout does not
 /// shift by a cell when focus moves, and the one box still on screen means
 /// "you are here" instead of "this is a pane".
-pub(super) fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
+fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
     let block = Block::bordered().title(Span::styled(
         title,
         Style::default().fg(if focused {
@@ -1008,7 +1008,7 @@ pub(super) fn draw(f: &mut Frame, app: &mut App, rev: &str) {
 }
 
 /// The why pane's rows for the selected hunk.
-pub(super) fn why_content(app: &App) -> Vec<WhyRow> {
+fn why_content(app: &App) -> Vec<WhyRow> {
     why_rows(
         &app.items[app.sel],
         &app.view,
@@ -1373,7 +1373,7 @@ pub(super) fn command_menu_row(
 }
 
 // centered floating box over `area`, sized to the popup's content
-pub(super) fn popup_rect(area: Rect, n_lines: usize) -> Rect {
+fn popup_rect(area: Rect, n_lines: usize) -> Rect {
     let w = (area.width.saturating_sub(4)).clamp(20, 90);
     let h = ((n_lines as u16) + 2).clamp(3, area.height.saturating_sub(2).max(3));
     Rect {
@@ -1386,7 +1386,7 @@ pub(super) fn popup_rect(area: Rect, n_lines: usize) -> Rect {
 
 // the command bar itself: one content row, centered, ~60% of the terminal's
 // width, a couple of rows down from the top
-pub(super) fn command_bar_rect(area: Rect) -> Rect {
+fn command_bar_rect(area: Rect) -> Rect {
     let w = ((area.width as u32 * 3 / 5) as u16).clamp(20, area.width.saturating_sub(4).max(20));
     Rect {
         x: area.x + (area.width.saturating_sub(w)) / 2,
@@ -1398,7 +1398,7 @@ pub(super) fn command_bar_rect(area: Rect) -> Rect {
 
 // the completion menu: left-aligned to `bar`, directly below it, sized to
 // its candidate rows but never past the bottom of the terminal
-pub(super) fn command_menu_rect(bar: Rect, area: Rect, n_candidates: usize) -> Rect {
+fn command_menu_rect(bar: Rect, area: Rect, n_candidates: usize) -> Rect {
     let below = area.y + area.height;
     let avail = below.saturating_sub(bar.y + bar.height).max(3);
     let h = ((n_candidates as u16) + 2).clamp(3, avail);

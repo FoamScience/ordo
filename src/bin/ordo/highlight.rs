@@ -15,7 +15,7 @@ use tree_sitter_highlight::Highlighter;
 // index a walk yields is the position of the matched name in this list.
 /// Highlight capture → role. The names are tree-sitter's; the roles are what a
 /// theme colours. Verified against each grammar's own highlights query.
-pub(super) const HL: &[(&str, Role)] = &[
+const HL: &[(&str, Role)] = &[
     ("attribute", Role::Attribute),
     ("boolean", Role::Number),
     ("comment", Role::Comment),
@@ -206,7 +206,7 @@ pub(super) fn highlight_for_lang(lang: &str) -> Option<(tree_sitter::Language, S
 // own would reproduce the exact same starting-byte tie against the
 // injection. Falls back to the query unmodified if upstream ever reformats
 // that line — a missed match just brings the wash back, it doesn't break.
-pub(super) fn md_block_query() -> String {
+fn md_block_query() -> String {
     tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.replace("\n  (fenced_code_block)\n", "\n")
 }
 
@@ -215,7 +215,7 @@ pub(super) fn md_block_query() -> String {
 // table a real file uses — instead of a second copy of the grammar list.
 // Mirrors `lang::for_lang_name`'s canonical names. A language ordo has no
 // grammar for (`console`, `json`, `diff`, …) returns None and stays plain.
-pub(super) fn fence_ext(name: &str) -> Option<&'static str> {
+fn fence_ext(name: &str) -> Option<&'static str> {
     let word = name.trim().split([' ', ',', '{', ':']).next()?.trim();
     Some(match word.to_ascii_lowercase().as_str() {
         "py" | "python" | "python3" | "pyi" => "py",
@@ -238,7 +238,7 @@ pub(super) fn fence_ext(name: &str) -> Option<&'static str> {
 // `src`, in first-seen order. Parsed with the block grammar directly, ahead
 // of highlighting, so the injected per-fence configs can be built before the
 // highlighter borrows them.
-pub(super) fn md_fence_languages(src: &str) -> Vec<String> {
+fn md_fence_languages(src: &str) -> Vec<String> {
     let language: tree_sitter::Language = tree_sitter_md::LANGUAGE.into();
     let mut parser = Parser::new();
     let Ok(()) = parser.set_language(&language) else {
@@ -288,7 +288,7 @@ pub(super) fn md_fence_languages(src: &str) -> Vec<String> {
 //   breaks the fence grammar's own parse (a `let` after that mangled prefix
 //   no longer parses as a keyword). `include-children` restores the full
 //   contiguous span.
-pub(super) const MD_INJECTION_QUERY: &str = r#"
+const MD_INJECTION_QUERY: &str = r#"
 ((inline) @injection.content
  (#set! injection.language "markdown_inline")
  (#set! injection.include-children))
@@ -316,7 +316,7 @@ thread_local! {
 // call (false only if construction failed).
 type HlCfgCache = std::cell::RefCell<HashMap<String, HighlightConfiguration>>;
 
-pub(super) fn ensure_hl_cfg(
+fn ensure_hl_cfg(
     cache: &HlCfgCache,
     key: &str,
     language: tree_sitter::Language,
