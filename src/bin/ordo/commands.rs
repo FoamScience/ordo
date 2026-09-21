@@ -1,6 +1,48 @@
 // -------------------------------------------------------------- command mode
-
-use super::*;
+use crate::build_globs;
+use crate::build_items;
+use crate::code_view::Theme;
+use crate::compute_view;
+use crate::config::ConfigUi;
+use crate::editor::is_vim_family;
+use crate::editor::qf_kind;
+use crate::editor::quickfix_script;
+use crate::editor::resolve_editor;
+use crate::editor::write_quickfix_script;
+use crate::editor::QfHunk;
+use crate::git::command_failures;
+use crate::git::git;
+use crate::git::resolve;
+use crate::git::Target;
+use crate::group_reasons;
+use crate::hidden_breakdown;
+use crate::keys::Keymap;
+use crate::keys::Pane;
+use crate::keys::ViewMode;
+use crate::marks::draft_rule;
+use crate::marks::mark_key;
+use crate::marks::note_key;
+use crate::marks::save_notes;
+use crate::marks::Delta;
+use crate::plural;
+use crate::prose;
+use crate::search::cycle_index;
+use crate::select;
+use crate::set_mode;
+use crate::App;
+use crate::CommandBar;
+use crate::Hidden;
+use crate::Item;
+use crate::Ledger;
+use crate::PathGlobs;
+use crate::Popup;
+use ordo::model::Input;
+use ordo::model::Options;
+use ordo::model::Strategy;
+use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyModifiers;
+use ratatui::text::Line;
+use std::path::PathBuf;
 
 /// One `:` command — name, a short argument hint for `:help` (empty when it
 /// takes none), and the help line itself.

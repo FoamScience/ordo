@@ -1,6 +1,13 @@
 // ----------------------------------------------------------------------- edit
-
-use super::*;
+use crate::git::git;
+use crate::plural;
+use crate::prose;
+use crate::App;
+use crate::Popup;
+use std::fmt::Write as _;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
 
 /// `$VISUAL` then `$EDITOR`, whitespace-split so trailing arguments (`code
 /// --wait`, `emacsclient -nw`) survive; `vi` when neither is set or both are

@@ -1,6 +1,26 @@
 // --------------------------------------------------------------------- tests
 
 use super::*;
+use crate::code_view::*;
+use crate::commands::*;
+use crate::config::*;
+use crate::draw::*;
+use crate::editor::*;
+use crate::findings::*;
+use crate::git::*;
+use crate::highlight::*;
+use crate::history::*;
+use crate::keys::*;
+use crate::marks::*;
+use crate::rules::*;
+use crate::search::*;
+use ordo::model::HunkOut;
+use ordo::model::Options;
+use ordo::model::Strategy;
+use ratatui::style::Color;
+use std::path::Path;
+use tree_sitter::Parser;
+use tree_sitter::Point;
 
 fn lines(s: &[&str]) -> Vec<String> {
     s.iter().map(|s| s.to_string()).collect()

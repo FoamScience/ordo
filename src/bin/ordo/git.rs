@@ -1,6 +1,13 @@
 // ------------------------------------------------------------------- git layer
-
-use super::*;
+use crate::read_progress;
+use crate::Filter;
+use crate::EMPTY_TREE;
+use ordo::model::Change;
+use ordo::model::Input;
+use ordo::model::Options;
+use std::collections::HashMap;
+use std::process::Command;
+use std::sync::Mutex;
 
 // Empty string when git fails, so a missing blob reads as empty content. The
 // status check matters: `rev-parse --verify -q` still prints on failure (a range

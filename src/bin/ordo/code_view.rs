@@ -1,6 +1,26 @@
 // ------------------------------------------------------------------- code view
-
-use super::*;
+use crate::highlight::highlight_spec;
+use crate::highlight::Highlights;
+use crate::highlight::LineSpans;
+use crate::history::history_lines;
+use crate::last_line;
+use crate::prose;
+use crate::App;
+use crate::Cursor;
+use crate::Item;
+use crate::ParsedFile;
+use crate::Popup;
+use crate::Sources;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use tree_sitter::Node;
+use tree_sitter::Parser;
+use tree_sitter::Point;
 
 // The reviewer's whole palette, in one place.
 //

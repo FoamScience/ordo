@@ -1,6 +1,56 @@
 // -------------------------------------------------------------------- draw
-
-use super::*;
+use crate::clamp_cursor;
+use crate::code_view::code_view;
+use crate::code_view::slice_range;
+use crate::code_view::Theme;
+use crate::code_view::GUTTER_W;
+use crate::commands::Cmd;
+use crate::commands::COMMANDS;
+use crate::config::draw_config;
+use crate::display_row_of;
+use crate::display_rows;
+use crate::highlight::cat_name;
+use crate::highlight::LineSpans;
+use crate::keys::Pane;
+use crate::last_line;
+use crate::marks::cascade_line;
+use crate::marks::churn_line;
+use crate::marks::coverage;
+use crate::marks::delta_line;
+use crate::marks::note_for;
+use crate::marks::out_of_order_labels;
+use crate::popup_width;
+use crate::prose;
+use crate::select;
+use crate::stack_pop_valid;
+use crate::stack_push;
+use crate::view_pos;
+use crate::App;
+use crate::Canvas;
+use crate::Card;
+use crate::DisplayRow;
+use crate::Item;
+use crate::Popup;
+use crate::SearchKind;
+use ratatui::layout::Alignment;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
+use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Clear;
+use ratatui::widgets::List;
+use ratatui::widgets::ListItem;
+use ratatui::widgets::ListState;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
+use ratatui::Frame;
 
 /// One line of the why pane's content, independent of rendering — shared by
 /// `draw` and the edge actions (`preview_edge`/`jump_to_edge`) below so both

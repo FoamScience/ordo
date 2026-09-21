@@ -1,6 +1,7 @@
 // ------------------------------------------------------------------- sarif
-
-use super::*;
+use crate::git::note_command_failure;
+use crate::Item;
+use std::collections::HashMap;
 
 /// One analyzer finding, placed at a file and line.
 ///

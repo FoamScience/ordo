@@ -1,6 +1,15 @@
 // ------------------------------------------------------------------- highlight
-
-use super::*;
+use crate::code_view::Role;
+use crate::code_view::Syntax;
+use ratatui::style::Color;
+use std::collections::HashMap;
+use tree_sitter::Parser;
+use tree_sitter::Query;
+use tree_sitter::QueryCursor;
+use tree_sitter::StreamingIterator;
+use tree_sitter_highlight::HighlightConfiguration;
+use tree_sitter_highlight::HighlightEvent;
+use tree_sitter_highlight::Highlighter;
 
 // tree-sitter highlight capture names we color, with their fg. The `Highlight`
 // index a walk yields is the position of the matched name in this list.

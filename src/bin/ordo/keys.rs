@@ -1,6 +1,10 @@
 // ----------------------------------------------------------------------- keys
-
-use super::*;
+use crate::code_view::hex;
+use crate::code_view::Theme;
+use crate::config::strip_comment;
+use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyModifiers;
+use ratatui::style::Color;
 
 /// The three panes, in focus-cycle order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
