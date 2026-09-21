@@ -17,17 +17,18 @@ repository, a config file or a terminal lives in the client.
 | | A3 narration layer | `src/order.rs`, `src/advisories.rs`, `rulesets/catalog/` |
 | **B — contract** | B1 contract + input | `src/model.rs`, `schema/v2.json`, `src/main.rs`, `src/patch.rs` |
 | | B2 rules + rulesets | `src/rules.rs`, `src/catalog.rs`, `rulesets/`, `scripts/ruleset-check.py` |
-| **C — client** | C1 data layer | `src/bin/ordo.rs` — the `sarif` … `reviewed-mark persistence` sections |
-| | C2 UI layer | `src/bin/ordo.rs` — `keys` onward, plus `src/refine.rs` |
+| **C — client** | C1 data layer | `src/bin/ordo/main.rs` (args, load), `src/bin/ordo/findings.rs`, `src/bin/ordo/git.rs`, `src/bin/ordo/marks.rs` |
+| | C2 UI layer | `src/bin/ordo/main.rs` (app state, event loop), `src/bin/ordo/keys.rs`, `src/bin/ordo/rules.rs`, `src/bin/ordo/config.rs`, `src/bin/ordo/highlight.rs`, `src/bin/ordo/code_view.rs`, `src/bin/ordo/history.rs`, `src/bin/ordo/search.rs`, `src/bin/ordo/editor.rs`, `src/bin/ordo/draw.rs`, `src/bin/ordo/commands.rs`, plus `src/refine.rs` |
 | **D — supporting** | D1 test + corpus | `tests/`, `benches/`, `corpus/`, `.github/workflows/ci.yml` |
-| | D2 docs system | `docs/`, the generated blocks inside `src/bin/ordo.rs` |
+| | D2 docs system | `docs/`, the generated blocks in `src/bin/ordo/docs.rs` |
 
 Out of scope: `target/`, `packaging/`, `assets/`.
 
-`src/bin/ordo.rs` is one file of ~15k lines, divided by `// ---- name` banners.
-The banners are the addressable unit — an earlier version of this map cited
-line ranges and they were stale within a fortnight. `grep -n '^// ----'
-src/bin/ordo.rs` lists them.
+The client is one binary crate under `src/bin/ordo/`: `src/bin/ordo/main.rs` holds the
+arguments, the loader, the app state and the event loop, and each `mod` file
+is one concern with a `// ---- name` banner at its top. The module files are
+the addressable unit — an earlier version of this map cited line ranges in a
+single 15k-line file and they were stale within a fortnight.
 
 ## What depends on what
 

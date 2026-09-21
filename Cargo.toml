@@ -16,7 +16,7 @@ path = "src/main.rs"
 # and reads config; on by default, `--no-default-features` builds the engine alone.
 [[bin]]
 name = "ordo"
-path = "src/bin/ordo.rs"
+path = "src/bin/ordo/main.rs"
 required-features = ["tui"]
 
 [[bench]]

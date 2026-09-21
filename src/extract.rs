@@ -2222,7 +2222,7 @@ fn member_name(node: Node, src: &[u8]) -> Option<String> {
 //
 // KNOWN LIMITATION: two calls sharing both callee and first literal argument
 // within one hunk collide onto the same key — the same class of limitation
-// documented at `symbol_identity_key` (src/bin/ordo.rs).
+// documented at `symbol_identity_key` (src/bin/ordo/marks.rs).
 fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -> Option<String> {
     call_container(node, src).or_else(|| {
         // a test block's label is a sentence, and a nested one is two: naming

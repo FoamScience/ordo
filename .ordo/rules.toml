@@ -102,5 +102,5 @@ note = "regenerated output: confirm the diff is the wording change you intended,
 
 [[rule]]
 name = "client-owns-policy"
-path = "src/bin/ordo.rs"
+path = "src/bin/ordo/**"
 note = "the client owns filtering, git and config; the engine has no opinion about which files belong in a review (README: Ceilings)"

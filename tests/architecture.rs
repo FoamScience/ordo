@@ -55,25 +55,30 @@ fn every_path_the_map_names_exists() {
     assert!(checked > 10, "only {checked} paths checked; the scan broke");
 }
 
-/// The map points at the client's `// ---- name` banners rather than line
-/// numbers, precisely so it survives the file growing. That only works while
-/// the banners it names are still there.
+/// The map says each client module file is one concern with a `// ---- name`
+/// banner at its top. That only stays true while the banners are there.
 #[test]
-fn the_client_sections_the_map_points_at_still_exist() {
-    let src = std::fs::read_to_string(root().join("src/bin/ordo.rs")).expect("client");
-    let banners: Vec<&str> = src
-        .lines()
-        .filter_map(|l| l.strip_prefix("// "))
-        .filter(|l| l.starts_with("----"))
-        .map(|l| l.trim_matches(|c: char| c == '-' || c == ' '))
-        .collect();
-    for named in ["sarif", "reviewed-mark persistence", "keys"] {
+fn every_client_module_opens_with_its_banner() {
+    let dir = root().join("src/bin/ordo");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("src/bin/ordo") {
+        let path = entry.expect("entry").path();
+        if path.file_name().is_some_and(|n| n == "main.rs") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).expect("module");
+        let first = src.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
         assert!(
-            banners.contains(&named),
-            "docs/architecture.md points at the `{named}` section, which is gone; \
-             banners now: {banners:?}"
+            first.starts_with("// ----"),
+            "{} does not open with a `// ---- name` banner: {first:?}",
+            path.display()
         );
+        checked += 1;
     }
+    assert!(
+        checked > 10,
+        "only {checked} modules checked; the scan broke"
+    );
 }
 
 /// The map quotes field counts for the three copies of the rule schema. They
