@@ -101,26 +101,26 @@ pub fn commit_input(dir: &Path, sha: &str) -> Option<(String, Input)> {
     if parent.is_empty() {
         return None;
     }
-    let names = git(dir, &["diff", "--name-only", parent, sha]);
+    range_input(dir, parent, sha).map(|input| (parent.to_string(), input))
+}
+
+/// `base..head` as engine input — a squash of every commit in between.
+pub fn range_input(dir: &Path, base: &str, head: &str) -> Option<Input> {
+    let names = git(dir, &["diff", "--name-only", base, head]);
     let changes: Vec<Change> = names
         .lines()
         .map(str::trim)
         .filter(|p| !p.is_empty() && is_supported(p))
         .map(|path| Change {
             path: path.to_string(),
-            old: Some(git(dir, &["show", &format!("{parent}:{path}")])),
-            new: Some(git(dir, &["show", &format!("{sha}:{path}")])),
+            old: Some(git(dir, &["show", &format!("{base}:{path}")])),
+            new: Some(git(dir, &["show", &format!("{head}:{path}")])),
             diff: None,
         })
         .collect();
-    (!changes.is_empty()).then(|| {
-        (
-            parent.to_string(),
-            Input {
-                changes,
-                options: Options::default(),
-            },
-        )
+    (!changes.is_empty()).then(|| Input {
+        changes,
+        options: Options::default(),
     })
 }
 
