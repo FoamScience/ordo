@@ -1,0 +1,737 @@
+{
+ "by": {
+  "enclosing_kind": {
+   "-": {
+    "faithful": {
+     "n": 70449,
+     "rate": 53
+    },
+    "matches_commit": {
+     "n": 70449,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 13537,
+     "rate": 91
+    }
+   },
+   "binding": {
+    "faithful": {
+     "n": 8417,
+     "rate": 59
+    },
+    "matches_commit": {
+     "n": 8417,
+     "rate": 98
+    },
+    "noise_correct": {
+     "n": 38,
+     "rate": 29
+    }
+   },
+   "call": {
+    "faithful": {
+     "n": 627,
+     "rate": 17
+    },
+    "matches_commit": {
+     "n": 627,
+     "rate": 63
+    },
+    "noise_correct": {
+     "n": 3,
+     "rate": 100
+    }
+   },
+   "document": {
+    "faithful": {
+     "n": 519,
+     "rate": 55
+    },
+    "matches_commit": {
+     "n": 519,
+     "rate": 100
+    },
+    "noise_correct": {
+     "n": 3,
+     "rate": 100
+    }
+   },
+   "front-matter": {
+    "faithful": {
+     "n": 31,
+     "rate": 35
+    },
+    "matches_commit": {
+     "n": 31,
+     "rate": 100
+    }
+   },
+   "namespace": {
+    "faithful": {
+     "n": 656,
+     "rate": 43
+    },
+    "matches_commit": {
+     "n": 656,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 23,
+     "rate": 83
+    }
+   },
+   "preamble": {
+    "faithful": {
+     "n": 55,
+     "rate": 22
+    },
+    "matches_commit": {
+     "n": 55,
+     "rate": 98
+    },
+    "noise_correct": {
+     "n": 5,
+     "rate": 100
+    }
+   },
+   "region": {
+    "faithful": {
+     "n": 923,
+     "rate": 35
+    },
+    "matches_commit": {
+     "n": 923,
+     "rate": 97
+    },
+    "noise_correct": {
+     "n": 152,
+     "rate": 47
+    }
+   },
+   "test": {
+    "faithful": {
+     "n": 4310,
+     "rate": 31
+    },
+    "matches_commit": {
+     "n": 4310,
+     "rate": 91
+    },
+    "noise_correct": {
+     "n": 20,
+     "rate": 40
+    }
+   }
+  },
+  "lang": {
+   "bash": {
+    "faithful": {
+     "n": 1522,
+     "rate": 42
+    },
+    "matches_commit": {
+     "n": 1522,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 10,
+     "rate": 80
+    }
+   },
+   "c": {
+    "faithful": {
+     "n": 6191,
+     "rate": 52
+    },
+    "matches_commit": {
+     "n": 6191,
+     "rate": 97
+    },
+    "noise_correct": {
+     "n": 265,
+     "rate": 72
+    }
+   },
+   "cpp": {
+    "faithful": {
+     "n": 15972,
+     "rate": 47
+    },
+    "matches_commit": {
+     "n": 15972,
+     "rate": 91
+    },
+    "noise_correct": {
+     "n": 1006,
+     "rate": 68
+    }
+   },
+   "go": {
+    "faithful": {
+     "n": 2128,
+     "rate": 70
+    },
+    "matches_commit": {
+     "n": 2128,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 122,
+     "rate": 80
+    }
+   },
+   "java": {
+    "faithful": {
+     "n": 1484,
+     "rate": 53
+    },
+    "matches_commit": {
+     "n": 1484,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 198,
+     "rate": 86
+    }
+   },
+   "javascript": {
+    "faithful": {
+     "n": 16811,
+     "rate": 53
+    },
+    "matches_commit": {
+     "n": 16811,
+     "rate": 95
+    },
+    "noise_correct": {
+     "n": 1956,
+     "rate": 75
+    }
+   },
+   "lua": {
+    "faithful": {
+     "n": 3396,
+     "rate": 61
+    },
+    "matches_commit": {
+     "n": 3396,
+     "rate": 98
+    },
+    "noise_correct": {
+     "n": 1958,
+     "rate": 100
+    }
+   },
+   "python": {
+    "faithful": {
+     "n": 5399,
+     "rate": 57
+    },
+    "matches_commit": {
+     "n": 5399,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 451,
+     "rate": 86
+    }
+   },
+   "rust": {
+    "faithful": {
+     "n": 1756,
+     "rate": 63
+    },
+    "matches_commit": {
+     "n": 1756,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 105,
+     "rate": 93
+    }
+   },
+   "tsx": {
+    "faithful": {
+     "n": 18409,
+     "rate": 50
+    },
+    "matches_commit": {
+     "n": 18409,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 1615,
+     "rate": 84
+    }
+   },
+   "typescript": {
+    "faithful": {
+     "n": 7980,
+     "rate": 52
+    },
+    "matches_commit": {
+     "n": 7980,
+     "rate": 100
+    },
+    "noise_correct": {
+     "n": 6007,
+     "rate": 100
+    }
+   },
+   "xonsh": {
+    "faithful": {
+     "n": 4939,
+     "rate": 55
+    },
+    "matches_commit": {
+     "n": 4939,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 88,
+     "rate": 83
+    }
+   }
+  },
+  "repo": {
+   "buildtheworld": {
+    "faithful": {
+     "n": 4939,
+     "rate": 55
+    },
+    "matches_commit": {
+     "n": 4939,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 88,
+     "rate": 83
+    }
+   },
+   "click": {
+    "faithful": {
+     "n": 5399,
+     "rate": 57
+    },
+    "matches_commit": {
+     "n": 5399,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 451,
+     "rate": 86
+    }
+   },
+   "cobra": {
+    "faithful": {
+     "n": 2128,
+     "rate": 70
+    },
+    "matches_commit": {
+     "n": 2128,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 122,
+     "rate": 80
+    }
+   },
+   "curl": {
+    "faithful": {
+     "n": 6191,
+     "rate": 52
+    },
+    "matches_commit": {
+     "n": 6191,
+     "rate": 97
+    },
+    "noise_correct": {
+     "n": 265,
+     "rate": 72
+    }
+   },
+   "excalidraw": {
+    "faithful": {
+     "n": 18409,
+     "rate": 50
+    },
+    "matches_commit": {
+     "n": 18409,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 1615,
+     "rate": 84
+    }
+   },
+   "execa": {
+    "faithful": {
+     "n": 16811,
+     "rate": 53
+    },
+    "matches_commit": {
+     "n": 16811,
+     "rate": 95
+    },
+    "noise_correct": {
+     "n": 1956,
+     "rate": 75
+    }
+   },
+   "junit5": {
+    "faithful": {
+     "n": 1484,
+     "rate": 53
+    },
+    "matches_commit": {
+     "n": 1484,
+     "rate": 96
+    },
+    "noise_correct": {
+     "n": 198,
+     "rate": 86
+    }
+   },
+   "lazy": {
+    "faithful": {
+     "n": 3396,
+     "rate": 61
+    },
+    "matches_commit": {
+     "n": 3396,
+     "rate": 98
+    },
+    "noise_correct": {
+     "n": 1958,
+     "rate": 100
+    }
+   },
+   "nvm": {
+    "faithful": {
+     "n": 1522,
+     "rate": 42
+    },
+    "matches_commit": {
+     "n": 1522,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 10,
+     "rate": 80
+    }
+   },
+   "openfoam": {
+    "faithful": {
+     "n": 15972,
+     "rate": 47
+    },
+    "matches_commit": {
+     "n": 15972,
+     "rate": 91
+    },
+    "noise_correct": {
+     "n": 1006,
+     "rate": 68
+    }
+   },
+   "ripgrep": {
+    "faithful": {
+     "n": 1756,
+     "rate": 63
+    },
+    "matches_commit": {
+     "n": 1756,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 105,
+     "rate": 93
+    }
+   },
+   "vue": {
+    "faithful": {
+     "n": 7980,
+     "rate": 52
+    },
+    "matches_commit": {
+     "n": 7980,
+     "rate": 100
+    },
+    "noise_correct": {
+     "n": 6007,
+     "rate": 100
+    }
+   }
+  },
+  "template": {
+   "adds": {
+    "faithful": {
+     "n": 23410,
+     "rate": 44
+    },
+    "matches_commit": {
+     "n": 23410,
+     "rate": 94
+    },
+    "noise_correct": {
+     "n": 2538,
+     "rate": 64
+    }
+   },
+   "changes": {
+    "faithful": {
+     "n": 4246,
+     "rate": 63
+    },
+    "matches_commit": {
+     "n": 4246,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 1813,
+     "rate": 92
+    }
+   },
+   "comments": {
+    "faithful": {
+     "n": 32,
+     "rate": 84
+    },
+    "matches_commit": {
+     "n": 32,
+     "rate": 100
+    }
+   },
+   "edits": {
+    "faithful": {
+     "n": 33813,
+     "rate": 55
+    },
+    "matches_commit": {
+     "n": 33813,
+     "rate": 95
+    }
+   },
+   "formatting": {
+    "faithful": {
+     "n": 1182,
+     "rate": 50
+    },
+    "matches_commit": {
+     "n": 1182,
+     "rate": 71
+    },
+    "noise_correct": {
+     "n": 1182,
+     "rate": 82
+    }
+   },
+   "generated": {
+    "faithful": {
+     "n": 7776,
+     "rate": 54
+    },
+    "matches_commit": {
+     "n": 7776,
+     "rate": 100
+    },
+    "noise_correct": {
+     "n": 7776,
+     "rate": 100
+    }
+   },
+   "import": {
+    "faithful": {
+     "n": 50,
+     "rate": 0
+    },
+    "matches_commit": {
+     "n": 50,
+     "rate": 98
+    },
+    "noise_correct": {
+     "n": 50,
+     "rate": 98
+    }
+   },
+   "moves": {
+    "faithful": {
+     "n": 4151,
+     "rate": 52
+    },
+    "matches_commit": {
+     "n": 4151,
+     "rate": 99
+    },
+    "noise_correct": {
+     "n": 42,
+     "rate": 93
+    }
+   },
+   "removes": {
+    "faithful": {
+     "n": 4261,
+     "rate": 51
+    },
+    "matches_commit": {
+     "n": 4261,
+     "rate": 97
+    },
+    "noise_correct": {
+     "n": 380,
+     "rate": 89
+    }
+   },
+   "renames": {
+    "faithful": {
+     "n": 218,
+     "rate": 76
+    },
+    "matches_commit": {
+     "n": 218,
+     "rate": 92
+    }
+   },
+   "replaces": {
+    "faithful": {
+     "n": 69,
+     "rate": 32
+    },
+    "matches_commit": {
+     "n": 69,
+     "rate": 91
+    }
+   },
+   "tests": {
+    "faithful": {
+     "n": 178,
+     "rate": 72
+    },
+    "matches_commit": {
+     "n": 178,
+     "rate": 100
+    }
+   },
+   "uncomments": {
+    "faithful": {
+     "n": 8,
+     "rate": 100
+    },
+    "matches_commit": {
+     "n": 8,
+     "rate": 100
+    }
+   },
+   "uses": {
+    "faithful": {
+     "n": 6593,
+     "rate": 58
+    },
+    "matches_commit": {
+     "n": 6593,
+     "rate": 96
+    }
+   }
+  }
+ },
+ "cuts": {
+  "faithful": 0.58,
+  "finding": 0.5,
+  "matches_commit": 0.24,
+  "noise_correct": 0.15
+ },
+ "hunks": 85987,
+ "overall": {
+  "faithful": {
+   "n": 85987,
+   "rate": 52
+  },
+  "finding": {
+   "n": 733,
+   "rate": 53
+  },
+  "matches_commit": {
+   "n": 85987,
+   "rate": 96
+  },
+  "noise_correct": {
+   "n": 13781,
+   "rate": 90
+  }
+ },
+ "rules": {
+  "absolute-path": {
+   "n": 10,
+   "rate": 70
+  },
+  "any": {
+   "n": 258,
+   "rate": 76
+  },
+  "assert-validation": {
+   "n": 6,
+   "rate": 100
+  },
+  "c-style-cast": {
+   "n": 3,
+   "rate": 0
+  },
+  "const-cast": {
+   "n": 7,
+   "rate": 86
+  },
+  "empty-catch": {
+   "n": 26,
+   "rate": 88
+  },
+  "eq-without-hash": {
+   "n": 3,
+   "rate": 0
+  },
+  "function-macro": {
+   "n": 92,
+   "rate": 95
+  },
+  "goto": {
+   "n": 103,
+   "rate": 0
+  },
+  "hardcoded-version": {
+   "n": 34,
+   "rate": 68
+  },
+  "lambda-ref-capture": {
+   "n": 17,
+   "rate": 0
+  },
+  "magic-argument": {
+   "n": 2,
+   "rate": 0
+  },
+  "magic-number": {
+   "n": 5,
+   "rate": 0
+  },
+  "operator-logical": {
+   "n": 1,
+   "rate": 100
+  },
+  "panic": {
+   "n": 5,
+   "rate": 100
+  },
+  "raw-new-delete": {
+   "n": 158,
+   "rate": 21
+  },
+  "reflect": {
+   "n": 1,
+   "rate": 0
+  },
+  "reinterpret_cast": {
+   "n": 2,
+   "rate": 100
+  }
+ }
+}
