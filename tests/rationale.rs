@@ -6,9 +6,9 @@
 //! them is detected, so membership is the claim being made. Pinning those to a
 //! full list would make every one of them fail whenever an unrelated advisory
 //! is added — churn with no signal.
-use ordo::model::{FindingSource, Input, Level};
+use ordo::model::{FindingSource, Level};
 mod fixture;
-use fixture::rationales_json as rationales;
+use fixture::{rationales_json as rationales, run_json};
 
 #[test]
 fn p3_adds_new_def_vs_edits_existing_body() {
@@ -93,11 +93,8 @@ fn p11_unnamed_defs_contribute_no_enclosing_segment() {
     // leaving `outer.<anonymous>` in user-visible wording.
     let old = "local function outer()\n  reg(function()\n    inner(function()\n      x = 1\n    end)\n  end)\nend\n";
     let new = "local function outer()\n  reg(function()\n    inner(function()\n      x = 2\n    end)\n  end)\nend\n";
-    let inp: ordo::model::Input = serde_json::from_value(
-        serde_json::json!({ "changes": [{ "path": "m.lua", "old": old, "new": new }] }),
-    )
-    .unwrap();
-    let out = ordo::run(inp);
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.lua", "old": old, "new": new }] }));
     let enc: Vec<_> = out.files[0]
         .hunks
         .iter()
@@ -146,11 +143,9 @@ class W:
     def g(self):
         return 200
 ";
-    let inp: Input = serde_json::from_value(
-        serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }),
-    )
-    .unwrap();
-    let enc: Vec<_> = ordo::run(inp).files[0]
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    let enc: Vec<_> = out.files[0]
         .hunks
         .iter()
         .filter_map(|h| h.enclosing.clone())
@@ -190,9 +185,9 @@ fn p12_move_detection() {
 #[test]
 fn p12_noise_formatting_and_generated() {
     // whitespace-only body change → formatting-only noise
-    let a = ordo::run(serde_json::from_value(serde_json::json!({
+    let a = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "old": "def f():\n    return  1\n", "new": "def f():\n    return 1\n" }]
-    })).unwrap());
+    }));
     assert!(
         a.files[0].hunks.iter().all(|h| h.noise),
         "formatting hunk flagged noise"
@@ -205,12 +200,9 @@ fn p12_noise_formatting_and_generated() {
     assert_eq!(rats, vec!["formatting only"]);
 
     // generated/lockfile path → noise regardless of content
-    let b = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [{ "path": "package-lock.json", "old": "{}\n", "new": "{ \"a\": 1 }\n" }]
-        }))
-        .unwrap(),
-    );
+    let b = run_json(serde_json::json!({
+        "changes": [{ "path": "package-lock.json", "old": "{}\n", "new": "{ \"a\": 1 }\n" }]
+    }));
     assert!(
         b.files[0].hunks.iter().all(|h| h.noise),
         "generated hunk flagged noise"
@@ -226,15 +218,12 @@ fn p12_noise_formatting_and_generated() {
 #[test]
 fn p12_clusters_split_and_connected() {
     // two unrelated files → two independent parts
-    let split = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "a.py", "old": "# a\n", "new": "# a\ndef x():\n    return 1\nq = x()\n" },
-                { "path": "b.py", "old": "# b\n", "new": "# b\ndef z():\n    return 2\nr = z()\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let split = run_json(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "# a\n", "new": "# a\ndef x():\n    return 1\nq = x()\n" },
+            { "path": "b.py", "old": "# b\n", "new": "# b\ndef z():\n    return 2\nr = z()\n" }
+        ]
+    }));
     assert_eq!(
         split.clusters.len(),
         2,
@@ -249,15 +238,12 @@ fn p12_clusters_split_and_connected() {
     );
 
     // cross-file def→use links into one part
-    let connected = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
-                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let connected = run_json(serde_json::json!({
+        "changes": [
+            { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+            { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+        ]
+    }));
     assert_eq!(
         connected.clusters.len(),
         1,
@@ -275,16 +261,13 @@ fn containment_edge_joins_nested_def_cluster_without_merging_groups() {
     // them in one cluster (ClusterChanges: containment feeds connected
     // components) while keeping them as two distinct groups (no flattening
     // to the outermost def).
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "a.py",
-                  "old": "def outer(spec):\n    x = 1\n    spacer = 9\n    def inner(y):\n        z = 2\n        return y\n    return inner(spec)\n",
-                  "new": "def outer(spec):\n    x = 100\n    spacer = 9\n    def inner(y, w):\n        z = 2\n        return y\n    return inner(spec)\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "a.py",
+              "old": "def outer(spec):\n    x = 1\n    spacer = 9\n    def inner(y):\n        z = 2\n        return y\n    return inner(spec)\n",
+              "new": "def outer(spec):\n    x = 100\n    spacer = 9\n    def inner(y, w):\n        z = 2\n        return y\n    return inner(spec)\n" }
+        ]
+    }));
     let hunks = &out.files[0].hunks;
     assert_eq!(hunks.len(), 2, "two independent line hunks: {hunks:?}");
 
@@ -325,16 +308,13 @@ fn sibling_methods_of_a_changed_class_are_not_fused() {
     // untouched, so there's no "Context" group for a containment edge to
     // anchor on) — an outermost-def key would wrongly fuse them; they must
     // stay in three separate groups and clusters.
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "ctx.py",
-                  "old": "class Context:\n    def __init__(self, info):\n        self.p = info\n    def __enter__(self):\n        return self\n    def scope(self, x):\n        return x\n",
-                  "new": "class Context:\n    def __init__(self, info: int):\n        self.p = info\n    def __enter__(self) -> \"Context\":\n        return self\n    def scope(self, x, y):\n        return x\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "ctx.py",
+              "old": "class Context:\n    def __init__(self, info):\n        self.p = info\n    def __enter__(self):\n        return self\n    def scope(self, x):\n        return x\n",
+              "new": "class Context:\n    def __init__(self, info: int):\n        self.p = info\n    def __enter__(self) -> \"Context\":\n        return self\n    def scope(self, x, y):\n        return x\n" }
+        ]
+    }));
     let hunks = &out.files[0].hunks;
     assert_eq!(
         hunks.len(),
@@ -358,15 +338,12 @@ fn sibling_methods_of_a_changed_class_are_not_fused() {
 
 #[test]
 fn p12_pack_renders_sections() {
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
-                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+            { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+        ]
+    }));
     let p = ordo::pack(&out);
     assert!(p.contains("# ordo review pack"), "header:\n{p}");
     assert!(p.contains("## reading order"), "order section");
@@ -378,15 +355,12 @@ fn p12_pack_renders_sections() {
 fn p13_def_smells_size_and_params() {
     let body: String = (0..65).map(|i| format!("    v{i} = {i}\n")).collect();
     let big = format!("def big():\n{body}");
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "a.py", "old": "", "new": big },
-                { "path": "b.py", "old": "", "new": "def f(a, b, c, d, e, f, g):\n    return a\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "", "new": big },
+            { "path": "b.py", "old": "", "new": "def f(a, b, c, d, e, f, g):\n    return a\n" }
+        ]
+    }));
     let notes: Vec<String> = out
         .files
         .iter()
@@ -406,12 +380,9 @@ fn p13_def_smells_are_one_note_per_kind() {
         src.push_str(&format!("{}def f{d}(x):\n", "    ".repeat(d)));
     }
     src.push_str(&format!("{}return x\n", "    ".repeat(8)));
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [{ "path": "a.py", "old": "", "new": src }]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "", "new": src }]
+    }));
     let notes: Vec<String> = out
         .files
         .iter()
@@ -432,12 +403,9 @@ fn p13_def_smells_are_one_note_per_kind() {
 #[test]
 fn p13_def_smells_skip_data_formats() {
     let deep = "{\n \"a\": {\n  \"b\": {\n   \"c\": {\n    \"d\": {\n     \"e\": 1\n    }\n   }\n  }\n }\n}\n";
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [{ "path": "a.json", "old": "", "new": deep }]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "a.json", "old": "", "new": deep }]
+    }));
     let notes: Vec<String> = out
         .files
         .iter()
@@ -451,13 +419,13 @@ fn p13_def_smells_skip_data_formats() {
 
 #[test]
 fn p14_metaclass_advisories() {
-    let out = ordo::run(serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [
             { "path": "reg.py", "old": "", "new": "class Registry(type):\n    def __init__(cls, name, bases, ns):\n        pass\n" },
             { "path": "meta.py", "old": "", "new": "class Meta(type):\n    def __new__(mcs, name, bases, ns):\n        return type.__new__(mcs, name, bases, ns)\n" },
             { "path": "use.py", "old": "", "new": "class Widget(metaclass=Meta):\n    pass\n" }
         ]
-    })).unwrap());
+    }));
     let advs: Vec<(String, String, bool)> = out
         .files
         .iter()
@@ -490,12 +458,9 @@ fn p14_metaclass_advisories() {
 #[test]
 fn p14_catalog() {
     fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [{ "path": path, "old": "", "new": code }]
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": path, "old": "", "new": code }]
+        }));
         out.files
             .iter()
             .flat_map(|f| {
@@ -550,12 +515,9 @@ fn p14_catalog() {
 #[test]
 fn p14_batch2() {
     fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [{ "path": path, "old": "", "new": code }]
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": path, "old": "", "new": code }]
+        }));
         out.files
             .iter()
             .flat_map(|f| {
@@ -674,12 +636,9 @@ fn placeholder_defs_suppressed() {
 #[test]
 fn p14_deep_python_cpp() {
     fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [{ "path": path, "old": "", "new": code }]
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": path, "old": "", "new": code }]
+        }));
         out.files
             .iter()
             .flat_map(|f| {
@@ -743,12 +702,9 @@ fn p14_deep_python_cpp() {
 #[test]
 fn p14_derived_python_cpp() {
     fn advs(path: &str, code: &str) -> Vec<(String, bool)> {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [{ "path": path, "old": "z", "new": code }]
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": path, "old": "z", "new": code }]
+        }));
         out.files
             .iter()
             .flat_map(|f| {
@@ -823,11 +779,9 @@ fn p14_derived_python_cpp() {
 
 #[test]
 fn rust_const_and_static_are_definitions() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [ { "path": "a.rs", "old": "pub fn go() -> u64 {\n    1\n}\n", "new": "const WINDOW_MINS: u64 = 24 * 60;\nstatic NAME: &str = \"x\";\n\npub fn go() -> u64 {\n    WINDOW_MINS\n}\n" } ]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     let hunks = &out.files[0].hunks;
     let const_hunk = &hunks[0];
     assert_eq!(const_hunk.category, ordo::model::Category::Definition);
@@ -851,11 +805,9 @@ fn rust_const_and_static_are_definitions() {
 
 #[test]
 fn java_field_is_a_definition() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [ { "path": "A.java", "old": "class A {\n  int go() {\n    return 1;\n  }\n}\n", "new": "class A {\n  private static final int WINDOW = 1440;\n\n  int go() {\n    return WINDOW;\n  }\n}\n" } ]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     let hunks = &out.files[0].hunks;
     let field_hunk = &hunks[0];
     assert_eq!(field_hunk.category, ordo::model::Category::Definition);
@@ -963,18 +915,15 @@ fn only_comments_keeps_just_the_comment_hunks_with_a_consistent_order() {
     // a.py mixes a comment-only hunk (f's docstring) with a code hunk (g's
     // body); b.py is pure code. With only_comments on, only f's hunk survives,
     // it carries comment: true, and `order` names exactly that one hunk.
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "a.py",
-                  "old": "def f():\n    \"\"\"old.\"\"\"\n    return 1\n\ndef g():\n    return 2\n",
-                  "new": "def f():\n    \"\"\"new.\"\"\"\n    return 1\n\ndef g():\n    return 3\n" },
-                { "path": "b.py", "old": "def h():\n    return 1\n", "new": "def h():\n    return 2\n" }
-            ],
-            "options": { "only_comments": true }
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "a.py",
+              "old": "def f():\n    \"\"\"old.\"\"\"\n    return 1\n\ndef g():\n    return 2\n",
+              "new": "def f():\n    \"\"\"new.\"\"\"\n    return 1\n\ndef g():\n    return 3\n" },
+            { "path": "b.py", "old": "def h():\n    return 1\n", "new": "def h():\n    return 2\n" }
+        ],
+        "options": { "only_comments": true }
+    }));
     let all_hunks: Vec<&ordo::model::HunkOut> =
         out.files.iter().flat_map(|f| f.hunks.iter()).collect();
     assert_eq!(
@@ -994,14 +943,11 @@ fn only_comments_keeps_just_the_comment_hunks_with_a_consistent_order() {
 fn comment_field_is_set_on_exactly_the_comment_hunks() {
     // without only_comments, every hunk survives; `comment` distinguishes the
     // docstring-only hunk in f from the ordinary body edit in g.
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [ { "path": "a.py",
-                "old": "def f():\n    \"\"\"old.\"\"\"\n    return 1\n\ndef g():\n    return 2\n",
-                "new": "def f():\n    \"\"\"new.\"\"\"\n    return 1\n\ndef g():\n    return 3\n" } ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [ { "path": "a.py",
+            "old": "def f():\n    \"\"\"old.\"\"\"\n    return 1\n\ndef g():\n    return 2\n",
+            "new": "def f():\n    \"\"\"new.\"\"\"\n    return 1\n\ndef g():\n    return 3\n" } ]
+    }));
     let f = &out.files[0];
     assert_eq!(f.hunks.len(), 2);
     let by_range = |lo: usize| f.hunks.iter().find(|h| h.new_range[0] == lo).unwrap();
@@ -1011,15 +957,12 @@ fn comment_field_is_set_on_exactly_the_comment_hunks() {
 
 #[test]
 fn unsupported_extension_flagged() {
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "logo.gif", "old": "abc", "new": "abd" },
-                { "path": "a.py", "old": "x = 1\n", "new": "x = 2\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "logo.gif", "old": "abc", "new": "abd" },
+            { "path": "a.py", "old": "x = 1\n", "new": "x = 2\n" }
+        ]
+    }));
     let gif = out.files.iter().find(|f| f.path == "logo.gif").unwrap();
     let py = out.files.iter().find(|f| f.path == "a.py").unwrap();
     assert!(gif.unsupported, "no grammar → unsupported: true");
@@ -1200,12 +1143,9 @@ fn a_lone_pair_that_shares_its_body_is_a_rename() {
 #[test]
 fn a_hunk_with_no_construct_still_says_what_it_did() {
     let rat = |path: &str, old: &str, new: &str| -> Vec<String> {
-        ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [{ "path": path, "old": old, "new": new }]
-            }))
-            .unwrap(),
-        )
+        run_json(serde_json::json!({
+            "changes": [{ "path": path, "old": old, "new": new }]
+        }))
         .files
         .iter()
         .flat_map(|f| f.hunks.iter().map(|h| h.rationale.clone()))

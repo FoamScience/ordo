@@ -1,20 +1,14 @@
 //! `symbols` field tests: name + tree-sitter kind + scope identity for each
 //! definition a hunk introduces (mirrors `defines`, minus imports).
-use ordo::model::{Input, Symbol};
-
-fn symbols(v: serde_json::Value) -> Vec<Symbol> {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    ordo::run(inp)
-        .files
-        .into_iter()
-        .flat_map(|f| f.hunks.into_iter().flat_map(|h| h.symbols))
-        .collect()
-}
+mod fixture;
+use fixture::{hunks, run_json};
+use ordo::model::Symbol;
 
 fn one(path: &str, old: &str, new: &str) -> Vec<Symbol> {
-    symbols(serde_json::json!({
-        "changes": [{ "path": path, "old": old, "new": new }]
-    }))
+    hunks(path, old, new)
+        .into_iter()
+        .flat_map(|h| h.symbols)
+        .collect()
 }
 
 #[test]
@@ -46,12 +40,10 @@ fn module_run_vs_method_run_are_distinct_symbols() {
 fn symbol_scope_can_differ_from_hunk_enclosing() {
     // one hunk (a brand-new file) whose `enclosing` is the outer class A, but
     // a nested class B's method has its own deeper scope "A.B"
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "old": "",
             "new": "class A:\n    class B:\n        def run(self):\n            pass\n" }]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("A"));
 

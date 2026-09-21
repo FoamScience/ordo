@@ -1,9 +1,8 @@
 //! html, and with it vue: only an element carrying an `id` is a definition —
 //! the one handle a stylesheet, a script or a fragment link addresses it by.
 //! A `.vue` single-file component needs no grammar of its own.
-use ordo::model::Input;
 mod fixture;
-use fixture::hunks as one;
+use fixture::{hunks as one, run_json};
 
 #[test]
 fn an_element_with_an_id_is_a_definition() {
@@ -51,11 +50,10 @@ fn a_vue_component_needs_no_grammar_of_its_own() {
         "<template>\n  <div id=\"card\">\n    <p>{{ msg }}</p>\n    <MyBtn @click=\"pick\" />\n  \
                </div>\n</template>\n\n<script setup lang=\"ts\">\nconst msg = 'hey'\n</script>\n";
     let hs = one("Card.vue", old, new);
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "Card.vue", "old": old, "new": new }]
-    }))
-    .unwrap();
-    assert!(!ordo::run(inp).files[0].unsupported);
+    }));
+    assert!(!out.files[0].unsupported);
     let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
     assert_eq!(enc, vec![Some("#card"), Some("<script setup lang=\"ts\">")]);
 }
@@ -67,11 +65,9 @@ fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
     // attribute kinds are identical, so the id-naming path is unchanged.
     let old = "<div id=\"root\">\n  <span>a</span>\n{#if n > 1}\n  <button on:click={() => pick()}>go</button>\n{/if}\n</div>\n";
     let new = "<div id=\"root\">\n  <span>b</span>\n{#if n > 1}\n  <button on:click={() => pick()}>stop</button>\n{/if}\n</div>\n";
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "App.svelte", "old": old, "new": new }]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     assert!(!out.files[0].unsupported);
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
     // markup outside any block attributes to the element id; markup inside a
@@ -84,20 +80,17 @@ fn svelte_needs_its_own_grammar_but_reuses_the_shape() {
 fn an_sfc_script_block_links_to_the_module_it_imports() {
     // the payoff: before injection a `.vue` script hunk said "change" with no
     // container — now it joins the def→use graph and sorts after its module
-    let out = ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({
-            "options": {"cross_file": true},
-            "changes": [
-              {"path": "Card.vue",
-               "old": "<template>\n  <p>{{ n }}</p>\n</template>\n\n<script setup lang=\"ts\">\nconst n = 1\n</script>\n",
-               "new": "<template>\n  <p>{{ n }}</p>\n</template>\n\n<script setup lang=\"ts\">\nimport { formatPrice } from './money'\nconst n = formatPrice(1)\n</script>\n"},
-              {"path": "money.ts",
-               "old": "export const VAT = 0.2\n",
-               "new": "export const VAT = 0.2\n\nexport function formatPrice(v: number) {\n  return v * (1 + VAT)\n}\n"}
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "options": {"cross_file": true},
+        "changes": [
+          {"path": "Card.vue",
+           "old": "<template>\n  <p>{{ n }}</p>\n</template>\n\n<script setup lang=\"ts\">\nconst n = 1\n</script>\n",
+           "new": "<template>\n  <p>{{ n }}</p>\n</template>\n\n<script setup lang=\"ts\">\nimport { formatPrice } from './money'\nconst n = formatPrice(1)\n</script>\n"},
+          {"path": "money.ts",
+           "old": "export const VAT = 0.2\n",
+           "new": "export const VAT = 0.2\n\nexport function formatPrice(v: number) {\n  return v * (1 + VAT)\n}\n"}
+        ]
+    }));
     let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
     assert_eq!(why, vec!["def→use: formatPrice"]);
     // the definition sorts ahead of the component consuming it
@@ -159,12 +152,9 @@ fn a_snippet_defines_and_render_uses_it() {
     // rather than a region, and `{@render}` calls it
     let old = "<p>a</p>\n";
     let new = "{#snippet row(x)}\n  <li>{x}</li>\n{/snippet}\n\n<p>a</p>\n\n<div>\n{@render row(1)}\n</div>\n";
-    let out = ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({
-            "changes": [{ "path": "List.svelte", "old": old, "new": new }]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "List.svelte", "old": old, "new": new }]
+    }));
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
     let defs: Vec<&[String]> = hs.iter().map(|h| h.defines.as_slice()).collect();
     assert_eq!(defs, vec![["row".to_string()].as_slice(), [].as_slice()]);

@@ -32,18 +32,7 @@ use ordo::model::{Change, Input, Options};
 
 #[path = "../tests/common/mod.rs"]
 mod common;
-use common::{commit_input, corpus_dir, git, is_supported, parse_manifest};
-
-/// Whether a `UPDATE_*` escape hatch is actually switched on.
-///
-/// These gates rewrite the recorded truth — golden fixtures, generated doc
-/// blocks, the corpus ratchet, the bench baseline — and then assert nothing.
-/// Testing `is_ok()` meant any value at all armed them, so `UPDATE_GOLDEN=0`
-/// or a stale empty export silently disabled the check while still reporting
-/// a pass.
-fn update_requested(var: &str) -> bool {
-    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
-}
+use common::{commit_input, corpus_dir, git, is_supported, parse_manifest, update_requested};
 
 const BASELINE: &str = "target/ordo-bench.json";
 const DEFAULT_REPOS: &str = "click,ripgrep,vue";

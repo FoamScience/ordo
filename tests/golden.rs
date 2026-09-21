@@ -4,16 +4,8 @@
 use std::fs;
 use std::path::Path;
 
-/// Whether a `UPDATE_*` escape hatch is actually switched on.
-///
-/// These gates rewrite the recorded truth — golden fixtures, generated doc
-/// blocks, the corpus ratchet, the bench baseline — and then assert nothing.
-/// Testing `is_ok()` meant any value at all armed them, so `UPDATE_GOLDEN=0`
-/// or a stale empty export silently disabled the check while still reporting
-/// a pass.
-fn update_requested(var: &str) -> bool {
-    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
-}
+mod common;
+use common::update_requested;
 
 fn run_case(dir: &Path) {
     let input = fs::read_to_string(dir.join("input.json"))

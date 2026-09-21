@@ -21,18 +21,7 @@ use std::path::Path;
 use ordo::model::{Category, Output};
 
 mod common;
-use common::{commit_input, corpus_dir, git, parse_manifest, range_input, Repo};
-
-/// Whether a `UPDATE_*` escape hatch is actually switched on.
-///
-/// These gates rewrite the recorded truth — golden fixtures, generated doc
-/// blocks, the corpus ratchet, the bench baseline — and then assert nothing.
-/// Testing `is_ok()` meant any value at all armed them, so `UPDATE_GOLDEN=0`
-/// or a stale empty export silently disabled the check while still reporting
-/// a pass.
-fn update_requested(var: &str) -> bool {
-    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
-}
+use common::{commit_input, corpus_dir, git, parse_manifest, range_input, update_requested, Repo};
 
 const MAX_RATIONALE: usize = 240;
 const BASELINE: &str = "corpus/baseline.json";

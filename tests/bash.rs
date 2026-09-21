@@ -2,9 +2,8 @@
 //! and `source x.sh` is an import spelled as a command rather than a keyword.
 //! Command and function names are bare `word` nodes — a kind make also uses —
 //! so they are read explicitly rather than through IDENT_KINDS.
-use ordo::model::Input;
 mod fixture;
-use fixture::{hunks as one, run_file as run};
+use fixture::{hunks as one, run_file as run, run_json};
 
 #[test]
 fn a_function_links_to_the_command_that_calls_it() {
@@ -58,24 +57,20 @@ fn a_dotenv_file_is_read_as_shell() {
     // `.env` carries no extension, and `.env.local` resolves through the
     // variant strip
     for path in [".env", ".env.local"] {
-        let inp: Input = serde_json::from_value(serde_json::json!({
+        let out = run_json(serde_json::json!({
             "changes": [{ "path": path, "old": "PORT=80\n", "new": "PORT=8080\n" }]
-        }))
-        .unwrap();
-        assert!(!ordo::run(inp).files[0].unsupported, "{path}");
+        }));
+        assert!(!out.files[0].unsupported, "{path}");
     }
 }
 
 #[test]
 fn a_zsh_script_has_a_grammar() {
     // `zsh` resolved from a markdown fence but not from a path
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [{ "path": "s.zsh",
-                "old": "greet() {\n  echo hi\n}\n",
-                "new": "greet() {\n  echo bye\n}\n" }]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "s.zsh",
+            "old": "greet() {\n  echo hi\n}\n",
+            "new": "greet() {\n  echo bye\n}\n" }]
+    }));
     assert!(!out.files[0].unsupported, "{:?}", out.files[0]);
 }
