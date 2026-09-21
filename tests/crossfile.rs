@@ -1,6 +1,8 @@
 //! P4: cross-file def→use. `helper` is defined in util.py but that file is
 //! listed *second*; only a cross-file edge can pull its definition ahead of the
 //! use in main.py (listed first).
+mod fixture;
+use fixture::run_json;
 use ordo::model::Input;
 
 fn input(cross_file: bool) -> Input {
@@ -68,17 +70,14 @@ fn cross_file_rationale_names_the_other_file() {
 fn a_name_two_files_both_define_seeds_no_edge() {
     // nothing here says which `View` a use means, and naming one of them sends
     // the reviewer to the wrong class
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "a.H", "old": "// a\n",
-                  "new": "// a\nstruct A\n{\n    using View = int;\n    View at(int i) { return i; }\n};\n" },
-                { "path": "b.H", "old": "// b\n",
-                  "new": "// b\nstruct B\n{\n    using View = long;\n    View at(int i) { return i; }\n};\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "a.H", "old": "// a\n",
+              "new": "// a\nstruct A\n{\n    using View = int;\n    View at(int i) { return i; }\n};\n" },
+            { "path": "b.H", "old": "// b\n",
+              "new": "// b\nstruct B\n{\n    using View = long;\n    View at(int i) { return i; }\n};\n" }
+        ]
+    }));
     assert!(
         !out.edges.iter().any(|e| e.why.contains("View")),
         "{:?}",
@@ -91,17 +90,14 @@ fn a_class_member_is_not_resolved_from_another_file() {
     // `key` here is a method of DonorGrid; the `key` in the other file is a
     // local of a different type. Matching them across files needs the imports
     // and qualifications the engine does not read, so it declines to guess.
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "grid.H", "old": "// g\n",
-                  "new": "// g\nstruct DonorGrid\n{\n    int key(int p) const { return p; }\n};\n" },
-                { "path": "io.H", "old": "// i\n",
-                  "new": "// i\nvoid read()\n{\n    const char* key = lookup();\n    open(key);\n}\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "grid.H", "old": "// g\n",
+              "new": "// g\nstruct DonorGrid\n{\n    int key(int p) const { return p; }\n};\n" },
+            { "path": "io.H", "old": "// i\n",
+              "new": "// i\nvoid read()\n{\n    const char* key = lookup();\n    open(key);\n}\n" }
+        ]
+    }));
     assert!(
         !out.edges.iter().any(|e| e.why.contains("key")),
         "{:?}",
@@ -122,15 +118,12 @@ fn a_class_member_is_not_resolved_from_another_file() {
 #[test]
 fn a_file_scope_definition_still_reaches_another_file() {
     // the rule narrows guesses, it does not switch cross-file edges off
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
-                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "main.py", "old": "# m\n", "new": "# m\nx = helper()\n" },
+            { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
+        ]
+    }));
     assert!(
         out.edges.iter().any(|e| e.why.contains("helper")),
         "{:?}",
@@ -143,16 +136,13 @@ fn a_use_side_scope_does_not_block_the_edge() {
     // it is the *definition's* scope that decides whether a name resolves
     // across files: a file-scope `helper` still reaches a use that happens to
     // sit inside a class
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" },
-                { "path": "main.py", "old": "# m\n",
-                  "new": "# m\nclass Runner:\n    def go(self):\n        return helper()\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" },
+            { "path": "main.py", "old": "# m\n",
+              "new": "# m\nclass Runner:\n    def go(self):\n        return helper()\n" }
+        ]
+    }));
     assert!(
         out.edges.iter().any(|e| e.why.contains("helper")),
         "{:?}",
@@ -165,18 +155,15 @@ fn a_use_side_scope_does_not_block_the_edge() {
 /// invisible to the graph — the identical change without `as h` gets an edge.
 #[test]
 fn an_aliased_import_still_reaches_its_definition() {
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "lib.py", "old": "def helper(x):\n    return x\n",
-                  "new": "def helper(x, y):\n    return x + y\n" },
-                { "path": "use.py",
-                  "old": "from lib import helper as h\n\ndef run():\n    return h(1)\n",
-                  "new": "from lib import helper as h\n\ndef run():\n    return h(1, 2)\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "lib.py", "old": "def helper(x):\n    return x\n",
+              "new": "def helper(x, y):\n    return x + y\n" },
+            { "path": "use.py",
+              "old": "from lib import helper as h\n\ndef run():\n    return h(1)\n",
+              "new": "from lib import helper as h\n\ndef run():\n    return h(1, 2)\n" }
+        ]
+    }));
     assert_eq!(out.edges.len(), 1, "{:?}", out.edges);
 }
 
@@ -185,18 +172,15 @@ fn an_aliased_import_still_reaches_its_definition() {
 /// a provenance the source contradicts.
 #[test]
 fn a_definer_the_import_does_not_name_is_not_the_definition() {
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "one.py", "old": "def save(x):\n    return x\n",
-                  "new": "def save(x, y):\n    return x + y\n" },
-                { "path": "caller.py",
-                  "old": "from two import save\n\ndef go():\n    return save(1)\n",
-                  "new": "from two import save\n\ndef go():\n    return save(1, 2)\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "one.py", "old": "def save(x):\n    return x\n",
+              "new": "def save(x, y):\n    return x + y\n" },
+            { "path": "caller.py",
+              "old": "from two import save\n\ndef go():\n    return save(1)\n",
+              "new": "from two import save\n\ndef go():\n    return save(1, 2)\n" }
+        ]
+    }));
     assert!(out.edges.is_empty(), "{:?}", out.edges);
     let rats: Vec<&String> = out
         .files
@@ -216,20 +200,17 @@ fn a_definer_the_import_does_not_name_is_not_the_definition() {
 /// exactly the one that should be drawn.
 #[test]
 fn an_import_disambiguates_a_name_two_files_define() {
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "one.py", "old": "def save(x):\n    return x\n",
-                  "new": "def save(x, y):\n    return x + y\n" },
-                { "path": "two.py", "old": "def save(x):\n    return x\n",
-                  "new": "def save(x, y):\n    return x - y\n" },
-                { "path": "caller.py",
-                  "old": "from one import save\n\ndef go():\n    return save(1)\n",
-                  "new": "from one import save\n\ndef go():\n    return save(1, 2)\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "one.py", "old": "def save(x):\n    return x\n",
+              "new": "def save(x, y):\n    return x + y\n" },
+            { "path": "two.py", "old": "def save(x):\n    return x\n",
+              "new": "def save(x, y):\n    return x - y\n" },
+            { "path": "caller.py",
+              "old": "from one import save\n\ndef go():\n    return save(1)\n",
+              "new": "from one import save\n\ndef go():\n    return save(1, 2)\n" }
+        ]
+    }));
     assert_eq!(out.edges.len(), 1, "{:?}", out.edges);
     let rats: Vec<&String> = out
         .files
@@ -273,15 +254,12 @@ fn an_alias_reaches_its_definition_in_every_language_that_spells_one() {
         ),
     ];
     for (dp, do_, dn, up, uo, un) in cases {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [
-                    { "path": dp, "old": do_, "new": dn },
-                    { "path": up, "old": uo, "new": un }
-                ]
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": [
+                { "path": dp, "old": do_, "new": dn },
+                { "path": up, "old": uo, "new": un }
+            ]
+        }));
         assert_eq!(out.edges.len(), 1, "{dp}: {:?}", out.edges);
     }
 }
@@ -292,18 +270,15 @@ fn an_alias_reaches_its_definition_in_every_language_that_spells_one() {
 #[test]
 fn a_package_relative_import_names_no_module_and_blocks_nothing() {
     for imp in ["from . import helper", "from .. import helper"] {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": [
-                    { "path": "pkg/lib.py", "old": "def helper(x):\n    return x\n",
-                      "new": "def helper(x, y):\n    return x + y\n" },
-                    { "path": "pkg/use.py",
-                      "old": format!("{imp}\n\ndef run():\n    return helper(1)\n"),
-                      "new": format!("{imp}\n\ndef run():\n    return helper(1, 2)\n") }
-                ]
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": [
+                { "path": "pkg/lib.py", "old": "def helper(x):\n    return x\n",
+                  "new": "def helper(x, y):\n    return x + y\n" },
+                { "path": "pkg/use.py",
+                  "old": format!("{imp}\n\ndef run():\n    return helper(1)\n"),
+                  "new": format!("{imp}\n\ndef run():\n    return helper(1, 2)\n") }
+            ]
+        }));
         assert_eq!(out.edges.len(), 1, "`{imp}`: {:?}", out.edges);
     }
 }

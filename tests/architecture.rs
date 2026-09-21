@@ -60,10 +60,12 @@ fn every_path_the_map_names_exists() {
 #[test]
 fn every_client_module_opens_with_its_banner() {
     let dir = root().join("src/bin/ordo");
+    let main = std::fs::read_to_string(dir.join("main.rs")).expect("main.rs");
+    let declared = main.lines().filter(|l| l.starts_with("mod ")).count();
     let mut checked = 0;
     for entry in std::fs::read_dir(&dir).expect("src/bin/ordo") {
         let path = entry.expect("entry").path();
-        if path.file_name().is_some_and(|n| n == "main.rs") {
+        if path.extension().is_none_or(|e| e != "rs") || path.ends_with("main.rs") {
             continue;
         }
         let src = std::fs::read_to_string(&path).expect("module");
@@ -75,10 +77,7 @@ fn every_client_module_opens_with_its_banner() {
         );
         checked += 1;
     }
-    assert!(
-        checked > 10,
-        "only {checked} modules checked; the scan broke"
-    );
+    assert_eq!(checked, declared, "one file per `mod` line in main.rs");
 }
 
 /// The map quotes field counts for the three copies of the rule schema. They

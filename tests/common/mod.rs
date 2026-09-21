@@ -1,4 +1,5 @@
-//! Corpus plumbing shared by `tests/corpus.rs` and `benches/corpus.rs`.
+//! Corpus plumbing shared by `tests/corpus.rs`, `tests/catalog_equivalence.rs`,
+//! `tests/golden.rs` and `benches/corpus.rs`.
 //!
 //! Lives under `tests/common/` rather than `tests/` so cargo does not build it
 //! as an integration-test target of its own; the bench pulls it in with an
@@ -7,9 +8,19 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+
 use std::process::Command;
 
 use ordo::model::{Change, Input, Options};
+
+/// Whether an environment switch — `UPDATE_GOLDEN`, `UPDATE_CATALOG`,
+/// `ORDO_CORPUS_REQUIRED` — is actually on. The `UPDATE_*` ones rewrite the
+/// recorded truth and then assert nothing; testing `is_ok()` meant any value at
+/// all armed them, so `UPDATE_GOLDEN=0` or a stale empty export silently
+/// disabled the check while still reporting a pass.
+pub fn update_requested(var: &str) -> bool {
+    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
+}
 
 /// Extensions the engine claims. Anything else is skipped: feeding it a `.png`
 /// measures nothing about rationale quality.

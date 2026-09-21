@@ -1,17 +1,14 @@
 //! Markdown v1: a def is a section (heading + its content). Covers section
 //! naming, the nested section path, prose wording ("adds section X"), and the
 //! P15 detail layer reporting a subsection added to its parent.
-use ordo::model::Input;
 mod fixture;
-use fixture::hunks as one;
+use fixture::{hunks as one, run_json};
 
 #[test]
 fn unsupported_is_false_for_markdown() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "README.md", "old": "# A\n", "new": "# A\n\nx\n" }]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     assert!(!out.files[0].unsupported, "{:?}", out.files[0].unsupported);
 }
 

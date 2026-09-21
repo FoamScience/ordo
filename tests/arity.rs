@@ -1,10 +1,11 @@
 //! P23.2: a definition whose signature changed, against the calls to it in the
 //! same change. Deliberately narrow — a false "wrong number of arguments" is
 //! worse than a missed one, so everything it cannot state exactly is skipped.
-use ordo::model::Input;
+mod fixture;
+use fixture::run_json;
 
 fn notes(v: serde_json::Value) -> Vec<String> {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap())
+    run_json(v)
         .files
         .iter()
         .flat_map(|f| f.hunks.iter().flat_map(|h| h.notes.clone()))

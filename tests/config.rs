@@ -2,16 +2,14 @@
 //! nested through a dotted path, and a member of the key above it. Covers key
 //! naming per grammar, the nested path, the "changes k" wording (a key has no
 //! signature), and the P15 detail layer naming the container key.
-use ordo::model::Input;
 mod fixture;
-use fixture::hunks as one;
+use fixture::{hunks as one, run_json};
 
 fn supported(path: &str, old: &str, new: &str) -> bool {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": path, "old": old, "new": new }]
-    }))
-    .unwrap();
-    !ordo::run(inp).files[0].unsupported
+    }));
+    !out.files[0].unsupported
 }
 
 #[test]
@@ -118,11 +116,9 @@ fn ini_by_extension() {
 fn a_yaml_anchor_is_defined_and_its_alias_uses_it() {
     let old = "app:\n  name: x\n\nmiddle: 1\n\ndev:\n  db: dev\n";
     let new = "app:\n  name: x\n\nbase: &base\n  adapter: pg\n\nmiddle: 1\n\ndev:\n  db: dev\n  <<: *base\n";
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "database.yml", "old": old, "new": new }]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
     let defines: Vec<&[String]> = hs.iter().map(|h| h.defines.as_slice()).collect();
     let uses: Vec<&[String]> = hs.iter().map(|h| h.uses.as_slice()).collect();
@@ -253,13 +249,11 @@ fn a_callable_still_changes_its_signature() {
 fn a_hash_comment_in_yaml_is_a_comment() {
     // the extension table used to fall through to the C-family default for
     // yaml, so `#` lines were not comments and the hunk was not comment-only
-    let inp: ordo::model::Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [ { "path": "a.yaml",
             "old": "svc:\n  # old note\n  port: 80\n",
             "new": "svc:\n  # new note\n  port: 80\n" } ]
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     assert!(
         out.files[0].hunks.iter().all(|h| h.comment),
         "yaml # line is a comment: {:?}",

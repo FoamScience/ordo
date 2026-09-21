@@ -1,10 +1,11 @@
 //! P13.2: change-shape signals about the changeset as a whole, as facts rather
 //! than judgments. Per-hunk signals live on `hunks[].notes`; these describe the
 //! change itself.
-use ordo::model::Input;
+mod fixture;
+use fixture::run_json;
 
 fn notes(v: serde_json::Value) -> Vec<String> {
-    ordo::run(serde_json::from_value::<Input>(v).unwrap()).notes
+    run_json(v).notes
 }
 
 fn code_change() -> serde_json::Value {
@@ -68,9 +69,7 @@ fn a_quiet_file_earns_no_churn_note() {
 
 #[test]
 fn the_review_pack_leads_with_them() {
-    let out = ordo::run(
-        serde_json::from_value::<Input>(serde_json::json!({ "changes": [code_change()] })).unwrap(),
-    );
+    let out = run_json(serde_json::json!({ "changes": [code_change()] }));
     let p = ordo::pack(&out);
     let (notes_at, order_at) = (p.find("## notes"), p.find("## reading order"));
     assert!(notes_at.is_some(), "{p}");

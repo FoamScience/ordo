@@ -2,7 +2,6 @@
 //! that format (its `{% … %}` statements blanked out at unchanged offsets),
 //! and its `{{ … }}` variables become uses that can link to wherever they are
 //! actually set. A `.j2` over a format with no grammar is parsed as jinja.
-use ordo::model::Input;
 mod fixture;
 use fixture::{hunks as one, run_json as run};
 
@@ -125,23 +124,21 @@ fn erb_cannot_host_a_format_with_no_grammar() {
     // The fixture is `.txt` rather than `.html` because html now *has* a
     // grammar, which would make the wrapped format supported and stop this
     // testing anything.
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run(serde_json::json!({
         "changes": [{ "path": "notes.txt.erb", "old": "a\n", "new": "b\n" }]
-    }))
-    .unwrap();
-    assert!(ordo::run(inp).files[0].unsupported);
+    }));
+    assert!(out.files[0].unsupported);
 }
 
 #[test]
 fn a_bare_j2_still_hosts_itself() {
     // the jinja counterpart of the test above — `standalone: true`
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run(serde_json::json!({
         "changes": [{ "path": "nginx.conf.j2",
                       "old": "{% block s %}\nlisten 80;\n{% endblock %}\n",
                       "new": "{% block s %}\nlisten 443;\n{% endblock %}\n" }]
-    }))
-    .unwrap();
-    assert!(!ordo::run(inp).files[0].unsupported);
+    }));
+    assert!(!out.files[0].unsupported);
 }
 
 #[test]
@@ -184,9 +181,8 @@ fn the_helm_heuristic_only_claims_yaml() {
     // a `templates/` directory in a project that is not a chart costs nothing.
     // `.txt` has no grammar and is not yaml, so the Helm rule must not claim
     // it as a standalone go-template either — it stays unsupported.
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run(serde_json::json!({
         "changes": [{ "path": "templates/notes.txt", "old": "a\n", "new": "b\n" }]
-    }))
-    .unwrap();
-    assert!(ordo::run(inp).files[0].unsupported);
+    }));
+    assert!(out.files[0].unsupported);
 }

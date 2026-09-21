@@ -7,7 +7,9 @@
 //! standard by `scripts/ruleset-check.py`; the catalog is held to it here,
 //! inside the normal test run, because the catalog is always on and so a dead
 //! rule silently stops flagging code for everyone.
-use ordo::model::{FindingSource, Input};
+mod fixture;
+use fixture::run_json;
+use ordo::model::FindingSource;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -15,11 +17,9 @@ use std::path::Path;
 fn fired(path: &Path) -> BTreeSet<String> {
     let new = std::fs::read_to_string(path).expect("read sample");
     let name = path.file_name().unwrap().to_string_lossy().to_string();
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": name, "old": "", "new": new }]
-    }))
-    .expect("fixture parses");
-    let out = ordo::run(inp);
+    }));
     assert!(out.problems.is_empty(), "{}: {:?}", name, out.problems);
     assert!(
         ordo::catalog::problem().is_none(),
@@ -69,16 +69,14 @@ fn every_catalog_rule_fires_on_a_sample() {
 /// reclassify every hunk the catalog's rule of that name fired on.
 #[test]
 fn a_user_rule_named_after_a_catalog_construct_does_not_inherit_its_hits() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "a.c", "old": "", "new":
             "int f(int n) {\n    if (n) goto done;\n    n = 1;\ndone:\n    return n;\n}\n" }],
         // same name as the catalog's C rule, but matching nothing here
         "options": { "rules": [
             { "name": "goto", "when": { "path": "vendor/**" }, "noise": true, "priority": 9 }
         ]}
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     let h = &out.files[0].hunks[0];
     assert!(
         h.findings
@@ -94,12 +92,11 @@ fn a_user_rule_named_after_a_catalog_construct_does_not_inherit_its_hits() {
 }
 
 fn python(src: &str, options: serde_json::Value) -> Vec<String> {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "old": "", "new": src }],
         "options": options,
-    }))
-    .expect("fixture parses");
-    let mut n: Vec<String> = ordo::run(inp)
+    }));
+    let mut n: Vec<String> = out
         .files
         .iter()
         .flat_map(|f| f.hunks.iter())
@@ -150,15 +147,14 @@ fn the_catalog_can_be_turned_off_whole_or_by_name() {
 /// are the reason someone would turn it off.
 #[test]
 fn the_callers_own_rules_survive_the_catalog_being_off() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "old": "", "new": HARDCODED }],
         "options": {
             "catalog": false,
             "rules": [{ "name": "mine", "when": { "lang": "python" }, "note": "still here" }]
         }
-    }))
-    .unwrap();
-    let names: Vec<(FindingSource, String)> = ordo::run(inp)
+    }));
+    let names: Vec<(FindingSource, String)> = out
         .files
         .iter()
         .flat_map(|f| f.hunks.iter())
@@ -202,11 +198,10 @@ fn the_string_rules_reach_every_grammar() {
         ("a.lua", "local x = \"/usr/lib/z\"\n"),
     ];
     for (path, src) in cases {
-        let inp: Input = serde_json::from_value(serde_json::json!({
+        let out = run_json(serde_json::json!({
             "changes": [{ "path": path, "old": "", "new": src }]
-        }))
-        .unwrap();
-        let hit = ordo::run(inp)
+        }));
+        let hit = out
             .files
             .iter()
             .flat_map(|f| f.hunks.iter())
@@ -220,12 +215,10 @@ fn the_string_rules_reach_every_grammar() {
 /// difference between "that rule is off" and "you typed it wrong".
 #[test]
 fn a_malformed_disable_glob_is_reported_not_swallowed() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "old": "", "new": HARDCODED }],
         "options": { "disable": ["["] }
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     assert!(
         out.problems.iter().any(|p| p.contains("is not a glob")),
         "a broken disable must be reported: {:?}",

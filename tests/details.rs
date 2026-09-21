@@ -1,10 +1,10 @@
 //! P15 detail-layer tests: what a hunk did to the members of its container.
-use ordo::model::Input;
+mod fixture;
+use fixture::run_json;
 
 fn details(v: serde_json::Value) -> Vec<String> {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    ordo::run(inp)
-        .files
+    let out = run_json(v);
+    out.files
         .into_iter()
         .flat_map(|f| f.hunks.into_iter().flat_map(|h| h.details))
         .collect()

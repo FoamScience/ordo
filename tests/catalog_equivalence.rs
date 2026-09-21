@@ -18,13 +18,9 @@ use ordo::model::FindingSource;
 use std::path::Path;
 
 mod common;
-use common::{commit_input, corpus_dir, git, parse_manifest, Repo};
+use common::{commit_input, corpus_dir, git, parse_manifest, update_requested, Repo};
 
 const RECORD: &str = "corpus/catalog.txt";
-
-fn update_requested(var: &str) -> bool {
-    std::env::var(var).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
-}
 
 fn sweep(dir: &Path, repo: &Repo, out: &mut Vec<String>) {
     let shas = git(

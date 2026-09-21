@@ -2,10 +2,11 @@
 //! advisories reach whatever already reads analyzer output. Findings only:
 //! SARIF describes results at locations and has no vocabulary for a reading
 //! order or a def→use graph.
-use ordo::model::Input;
+mod fixture;
+use fixture::run_json;
 
 fn sarif(v: serde_json::Value) -> serde_json::Value {
-    let out = ordo::run(serde_json::from_value::<Input>(v).unwrap());
+    let out = run_json(v);
     serde_json::from_str(&ordo::sarif(&out)).expect("valid json")
 }
 

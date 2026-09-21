@@ -1,6 +1,8 @@
 //! Pipeline + invariant tests. Python change: an import, a helper definition,
 //! and a top-level call that uses it — import hunks are skipped entirely, and
 //! comprehension order must put the definition before its use.
+mod fixture;
+use fixture::run_json;
 use ordo::model::{Category, Input};
 
 const OLD: &str = "# a\n# b\n# c\n# d\n# e\n";
@@ -79,7 +81,7 @@ fn lua_def_before_use() {
             "old": "-- a\n-- b\n-- c\n-- d\n",
             "new": "-- a\nlocal function helper()\n  return 1\nend\n-- c\n-- d\nlocal x = helper()\n" } ]
     });
-    let out = ordo::run(serde_json::from_value(j).unwrap());
+    let out = run_json(j);
     let h = &out.files[0].hunks;
     let def = h
         .iter()
@@ -126,19 +128,16 @@ fn a_dependency_cycle_still_orders_every_hunk_once() {
     // the topological sort carries its ready set across iterations now; a cycle
     // falls back to the same deterministic key, and nothing may be lost or
     // repeated on either path
-    let out = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [
-                { "path": "a.py",
-                  "old": "def f():\n    return 1\n",
-                  "new": "def f():\n    return g()\n" },
-                { "path": "b.py",
-                  "old": "def g():\n    return 2\n",
-                  "new": "def g():\n    return f()\n" }
-            ]
-        }))
-        .unwrap(),
-    );
+    let out = run_json(serde_json::json!({
+        "changes": [
+            { "path": "a.py",
+              "old": "def f():\n    return 1\n",
+              "new": "def f():\n    return g()\n" },
+            { "path": "b.py",
+              "old": "def g():\n    return 2\n",
+              "new": "def g():\n    return f()\n" }
+        ]
+    }));
     let total: usize = out.files.iter().map(|f| f.hunks.len()).sum();
     assert_eq!(out.order.len(), total, "{:?}", out.order);
     let mut ids: Vec<&str> = out.order.iter().map(|o| o.hunk.as_str()).collect();
@@ -167,13 +166,10 @@ fn docs_sort_after_the_code_unless_told_otherwise() {
           "new": "from core import run\n\ndef go():\n    return run(1, 2)\n" }
     ]);
     let order = |strategy: &str, docs_last: bool| -> Vec<String> {
-        let out = ordo::run(
-            serde_json::from_value(serde_json::json!({
-                "changes": changes,
-                "options": { "docs_last": docs_last, "strategy": strategy }
-            }))
-            .unwrap(),
-        );
+        let out = run_json(serde_json::json!({
+            "changes": changes,
+            "options": { "docs_last": docs_last, "strategy": strategy }
+        }));
         out.order.iter().map(|o| o.path.clone()).collect()
     };
     let at = |v: &[String], p: &str| v.iter().position(|x| x == p).expect(p);

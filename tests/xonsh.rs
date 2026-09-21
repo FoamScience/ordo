@@ -4,7 +4,7 @@
 //! comment, and `$FOO = …` names a binding python's `assignment` never sees.
 use ordo::model::{Category, FindingSource};
 mod fixture;
-use fixture::{rationales_of as rationales, run_file as one};
+use fixture::{rationales_of as rationales, run_file as one, run_json};
 
 #[test]
 fn every_xonsh_extension_resolves_to_the_grammar() {
@@ -143,13 +143,12 @@ fn a_command_inside_a_with_block_still_names_the_command() {
 fn commenting_xonsh_code_out_reads_as_that() {
     // the comment-marker table used to know `#` for `is_comment_line` on .xsh
     // but not for stripping it, so this degraded to "code replaced by comments"
-    let inp: ordo::model::Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [ { "path": "a.xsh",
             "old": "def f():\n    run_it()\n    return 1\n",
             "new": "def f():\n    # run_it()\n    return 1\n" } ]
-    }))
-    .unwrap();
-    let rats: Vec<String> = ordo::run(inp)
+    }));
+    let rats: Vec<String> = out
         .files
         .into_iter()
         .flat_map(|f| f.hunks.into_iter().map(|h| h.rationale))

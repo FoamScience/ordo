@@ -1,10 +1,11 @@
 //! P9 diff-input: L1 (`old` + `diff` → apply → full semantics), plus graceful
 //! degradation when a diff can't be applied.
-use ordo::model::{Input, SymbolChange};
+mod fixture;
+use fixture::run_json;
+use ordo::model::SymbolChange;
 
 fn run_pretty(v: serde_json::Value) -> String {
-    let inp: Input = serde_json::from_value(v).unwrap();
-    serde_json::to_string_pretty(&ordo::run(inp)).unwrap()
+    serde_json::to_string_pretty(&run_json(v)).unwrap()
 }
 
 #[test]
@@ -33,11 +34,8 @@ fn l1_unapplicable_diff_degrades_gracefully() {
     // context lines don't match old → apply fails → positional, must not panic
     let old = "def f():\n    return 1\n";
     let diff = "@@ -1,2 +1,2 @@\n nope\n-wrong\n+bad\n";
-    let inp: Input = serde_json::from_value(
-        serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "diff": diff }] }),
-    )
-    .unwrap();
-    let out = ordo::run(inp);
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "diff": diff }] }));
     assert_eq!(out.schema, 2);
     assert!(
         out.files[0]
@@ -55,12 +53,10 @@ const FULL_CTX_DIFF: &str =
 
 #[test]
 fn l2_full_context_flag_gives_semantics() {
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "m.py", "diff": FULL_CTX_DIFF }],
         "options": { "full_context": true }
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     assert!(
         out.files[0]
             .hunks
@@ -73,11 +69,8 @@ fn l2_full_context_flag_gives_semantics() {
 
 #[test]
 fn l2_without_flag_stays_positional() {
-    let inp: Input = serde_json::from_value(
-        serde_json::json!({ "changes": [{ "path": "m.py", "diff": FULL_CTX_DIFF }] }),
-    )
-    .unwrap();
-    let out = ordo::run(inp);
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "diff": FULL_CTX_DIFF }] }));
     assert!(
         out.files[0]
             .hunks
@@ -91,12 +84,10 @@ fn l2_without_flag_stays_positional() {
 fn l2_multi_hunk_with_flag_stays_positional() {
     // two hunks → not a single whole-file hunk → refuse even with the flag
     let diff = "@@ -1,1 +1,1 @@\n-a\n+A\n@@ -5,1 +5,1 @@\n-b\n+B\n";
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "m.py", "diff": diff }],
         "options": { "full_context": true }
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     assert!(
         out.files[0].hunks.iter().all(|h| h.enclosing.is_none()),
         "multi-hunk under flag → still positional"
@@ -108,21 +99,16 @@ fn l2_multi_hunk_with_flag_stays_positional() {
 #[test]
 fn l3_partial_diff_sets_degraded() {
     // diff only, no flag → positional → degraded flag set
-    let inp: Input = serde_json::from_value(
-        serde_json::json!({ "changes": [{ "path": "m.py", "diff": FULL_CTX_DIFF }] }),
-    )
-    .unwrap();
-    let out = ordo::run(inp);
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "diff": FULL_CTX_DIFF }] }));
     assert!(out.files[0].degraded, "positional diff → degraded = true");
 }
 
 #[test]
 fn l3_full_input_not_degraded_and_omitted() {
-    let inp: Input = serde_json::from_value(
+    let out = run_json(
         serde_json::json!({ "changes": [{ "path": "m.py", "old": "a\n", "new": "b\n" }] }),
-    )
-    .unwrap();
-    let out = ordo::run(inp);
+    );
     assert!(!out.files[0].degraded, "old/new → not degraded");
     assert!(
         !serde_json::to_string(&out).unwrap().contains("degraded"),
@@ -139,12 +125,10 @@ fn a_reconstructed_old_side_reaches_the_ledger() {
     let new = "class A:\n    def drain(self):\n        return 2\n";
     let diff =
         "@@ -1,3 +1,3 @@\n class A:\n     def drain(self):\n-        return 1\n+        return 2\n";
-    let inp: Input = serde_json::from_value(serde_json::json!({
+    let out = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "diff": diff }],
         "options": { "full_context": true }
-    }))
-    .unwrap();
-    let out = ordo::run(inp);
+    }));
     let row = out
         .ledger
         .iter()
@@ -153,12 +137,9 @@ fn a_reconstructed_old_side_reaches_the_ledger() {
     assert_eq!(row.change, SymbolChange::Body, "its header is untouched");
 
     // the same change sent as old/new must say exactly the same thing
-    let by_content = ordo::run(
-        serde_json::from_value(serde_json::json!({
-            "changes": [{ "path": "a.py", "old": old, "new": new }]
-        }))
-        .unwrap(),
-    );
+    let by_content = run_json(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": old, "new": new }]
+    }));
     let names = |o: &ordo::model::Output| -> Vec<(String, SymbolChange)> {
         o.ledger
             .iter()
