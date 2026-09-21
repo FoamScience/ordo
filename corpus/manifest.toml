@@ -18,6 +18,11 @@
 # would sweep the whole file as one synthetic "everything added" hunk and skew
 # every metric), so an over-large cap silently sweeps fewer commits than it says.
 # `scripts/corpus-fetch.sh` clones deep enough for these values.
+#
+# `gold.jsonl` is drawn from these same repos at these same revs by
+# `scripts/gold-sample.py`: ~200 hunks with ordo's claims and the git hunk each
+# was made against, labeled by hand with `scripts/gold-label.py`. A re-draw
+# after a `rev` bump starts the labels over, so bump and re-draw deliberately.
 
 [[repo]]
 name = "click"
