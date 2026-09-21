@@ -442,6 +442,7 @@ fn classify_imports(
         if rows.is_empty() {
             continue;
         }
+        let old_lines: Vec<&str> = old_src.lines().collect();
         let PerFileHunks { raw, sem: sems, .. } = &mut hunks[fi];
         for (li, sem) in sems.iter_mut().enumerate() {
             let [o0, o1] = sem.old_range;
@@ -450,6 +451,32 @@ fn classify_imports(
             if deletes_only && o0 >= 1 && o0 <= o1 && (o0..=o1).all(|r| rows.contains(&r)) {
                 sem.category = Category::Import;
                 sem.noise = true;
+                // What left: an import recorded on a deleted row, or — for one
+                // member dropped from a multi-line `import { a, b }`, which
+                // sits rows below the statement its removal is recorded
+                // against — a deleted line that is just that name. A name the
+                // new side still imports is a moved import, and the residue it
+                // leaves behind stays "formatting only".
+                let deleted = &old_lines[o0 - 1..o1.min(old_lines.len())];
+                let member_line = |nm: &str| {
+                    deleted.iter().any(|l| {
+                        let l = l.trim().trim_end_matches(',').trim();
+                        l == nm || l.ends_with(&format!(" as {nm}"))
+                    })
+                };
+                let mut gone: Vec<String> = symbols[fi]
+                    .old_rows
+                    .1
+                    .iter()
+                    .filter(|(nm, row)| {
+                        !symbols[fi].new_imports.contains(nm)
+                            && ((o0..=o1).contains(row) || member_line(nm))
+                    })
+                    .map(|(nm, _)| nm.clone())
+                    .collect();
+                gone.sort();
+                gone.dedup();
+                sem.imports = gone;
             }
         }
     }
@@ -998,8 +1025,7 @@ fn build_ledger(
             if !seen.insert((f.path.clone(), name.to_string(), None)) {
                 continue;
             }
-            // `body_only` is keyed by bare name; `enclosing` is qualified
-            let bare = name.rsplit('.').next().unwrap_or(name);
+            let bare = order::bare_name(name);
             let change = if facts.changed[fi].body_only.contains(bare) {
                 SymbolChange::Body
             } else {
@@ -1148,9 +1174,11 @@ pub(crate) struct FileSymbols {
     /// header and body text per definition, for rename and move matching
     pub(crate) old_body: Vec<extract::Body>,
     pub(crate) new_body: Vec<extract::Body>,
-    /// file-scope bindings: a removed one is named rather than counted
+    /// file-scope bindings: a removed one is named rather than counted, and a
+    /// touched one is what a hunk on a module constant did
     pub(crate) old_binds: Vec<(String, usize)>,
     pub(crate) new_binds: HashSet<String>,
+    pub(crate) new_bind_rows: Vec<(String, usize)>,
 }
 
 impl FileSymbols {
@@ -1167,6 +1195,7 @@ impl FileSymbols {
             extract::symbol_facts(sp, n)
         });
         let set = |v: &[(String, usize)]| v.iter().map(|(n, _)| n.clone()).collect();
+        let new_bind_rows = new.map_or(vec![], |(n, sp)| extract::top_level_bindings(sp, n));
         let (new_defs, new_imports): (HashSet<String>, HashSet<String>) =
             (set(&new_rows.0), set(&new_rows.1));
         FileSymbols {
@@ -1192,12 +1221,8 @@ impl FileSymbols {
             old_body,
             new_body,
             old_binds: old.map_or(vec![], |(o, sp)| extract::top_level_bindings(sp, o)),
-            new_binds: new.map_or(HashSet::new(), |(n, sp)| {
-                extract::top_level_bindings(sp, n)
-                    .into_iter()
-                    .map(|(nm, _)| nm)
-                    .collect()
-            }),
+            new_binds: new_bind_rows.iter().map(|(nm, _)| nm.clone()).collect(),
+            new_bind_rows,
             old_rows,
         }
     }

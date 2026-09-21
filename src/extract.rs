@@ -22,9 +22,15 @@ pub struct HunkSem {
     pub enclosing: Option<String>,
     /// what `enclosing` names, when it is not a plain definition
     pub enclosing_kind: Option<ContainerKind>,
+    /// the hunk lies entirely in `enclosing`'s header — above its body — so
+    /// what it touched is the signature, even though the `def` line itself is
+    /// outside the hunk (a multi-line parameter list, a return annotation)
+    pub in_header: bool,
     pub defines: Vec<String>,
     /// subset of `defines` that a hunk introduces via *import* nodes — used for
-    /// rationale wording so an import+def hunk doesn't call function names imports
+    /// rationale wording so an import+def hunk doesn't call function names
+    /// imports. On a deletion-only import hunk (no new side) it holds instead
+    /// the names that left, filled in by `classify_imports`.
     pub imports: Vec<String>,
     pub uses: Vec<String>,
     /// a type-def (class/struct/enum/…) starts in this hunk (#4 wording)
@@ -94,6 +100,7 @@ impl HunkSem {
             category: Category::Other,
             enclosing: None,
             enclosing_kind: None,
+            in_header: false,
             defines: vec![],
             imports: vec![],
             uses: vec![],
@@ -284,6 +291,15 @@ struct DefRec {
     /// what this container is: a declaration, or a region that merely holds
     /// code (see `ContainerKind`)
     kind: ContainerKind,
+    /// 0-based last row of the header, for a def that has a body: the
+    /// declarator's end where the grammar has one (c, c++ — a constructor's
+    /// initializer list sits between declarator and body and is neither),
+    /// else the row before the `body` field. A hunk that stays within it
+    /// touched the signature (parameters, return annotation, storage class).
+    header_e: Option<usize>,
+    /// `lang::has_signature` for the defining node — only a callable's header
+    /// is a signature
+    callable: bool,
 }
 
 // Structural-smell thresholds (P13.1) — change-shape signals, not style rules.
@@ -374,6 +390,8 @@ pub fn analyze(
             })
         };
         let enclosing = container.map(|d| d.name.clone());
+        let in_header =
+            container.is_some_and(|d| d.callable && d.header_e.is_some_and(|e| r1 <= e));
         // a plain definition is the default and says nothing extra; only a
         // region (see `ContainerKind`) is worth reporting
         let enclosing_kind = container
@@ -598,6 +616,7 @@ pub fn analyze(
             category,
             enclosing,
             enclosing_kind,
+            in_header,
             defines,
             imports,
             uses,
@@ -1430,6 +1449,8 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             depth: stack.len(),
             params: 0,
             kind: ContainerKind::Binding,
+            header_e: None,
+            callable: false,
         });
         // fall through: the value still holds locals, uses and nested defs
     }
@@ -1467,6 +1488,8 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             depth,
             params: 0,
             kind,
+            header_e: None,
+            callable: false,
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
@@ -1505,6 +1528,8 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             depth,
             params: 0,
             kind: ContainerKind::Test,
+            header_e: None,
+            callable: false,
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
@@ -1524,6 +1549,8 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             depth: stack.len(),
             params: 0,
             kind: ContainerKind::Call,
+            header_e: None,
+            callable: false,
         });
         // fall through: the arguments still hold uses, members and defs
     }
@@ -1637,6 +1664,14 @@ fn walk_node(node: Node, src: &[u8], spec: &LangSpec, stack: &mut Vec<String>, c
             } else {
                 ContainerKind::Definition
             },
+            header_e: node
+                .child_by_field_name("declarator")
+                .map(|d| d.end_position().row)
+                .or_else(|| {
+                    node.child_by_field_name("body")
+                        .and_then(|b| b.start_position().row.checked_sub(1))
+                }),
+            callable: lang::has_signature(kind),
         });
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {

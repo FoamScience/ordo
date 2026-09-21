@@ -1234,3 +1234,60 @@ fn a_hunk_with_no_construct_still_says_what_it_did() {
         "{doc:?}"
     );
 }
+
+#[test]
+fn a_member_dropped_from_a_multiline_import_is_named() {
+    // the removal is recorded against the statement's row; the deleted line
+    // sits below it, so the name is matched from the deleted text instead
+    let rats = rationales(serde_json::json!({
+        "changes": [ {
+            "path": "a.js",
+            "old": "import {\n  a,\n  b,\n} from './m';\nconsole.log(a);\n",
+            "new": "import {\n  a,\n} from './m';\nconsole.log(a);\n"
+        } ]
+    }));
+    assert_eq!(rats, vec!["removes import b"]);
+}
+
+#[test]
+fn a_hunk_on_the_return_annotation_is_a_signature_change() {
+    // the `def` line is outside the hunk, so `defines` is empty; the hunk
+    // still lies above the body, which is what a signature edit looks like
+    let rats = rationales(serde_json::json!({
+        "changes": [ {
+            "path": "a.py",
+            "old": "def f(\n    a,\n) -> int:\n    return a\n",
+            "new": "def f(\n    a,\n) -> str:\n    return a\n"
+        } ]
+    }));
+    assert_eq!(rats, vec!["changes signature of f"]);
+}
+
+#[test]
+fn a_touched_module_constant_is_named_not_its_identifiers() {
+    let rats = rationales(serde_json::json!({
+        "changes": [ {
+            "path": "a.py",
+            "old": "import typing as t\nX = 1\nY = 2\n",
+            "new": "import typing as t\nX: t.Final = 1\nY = 2\n"
+        } ]
+    }));
+    assert_eq!(rats, vec!["changes X"]);
+}
+
+#[test]
+fn a_file_scope_call_reads_its_details_not_its_identifiers() {
+    // "uses action, add_argument, help" said nothing; the detail layer does
+    let rats = rationales(serde_json::json!({
+        "changes": [ {
+            "path": "a.py",
+            "old": "p.add_argument(\"--a\", help=\"x\")\n",
+            "new": "p.add_argument(\"--a\", help=\"y\")\np.add_argument(\"--b\", help=\"z\", action=\"store_true\")\n"
+        } ]
+    }));
+    assert_eq!(rats.len(), 1, "{rats:?}");
+    assert!(
+        rats[0].contains("add_argument") && !rats[0].starts_with("uses "),
+        "{rats:?}"
+    );
+}
