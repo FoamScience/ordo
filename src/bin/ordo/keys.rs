@@ -1,7 +1,6 @@
 // ----------------------------------------------------------------------- keys
 use crate::code_view::hex;
-use crate::code_view::Theme;
-use crate::config::strip_comment;
+use crate::code_view::THEME_ROLES;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::crossterm::event::KeyModifiers;
 use ratatui::style::Color;
@@ -630,71 +629,6 @@ pub(super) fn parse_hex(text: &str) -> Option<Color> {
     Some(hex(u32::from_str_radix(t, 16).ok()?))
 }
 
-/// Declares the theme roles a config file may set, each the name of a `Theme`
-/// field, generating the write side (`apply_theme_colors`) and read side
-/// (`theme_role_color`) from one list — so a role can't drift between the
-/// two, which is how "match-bg" once read back the wrong field.
-macro_rules! theme_roles {
-    ($($role:literal => $($seg:ident).+),* $(,)?) => {
-        pub(super) const THEME_ROLES: &[&str] = &[$($role),*];
-
-        /// Overlay a config's colour overrides onto a theme. Unknown roles are
-        /// rejected at parse time, so everything reaching here names a field.
-        pub(super) fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
-            for (role, c) in colors {
-                match role.as_str() {
-                    $($role => t.$($seg).+ = *c,)*
-                    _ => {}
-                }
-            }
-            t
-        }
-
-        /// A theme role's current colour, by the name a config file uses. The
-        /// read side of `apply_theme_colors`, so `--init-config` prints what
-        /// the program would actually read back.
-        pub(super) fn theme_role_color(t: &Theme, role: &str) -> Color {
-            match role {
-                $($role => t.$($seg).+,)*
-                _ => Color::Reset,
-            }
-        }
-    };
-}
-
-theme_roles! {
-    "fg" => fg,
-    "dim" => dim,
-    "border" => border,
-    "border-focus" => border_focus,
-    "accent" => accent,
-    "category" => category,
-    "mark" => mark,
-    "reviewed" => reviewed,
-    "warn" => warn,
-    "add-fg" => add_fg,
-    "del-fg" => del_fg,
-    "add-bg" => add_bg,
-    "del-bg" => del_bg,
-    "add-strong-bg" => add_strong_bg,
-    "del-strong-bg" => del_strong_bg,
-    "select-bg" => select_bg,
-    "match-bg" => match_bg,
-    "match-current-bg" => match_cur_bg,
-    "syntax-comment" => syn.comment,
-    "syntax-keyword" => syn.keyword,
-    "syntax-string" => syn.string,
-    "syntax-number" => syn.number,
-    "syntax-function" => syn.function,
-    "syntax-type" => syn.type_,
-    "syntax-property" => syn.property,
-    "syntax-operator" => syn.operator,
-    "syntax-variable" => syn.variable,
-    "syntax-builtin" => syn.builtin,
-    "syntax-parameter" => syn.param,
-    "syntax-attribute" => syn.attribute,
-}
-
 /// Which section of the config the reader is in.
 #[derive(PartialEq, Eq)]
 enum Section {
@@ -813,4 +747,143 @@ pub(super) fn apply_key_config(mut km: Keymap, cfg: &KeyConfig) -> Keymap {
         }
     }
     km
+}
+
+/// A config line without its trailing comment. `#` opens a comment only
+/// *outside* quotes: a colour is written `"#89b4fa"`, and cutting at the first
+/// `#` regardless would eat every palette value in the file.
+pub(super) fn strip_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (None, '"') | (None, '\'') => quote = Some(c),
+            (None, '#') => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// One key, rendered legibly: `C-`/`S-`/`A-` modifier prefixes, named special
+/// keys, `F<n>` for function keys, the char itself otherwise.
+pub(super) fn key_label(key: Key) -> String {
+    let (code, mods) = key;
+    let mut prefix = String::new();
+    if mods.contains(KeyModifiers::CONTROL) {
+        prefix.push_str("C-");
+    }
+    if mods.contains(KeyModifiers::SHIFT) {
+        prefix.push_str("S-");
+    }
+    if mods.contains(KeyModifiers::ALT) {
+        prefix.push_str("A-");
+    }
+    let body = match code {
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::F(n) => format!("F{n}"),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PageUp".to_string(),
+        KeyCode::PageDown => "PageDown".to_string(),
+        other => format!("{other:?}"),
+    };
+    format!("{prefix}{body}")
+}
+
+/// A bind's full chord: `gg`/`ge` (no space — vim's own convention for a
+/// plain-char chord) vs. `C-w C-w` (spaced — either half carries a modifier
+/// or a named key, and vim always writes those chords spaced).
+pub(super) fn chord_label(prefix: Option<Key>, key: Key) -> String {
+    let Some(p) = prefix else {
+        return key_label(key);
+    };
+    let simple = |k: Key| matches!(k.0, KeyCode::Char(_)) && k.1 == KeyModifiers::NONE;
+    if simple(p) && simple(key) {
+        format!("{}{}", key_label(p), key_label(key))
+    } else {
+        format!("{} {}", key_label(p), key_label(key))
+    }
+}
+
+/// The `?`/`F1` help popup body: every bind in `keys`, grouped by category and
+/// collapsed onto one row per action (several keys can mean the same thing,
+/// e.g. `j` and `Down` both `Next`) — generated straight from `Keymap.binds`
+/// rather than hand-duplicated, so it cannot describe a key the table doesn't
+/// actually bind.
+pub(super) fn build_help(keys: &Keymap) -> Vec<String> {
+    struct Row {
+        category: Category,
+        desc: &'static str,
+        keys: Vec<String>,
+    }
+    let mut rows: Vec<Row> = vec![];
+    for &(prefix, key, action) in &keys.binds {
+        let (category, desc) = action_help(action);
+        let label = chord_label(prefix, key);
+        match rows
+            .iter_mut()
+            .find(|r| r.category == category && r.desc == desc)
+        {
+            Some(r) if !r.keys.contains(&label) => r.keys.push(label),
+            Some(_) => {}
+            None => rows.push(Row {
+                category,
+                desc,
+                keys: vec![label],
+            }),
+        }
+    }
+    let order = [
+        Category::General,
+        Category::Navigation,
+        Category::Panes,
+        Category::Search,
+        Category::Review,
+        Category::Editor,
+        Category::Help,
+    ];
+    let mut out = vec![];
+    for &cat in &order {
+        let group: Vec<&Row> = rows.iter().filter(|r| r.category == cat).collect();
+        if group.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push(category_label(cat).to_uppercase());
+        // At most three chords per row. The help is for discovery, and one
+        // action with four aliases (`Space, f, C-f, PageDown`) widened the key
+        // column for every other row in its section; the full set is in the
+        // generated table in docs/tui.md.
+        const SHOWN: usize = 3;
+        let label = |r: &Row| {
+            let mut l = r.keys[..r.keys.len().min(SHOWN)].join(", ");
+            if r.keys.len() > SHOWN {
+                l.push('…');
+            }
+            l
+        };
+        // the column is as wide as the widest chord in this section, not a
+        // fixed 16 that the longest row overflowed and fell out of line with
+        let w = group
+            .iter()
+            .map(|r| label(r).chars().count())
+            .max()
+            .unwrap_or(0);
+        for r in group {
+            out.push(format!("  {:<w$} {}", label(r), r.desc));
+        }
+    }
+    out
 }

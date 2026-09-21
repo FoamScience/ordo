@@ -234,7 +234,7 @@ impl Palette {
     /// Mix `a` toward `b` by `w`/256 — how a diff tint is derived from a
     /// palette colour rather than guessed at per theme.
     const fn mix(a: u32, b: u32, w: u32) -> Color {
-        pub(super) const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u8 {
+        const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u8 {
             let (x, y) = ((a >> sh) & 0xff, (b >> sh) & 0xff);
             ((x * (256 - w) + y * w) / 256) as u8
         }
@@ -605,14 +605,14 @@ fn overlay_cursor(spans: Vec<Span<'static>>, target: usize) -> Vec<Span<'static>
     })
 }
 
-// The whole new file with the changed hunk highlighted in place: removed lines
-// on a red-tinted row (shown at the change point), added lines on a green tint,
-// the rest plain context. Code is syntax-highlighted via tree-sitter.
 // prefix width: 1-char sign bar + 4-digit line number + 1 space
 pub(super) const GUTTER_W: usize = 1 + 5;
 /// gutter glyph on a row `uses_at` names
 pub(super) const MARK: &str = "▸";
 
+// The whole new file with the changed hunk highlighted in place: removed lines
+// on a red-tinted row (shown at the change point), added lines on a green tint,
+// the rest plain context. Code is syntax-highlighted via tree-sitter.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn code_view(
     it: &Item,
@@ -1200,4 +1200,69 @@ pub(super) fn hover(app: &mut App) {
     }
     let lines = lines.into_iter().map(prose).collect();
     app.popup = Some(Popup::new(name, lines));
+}
+
+/// Declares the theme roles a config file may set, each the name of a `Theme`
+/// field, generating the write side (`apply_theme_colors`) and read side
+/// (`theme_role_color`) from one list — so a role can't drift between the
+/// two, which is how "match-bg" once read back the wrong field.
+macro_rules! theme_roles {
+    ($($role:literal => $($seg:ident).+),* $(,)?) => {
+        pub(super) const THEME_ROLES: &[&str] = &[$($role),*];
+
+        /// Overlay a config's colour overrides onto a theme. Unknown roles are
+        /// rejected at parse time, so everything reaching here names a field.
+        pub(super) fn apply_theme_colors(mut t: Theme, colors: &[(String, Color)]) -> Theme {
+            for (role, c) in colors {
+                match role.as_str() {
+                    $($role => t.$($seg).+ = *c,)*
+                    _ => {}
+                }
+            }
+            t
+        }
+
+        /// A theme role's current colour, by the name a config file uses. The
+        /// read side of `apply_theme_colors`, so `--init-config` prints what
+        /// the program would actually read back.
+        pub(super) fn theme_role_color(t: &Theme, role: &str) -> Color {
+            match role {
+                $($role => t.$($seg).+,)*
+                _ => Color::Reset,
+            }
+        }
+    };
+}
+
+theme_roles! {
+    "fg" => fg,
+    "dim" => dim,
+    "border" => border,
+    "border-focus" => border_focus,
+    "accent" => accent,
+    "category" => category,
+    "mark" => mark,
+    "reviewed" => reviewed,
+    "warn" => warn,
+    "add-fg" => add_fg,
+    "del-fg" => del_fg,
+    "add-bg" => add_bg,
+    "del-bg" => del_bg,
+    "add-strong-bg" => add_strong_bg,
+    "del-strong-bg" => del_strong_bg,
+    "select-bg" => select_bg,
+    "match-bg" => match_bg,
+    "match-current-bg" => match_cur_bg,
+    "syntax-comment" => syn.comment,
+    "syntax-keyword" => syn.keyword,
+    "syntax-string" => syn.string,
+    "syntax-number" => syn.number,
+    "syntax-function" => syn.function,
+    "syntax-type" => syn.type_,
+    "syntax-property" => syn.property,
+    "syntax-operator" => syn.operator,
+    "syntax-variable" => syn.variable,
+    "syntax-builtin" => syn.builtin,
+    "syntax-parameter" => syn.param,
+    "syntax-attribute" => syn.attribute,
 }

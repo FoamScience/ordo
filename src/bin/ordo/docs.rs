@@ -1,8 +1,8 @@
 // ------------------------------------------------------ generated doc blocks
 
 use super::*;
+use crate::code_view::THEME_ROLES;
 use crate::commands::*;
-use crate::config::*;
 use crate::keys::*;
 use crate::rules::*;
 use std::path::Path;

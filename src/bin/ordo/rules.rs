@@ -1,13 +1,13 @@
 // ------------------------------------------------------------ reviewing rules
 use crate::code_view::theme;
 use crate::code_view::theme_names;
+use crate::code_view::theme_role_color;
+use crate::code_view::THEME_ROLES;
 use crate::config::config_path;
-use crate::config::key_label;
 use crate::keys::action_help;
+use crate::keys::key_label;
 use crate::keys::keymap;
-use crate::keys::theme_role_color;
 use crate::keys::ACTION_NAMES;
-use crate::keys::THEME_ROLES;
 use ratatui::style::Color;
 use std::fmt::Write as _;
 use std::path::Path;
