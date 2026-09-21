@@ -87,6 +87,13 @@ type Verbs<'a> = (
 /// spends the whole budget on the container and leaves none for what changed.
 /// The innermost segment identifies it; anything still very long is elided
 /// rather than allowed to crowd out the rest of the sentence.
+/// The last segment of a qualified container name: `old_defs`, `body_only`
+/// and friends are keyed by bare name, `enclosing` is scope-qualified with
+/// whichever separator the language uses.
+pub(crate) fn bare_name(name: &str) -> &str {
+    name.rsplit(['.', ':']).next().unwrap_or(name)
+}
+
 pub(crate) fn short_container(name: &str) -> String {
     // Only a *test* path collapses to its innermost segment: its outer levels
     // are sentences a reviewer already read in the file. A markdown section
@@ -787,6 +794,54 @@ impl RatCtx<'_> {
             (true, true) => "changes type",
         }
     }
+    // a hunk that stays above the body of an existing callable changed its
+    // signature — a parameter, a return annotation, a storage class — even
+    // though the `def` line itself is outside the hunk, so `defines` is empty
+    // and the wording would otherwise fall to "edits f"
+    fn header_edit(&self, file: usize, s: &HunkSem) -> Option<String> {
+        if !s.in_header {
+            return None;
+        }
+        let nm = s.enclosing.as_deref()?;
+        let existed = self
+            .symbols
+            .get(file)
+            .is_some_and(|f| f.old_defs.contains(bare_name(nm)));
+        existed.then(|| format!("changes signature of {}", short_container(nm)))
+    }
+    // a file-scope hunk that touches module-level bindings: "changes STRING"
+    // for a constant whose declaration line changed (an annotation, a value),
+    // "adds X" for a new one. What the hunk did to a name, where "uses Final,
+    // STRING" only listed the identifiers on the line.
+    fn file_bind_phrase(&self, file: usize, s: &HunkSem) -> Option<String> {
+        if s.enclosing.is_some() || s.new_empty {
+            return None;
+        }
+        let f = self.symbols.get(file)?;
+        let (n0, n1) = (s.start_row + 1, s.start_row + s.new_len);
+        let (mut changed, mut added): (Vec<&str>, Vec<&str>) = (vec![], vec![]);
+        for (nm, row) in &f.new_bind_rows {
+            if !(n0..=n1).contains(row) {
+                continue;
+            }
+            let bucket = if f.old_binds.iter().any(|(o, _)| o == nm) {
+                &mut changed
+            } else {
+                &mut added
+            };
+            if !bucket.contains(&nm.as_str()) {
+                bucket.push(nm);
+            }
+        }
+        let mut frags = vec![];
+        if !added.is_empty() {
+            frags.push(format!("adds {}", name_list(&added)));
+        }
+        if !changed.is_empty() {
+            frags.push(format!("changes {}", name_list(&changed)));
+        }
+        (!frags.is_empty()).then(|| frags.join("; "))
+    }
     // "uses foo, defined in a.py" / "uses foo, defined above|below"
     fn use_of_phrase(&self, sym: &str, mine: usize, b: usize) -> String {
         if self.group_file[b] != self.group_file[mine] {
@@ -838,6 +893,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     // exactly right, where "removes 1 line" would claim something left.
     let import_speaks = s.category == Category::Import
         && (!s.new_empty
+            || !s.imports.is_empty()
             || ctx.changed.get(my_file).is_some_and(|c| {
                 c.removals
                     .iter()
@@ -851,8 +907,13 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         };
     }
 
-    // a deleted import has no new-side names to report: its wording comes from
-    // the removal path below ("removes import logger"), which knows what left
+    // a deleted import names what left when `classify_imports` could tell
+    // (the dropped member of a multi-line import, matched by name); otherwise
+    // its wording comes from the removal path below ("removes import logger")
+    if s.category == Category::Import && s.new_empty && !s.imports.is_empty() {
+        let names: Vec<&str> = s.imports.iter().map(String::as_str).collect();
+        return format!("removes import {}", name_list(&names));
+    }
     if s.category == Category::Import && !s.new_empty {
         if s.imports.is_empty() {
             return "import".to_string();
@@ -1117,6 +1178,18 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         if let Some(r) = binding_rationale(s, &ctx.symbols[my_file].old_locals) {
             return r;
         }
+        if let Some(r) = ctx.header_edit(my_file, s) {
+            return r;
+        }
+        if let Some(r) = ctx.file_bind_phrase(my_file, s) {
+            return r;
+        }
+        // at file scope or inside a call's argument list the detail layer
+        // already says what moved ("adds action, help to add_argument(...)");
+        // "uses action, add_argument, help" would only list the identifiers
+        if let Some(r) = detail_rationale(s) {
+            return r;
+        }
         if let Some(nm) = &s.enclosing {
             return format!("edits {}", short_container(nm));
         }
@@ -1125,6 +1198,15 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     }
 
     if let Some(r) = binding_rationale(s, &ctx.symbols[my_file].old_locals) {
+        return r;
+    }
+    if let Some(r) = ctx.header_edit(my_file, s) {
+        return r;
+    }
+    if let Some(r) = ctx.file_bind_phrase(my_file, s) {
+        return r;
+    }
+    if let Some(r) = detail_rationale(s) {
         return r;
     }
 
@@ -1171,6 +1253,27 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     } else {
         format!("edits {n} line{plural}")
     }
+}
+
+// The detail layer as the rationale, for a hunk with nothing better to say:
+// only at file scope or in a call's arguments, where "edits <container>" has
+// no container worth naming. Inside a definition "edits f" stays — it is true
+// and short, and the details ride alongside it.
+fn detail_rationale(s: &HunkSem) -> Option<String> {
+    let bare = s.enclosing.is_none() || s.enclosing_kind == Some(crate::ContainerKind::Call);
+    // a pure deletion has its own wording below ("removes section Usage"),
+    // shorter than the detail that says the same with its container
+    if !bare || s.new_empty || s.details.is_empty() {
+        return None;
+    }
+    Some(
+        s.details
+            .iter()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 // comment-only wording, verb/preposition matched the way P15's detail_phrases
