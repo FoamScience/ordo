@@ -336,7 +336,7 @@ fn rows(n: u16) -> impl Fn(usize) -> u16 {
 }
 
 fn layout(body: Rect, cards: &[Card]) -> CanvasLayout {
-    canvas_layout(body, cards, 0, &rows(6))
+    canvas_layout(body, cards, 0, &rows(6), Zoom::Off)
 }
 
 /// The fan's defining property: neither side crosses the centre line.
@@ -2222,7 +2222,7 @@ fn canvas_cards_grow_with_the_frame_and_never_cross_the_centre() {
                 width,
                 height: 44,
             };
-            let l = canvas_layout(body, &cs, 0, &rows(6));
+            let l = canvas_layout(body, &cs, 0, &rows(6), Zoom::Off);
             assert!(l.fanned, "{width} is above SPLIT_COLS");
             let centre = l.area.x + l.area.width / 2;
             let right_edge = l.area.x + l.area.width;
@@ -2274,8 +2274,8 @@ fn a_wide_frame_widens_the_cards() {
 #[test]
 fn the_anchor_covers_its_hunk() {
     let body = Rect::new(0, 0, 200, 50);
-    let short = canvas_layout(body, &[card(true)], 0, &rows(2));
-    let tall = canvas_layout(body, &[card(true)], 0, &rows(30));
+    let short = canvas_layout(body, &[card(true)], 0, &rows(2), Zoom::Off);
+    let tall = canvas_layout(body, &[card(true)], 0, &rows(30), Zoom::Off);
     assert!(
         tall.anchor.height > short.anchor.height,
         "a longer hunk gets a taller anchor"
@@ -2298,17 +2298,96 @@ fn the_anchor_covers_its_hunk() {
     );
 }
 
+/// `4` again on the anchor: it fills the canvas and every card goes.
+#[test]
+fn zooming_the_anchor_fills_the_canvas() {
+    let body = Rect::new(0, 0, 140, 40);
+    let cards = vec![card(true), card(false)];
+    let l = canvas_layout(body, &cards, 0, &rows(6), Zoom::Anchor);
+    assert!(l.zoomed);
+    assert_eq!(l.anchor.x, l.area.x + 1);
+    assert_eq!(l.anchor.y, l.area.y + 1);
+    assert_eq!(l.anchor.width, l.area.width - 2);
+    assert_eq!(l.anchor.height, l.area.height - 2);
+    assert!(l.cards.iter().all(|r| r.height == 0), "{:?}", l.cards);
+}
+
+/// `4` again on a side card: it takes its whole half, top to bottom, the
+/// anchor moves across, its siblings go and the other side stays put.
+#[test]
+fn zooming_a_side_card_takes_its_half_and_moves_the_anchor_across() {
+    let body = Rect::new(0, 0, 140, 40);
+    let cards = vec![card(true), card(true), card(false), card(false)];
+    let plain = canvas_layout(body, &cards, 0, &rows(6), Zoom::Off);
+    let centre = plain.area.x + plain.area.width / 2;
+    // an even width is where the right half used to run one column over
+    assert_eq!(plain.area.width % 2, 0);
+    for (i, needs) in [(0, true), (3, false)] {
+        let l = canvas_layout(body, &cards, 0, &rows(6), Zoom::Card(i));
+        assert!(l.zoomed);
+        let r = l.cards[i];
+        assert_eq!(r.y, l.area.y + 1);
+        assert_eq!(r.height, l.area.height - 2);
+        let inner_end = l.area.x + l.area.width - 1;
+        for (what, b) in [("card", r), ("anchor", l.anchor)] {
+            assert!(b.x > l.area.x, "{what} inside the left border: {b:?}");
+            assert!(
+                b.x + b.width <= inner_end,
+                "{what} inside the right border: {b:?}"
+            );
+        }
+        if needs {
+            assert!(r.x + r.width <= centre, "needs card stays left: {r:?}");
+            assert!(l.anchor.x >= centre, "anchor moves right: {:?}", l.anchor);
+        } else {
+            assert!(r.x >= centre, "needed-by card stays right: {r:?}");
+            assert!(
+                l.anchor.x + l.anchor.width <= centre,
+                "anchor moves left: {:?}",
+                l.anchor
+            );
+        }
+        assert_eq!(l.anchor.height, plain.anchor.height);
+        for (j, c) in cards.iter().enumerate() {
+            if j == i {
+                continue;
+            }
+            if c.needs == needs {
+                assert_eq!(l.cards[j].height, 0, "sibling {j} is hidden");
+            } else {
+                assert_eq!(l.cards[j], plain.cards[j], "the other side keeps its fan");
+            }
+        }
+    }
+}
+
+/// Below the split threshold there is no half to take: a side card's zoom
+/// leaves the stacked layout alone, and only the anchor can fill the frame.
+#[test]
+fn a_side_card_zoom_needs_the_width_to_fan() {
+    let body = Rect::new(0, 0, SPLIT_COLS + 1, 40);
+    let cards = vec![card(true), card(false)];
+    let plain = canvas_layout(body, &cards, 0, &rows(6), Zoom::Off);
+    assert!(!plain.fanned);
+    let l = canvas_layout(body, &cards, 0, &rows(6), Zoom::Card(0));
+    assert!(!l.zoomed);
+    assert_eq!(l.cards, plain.cards);
+    assert_eq!(l.anchor, plain.anchor);
+    assert!(canvas_layout(body, &cards, 0, &rows(6), Zoom::Anchor).zoomed);
+}
+
 /// Cards share the height under the rule rather than taking a fixed slice,
 /// so a lone card on a side gets the whole column.
 #[test]
 fn cards_share_the_height_they_are_given() {
     let body = Rect::new(0, 0, 200, 50);
-    let one = canvas_layout(body, &[card(true)], 0, &rows(30));
+    let one = canvas_layout(body, &[card(true)], 0, &rows(30), Zoom::Off);
     let four = canvas_layout(
         body,
         &[card(true), card(true), card(true), card(true)],
         0,
         &rows(30),
+        Zoom::Off,
     );
     assert!(
         one.cards[0].height > four.cards[0].height,

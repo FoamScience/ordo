@@ -39,6 +39,7 @@ use crate::draw::move_card;
 use crate::draw::open_deps;
 use crate::draw::preview_edge;
 use crate::draw::set_geometry;
+use crate::draw::zoom_card;
 use crate::editor::open_editor;
 use crate::editor::open_quickfix_editor;
 use crate::findings::parse_lcov;
@@ -146,7 +147,9 @@ change-ID prefix) reviews that commit.
 `gD` on a hunk opens the dependency canvas: the hunk at top centre, everything
 it needs fanning left and everything that needs it fanning right, each as a card
 showing that hunk's own code. Enter goes to a card (C-o returns), Esc closes.
-The canvas takes the next free pane digit while it is open, so `4` addresses it.
+The canvas takes the next free pane digit while it is open, so `4` addresses it;
+`4` again fills the frame with the selected card — the top hunk whole, a side
+card its own half when the frame is wide enough to fan.
 
 --no-catalog runs only your own rules. The built-in construct catalog is on by
 default — it is what a reviewer gets with no configuration — and this turns it
@@ -1347,8 +1350,12 @@ struct ParsedFile {
 struct Canvas {
     /// the item the canvas was opened on
     anchor: usize,
-    /// index into the flattened card list (left side first, then right)
-    sel: usize,
+    /// index into the flattened card list (left side first, then right);
+    /// `None` is the anchor itself, one step above the first card
+    sel: Option<usize>,
+    /// the selected card fills the frame: the anchor whole, a side card its
+    /// own half (see `canvas_layout`)
+    zoomed: bool,
 }
 
 /// One card: a hunk this one depends on, or one that depends on it.
@@ -2734,8 +2741,9 @@ fn apply_in_popup(app: &mut App, a: Action) {
 }
 
 /// The canvas is a floating view with its own selection: j/k move between
-/// cards, Enter goes to one, Esc closes. Anything else is a no-op rather than
-/// leaking through to the pane underneath.
+/// cards (k from the first reaches the hunk itself), Enter goes to one, `4`
+/// again or the zoom key fills the frame with it, Esc closes. Anything else
+/// is a no-op rather than leaking through to the pane underneath.
 fn apply_on_canvas(app: &mut App, a: Action) {
     match a {
         Action::Quit => close_deps(app),
@@ -2744,7 +2752,10 @@ fn apply_on_canvas(app: &mut App, a: Action) {
         Action::First => move_card(app, isize::MIN / 2),
         Action::Last => move_card(app, isize::MAX / 2),
         Action::JumpToEdge => jump_to_card(app),
-        Action::Focus(p) if p != Pane::Deps => {
+        // the same digit that opened it, or the zoom key: more of the
+        // selected card, the way the same digit zooms any other pane
+        Action::Focus(Pane::Deps) | Action::Zoom => zoom_card(app),
+        Action::Focus(p) => {
             close_deps(app);
             app.focus = p;
         }
