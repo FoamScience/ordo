@@ -3,7 +3,7 @@
 //! topological sort (Kahn) with deterministic (import, file, position) tiebreak.
 //! Single-file is just the one-file case of this.
 use crate::extract::{self, BindingUse, HunkSem, RawHunk};
-use crate::model::{Category, Removal, RemovalKind, Strategy};
+use crate::model::{Category, Options, Removal, RemovalKind, Strategy};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub struct GroupInfo {
@@ -208,9 +208,7 @@ pub fn order_all(
     files: &[crate::PerFileHunks],
     paths: &[String],
     facts: &FileFacts,
-    strategy: Strategy,
-    cross_file: bool,
-    docs_last: bool,
+    options: &Options,
 ) -> OrderedAll {
     let FileFacts { symbols, changed } = *facts;
     let flat = flatten(files);
@@ -247,20 +245,21 @@ pub fn order_all(
         paths,
         symbols,
     };
-    let (mut edges, gedges) = def_use_edges(&groups, &flat.sem, &gdef, &users, &bind, cross_file);
+    let (mut edges, gedges) =
+        def_use_edges(&groups, &flat.sem, &gdef, &users, &bind, options.cross_file);
     let (contain_edges, contain_gedges) = containment_edges(&flat, &groups, &group_idx);
     edges.extend(contain_edges);
 
     let docs: Vec<u8> = group_file
         .iter()
-        .map(|&f| docs_rank(&paths[f], docs_last))
+        .map(|&f| docs_rank(&paths[f], options.docs_last))
         .collect();
     let keys = GroupKeys {
         docs: &docs,
         file: &group_file,
         row: &group_row,
     };
-    let group_order = order_groups(strategy, &groups, &flat.sem, &gedges, &keys);
+    let group_order = order_groups(options.strategy, &groups, &flat.sem, &gedges, &keys);
     // ---- flatten groups to a global hunk permutation ----
     let mut perm = vec![];
     for &gi in &group_order {
@@ -281,7 +280,7 @@ pub fn order_all(
         changed,
         comment: &flat.comment,
         switched: &flat.switched,
-        cross_file,
+        cross_file: options.cross_file,
     };
     let rationale = (0..flat.sem.len())
         .map(|i| clamp_rationale(rationale_for(i, &flat.sem, &group_idx, &ctx)))
@@ -605,34 +604,72 @@ fn order_groups(
 /// from `left` (`ready` only ever holds members of `left`), so the loop ends
 /// after exactly g rounds, cycle or not.
 fn topo_order(key_v: &[GroupKey], gedges: &[(usize, usize)]) -> Vec<usize> {
-    let g = key_v.len();
-    let mut indeg = vec![0usize; g];
-    let mut succ: Vec<Vec<usize>> = vec![vec![]; g];
-    for &(a, b) in gedges {
-        succ[a].push(b);
-        indeg[b] += 1;
-    }
-    let mut ready: BTreeSet<GroupKey> = (0..g)
-        .filter(|&gi| indeg[gi] == 0)
-        .map(|gi| key_v[gi])
-        .collect();
-    let mut left: BTreeSet<GroupKey> = key_v.iter().copied().collect();
-    let mut order = Vec::with_capacity(g);
-    while let Some(key) = ready.first().or_else(|| left.first()).copied() {
-        let pick = key.4;
-        ready.remove(&key);
-        left.remove(&key);
+    let mut frontier = Frontier::new(key_v, gedges);
+    let mut order = Vec::with_capacity(key_v.len());
+    while let Some(pick) = frontier.take() {
         order.push(pick);
-        for &s in &succ[pick] {
-            if indeg[s] > 0 {
-                indeg[s] -= 1;
-                if indeg[s] == 0 && left.contains(&key_v[s]) {
-                    ready.insert(key_v[s]);
-                }
+        frontier.release(pick);
+    }
+    order
+}
+
+/// Kahn's frontier over the group graph: `ready` is the groups with no unmet
+/// predecessor and `left` every group not yet emitted, both keyed so the
+/// smallest key is picked first. A cycle leaves `ready` empty with `left`
+/// not; the smallest of `left` is picked then, so a cycle is broken rather
+/// than dropped.
+struct Frontier<'a> {
+    key_v: &'a [GroupKey],
+    indeg: Vec<usize>,
+    succ: Vec<Vec<usize>>,
+    ready: BTreeSet<GroupKey>,
+    left: BTreeSet<GroupKey>,
+}
+
+impl<'a> Frontier<'a> {
+    fn new(key_v: &'a [GroupKey], gedges: &[(usize, usize)]) -> Self {
+        let g = key_v.len();
+        let mut indeg = vec![0usize; g];
+        let mut succ: Vec<Vec<usize>> = vec![vec![]; g];
+        for &(a, b) in gedges {
+            succ[a].push(b);
+            indeg[b] += 1;
+        }
+        let ready = (0..g)
+            .filter(|&gi| indeg[gi] == 0)
+            .map(|gi| key_v[gi])
+            .collect();
+        let left = key_v.iter().copied().collect();
+        Frontier {
+            key_v,
+            indeg,
+            succ,
+            ready,
+            left,
+        }
+    }
+
+    fn take(&mut self) -> Option<usize> {
+        let key = self.ready.first().or_else(|| self.left.first()).copied()?;
+        self.ready.remove(&key);
+        self.left.remove(&key);
+        Some(key.4)
+    }
+
+    /// `pick` is emitted: each successor loses a predecessor, and one with
+    /// none left (and not already emitted) becomes ready
+    fn release(&mut self, pick: usize) {
+        for i in 0..self.succ[pick].len() {
+            let s = self.succ[pick][i];
+            if self.indeg[s] == 0 {
+                continue;
+            }
+            self.indeg[s] -= 1;
+            if self.indeg[s] == 0 && self.left.contains(&self.key_v[s]) {
+                self.ready.insert(self.key_v[s]);
             }
         }
     }
-    order
 }
 
 /// P12.3: connected components of the group graph = independent parts, each
@@ -1490,51 +1527,68 @@ fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String
         return None;
     }
     items.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut no_uses_scoped: Vec<(&str, Vec<&str>)> = vec![]; // (scope, names), scope-sorted below
-    let mut no_uses_file: Vec<&str> = vec![];
-    let mut used_scoped: Vec<(&str, &[usize])> = vec![];
-    let mut used_file: Vec<(&str, &[usize])> = vec![];
+    let mut buckets = BindingBuckets::default();
     for b in &items {
+        buckets.push(b);
+    }
+    Some(join_frags(&buckets.frags()))
+}
+
+/// The introduced bindings by scope and by whether anything uses them, each
+/// bucket worded on its own.
+#[derive(Default)]
+struct BindingBuckets<'a> {
+    /// (scope, names), scope-sorted before wording
+    no_uses_scoped: Vec<(&'a str, Vec<&'a str>)>,
+    no_uses_file: Vec<&'a str>,
+    used_scoped: Vec<(&'a str, &'a [usize])>,
+    used_file: Vec<(&'a str, &'a [usize])>,
+}
+
+impl<'a> BindingBuckets<'a> {
+    fn push(&mut self, b: &'a BindingUse) {
         match (&b.scope, b.uses.is_empty()) {
-            (Some(scope), true) => match no_uses_scoped.iter_mut().find(|(sc, _)| sc == scope) {
+            (Some(scope), true) => match self.no_uses_scoped.iter_mut().find(|(sc, _)| sc == scope)
+            {
                 Some((_, names)) => names.push(&b.name),
-                None => no_uses_scoped.push((scope.as_str(), vec![&b.name])),
+                None => self.no_uses_scoped.push((scope.as_str(), vec![&b.name])),
             },
-            (None, true) => no_uses_file.push(&b.name),
-            (Some(_), false) => used_scoped.push((&b.name, &b.uses)),
-            (None, false) => used_file.push((&b.name, &b.uses)),
+            (None, true) => self.no_uses_file.push(&b.name),
+            (Some(_), false) => self.used_scoped.push((&b.name, &b.uses)),
+            (None, false) => self.used_file.push((&b.name, &b.uses)),
         }
     }
-    no_uses_scoped.sort_by_key(|(scope, _)| *scope);
 
-    let mut frags: Vec<String> = vec![];
-    frags.extend(unused_scoped_frag(&no_uses_scoped));
-    if !no_uses_file.is_empty() {
-        // scoped fragments above already say "no uses in {scope}" — when both
-        // kinds land in the same rationale (P17 composing with def-side
-        // wording), repeating that exact phrase at file scope reads as the
-        // per-symbol-fragment defect rationale_bounds.rs guards against, even
-        // though it's really two distinct groups. Reword only in that mixed
-        // case; the lone-fragment wording (no scoped group alongside it)
-        // stays as-is.
-        let where_ = if no_uses_scoped.is_empty() {
-            "no uses in this file"
-        } else {
-            "unused elsewhere in this file"
-        };
-        frags.push(format!(
-            "adds {}, {where_} — check other files",
-            name_list(&no_uses_file)
-        ));
+    fn frags(mut self) -> Vec<String> {
+        self.no_uses_scoped.sort_by_key(|(scope, _)| *scope);
+        let mut frags: Vec<String> = vec![];
+        frags.extend(unused_scoped_frag(&self.no_uses_scoped));
+        if !self.no_uses_file.is_empty() {
+            // scoped fragments above already say "no uses in {scope}" — when
+            // both kinds land in the same rationale (P17 composing with
+            // def-side wording), repeating that exact phrase at file scope
+            // reads as the per-symbol-fragment defect rationale_bounds.rs
+            // guards against, even though it's really two distinct groups.
+            // Reword only in that mixed case; the lone-fragment wording (no
+            // scoped group alongside it) stays as-is.
+            let where_ = if self.no_uses_scoped.is_empty() {
+                "no uses in this file"
+            } else {
+                "unused elsewhere in this file"
+            };
+            frags.push(format!(
+                "adds {}, {where_} — check other files",
+                name_list(&self.no_uses_file)
+            ));
+        }
+        if !self.used_scoped.is_empty() {
+            frags.push(used_frag(&self.used_scoped, "local "));
+        }
+        if !self.used_file.is_empty() {
+            frags.push(used_frag(&self.used_file, ""));
+        }
+        frags
     }
-    if !used_scoped.is_empty() {
-        frags.push(used_frag(&used_scoped, "local "));
-    }
-    if !used_file.is_empty() {
-        frags.push(used_frag(&used_file, ""));
-    }
-    Some(join_frags(&frags))
 }
 
 // One scope reads naturally; several must still say the phrase once, or the
@@ -1606,28 +1660,40 @@ pub(crate) fn detail_phrases(
     containers.sort();
     containers.dedup();
 
-    let mut out = vec![];
     let empty = HashMap::new();
-    for container in containers {
-        let old = old_by.get(&container).unwrap_or(&empty);
-        let new = new_by.get(&container).unwrap_or(&empty);
-        for (verb, prep, names) in member_diff(container.as_deref(), old, new) {
-            if names.is_empty() {
-                continue;
-            }
+    containers
+        .iter()
+        .flat_map(|container| {
+            let old = old_by.get(container).unwrap_or(&empty);
+            let new = new_by.get(container).unwrap_or(&empty);
+            container_phrases(container.as_deref(), old, new, prose)
+        })
+        .collect()
+}
+
+/// One container's member phrases: "adds a, b to Foo", "removes c from Foo".
+fn container_phrases(
+    container: Option<&str>,
+    old: &HashMap<&str, &str>,
+    new: &HashMap<&str, &str>,
+    prose: bool,
+) -> Vec<String> {
+    member_diff(container, old, new)
+        .into_iter()
+        .filter(|(_, _, names)| !names.is_empty())
+        .map(|(verb, prep, names)| {
             let list = name_list(&names);
             let list = if prose && verb != "changes" {
                 prose_noun(names.len(), &list)
             } else {
                 list
             };
-            out.push(match &container {
+            match container {
                 Some(c) => format!("{verb} {list} {prep} {c}"),
                 None => format!("{verb} {list}"),
-            });
-        }
-    }
-    out
+            }
+        })
+        .collect()
 }
 
 /// name → normalized text, per container
