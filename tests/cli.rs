@@ -11,12 +11,9 @@ fn review(args: &[&str], stdin: &str) -> String {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
+    // a child that refuses its flags exits before reading stdin; the write
+    // then fails with a broken pipe, which says nothing about the child
+    let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
     String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
 }
 
@@ -48,12 +45,9 @@ fn run(args: &[&str], stdin: &str) -> (String, i32) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
+    // a child that refuses its flags exits before reading stdin; the write
+    // then fails with a broken pipe, which says nothing about the child
+    let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
     let out = child.wait_with_output().unwrap();
     (
         String::from_utf8(out.stdout).unwrap(),
