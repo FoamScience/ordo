@@ -106,14 +106,7 @@ pub fn run(input: Input) -> Output {
         symbols: &symbols,
         changed: &changed,
     };
-    let ordered = order::order_all(
-        &hunks,
-        &paths,
-        &facts,
-        input.options.strategy,
-        input.options.cross_file,
-        input.options.docs_last,
-    );
+    let ordered = order::order_all(&hunks, &paths, &facts, &input.options);
     let placed = placements(&ordered, &hunks);
     let gids: Vec<String> = (0..ordered.groups.len())
         .map(|gi| format!("g{gi}"))
