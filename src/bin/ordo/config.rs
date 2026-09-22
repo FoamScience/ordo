@@ -343,13 +343,12 @@ impl ConfigUi {
             .find(|s| s.name == section)
             .map(|s| s.rules.clone())
             .unwrap_or_default();
-        for sec in &mut self.sections {
-            for f in &mut sec.fields {
-                if let Some(rule) = f.key.strip_prefix("disable:") {
-                    if names.iter().any(|n| n == rule) {
-                        f.kind = FieldKind::Flag(on);
-                    }
-                }
+        for f in self.sections.iter_mut().flat_map(|s| &mut s.fields) {
+            let Some(rule) = f.key.strip_prefix("disable:") else {
+                continue;
+            };
+            if names.iter().any(|n| n == rule) {
+                f.kind = FieldKind::Flag(on);
             }
         }
     }
@@ -368,13 +367,12 @@ impl ConfigUi {
                 (s.name.clone(), any)
             })
             .collect();
-        for sec in &mut self.sections {
-            for f in &mut sec.fields {
-                if let Some(name) = f.key.strip_prefix("section:") {
-                    if let Some((_, any)) = on.iter().find(|(n, _)| n == name) {
-                        f.kind = FieldKind::Flag(*any);
-                    }
-                }
+        for f in self.sections.iter_mut().flat_map(|s| &mut s.fields) {
+            let Some(name) = f.key.strip_prefix("section:") else {
+                continue;
+            };
+            if let Some((_, any)) = on.iter().find(|(n, _)| n == name) {
+                f.kind = FieldKind::Flag(*any);
             }
         }
     }
@@ -582,9 +580,7 @@ fn config_rule_state(c: &ConfigUi) -> (bool, Vec<String>) {
         match (&f.key, &f.kind) {
             (k, FieldKind::Flag(v)) if k == "catalog" => catalog = *v,
             (k, FieldKind::Flag(false)) => {
-                if let Some(rule) = k.strip_prefix("disable:") {
-                    disables.push(rule.to_string());
-                }
+                disables.extend(k.strip_prefix("disable:").map(str::to_string));
             }
             _ => {}
         }

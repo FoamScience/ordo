@@ -194,19 +194,12 @@ fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut La
         acc.problems.push(format!("{origin}: {p}"));
     }
     for inc in &doc.include {
-        if let Some(t) = preset(inc) {
-            acc.includes.push(inc.clone());
-            layer_rules(t, inc, Path::new("."), depth + 1, acc);
-        } else {
-            let path = base.join(inc);
-            match std::fs::read_to_string(&path) {
-                Ok(t) => {
-                    let label = path.display().to_string();
-                    let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    layer_rules(&t, &label, &parent, depth + 1, acc);
-                }
-                Err(e) => acc.problems.push(format!("{origin}: include `{inc}`: {e}")),
+        match preset(inc) {
+            Some(t) => {
+                acc.includes.push(inc.clone());
+                layer_rules(t, inc, Path::new("."), depth + 1, acc);
             }
+            None => include_file(inc, origin, base, depth + 1, acc),
         }
     }
     acc.disables.extend(doc.disable);
@@ -223,6 +216,20 @@ fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut La
             }
             None => acc.layered.push((rule, origin.to_string())),
         }
+    }
+}
+
+/// An `include` that names a file rather than a preset: layered at `depth`,
+/// from where it sits, so its own includes resolve beside it.
+fn include_file(inc: &str, origin: &str, base: &Path, depth: usize, acc: &mut Layering) {
+    let path = base.join(inc);
+    match std::fs::read_to_string(&path) {
+        Ok(t) => {
+            let label = path.display().to_string();
+            let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+            layer_rules(&t, &label, &parent, depth, acc);
+        }
+        Err(e) => acc.problems.push(format!("{origin}: include `{inc}`: {e}")),
     }
 }
 

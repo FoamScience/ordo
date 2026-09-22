@@ -117,28 +117,27 @@ pub(super) fn place_findings(items: &mut [Item], findings: &[Finding]) -> usize 
                 && it.new_range[0] <= f.line
                 && f.line <= it.new_range[1]
         });
-        match hit {
-            Some(it) => {
-                // the row mark is decided in `build_items`, before findings
-                // exist; a warning-level finding earns the same ⚠ a warn rule
-                // or an advisory does, or the reviewer has to open the hunk to
-                // discover there is anything to see
-                if f.level != ordo::model::Level::Note {
-                    it.mark = "⚠ ".to_string();
-                }
-                it.findings.push(ordo::model::Finding {
-                    source: ordo::model::FindingSource::Analyzer,
-                    name: if f.rule.is_empty() {
-                        f.tool.clone()
-                    } else {
-                        format!("{} {}", f.tool, f.rule)
-                    },
-                    message: f.message.clone(),
-                    level: f.level,
-                });
-            }
-            None => unplaced += 1,
+        let Some(it) = hit else {
+            unplaced += 1;
+            continue;
+        };
+        // the row mark is decided in `build_items`, before findings exist; a
+        // warning-level finding earns the same ⚠ a warn rule or an advisory
+        // does, or the reviewer has to open the hunk to discover there is
+        // anything to see
+        if f.level != ordo::model::Level::Note {
+            it.mark = "⚠ ".to_string();
         }
+        it.findings.push(ordo::model::Finding {
+            source: ordo::model::FindingSource::Analyzer,
+            name: if f.rule.is_empty() {
+                f.tool.clone()
+            } else {
+                format!("{} {}", f.tool, f.rule)
+            },
+            message: f.message.clone(),
+            level: f.level,
+        });
     }
     unplaced
 }

@@ -431,18 +431,23 @@ fn spans_per_line(
             }
             HighlightEvent::Source { start, end } => {
                 let color = stack.last().copied().unwrap_or(syn.variable);
-                let mut first = true;
-                for piece in src.get(start..end).unwrap_or("").split('\n') {
-                    if !first {
-                        lines.push(vec![]);
-                    }
-                    first = false;
-                    if !piece.is_empty() {
-                        lines.last_mut().unwrap().push((piece.to_string(), color));
-                    }
-                }
+                push_source(&mut lines, src.get(start..end).unwrap_or(""), color);
             }
         }
     }
     Some(lines)
+}
+
+/// One highlighted run of source onto the current line — `lines` always
+/// holds one — and a new line per newline in it.
+fn push_source(lines: &mut Vec<LineSpans>, text: &str, color: Color) {
+    for (i, piece) in text.split('\n').enumerate() {
+        if i > 0 {
+            lines.push(vec![]);
+        }
+        if !piece.is_empty() {
+            let current = lines.last_mut().expect("a current line");
+            current.push((piece.to_string(), color));
+        }
+    }
 }
