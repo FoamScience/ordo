@@ -18,13 +18,10 @@ from pathlib import Path
 
 from typesafe_sdk import Noul, TypeSafeClient
 
+from judgelib import QUESTIONS, noul_instructions, state_text
+
 ROOT = Path(__file__).resolve().parent.parent
 
-QUESTIONS = {
-    "faithful": "Does the rationale accurately describe what this diff changes?",
-    "matches_commit": "Is the rationale consistent with the commit message?",
-    "noise_correct": "Is this diff only formatting, whitespace, generated code or import lines, with no behavioural change?",
-}
 
 
 def auc(pairs):
@@ -43,14 +40,7 @@ def fmt(x):
 
 def questions_for(r):
     """The nouls a labeled row answers: one per labeled question, one per finding."""
-    L = r["labels"]
-    qs = {k: Noul(instructions=v) for k, v in QUESTIONS.items()
-          if k in L and L[k] is not None}
-    for name in L["findings"]:
-        msg = next((f["message"] for f in r["findings"] if f["name"] == name), name)
-        qs[f"finding:{name}"] = Noul(
-            instructions=f"Is this reviewer warning warranted for this code? Warning: {msg}")
-    return qs
+    return {k: Noul(instructions=v) for k, v in noul_instructions(r).items()}
 
 
 def judge(client, text, qs):
@@ -107,8 +97,7 @@ def main():
         qs = questions_for(r)
         if not qs:
             continue
-        text = (f"commit message: {r['subject']}\nrationale: {r['rationale']}\n"
-                f"diff:\n{r['diff'][:6000]}")
+        text = state_text(r)
         res = judge(client, text, qs)
         n_req += 1
         got = {k: v.noul for k, v in res.nouls.items()}
