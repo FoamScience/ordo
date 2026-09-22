@@ -88,32 +88,23 @@ pub fn parse_file_diff(diff: &str, full_context: bool) -> ParsedFile {
     let mut new_side: Vec<&str> = vec![]; // context + added
     let mut in_hunk = false;
     for line in diff.lines() {
-        // Only *outside* a hunk body is `--- `/`+++ ` a file header. Inside
-        // one it is an ordinary changed line whose own text begins with `--`
-        // or `++`: a lua or sql comment being removed (`-` + `-- note`), TOML
-        // front matter being added to a markdown file (`+` + `+++`). Treating
-        // those as headers dropped them from the reconstructed side, and the
-        // hunk then reported an edit as a pure addition.
-        if !in_hunk && line.starts_with("+++ ") {
-            // new path marker — nothing to record here
-        } else if let Some(p) = (!in_hunk).then(|| line.strip_prefix("--- ")).flatten() {
-            if clean_path(p) == "/dev/null" {
-                is_new_file = true;
-            }
-        } else if line.starts_with("@@") {
+        if line.starts_with("@@") {
             in_hunk = true;
-            if let Some(h) = parse_hunk_header(line) {
-                hunks.push(h);
-            }
-        } else if in_hunk {
-            if let Some(rest) = line.strip_prefix('+') {
-                new_side.push(rest);
-            } else if let Some(rest) = line.strip_prefix('-') {
-                old_side.push(rest);
-            } else if let Some(rest) = line.strip_prefix(' ') {
-                old_side.push(rest);
-                new_side.push(rest);
-            }
+            hunks.extend(parse_hunk_header(line));
+            continue;
+        }
+        // Inside a hunk body every line belongs to a side, `--- `/`+++ `
+        // included: those are an ordinary changed line whose own text begins
+        // with `--` or `++` — a lua or sql comment being removed, TOML front
+        // matter being added to a markdown file. Only outside a hunk is
+        // `--- ` the old-path header, and `/dev/null` there means a new file.
+        if in_hunk {
+            record_line(line, &mut old_side, &mut new_side);
+        } else if line
+            .strip_prefix("--- ")
+            .is_some_and(|p| clean_path(p) == "/dev/null")
+        {
+            is_new_file = true;
         }
     }
     let (old, new) = if is_new_file {
@@ -132,6 +123,20 @@ fn join_nl(lines: &[&str]) -> String {
         String::new()
     } else {
         lines.join("\n") + "\n"
+    }
+}
+
+/// A hunk body line onto the side(s) its first byte names; a line with no
+/// such byte — a `\ No newline at end of file` marker, a context line some
+/// tool trimmed to nothing — belongs to neither.
+fn record_line<'a>(line: &'a str, old_side: &mut Vec<&'a str>, new_side: &mut Vec<&'a str>) {
+    if let Some(rest) = line.strip_prefix('+') {
+        new_side.push(rest);
+    } else if let Some(rest) = line.strip_prefix('-') {
+        old_side.push(rest);
+    } else if let Some(rest) = line.strip_prefix(' ') {
+        old_side.push(rest);
+        new_side.push(rest);
     }
 }
 
