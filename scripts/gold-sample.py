@@ -15,44 +15,21 @@ import argparse
 import json
 import os
 import random
-import re
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-ENGINE = ROOT / "target/release/ordo-engine"
+from corpuslib import ROOT, commit_input, engine_output, git, repos, template
+
 OUT = ROOT / "corpus/gold.jsonl"
 
 
-def repos():
-    text = (ROOT / "corpus/manifest.toml").read_text()
-    field = lambda b, k: (m.group(1) if (m := re.search(rf'^{k}\s*=\s*"?([^"\n]+)"?', b, re.M)) else None)
-    for b in text.split("[[repo]]")[1:]:
-        yield field(b, "name"), field(b, "lang"), field(b, "rev")
-
-
-def git(repo, *args):
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True,
-                          errors="replace").stdout
-
-
 def commit_output(repo, sha):
-    parent = git(repo, "rev-parse", "--verify", "-q", f"{sha}^").strip()
-    if not parent:
+    """(blobs by path, engine output) for one commit, or (None, None)."""
+    parent, inp = commit_input(repo, sha)
+    if parent is None:
         return None, None
-    # every text file goes in; the engine flags what it has no grammar for and
-    # the caller drops those, so the supported-extension list lives in one place
-    names = [l.split("\t", 2)[2] for l in git(repo, "diff", "--numstat", "--no-renames", parent, sha).splitlines()
-             if not l.startswith("-\t-\t")]
-    if not names:
-        return None, None
-    inp = {"changes": [{"path": p, "old": git(repo, "show", f"{parent}:{p}"),
-                        "new": git(repo, "show", f"{sha}:{p}")} for p in names]}
-    r = subprocess.run([ENGINE, "order", "--json"], input=json.dumps(inp),
-                       capture_output=True, text=True)
     blobs = {c["path"]: (c["old"].splitlines(), c["new"].splitlines()) for c in inp["changes"]}
-    return blobs, json.loads(r.stdout)
+    return blobs, engine_output(inp)
 
 
 def hunk_diff(old, new, old_range, new_range, ctx=3):
@@ -74,10 +51,6 @@ def hunk_diff(old, new, old_range, new_range, ctx=3):
     head = f"@@ -{o0},{max(0, o1 - o0 + 1)} +{n0},{max(0, n1 - n0 + 1)} @@"
     body = [" " + l for l in before] + ["-" + l for l in removed] + ["+" + l for l in added] + [" " + l for l in after]
     return "\n".join([head] + body)
-
-
-def template(rationale):
-    return rationale.split(" ", 1)[0] if rationale else "change"
 
 
 def hunk_entry(name, lang, sha, subject, f, h, old, new):

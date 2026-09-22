@@ -5,7 +5,7 @@ use crate::code_view::theme_role_color;
 use crate::code_view::THEME_ROLES;
 use crate::config::config_path;
 use crate::keys::action_help;
-use crate::keys::key_label;
+use crate::keys::chord_setting;
 use crate::keys::keymap;
 use crate::keys::ACTION_NAMES;
 use ratatui::style::Color;
@@ -603,10 +603,7 @@ pub(super) fn init_config(preset: &str, theme_name: &str) -> String {
         let _ = writeln!(out, "{line}");
     }
     for (prefix, key, action) in &km.binds {
-        let keys = match prefix {
-            Some(p) => format!("{} {}", key_label(*p), key_label(*key)),
-            None => key_label(*key),
-        };
+        let keys = chord_setting(*prefix, *key);
         let name = ACTION_NAMES
             .iter()
             .find(|(_, a)| a == action)

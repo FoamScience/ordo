@@ -88,20 +88,11 @@ fn keys_table() -> String {
         }
         out.join(", ")
     };
-    let order = [
-        Category::General,
-        Category::Navigation,
-        Category::Panes,
-        Category::Search,
-        Category::Review,
-        Category::Editor,
-        Category::Help,
-    ];
     let mut out = vec![
         "| | `vim` (default) | `vscode` |".to_string(),
         "| --- | --- | --- |".to_string(),
     ];
-    for cat in order {
+    for cat in Category::ORDER {
         let group: Vec<_> = rows.iter().filter(|(c, _)| *c == cat).collect();
         if group.is_empty() {
             continue;

@@ -2148,6 +2148,14 @@ fn stack_pop_valid_skips_an_entry_whose_index_no_longer_resolves() {
 
 // ---- why pane: dep-line resolution and cursor ----
 
+/// the kind of every edge row `why_rows` produced, in order
+fn edge_kinds(rows: &[WhyRow]) -> Vec<&WhyKind> {
+    rows.iter()
+        .map(|r| &r.kind)
+        .filter(|k| matches!(k, WhyKind::Edge(_)))
+        .collect()
+}
+
 #[test]
 fn why_rows_marks_edge_lines_and_carries_their_target() {
     let mut it = test_item("a.rs");
@@ -2163,11 +2171,7 @@ fn why_rows_marks_edge_lines_and_carries_their_target() {
         &Theme::terminal("dark", false),
         &WhyContext::default(),
     );
-    let edges: Vec<&WhyKind> = rows
-        .iter()
-        .map(|r| &r.kind)
-        .filter(|k| matches!(k, WhyKind::Edge(_)))
-        .collect();
+    let edges = edge_kinds(&rows);
     assert!(matches!(edges[0], WhyKind::Edge(Some(3))));
     assert!(matches!(edges[1], WhyKind::Edge(None)));
 }
@@ -2183,11 +2187,7 @@ fn why_rows_treats_a_filtered_out_target_as_not_part_of_the_review() {
         &Theme::terminal("dark", false),
         &WhyContext::default(),
     );
-    let edges: Vec<&WhyKind> = rows
-        .iter()
-        .map(|r| &r.kind)
-        .filter(|k| matches!(k, WhyKind::Edge(_)))
-        .collect();
+    let edges = edge_kinds(&rows);
     assert!(matches!(edges[0], WhyKind::Edge(None)));
 }
 
@@ -3626,16 +3626,23 @@ fn grouped_item(path: &str, group: &str) -> Item {
     it
 }
 
-#[test]
-fn display_rows_inserts_one_header_per_contiguous_group_run() {
+/// two hunks in `g0` and one in `g1`, with the reasons their headers read
+fn grouped_trio() -> (Vec<Item>, HashMap<String, String>) {
     let items = vec![
         grouped_item("a.rs", "g0"),
         grouped_item("a.rs", "g0"),
         grouped_item("b.rs", "g1"),
     ];
-    let mut groups = HashMap::new();
-    groups.insert("g0".to_string(), "same definition: run".to_string());
-    groups.insert("g1".to_string(), "same scope: top-level".to_string());
+    let groups = HashMap::from([
+        ("g0".to_string(), "same definition: run".to_string()),
+        ("g1".to_string(), "same scope: top-level".to_string()),
+    ]);
+    (items, groups)
+}
+
+#[test]
+fn display_rows_inserts_one_header_per_contiguous_group_run() {
+    let (items, groups) = grouped_trio();
     let view = vec![0, 1, 2];
 
     let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
@@ -4472,14 +4479,7 @@ fn comments_and_blank_lines_are_ignored() {
 
 #[test]
 fn a_folded_group_shows_its_header_and_hides_its_hunks() {
-    let items = vec![
-        grouped_item("a.rs", "g0"),
-        grouped_item("a.rs", "g0"),
-        grouped_item("b.rs", "g1"),
-    ];
-    let mut groups = HashMap::new();
-    groups.insert("g0".to_string(), "same definition: run".to_string());
-    groups.insert("g1".to_string(), "same scope: top-level".to_string());
+    let (items, groups) = grouped_trio();
     let view = vec![0, 1, 2];
     let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
 
