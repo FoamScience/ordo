@@ -1466,6 +1466,45 @@ impl Collected {
     }
 }
 
+/// A definition's (header, body, body lines): the header is everything before
+/// the body (the signature); the body text drives rename/relocation matching.
+/// Both fall back to the whole node when it does not split.
+fn body_parts(node: Node, src: &[u8], spec: &LangSpec) -> (String, String, Vec<String>) {
+    let full = node.utf8_text(src).unwrap_or("");
+    // `value` is the body under another name: a macro (`preproc_def`,
+    // `preproc_function_def`) and a rust `const_item`/`static_item` hold
+    // theirs there, and without this every change to one reads as a
+    // signature change because the header would be the whole node.
+    let body = node
+        .child_by_field_name("body")
+        .or_else(|| node.child_by_field_name("value"))
+        // css labels no field: a `rule_set`'s declarations are a `block`
+        // child. Without this the header is the whole rule, so every
+        // declaration edit reads as a change to the selector itself and a
+        // renamed selector never matches its old body. Gated to css so no
+        // shipped language moves — cmake's `function_def` has an unlabelled
+        // `body` child too.
+        .or_else(|| {
+            if spec.name != "css" {
+                return None;
+            }
+            let mut cur = node.walk();
+            let found = node.named_children(&mut cur).find(|c| c.kind() == "block");
+            found
+        });
+    let header = match body {
+        Some(b) => &full[..(b.start_byte() - node.start_byte()).min(full.len())],
+        None => full,
+    };
+    let text = body.and_then(|b| b.utf8_text(src).ok()).unwrap_or(full);
+    let lines = text
+        .lines()
+        .map(squeeze)
+        .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
+        .collect();
+    (squeeze(header), squeeze(text), lines)
+}
+
 /// The node's text, trimmed, when it has any.
 fn trimmed<'s>(node: Node, src: &'s [u8]) -> Option<&'s str> {
     node.utf8_text(src)
@@ -1577,12 +1616,8 @@ impl<'a> Walker<'a> {
             return;
         }
         self.visit_binding_container(node);
-        // a single-file component's `<script>` is real code in another
-        // language. This has to run *before* the region branch, which names
-        // the block and then returns.
-        if matches!(spec.name, "html" | "svelte") && kind == "script_element" {
-            inject_sfc_script(node, self.src, &mut self.c);
-        }
+        // before the region visit, which names the `<script>` block and returns
+        self.visit_sfc_script(node);
         if self.visit_region(node) || self.visit_test_block(node) {
             return;
         }
@@ -1595,10 +1630,7 @@ impl<'a> Walker<'a> {
         }
         self.visit_member(node);
         self.visit_locals(node);
-        if spec.prose && kind == "fenced_code_block" {
-            inject_fence(node, self.src, &mut self.c);
-            // fall through: the fence's own prose structure is still walked
-        }
+        self.visit_fence(node);
         // nix: an `attrpath` is a name being bound (`meta.description = …`) or
         // selected (`pkgs.gcc`) — never a free reference to something defined
         // elsewhere, so its identifiers are not uses. The binding's own name
@@ -1767,6 +1799,21 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// A single-file component's `<script>` is real code in another language.
+    fn visit_sfc_script(&mut self, node: Node) {
+        if matches!(self.spec.name, "html" | "svelte") && node.kind() == "script_element" {
+            inject_sfc_script(node, self.src, &mut self.c);
+        }
+    }
+
+    /// A markdown fence's code, read in its own language; the walk then goes
+    /// on through the fence's own prose structure.
+    fn visit_fence(&mut self, node: Node) {
+        if self.spec.prose && node.kind() == "fenced_code_block" {
+            inject_fence(node, self.src, &mut self.c);
+        }
+    }
+
     fn visit_def(&mut self, node: Node) -> bool {
         let (src, spec, kind) = (self.src, self.spec, node.kind());
         if !spec.is_def(kind) || is_misparsed_call(node, spec) {
@@ -1797,26 +1844,9 @@ impl<'a> Walker<'a> {
         // verified against tree-sitter-cpp-0.23.4.)
         let scope_only = kind == "namespace_definition";
         if !scope_only {
-            self.c.def_rows.insert(sr);
-            if lang::is_type_kind(kind) {
-                self.c.type_rows.insert(sr);
-            }
-            self.c.decls.push((sr, sr, own.clone()));
+            self.record_def_rows(node, sr, &own);
         }
-        // prose and config only: a def kind that is *also* a member kind
-        // (markdown's `section`, a config format's key) registers itself as a
-        // member of its enclosing container too, so a new subsection or key
-        // shows up in the P15 detail layer. Gated on the language shape rather
-        // than on the overlap alone, because javascript's `method_definition`
-        // *is* in both sets and must keep today's behavior — see lang.rs's
-        // java comment on that same trap.
-        if (spec.prose || spec.data) && spec.is_member(kind) {
-            let text = node.utf8_text(src).map(squeeze).unwrap_or_default();
-            // neither prose nor config has calls: the container is always
-            // the enclosing def (`stack`, not yet pushed with `own` here).
-            let container = self.scope();
-            self.c.member_rows.push((sr, own.clone(), text, container));
-        }
+        self.record_member_def(node, sr, &own);
         // enclosing defs before this one
         let depth = self.stack.len();
         // collapse runs of nested defs sharing a name in the qualified enclosing
@@ -1824,24 +1854,8 @@ impl<'a> Walker<'a> {
         // whose resolved name (via the `definition` field) duplicates the
         // class/function it wraps.
         let dup = self.stack.last().is_some_and(|s| s == &own);
-        // a wrapper that delegates its name to an inner def (python's
-        // decorated_definition -> `definition` field) isn't itself the
-        // defining node — the inner def it wraps gets the symbol entry.
-        let delegates = node
-            .child_by_field_name("definition")
-            .is_some_and(|d| spec.is_def(d.kind()));
-        if !delegates && !scope_only {
-            // scope excludes a duplicate trailing entry (the wrapper's own
-            // push for this same symbol, not a genuine enclosing scope)
-            let scope_stack = if dup {
-                &self.stack[..self.stack.len() - 1]
-            } else {
-                &self.stack[..]
-            };
-            let scope = (!scope_stack.is_empty()).then(|| scope_stack.join(lang::scope_sep(spec)));
-            self.c
-                .sym_decls
-                .push((sr, own.clone(), kind.to_string(), scope));
+        if !scope_only {
+            self.record_symbol(node, sr, &own, dup);
         }
         if !dup {
             self.stack.push(own);
@@ -1865,6 +1879,61 @@ impl<'a> Walker<'a> {
             self.stack.pop();
         }
         true
+    }
+
+    /// The rows a definition claims: its own, and as a type when it is one.
+    fn record_def_rows(&mut self, node: Node, sr: usize, own: &str) {
+        self.c.def_rows.insert(sr);
+        if lang::is_type_kind(node.kind()) {
+            self.c.type_rows.insert(sr);
+        }
+        self.c.decls.push((sr, sr, own.to_string()));
+    }
+
+    /// Prose and config only: a def kind that is *also* a member kind
+    /// (markdown's `section`, a config format's key) registers itself as a
+    /// member of its enclosing container too, so a new subsection or key shows
+    /// up in the P15 detail layer. Gated on the language shape rather than on
+    /// the overlap alone, because javascript's `method_definition` *is* in
+    /// both sets and must keep today's behavior — see lang.rs's java comment
+    /// on that same trap.
+    fn record_member_def(&mut self, node: Node, sr: usize, own: &str) {
+        let spec = self.spec;
+        if !((spec.prose || spec.data) && spec.is_member(node.kind())) {
+            return;
+        }
+        let text = node.utf8_text(self.src).map(squeeze).unwrap_or_default();
+        // neither prose nor config has calls: the container is always the
+        // enclosing def (`stack`, not yet pushed with `own` here).
+        let container = self.scope();
+        self.c
+            .member_rows
+            .push((sr, own.to_string(), text, container));
+    }
+
+    /// The symbol entry for a definition — unless it is a wrapper that
+    /// delegates its name to an inner def (python's decorated_definition ->
+    /// `definition` field): that is not itself the defining node, and the
+    /// inner def it wraps gets the entry.
+    fn record_symbol(&mut self, node: Node, sr: usize, own: &str, dup: bool) {
+        let spec = self.spec;
+        let delegates = node
+            .child_by_field_name("definition")
+            .is_some_and(|d| spec.is_def(d.kind()));
+        if delegates {
+            return;
+        }
+        // scope excludes a duplicate trailing entry (the wrapper's own push
+        // for this same symbol, not a genuine enclosing scope)
+        let scope_stack = if dup {
+            &self.stack[..self.stack.len() - 1]
+        } else {
+            &self.stack[..]
+        };
+        let scope = (!scope_stack.is_empty()).then(|| scope_stack.join(lang::scope_sep(spec)));
+        self.c
+            .sym_decls
+            .push((sr, own.to_string(), node.kind().to_string(), scope));
     }
 
     // parameter names are local bindings, not references to outer symbols —
@@ -2587,97 +2656,97 @@ fn node_name(node: Node, src: &[u8]) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+/// The naming paths, tried in order. Three answers are final, a `None`
+/// included: a markdown section's heading, a `name` field, and a grammar's
+/// own way of naming a construct (an element without an id is anonymous).
 fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
-    // 0. markdown `section`: no name/declarator/identifier field exists (a
-    // heading is prose, not an identifier) — name it from the heading text
-    // instead. Scoped to this exact kind, which no other grammar in this
-    // crate produces (verified against each grammar's node-types.json), so
-    // it can't shadow any other language's naming path.
-    if node.kind() == "section" {
-        // a section's first child is only sometimes a heading: content
-        // before the document's first heading is its own headless section
-        // (e.g. an HTML comment or a stray paragraph at the top of a file).
-        // Naming it after that raw content reads badly, so it stays
-        // anonymous rather than borrowing the wrong node's text.
-        if let Some(h) = node
-            .named_child(0)
-            .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
-        {
-            return heading_name(h, src);
-        }
-        // ini spells `[user]` as a `section` too — same kind name, a different
-        // grammar, told apart by the child that carries the name. It falls
-        // through to the config-key path below; a *markdown* section with no
-        // heading finds nothing there either (that grammar has no `*_name`
-        // child and no identifier kind) and stays anonymous, as before.
+    if let Some(h) = section_heading(node) {
+        return heading_name(h, src);
     }
-    // 1. own name (function foo, class Foo, local function foo, impl Foo, …).
+    // own name (function foo, class Foo, local function foo, impl Foo, …).
     // Unquoted: a few grammars name a construct with a string literal rather
     // than an identifier — `{{ define "mychart.labels" }}` — and the quotes
     // are the grammar's, not part of the name.
     if let Some(n) = node.child_by_field_name("name") {
         return n.utf8_text(src).ok().map(|t| unquote(t.trim()).to_string());
     }
-    // 1b. name nested one or more levels down a `declarator` field — java
-    // `field_declaration` -> `variable_declarator`, c/cpp `declaration` ->
-    // `pointer_declarator`/`init_declarator`/… -> identifier.
-    if let Some(d) = node.child_by_field_name("declarator") {
-        if let Some(name) = declarator_name(d, src) {
-            return Some(name);
-        }
+    if let Some(name) =
+        declarator_field_name(node, src).or_else(|| definition_field_name(node, src))
+    {
+        return Some(name);
     }
-    // 1c. python `decorated_definition` -> the class/function it wraps, under
-    // field `definition`.
-    if let Some(d) = node.child_by_field_name("definition") {
-        if let Some(name) = node_name(d, src) {
-            return Some(name);
-        }
-    }
-    // 1c. a grammar's own way of naming a construct — its answer is final,
-    // a `None` included: an element without an id is anonymous
     if let Some(own) = grammar_name(node, src) {
         return own;
     }
-    // 1d. config formats: a key-value pair (and a toml `[table]` header) is
-    // named by its key. json and yaml label it with a `key` field; toml-ng
-    // labels no fields at all, so its key is the first `*_key` child. Reached
-    // only for kinds the config specs declare as defs — python's and js's own
-    // `pair` is a member, never a def, so it never enters `node_name`.
-    if let Some(name) = config_key_name(node, src) {
-        return Some(name);
+    config_key_name(node, src)
+        .or_else(|| bound_name(node, src))
+        .or_else(|| type_field_name(node, src))
+        .or_else(|| first_ident_child(node, src))
+}
+
+/// A markdown `section`'s heading. No name/declarator/identifier field exists
+/// there (a heading is prose, not an identifier), so the section is named
+/// from the heading text. Scoped to this exact kind, which no other grammar
+/// in this crate produces (verified against each grammar's node-types.json),
+/// so it can't shadow any other language's naming path.
+///
+/// A section's first child is only sometimes a heading: content before the
+/// document's first heading is its own headless section (e.g. an HTML comment
+/// or a stray paragraph at the top of a file). Naming it after that raw
+/// content reads badly, so it stays anonymous rather than borrowing the wrong
+/// node's text. ini spells `[user]` as a `section` too — same kind name, a
+/// different grammar, told apart by the child that carries the name. It falls
+/// through to the config-key path; a *markdown* section with no heading finds
+/// nothing there either (that grammar has no `*_name` child and no identifier
+/// kind) and stays anonymous.
+fn section_heading(node: Node) -> Option<Node> {
+    if node.kind() != "section" {
+        return None;
     }
-    // 2. anonymous expression → the binding it's assigned to
-    //    (local x = function…, x = function…, t.x = function…, x: fn)
-    if let Some(name) = bound_name(node, src) {
-        return Some(name);
+    node.named_child(0)
+        .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
+}
+
+/// A name nested one or more levels down a `declarator` field — java
+/// `field_declaration` -> `variable_declarator`, c/cpp `declaration` ->
+/// `pointer_declarator`/`init_declarator`/… -> identifier.
+fn declarator_field_name(node: Node, src: &[u8]) -> Option<String> {
+    declarator_name(node.child_by_field_name("declarator")?, src)
+}
+
+/// python `decorated_definition` -> the class/function it wraps, under field
+/// `definition`.
+fn definition_field_name(node: Node, src: &[u8]) -> Option<String> {
+    node_name(node.child_by_field_name("definition")?, src)
+}
+
+/// The `type` field, for a def named after a type rather than an identifier
+/// of its own — rust `impl<'s> Worker<'s>`, whose first named child is the
+/// lifetime list, and `impl Display for Work`, where the first identifier is
+/// the *trait*. Only when there is no `declarator`, so c/cpp's `type` (a
+/// return type) and java's (a field type) can never be reached: those shapes
+/// are named by `declarator_field_name`.
+fn type_field_name(node: Node, src: &[u8]) -> Option<String> {
+    if node.child_by_field_name("declarator").is_some() {
+        return None;
     }
-    // 2b. the `type` field, for a def named after a type rather than an
-    // identifier of its own — rust `impl<'s> Worker<'s>`, whose first named
-    // child is the lifetime list, and `impl Display for Work`, where the first
-    // identifier is the *trait*. Only when there is no `declarator`, so c/cpp's
-    // `type` (a return type) and java's (a field type) can never be reached:
-    // those shapes are named by 1b above.
-    if node.child_by_field_name("declarator").is_none() {
-        if let Some(t) = node.child_by_field_name("type") {
-            if let Some(name) = type_name(t, src) {
-                return Some(name);
-            }
-        }
+    type_name(node.child_by_field_name("type")?, src)
+}
+
+/// The first identifier-ish child (e.g. rust impl's type_identifier). js/ts
+/// `arrow_function` is the one def kind whose own single bare parameter
+/// (`x => …`, field `parameter`) is itself a direct identifier child — without
+/// this guard it would be picked up here and misname an anonymous callback
+/// after its own parameter instead of staying nameless.
+fn first_ident_child(node: Node, src: &[u8]) -> Option<String> {
+    if node.kind() == "arrow_function" {
+        return None;
     }
-    // 3. first identifier-ish child (e.g. rust impl's type_identifier).
-    // js/ts `arrow_function` is the one def kind whose own single bare
-    // parameter (`x => …`, field `parameter`) is itself a direct identifier
-    // child — without this guard it would be picked up here and misname an
-    // anonymous callback after its own parameter instead of staying nameless.
-    if node.kind() != "arrow_function" {
-        let mut cur = node.walk();
-        for ch in node.named_children(&mut cur) {
-            if lang::is_ident(ch.kind()) {
-                return ch.utf8_text(src).ok().map(|s| s.to_string());
-            }
-        }
-    }
-    None
+    let mut cur = node.walk();
+    let ch = node
+        .named_children(&mut cur)
+        .find(|ch| lang::is_ident(ch.kind()))?;
+    ch.utf8_text(src).ok().map(|s| s.to_string())
 }
 
 /// The name for a node kind that only one grammar produces (each verified
@@ -3141,62 +3210,20 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
     let row = node.start_position().row + 1; // 1-based
     let import = !in_import && import_like(node, src, spec);
     if import {
-        match import_bound_names(node, src, spec) {
-            Some(names) => o.imports.extend(names.into_iter().map(|(_, n)| (n, row))),
-            None => o
-                .imports
-                .extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
-        }
+        let names = import_bound_names(node, src, spec)
+            .map(|names| names.into_iter().map(|(_, n)| n).collect())
+            .unwrap_or_else(|| ident_texts(node, src));
+        o.imports.extend(names.into_iter().map(|n| (n, row)));
     }
-    if spec.is_def(kind) {
+    let def = spec.is_def(kind).then(|| node_name(node, src)).flatten();
+    if let Some(name) = def {
         // `collect_rows` returned before its own def check when the node was an
         // import, so a definition under one was never a row
         if !in_import && !import {
-            if let Some(n) = node_name(node, src) {
-                o.defs.push((n, row));
-            }
+            o.defs.push((name.clone(), row));
         }
-        {
-            if let Some(name) = node_name(node, src) {
-                let full = node.utf8_text(src).unwrap_or("");
-                // `value` is the body under another name: a macro (`preproc_def`,
-                // `preproc_function_def`) and a rust `const_item`/`static_item`
-                // hold theirs there, and without this every change to one reads as
-                // a signature change because the header would be the whole node.
-                let body = node
-                    .child_by_field_name("body")
-                    .or_else(|| node.child_by_field_name("value"))
-                    // css labels no field: a `rule_set`'s declarations are a
-                    // `block` child. Without this the header is the whole rule, so
-                    // every declaration edit reads as a change to the selector
-                    // itself and a renamed selector never matches its old body.
-                    // Gated to css so no shipped language moves — cmake's
-                    // `function_def` has an unlabelled `body` child too.
-                    .or_else(|| {
-                        if spec.name != "css" {
-                            return None;
-                        }
-                        let mut cur = node.walk();
-                        let found = node.named_children(&mut cur).find(|c| c.kind() == "block");
-                        found
-                    });
-                // header = everything before the body (the signature); body text drives
-                // rename/relocation matching. Fall back to the whole node when unsplit.
-                let header = match body {
-                    Some(b) => &full[..(b.start_byte() - node.start_byte()).min(full.len())],
-                    None => full,
-                };
-                let text = body.and_then(|b| b.utf8_text(src).ok()).unwrap_or(full);
-                let header = squeeze(header);
-                let whole = squeeze(text);
-                let lines = text
-                    .lines()
-                    .map(squeeze)
-                    .filter(|l| l.chars().filter(|c| c.is_alphanumeric()).count() >= 3)
-                    .collect();
-                o.bodies.push((name, header, whole, lines));
-            }
-        }
+        let (header, whole, lines) = body_parts(node, src, spec);
+        o.bodies.push((name, header, whole, lines));
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
