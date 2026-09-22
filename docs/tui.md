@@ -87,8 +87,12 @@ rule, so one card on a side takes the column and four take a quarter each, and
 each side's cards span its half. Below 96 columns the halves are too narrow for
 code and the cards stack in one labelled column instead.
 
-`j`/`k` move between cards, `Enter` jumps to one and closes the canvas, `C-o`
-comes back.
+`j`/`k` move between cards — `k` from the first card (or `gg`) reaches the hunk itself —
+`Enter` jumps to one and closes the canvas, `C-o` comes back. `4` again (or the
+zoom key) fills the frame with the selected card: the hunk takes the whole
+canvas, a side card takes its own half top to bottom with the hunk moved across
+to the other half. Below 96 columns there is no half to take, so only the hunk
+zooms.
 
 Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
 removed line is paired with the added line it became, and only the differing

@@ -368,9 +368,21 @@ pub(super) fn open_deps(app: &mut App) {
     }
     app.canvas = Some(Canvas {
         anchor: app.sel,
-        sel: 0,
+        sel: Some(0),
+        zoomed: false,
     });
     app.focus = Pane::Deps;
+}
+
+/// `4` again, or the zoom key, on the canvas: the selected card fills the
+/// frame, or stops filling it. Which card, and whether a side card gets its
+/// half, is the layout's call each frame — see `canvas_layout`. A zoomed card
+/// shows the file around its hunk the way the code pane does: the hunk
+/// tinted, the rest plain.
+pub(super) fn zoom_card(app: &mut App) {
+    if let Some(c) = app.canvas.as_mut() {
+        c.zoomed = !c.zoomed;
+    }
 }
 
 pub(super) fn close_deps(app: &mut App) {
@@ -383,11 +395,17 @@ pub(super) fn close_deps(app: &mut App) {
 /// Enter on a card: go there, and close the canvas. The jump is pushed the
 /// same way `gd` pushes it, so `C-o` returns — and returns to the hunk, not to
 /// the canvas, which has served its purpose once a destination is chosen.
+/// Enter on the anchor just closes: it is where the reader already was.
 pub(super) fn jump_to_card(app: &mut App) {
     let Some(c) = app.canvas.as_ref() else { return };
     let cards = cards_for(app, c.anchor);
-    let Some(card) = cards.get(c.sel) else { return };
-    let idx = card.idx;
+    let idx = match c.sel {
+        Some(i) => match cards.get(i) {
+            Some(card) => card.idx,
+            None => return,
+        },
+        None => c.anchor,
+    };
     stack_push(&mut app.jumps, (app.sel, app.cursor));
     close_deps(app);
     select(app, idx);
@@ -395,16 +413,19 @@ pub(super) fn jump_to_card(app: &mut App) {
 }
 
 /// Move the card selection, clamped. `delta` is signed so one function serves
-/// `j` and `k`.
+/// `j` and `k`. The anchor sits one step above the first card, so `k` from
+/// there reaches it, `j` comes back, and `gg` lands on it.
 pub(super) fn move_card(app: &mut App, delta: isize) {
     let Some(c) = app.canvas.as_ref() else { return };
     let n = cards_for(app, c.anchor).len();
     if n == 0 {
         return;
     }
-    let next = (c.sel as isize + delta).clamp(0, n as isize - 1) as usize;
+    // -1 is the anchor
+    let at = c.sel.map_or(-1, |i| i as isize);
+    let next = at.saturating_add(delta).clamp(-1, n as isize - 1);
     if let Some(c) = app.canvas.as_mut() {
-        c.sel = next;
+        c.sel = usize::try_from(next).ok();
     }
 }
 
@@ -549,13 +570,86 @@ pub(super) const CARD_ROWS: usize = 12;
 pub(super) struct CanvasLayout {
     pub(super) area: Rect,
     pub(super) anchor: Rect,
-    /// one rect per card, parallel to the `Card` list it was built from
+    /// one rect per card, parallel to the `Card` list it was built from; an
+    /// empty rect is a card the zoom hides
     pub(super) cards: Vec<Rect>,
     /// false when the frame is too narrow to fan, so the cards stack instead
     pub(super) fanned: bool,
+    /// whether a zoom took effect this frame
+    pub(super) zoomed: bool,
+}
+
+/// What fills the frame: nothing, the anchor, or one card by its index.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Zoom {
+    Off,
+    Anchor,
+    Card(usize),
 }
 
 pub(super) fn canvas_layout(
+    body: Rect,
+    cards: &[Card],
+    anchor_idx: usize,
+    extent: &dyn Fn(usize) -> u16,
+    zoom: Zoom,
+) -> CanvasLayout {
+    let mut l = fan_layout(body, cards, anchor_idx, extent);
+    // A zoomed side card keeps its half and takes all of it, top to bottom;
+    // the anchor moves across to the other half so the two still read
+    // together. Below the split threshold there is no half to take, so a
+    // side card's zoom does nothing — the stacked fallback stays.
+    let target = match zoom {
+        Zoom::Off => return l,
+        Zoom::Anchor => None,
+        Zoom::Card(i) if l.fanned && i < cards.len() => Some(i),
+        Zoom::Card(_) => return l,
+    };
+    let inner_w = l.area.width.saturating_sub(2);
+    let full_h = l.area.height.saturating_sub(2);
+    let half = l.area.width.saturating_sub(4) / 2;
+    let centre = l.area.x + l.area.width / 2;
+    let Some(i) = target else {
+        l.anchor = Rect {
+            x: l.area.x + 1,
+            y: l.area.y + 1,
+            width: inner_w,
+            height: full_h,
+        };
+        l.cards = vec![Rect::default(); cards.len()];
+        l.zoomed = true;
+        return l;
+    };
+    let needs = cards[i].needs;
+    // the left half runs from the inner edge to the centre; the right half
+    // from past the centre to the inner edge, one column short of `half`
+    // when the width is even
+    let left = (l.area.x + 1, half.min(inner_w));
+    let right_x = centre + 2;
+    let right = (
+        right_x,
+        half.min((l.area.x + l.area.width).saturating_sub(right_x + 1)),
+    );
+    let (own, other) = if needs { (left, right) } else { (right, left) };
+    (l.anchor.x, l.anchor.width) = other;
+    for (j, (c, r)) in cards.iter().zip(l.cards.iter_mut()).enumerate() {
+        if j == i {
+            *r = Rect {
+                x: own.0,
+                y: l.area.y + 1,
+                width: own.1,
+                height: full_h,
+            };
+        } else if c.needs == needs {
+            *r = Rect::default();
+        }
+    }
+    l.zoomed = true;
+    l
+}
+
+/// The plain fan: the anchor across the top, the cards below it on their sides.
+fn fan_layout(
     body: Rect,
     cards: &[Card],
     anchor_idx: usize,
@@ -601,6 +695,7 @@ pub(super) fn canvas_layout(
             anchor,
             cards: rects,
             fanned,
+            zoomed: false,
         };
     }
     // Each direction owns its half and keeps it. An empty side used to yield
@@ -652,6 +747,7 @@ pub(super) fn canvas_layout(
         anchor,
         cards: rects,
         fanned,
+        zoomed: false,
     }
 }
 
@@ -698,26 +794,37 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
         let n = it.new_range[1].saturating_sub(it.new_range[0]) + 1;
         n.min(u16::MAX as usize) as u16
     };
-    let l = canvas_layout(body, &cards, c.anchor, &extent);
+    let zoom = match (c.zoomed, c.sel) {
+        (false, _) => Zoom::Off,
+        (true, None) => Zoom::Anchor,
+        (true, Some(i)) => Zoom::Card(i),
+    };
+    let l = canvas_layout(body, &cards, c.anchor, &extent, zoom);
     let theme = &app.theme;
-    // cards that will not fit are counted, not silently dropped
+    // cards that will not fit are counted, not silently dropped; the ones a
+    // zoom hides on purpose have no rect and are not
     let hidden = l
         .cards
         .iter()
-        .filter(|r| r.y + r.height >= l.area.y + l.area.height)
+        .filter(|r| r.height > 0 && r.y + r.height >= l.area.y + l.area.height)
         .count();
     f.render_widget(Clear, l.area);
     let anchor_it = &app.items[c.anchor];
+    let zoomed = if l.zoomed {
+        " · zoomed (same key restores)"
+    } else {
+        ""
+    };
+    let unshown = if hidden > 0 {
+        format!(" · {hidden} not shown")
+    } else {
+        String::new()
+    };
     let title = format!(
-        " 4 deps — {} · {} needs, {} needed by{} ",
+        " 4 deps — {} · {} needs, {} needed by{zoomed}{unshown} ",
         card_name(anchor_it),
         cards.iter().filter(|c| c.needs).count(),
         cards.iter().filter(|c| !c.needs).count(),
-        if hidden > 0 {
-            format!(" · {hidden} not shown")
-        } else {
-            String::new()
-        }
     );
     f.render_widget(
         Block::bordered()
@@ -735,10 +842,10 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
         c.anchor,
         &card_name(anchor_it),
         true,
-        false,
+        c.sel.is_none(),
     );
 
-    if l.fanned {
+    if l.fanned && !l.zoomed {
         // the rule under the anchor, labelling which way each side runs
         let rule_y = l.anchor.y + l.anchor.height;
         let rule = Rect {
@@ -772,10 +879,18 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
     }
 
     for (i, (card, rect)) in cards.iter().zip(l.cards.iter()).enumerate() {
-        if rect.y + rect.height >= l.area.y + l.area.height {
-            continue; // would overrun the frame's own border; counted above
+        if rect.height == 0 || rect.y + rect.height >= l.area.y + l.area.height {
+            continue; // hidden by the zoom, or would overrun the frame's own border
         }
-        card_widget(f, app, *rect, card.idx, &card.label, false, i == c.sel);
+        card_widget(
+            f,
+            app,
+            *rect,
+            card.idx,
+            &card.label,
+            false,
+            c.sel == Some(i),
+        );
     }
 }
 
@@ -969,6 +1084,13 @@ pub(super) fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         // the split is unavailable at this width, so an explicit toggle would
         // sit invisible and surprise the reviewer when the terminal widens
         app.zoom = false;
+    }
+    // the same for a side card's zoom: the canvas is inset by two, so it fans
+    // two columns later than the panes split
+    if body.width < SPLIT_COLS + 2 {
+        if let Some(c) = app.canvas.as_mut().filter(|c| c.sel.is_some()) {
+            c.zoomed = false;
+        }
     }
     // built before the layout, because the why pane is sized to it: it used to
     // take a flat 30% and sat nearly empty on a one-line rationale
