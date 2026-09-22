@@ -971,44 +971,46 @@ pub fn is_ident(kind: &str) -> bool {
 
 /// Does this path look like a test file? (tests/ dir, test_*, *_test, *_spec)
 pub fn is_test_path(p: &str) -> bool {
+    // slash-wrapped, so `d` matches inside the path and `d[1..]` at its start
+    const TEST_DIRS: &[&str] = &["/tests/", "/test/"];
+    const NAME_PARTS: &[&str] = &["_test.", "_spec.", ".test.", ".spec."];
     let name = p.rsplit('/').next().unwrap_or(p);
-    p.contains("/tests/")
-        || p.starts_with("tests/")
-        || p.contains("/test/")
-        || p.starts_with("test/")
+    TEST_DIRS
+        .iter()
+        .any(|d| p.contains(d) || p.starts_with(&d[1..]))
         || name.starts_with("test_")
-        || name.contains("_test.")
-        || name.contains("_spec.")
-        || name.contains(".test.")
-        || name.contains(".spec.")
+        || NAME_PARTS.iter().any(|s| name.contains(s))
 }
 
 /// Generated / vendored / lockfile paths whose hunks are noise to a reviewer.
 pub fn is_generated_path(p: &str) -> bool {
+    const LOCKFILES: &[&str] = &[
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "poetry.lock",
+        "Gemfile.lock",
+        "composer.lock",
+        "flake.lock",
+        "uv.lock",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "_generated.go",
+        ".min.js",
+        ".min.css",
+        ".map",
+        ".pb.go",
+        "_pb2.py",
+    ];
+    const GENERATED_DIRS: &[&str] = &["/generated/", "/vendor/", "/node_modules/"];
     let name = p.rsplit('/').next().unwrap_or(p);
-    matches!(
-        name,
-        "package-lock.json"
-            | "yarn.lock"
-            | "pnpm-lock.yaml"
-            | "Cargo.lock"
-            | "go.sum"
-            | "poetry.lock"
-            | "Gemfile.lock"
-            | "composer.lock"
-            | "flake.lock"
-            | "uv.lock"
-    ) || name.starts_with("_generated.")
+    LOCKFILES.contains(&name)
+        || name.starts_with("_generated.")
         || name.contains(".generated.")
-        || name.ends_with("_generated.go")
-        || name.ends_with(".min.js")
-        || name.ends_with(".min.css")
-        || name.ends_with(".map")
-        || name.ends_with(".pb.go")
-        || name.ends_with("_pb2.py")
-        || p.contains("/generated/")
-        || p.contains("/vendor/")
-        || p.contains("/node_modules/")
+        || SUFFIXES.iter().any(|s| name.ends_with(s))
+        || GENERATED_DIRS.iter().any(|d| p.contains(d))
 }
 
 /// What a parameter contributes to a definition's arity.

@@ -137,46 +137,21 @@ fn tokens_by_row(
             .get(row)
             .map_or(byte, |l| l[..byte.min(l.len())].chars().count())
     };
-    let node_rows = |node: Node| -> (usize, usize, usize, usize) {
-        let (s, e) = (node.start_position(), node.end_position());
-        (s.row, s.column, e.row, e.column)
-    };
     while let Some(node) = stack.pop() {
         if node.child_count() > 0 {
             stack.extend(node.children(&mut cursor));
             continue;
         }
-        let (sr, sc, er, ec) = node_rows(node);
         let text = src.get(node.start_byte()..node.end_byte()).unwrap_or("");
-        for (k, line) in text.split('\n').enumerate() {
-            let row = sr + k;
+        for (row, bytes, line) in leaf_spans(node, text) {
             if row >= rows {
                 break;
             }
-            // columns are byte offsets from tree-sitter; the renderer counts
-            // chars, so convert against the row's own text
-            let (bs, be) = if sr == er {
-                (sc, ec)
-            } else if row == sr {
-                (sc, sc + line.len())
-            } else if row == er {
-                (0, ec)
-            } else {
-                (0, line.len())
-            };
-            if be > bs {
-                let id = match interned.get(line) {
-                    Some(&id) => id,
-                    None => {
-                        let id = interned.len() as u32;
-                        interned.insert(line.to_string(), id);
-                        id
-                    }
-                };
+            if !bytes.is_empty() {
                 out[row].push(Token {
-                    start: to_char(row, bs),
-                    end: to_char(row, be),
-                    id,
+                    start: to_char(row, bytes.start),
+                    end: to_char(row, bytes.end),
+                    id: intern(interned, line),
                 });
             }
         }
@@ -185,6 +160,39 @@ fn tokens_by_row(
         row.sort_by_key(|t| t.start);
     }
     out
+}
+
+/// A leaf's text row by row: (row, the byte columns it covers there, the
+/// line's text). The columns are tree-sitter's own on the first and last row
+/// and the whole line in between.
+fn leaf_spans<'s>(
+    node: Node,
+    text: &'s str,
+) -> impl Iterator<Item = (usize, std::ops::Range<usize>, &'s str)> {
+    let (s, e) = (node.start_position(), node.end_position());
+    let (sr, sc, er, ec) = (s.row, s.column, e.row, e.column);
+    text.split('\n').enumerate().map(move |(k, line)| {
+        let row = sr + k;
+        let bytes = if sr == er {
+            sc..ec
+        } else if row == sr {
+            sc..sc + line.len()
+        } else if row == er {
+            0..ec
+        } else {
+            0..line.len()
+        };
+        (row, bytes, line)
+    })
+}
+
+fn intern(interned: &mut std::collections::HashMap<String, u32>, text: &str) -> u32 {
+    if let Some(&id) = interned.get(text) {
+        return id;
+    }
+    let id = interned.len() as u32;
+    interned.insert(text.to_string(), id);
+    id
 }
 
 /// Fills the LCS DP table (flat, row-major, `(n+1) x (m+1)`) and returns it
