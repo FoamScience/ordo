@@ -59,7 +59,7 @@ fn cross_file_rationale_names_the_other_file() {
     assert_eq!(
         rats,
         vec![
-            "uses helper, defined in util.py",
+            "uses helper, added in util.py",
             "adds helper, used in main.py"
         ],
         "each side names the other file"

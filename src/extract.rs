@@ -65,6 +65,9 @@ pub struct HunkSem {
     pub old_range: [usize; 2],
     /// hunk adds no new lines (pure deletion) — drives removal wording
     pub new_empty: bool,
+    /// the hunk covers the old file from its first line to its last: with an
+    /// empty new side, the file is gone rather than trimmed
+    pub whole_old_file: bool,
     /// how many new-side lines the hunk covers, so a hunk that introduces no
     /// construct can still say what it did instead of the bare word "change"
     pub new_len: usize,
@@ -117,6 +120,7 @@ impl HunkSem {
             start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
             old_range: h.old_range,
             new_empty: h.new_r0.is_none(),
+            whole_old_file: false,
             new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
             def_lines: 0,
             def_params: 0,
@@ -229,7 +233,12 @@ struct Collected {
     /// (row, name, tree-sitter kind, enclosing scope) for each real definition
     /// — the raw material for `symbols` (name+kind+scope identity)
     sym_decls: Vec<(usize, String, String, Option<String>)>,
+    /// (start_row, end_row, name) per import name, spanning its whole
+    /// statement: what a hunk anywhere in the statement can still report
     import_decls: Vec<(usize, usize, String)>,
+    /// (row, name) for the languages that write one import per row (go), so a
+    /// hunk that swaps one line of a ten-line block names that import alone
+    import_rows_of: Vec<(usize, String)>,
     uses: Vec<(usize, String)>,
     /// parameter names (local bindings) seen anywhere in the file
     bound: HashSet<String>,
@@ -423,7 +432,16 @@ impl Parsed<'_> {
             // a hunk whose new side is nothing but blank lines has as little
             // to say for itself as a pure deletion, and the same wording fits:
             // what a reviewer wants to know is what left
-            new_empty: (r0..=r1).all(|r| self.lines.get(r).is_none_or(|l| l.trim().is_empty())),
+            // A hunk whose new side is nothing but blank lines has as little
+            // to say for itself as a pure deletion. With no new side to read
+            // at all — a context-limited patch the caller called complete —
+            // every hunk looked empty, and a file of real edits reported
+            // itself removed line by line.
+            new_empty: r1 < r0
+                || (!self.lines.is_empty()
+                    && (r0..=r1).all(|r| self.lines.get(r).is_none_or(|l| l.trim().is_empty()))),
+            // filled in by `build_change`, which knows the old side's length
+            whole_old_file: false,
             new_len: r1 - r0 + 1,
             def_lines: shape.lines,
             def_params: shape.params,
@@ -513,8 +531,31 @@ impl Parsed<'_> {
             )
         };
         let mut defines = names(&self.c.decls);
-        let imports = names(&self.c.import_decls);
-        defines.retain(|d| !imports.contains(d));
+        // Every name the statement binds, whichever row the hunk touched: an
+        // imported name is never a definition, and leaving the ones this hunk
+        // does not report in `defines` made a file that imports `createApp`
+        // the definer of it for every other file in the change.
+        let statement = names(&self.c.import_decls);
+        defines.retain(|d| !statement.contains(d));
+        // What the hunk reports is narrower: an import written on its own row
+        // is what a hunk touching that row is about, and the statement's
+        // other names are context. With none of those rows in range — a hunk
+        // on the block's brace, or on a comment inside it — the statement
+        // answers instead, rather than a bare "import" that tells a reviewer
+        // nothing.
+        let own_rows = sorted_unique(
+            self.c
+                .import_rows_of
+                .iter()
+                .filter(|(row, _)| (r0..=r1).contains(row))
+                .map(|(_, n)| n.clone())
+                .collect(),
+        );
+        let imports = if own_rows.is_empty() {
+            statement
+        } else {
+            own_rows
+        };
         (defines, imports)
     }
 
@@ -522,12 +563,16 @@ impl Parsed<'_> {
     // included, an imported name is not a use of it — and the file's
     // parameter names
     fn uses(&self, r0: usize, r1: usize, defines: &[String], imports: &[String]) -> Vec<String> {
+        // An imported name is not a use of it: `import x` says where x comes
+        // from, not that this hunk calls it. The hunk that imports AND calls
+        // it in one insertion is linked on the edge side instead, from its
+        // `imports` — see `order::group_symbols`.
         let declared: HashSet<&String> = defines.iter().chain(imports).collect();
         sorted_unique(
             self.c
                 .uses
                 .iter()
-                .filter(|(row, _)| r0 <= *row && *row <= r1)
+                .filter(|(row, _)| (r0..=r1).contains(row))
                 .map(|(_, n)| n.clone())
                 .filter(|n| !declared.contains(n) && !self.c.bound.contains(n))
                 .collect(),
@@ -737,7 +782,19 @@ fn is_bookkeeping_export(node: Node) -> bool {
     // NOT bookkeeping: `export default {…}` is the whole body of a config file
     // or a component. Reading it as an import swept every hunk inside it out of
     // the review.
-    node.child_by_field_name("declaration").is_none() && node.child_by_field_name("value").is_none()
+    if node.child_by_field_name("declaration").is_some()
+        || node.child_by_field_name("value").is_some()
+    {
+        return false;
+    }
+    // `export {};` re-exports nothing: it is the marker that makes a file a
+    // module, and in a `.d.ts` sweep it is the whole change — a reviewer has
+    // to see it, so it is neither import nor noise
+    let mut cur = node.walk();
+    let empty_clause = node
+        .named_children(&mut cur)
+        .any(|c| c.kind() == "export_clause" && c.named_child_count() == 0);
+    !empty_clause
 }
 
 /// Import-like for classification: a real import, or an export that only moves
@@ -1280,6 +1337,87 @@ fn opens_include_guard(node: Node, src: &[u8]) -> bool {
 /// macro wrapping a lambda — `Kokkos::parallel_for(n, KOKKOS_LAMBDA(int i){…})`
 /// parses as a definition named after the callee. A local class's methods are a
 /// real nesting, so the climb stops at any class, struct or namespace body.
+/// A def kind that is actually defining something here. C and C++ spell a
+/// mention of a type with the same node as its definition — `struct Curl_easy
+/// *data` in a parameter list is a `struct_specifier` too — and only the one
+/// with a body defines anything; the rest used to make every prototype taking
+/// a struct pointer "change type Curl_easy".
+fn is_def_node(node: Node, spec: &LangSpec) -> bool {
+    if !matches!(spec.name, "c" | "cpp") {
+        return spec.is_def(node.kind());
+    }
+    match node.kind() {
+        // a specifier with a body defines a type; one without is a mention —
+        // `struct Curl_easy *data` in a parameter list — unless it stands as
+        // a declaration of its own, which is a forward declaration
+        "struct_specifier" | "enum_specifier" | "union_specifier" | "class_specifier" => {
+            node.child_by_field_name("body").is_some() || is_forward_declaration(node)
+        }
+        // a file-scope prototype declares the function it names: a header's
+        // `int f(struct S *s, int8_t i);` changing is a signature change of
+        // `f`, which is what a reviewer reads it as
+        "declaration" => is_prototype(node),
+        kind => spec.is_def(kind),
+    }
+}
+
+/// The kind a def records itself under. A c/cpp prototype is spelled
+/// `declaration`, a kind css also uses for a style property and half a dozen
+/// grammars use for something else again; it records what it is instead, so
+/// the wording rules can read the kind without knowing the language.
+fn def_kind(node: Node, spec: &LangSpec) -> Option<&'static str> {
+    let prototype =
+        matches!(spec.name, "c" | "cpp") && node.kind() == "declaration" && is_prototype(node);
+    prototype.then_some("function_declaration")
+}
+
+/// `struct Opaque;` — a specifier standing as a statement of its own, naming
+/// the type and nothing else. C parses it straight under the scope it sits
+/// in; C++ wraps it in a `declaration`. `struct S x;` declares a variable and
+/// `struct S *s` a parameter: those mention the type, they do not declare it.
+fn is_forward_declaration(node: Node) -> bool {
+    node.parent().is_some_and(|p| match p.kind() {
+        "translation_unit"
+        | "declaration_list"
+        | "field_declaration_list"
+        | "linkage_specification" => true,
+        "declaration" | "field_declaration" => p.child_by_field_name("declarator").is_none(),
+        _ => false,
+    })
+}
+
+/// A `declaration` whose declarator is (or wraps) a `function_declarator`, at
+/// file or namespace scope: a prototype, not a variable.
+fn is_prototype(node: Node) -> bool {
+    // file scope, seen through the `#ifndef` guard and `#if` blocks a header
+    // wraps its prototypes in
+    let mut p = node.parent();
+    loop {
+        match p.map(|n| n.kind()) {
+            Some(
+                "translation_unit"
+                | "namespace_definition"
+                | "declaration_list"
+                | "linkage_specification",
+            ) => break,
+            Some(k) if k.starts_with("preproc_") => p = p.and_then(|n| n.parent()),
+            _ => return false,
+        }
+    }
+    let mut d = node.child_by_field_name("declarator");
+    while let Some(n) = d {
+        if n.kind() == "function_declarator" {
+            return declares_parameters(n);
+        }
+        d = n.child_by_field_name("declarator").or_else(|| {
+            (n.kind() == "reference_declarator")
+                .then(|| n.named_child(0))
+                .flatten()
+        });
+    }
+    false
+}
+
 fn is_misparsed_call(node: Node, spec: &LangSpec) -> bool {
     if !matches!(spec.name, "c" | "cpp") || node.kind() != "function_definition" {
         return false;
@@ -1524,6 +1662,25 @@ fn header_end(node: Node) -> Option<usize> {
         })
 }
 
+/// Whether a `function_declarator`'s parentheses hold parameters rather than
+/// constructor arguments. C++'s most vexing parse spells `std::mutex m(a, b);`
+/// exactly like a prototype; its "parameters" are bare type identifiers with
+/// nothing declared after them, where a real prototype either names what it
+/// declares or spells a built-in type.
+fn declares_parameters(declarator: Node) -> bool {
+    let Some(params) = declarator.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cur = params.walk();
+    let declared = params.named_children(&mut cur).all(|p| {
+        p.kind() != "parameter_declaration"
+            || p.child_by_field_name("declarator").is_some()
+            || p.child_by_field_name("type")
+                .is_some_and(|t| t.kind() != "type_identifier")
+    });
+    declared
+}
+
 /// The first named child `pred` accepts.
 fn child_where<'t>(node: Node<'t>, pred: impl Fn(&Node<'t>) -> bool) -> Option<Node<'t>> {
     let mut cur = node.walk();
@@ -1685,15 +1842,22 @@ impl<'a> Walker<'a> {
         for r in sr..=er {
             self.c.import_rows.insert(r);
         }
-        // A name is attributed to every row of its statement, not just the row
-        // it is written on: a hunk that touches the tail of a multi-line import
-        // list (`} from './y'`) still has the statement's names to report, and
-        // "import" with nothing after it tells a reviewer nothing.
+        // A name is attributed to the row it is written on and to the
+        // statement's head and tail: a hunk that touches the tail of a
+        // multi-line import list (`} from './y'`) still has the statement's
+        // names to report, and "import" with nothing after it tells a reviewer
+        // nothing — while a hunk that swaps one line of a go import block
+        // names that import, not the nine around it.
         let names = import_bound_names(node, self.src, self.spec)
             .unwrap_or_else(|| ident_text_rows(node, self.src));
-        for (_, name) in names {
+        for (row, name) in names {
             self.c.decls.push((sr, er, name.clone()));
-            self.c.import_decls.push((sr, er, name));
+            self.c.import_decls.push((sr, er, name.clone()));
+            // a name the language reports on the statement's own row has no
+            // row of its own (python's `from x import a, b`, js's clause)
+            if row != sr {
+                self.c.import_rows_of.push((row, name));
+            }
         }
         true // don't descend: import identifiers are declarations, not uses
     }
@@ -1817,7 +1981,7 @@ impl<'a> Walker<'a> {
 
     fn visit_def(&mut self, node: Node) -> bool {
         let (src, spec, kind) = (self.src, self.spec, node.kind());
-        if !spec.is_def(kind) || is_misparsed_call(node, spec) {
+        if !is_def_node(node, spec) || is_misparsed_call(node, spec) {
             return false;
         }
         // A def with no name of its own names no container, so it is
@@ -1924,6 +2088,7 @@ impl<'a> Walker<'a> {
         if delegates {
             return;
         }
+        let kind = def_kind(node, spec).unwrap_or_else(|| node.kind());
         // scope excludes a duplicate trailing entry (the wrapper's own push
         // for this same symbol, not a genuine enclosing scope)
         let scope_stack = if dup {
@@ -1934,7 +2099,7 @@ impl<'a> Walker<'a> {
         let scope = (!scope_stack.is_empty()).then(|| scope_stack.join(lang::scope_sep(spec)));
         self.c
             .sym_decls
-            .push((sr, own.to_string(), node.kind().to_string(), scope));
+            .push((sr, own.to_string(), kind.to_string(), scope));
     }
 
     // parameter names are local bindings, not references to outer symbols —
@@ -2159,7 +2324,7 @@ fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
         // `readonly` / `declare` wrapper the walk descends through
         "variable_assignment" => "name",
         "let_declaration" => "pattern",
-        "var_spec" | "variable_declarator" => "name",
+        "var_spec" | "const_spec" | "variable_declarator" => "name",
         // java local_variable_declaration / c/cpp declaration: one or more
         // `declarator` fields (`int x = 1, y = 2;`), each possibly wrapping
         // the name a level or two down (pointer/init declarator).
@@ -2222,6 +2387,12 @@ fn declarator_ident(node: Node) -> Option<Node> {
     }
     if let Some(d) = node.child_by_field_name("declarator") {
         return declarator_ident(d);
+    }
+    // c++ `const T& f()`: a `reference_declarator` holds its declarator as a
+    // bare child, not a field, so the chain used to stop here and the
+    // function fell back to being named after its return type
+    if node.kind() == "reference_declarator" {
+        return node.named_child(0).and_then(declarator_ident);
     }
     // a c++ `operator()` or `~Foo` declarator is the method's own name, though
     // neither spells it with an identifier node. Without this the declarator
@@ -2522,7 +2693,9 @@ pub fn signatures(spec: &LangSpec, content: &str) -> Vec<SigInfo> {
     };
     let src = content.as_bytes();
     fn walk(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<SigInfo>) {
-        if spec.is_def(node.kind()) && lang::has_signature(node.kind()) {
+        if is_def_node(node, spec)
+            && (lang::has_signature(node.kind()) || def_kind(node, spec).is_some())
+        {
             if let (Some(name), Some(params)) = (node_name(node, src), params_of(node)) {
                 let mut cur = params.walk();
                 let kinds: Vec<&str> = params.named_children(&mut cur).map(|c| c.kind()).collect();
@@ -3207,7 +3380,6 @@ struct DefOut {
 /// `collect_bodies` did when it ran separately. `in_import` is what tells the
 /// row half it is under one; it is not a shortcut for "skip this subtree".
 fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_import: bool) {
-    let kind = node.kind();
     let row = node.start_position().row + 1; // 1-based
     let import = !in_import && import_like(node, src, spec);
     if import {
@@ -3216,7 +3388,9 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
             .unwrap_or_else(|| ident_texts(node, src));
         o.imports.extend(names.into_iter().map(|n| (n, row)));
     }
-    let def = spec.is_def(kind).then(|| node_name(node, src)).flatten();
+    let def = is_def_node(node, spec)
+        .then(|| node_name(node, src))
+        .flatten();
     if let Some(name) = def {
         // `collect_rows` returned before its own def check when the node was an
         // import, so a definition under one was never a row

@@ -58,15 +58,19 @@ fn a_re_export_is_module_bookkeeping_like_an_import() {
 }
 
 #[test]
-fn the_bare_export_module_marker_is_bookkeeping_too() {
+fn the_bare_export_module_marker_is_the_change_not_bookkeeping() {
+    // `export {};` re-exports nothing: it is what makes a `.d.ts` a module,
+    // and in a sweep that adds it to every declaration file it is the whole
+    // change. Ten labeled silver hunks said so (tasks-3uv.28); dimming it as
+    // import noise hid the commit.
     let out = one(
         "t.d.ts",
         "type A = string;\n",
         "type A = string;\n\nexport {};\n",
     );
     let h = out.files[0].hunks.last().expect("the marker hunk");
-    assert_eq!(h.category, Category::Import);
-    assert!(h.noise);
+    assert_eq!(h.category, Category::Other);
+    assert!(!h.noise);
 }
 
 #[test]
@@ -595,9 +599,11 @@ fn a_doc_comment_arriving_where_code_left_says_both_halves() {
         "/// On Unix, an optimized check.\n#[cfg(unix)]\npub fn is_hidden(d: &D) -> bool { true }\n",
         "/// ## Windows\n",
     );
+    // both halves: what left, and what arrived in its place. The count alone
+    // ("replaces 3 lines with comments") said nothing about the code.
     assert_eq!(
         out.files[0].hunks[0].rationale,
-        "replaces 3 lines with comments"
+        "removes is_hidden, replaced by comments"
     );
 }
 
@@ -669,7 +675,10 @@ fn the_bookkeeping_forms_are_still_bookkeeping() {
             "export * from \"./a\";\n",
             "export * from \"./a\";\nexport * from \"./b\";\n",
         ),
-        ("type A = 1;\n", "type A = 1;\n\nexport {};\n"),
+        (
+            "export { a } from \"./a\";\n",
+            "export { a } from \"./a\";\nexport { b } from \"./b\";\n",
+        ),
     ] {
         let out = one("b.ts", old, new);
         assert!(

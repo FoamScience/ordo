@@ -60,7 +60,7 @@
           ],
           "group": "g1",
           "order_index": 1,
-          "rationale": "uses helper, defined above"
+          "rationale": "uses helper, added above"
         }
       ]
     }

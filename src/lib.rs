@@ -81,7 +81,7 @@ pub fn run(input: Input) -> Output {
     // A caller who sends a diff gets the same review as one who sends
     // `old`/`new`, whenever the diff carries enough to rebuild them.
     let mut input = input;
-    fill_sides(&mut input);
+    let mut input_problems = fill_sides(&mut input);
     // Templates are rewritten before anything else looks at them: every later
     // parse (semantics, symbol rows, bodies, advisories) then sees text the
     // underlying grammar can read, at unchanged offsets. What the jinja
@@ -100,7 +100,10 @@ pub fn run(input: Input) -> Output {
     classify_imports(&mut hunks, &input.changes, &symbols, &changed);
 
     uninit_members(&mut hunks, &input.changes);
-    let (rule_hits, problems) = apply_rules(&mut hunks, &input);
+    let (rule_hits, mut problems) = apply_rules(&mut hunks, &input);
+    problems.append(&mut input_problems);
+    problems.sort();
+    problems.dedup();
 
     let facts = order::FileFacts {
         symbols: &symbols,
@@ -234,7 +237,7 @@ fn apply_rules(hunks: &mut [PerFileHunks], input: &Input) -> (Vec<Vec<Vec<Findin
                 )
             })
             .collect();
-        rule_hits.push(per_file);
+        rule_hits.push(cap_repeats(per_file));
     }
     engine.finish();
     for (fi, per_file) in rule_hits.iter().enumerate() {
@@ -255,6 +258,43 @@ fn apply_rules(hunks: &mut [PerFileHunks], input: &Input) -> (Vec<Vec<Vec<Findin
     problems.sort();
     problems.dedup();
     (rule_hits, problems)
+}
+
+/// How many times one rule speaks about one file before it starts counting
+/// instead. A construct a file uses everywhere — OpenFOAM wraps every `new`
+/// in a `tmp<>` — produced twenty-five identical notes in one review, of
+/// which a labeled sample judged one worth reading.
+const RULE_REPEATS: usize = 3;
+
+/// The same rule, past `RULE_REPEATS` hunks of one file, stops repeating and
+/// says how many more there are. Nothing is dropped silently: the last
+/// finding that speaks carries the count of the ones that did not.
+fn cap_repeats(mut per_file: Vec<Vec<Finding>>) -> Vec<Vec<Finding>> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for hits in per_file.iter_mut() {
+        hits.retain(|f| {
+            let n = seen.entry(f.name.clone()).or_default();
+            *n += 1;
+            *n <= RULE_REPEATS
+        });
+    }
+    for (name, total) in seen {
+        let more = total.saturating_sub(RULE_REPEATS);
+        if more == 0 {
+            continue;
+        }
+        // the last one that still speaks carries the count of the rest
+        let last = per_file
+            .iter_mut()
+            .rev()
+            .flat_map(|hits| hits.iter_mut().rev())
+            .find(|f| f.name == name);
+        if let Some(f) = last {
+            f.message
+                .push_str(&format!("\n(and {more} more in this file)"));
+        }
+    }
+    per_file
 }
 
 /// What a rule can ask about one hunk.
@@ -366,8 +406,9 @@ impl Passes<'_> {
 /// `old: None` and read the file as having had no definitions at all — so on
 /// the whole patch path every pre-existing definition was reported as a
 /// signature change, and no hunk ever reported a body-only edit.
-fn fill_sides(input: &mut Input) {
+fn fill_sides(input: &mut Input) -> Vec<String> {
     let full_context = input.options.full_context;
+    let mut problems = vec![];
     for c in &mut input.changes {
         if c.new.is_some() {
             continue;
@@ -382,10 +423,23 @@ fn fill_sides(input: &mut Input) {
         }
         // L2: an added file, or a caller-asserted full-context patch
         let pf = patch::parse_file_diff(diff, full_context);
-        if let (Some(old), Some(new)) = (pf.old, pf.new) {
-            (c.old, c.new) = (Some(old), Some(new));
+        let whole_file = pf.hunks.len() == 1 && pf.hunks[0].old_range[0] == 1;
+        match (pf.old, pf.new) {
+            (Some(old), Some(new)) => (c.old, c.new) = (Some(old), Some(new)),
+            // The caller asserted a complete patch and sent a context-limited
+            // one. Saying so beats a confident answer read off three lines of
+            // context per hunk: the assertion is the only reason the engine
+            // would have trusted it.
+            _ if full_context && !whole_file => problems.push(format!(
+                "{}: full_context was asserted but the patch carries {} hunks \
+                 rather than the whole file — positional order only",
+                c.path,
+                pf.hunks.len()
+            )),
+            _ => {}
         }
     }
+    problems
 }
 
 /// Hunks and semantics for every changed file, with the drops the caller asked
@@ -461,6 +515,28 @@ fn classify_imports(
         name_deleted_imports(&mut hunks[fi], &changes[fi], &symbols[fi]);
         mark_moved_imports(&mut hunks[fi], &changes[fi]);
         mark_import_residue(&mut hunks[fi], &changes[fi], &symbols[fi], &changed[fi]);
+        keep_removed_definitions(&mut hunks[fi], &changed[fi]);
+    }
+}
+
+/// A hunk is classified from its new side, so one that deletes a definition
+/// and leaves an import line behind read as an import hunk and was dimmed —
+/// a removed public export hidden as noise. The old side knows better: a
+/// definition removed inside the hunk's rows makes it a real change.
+fn keep_removed_definitions(f: &mut PerFileHunks, changed: &FileChanges) {
+    for sem in &mut f.sem {
+        let [o0, o1] = sem.old_range;
+        if sem.category != Category::Import || o0 == 0 || o0 > o1 {
+            continue;
+        }
+        let removes_def = changed
+            .removals
+            .iter()
+            .any(|r| r.kind != RemovalKind::Import && (o0..=o1).contains(&r.row));
+        if removes_def {
+            sem.category = Category::Other;
+            sem.noise = false;
+        }
     }
 }
 
@@ -691,61 +767,100 @@ fn header_of<'a>(list: &'a [extract::Body], name: &str) -> Option<&'a str> {
 
 /// P12.1: freshly-appeared new defs by (name, body) → file, for moves
 fn appeared_defs(symbols: &[FileSymbols]) -> HashMap<(String, String), usize> {
-    let mut appeared: HashMap<(String, String), usize> = HashMap::new();
+    let mut appeared: HashMap<(String, String), Option<usize>> = HashMap::new();
     for (fi, fs) in symbols.iter().enumerate() {
         for (name, _, body, _) in &fs.new_body {
             if body.len() >= 8 && !fs.old_defs.contains(name) {
-                appeared.entry((name.clone(), body.clone())).or_insert(fi);
+                // Two files receiving the same (name, body) name no
+                // destination: a yaml key with a common value, a boilerplate
+                // struct. Claiming the first is how a move ended up pointing
+                // at a file the code never came from.
+                appeared
+                    .entry((name.clone(), body.clone()))
+                    .and_modify(|e| {
+                        if *e != Some(fi) {
+                            *e = None;
+                        }
+                    })
+                    .or_insert(Some(fi));
             }
         }
     }
     appeared
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v?)))
+        .collect()
 }
 
 /// #7 rename (same file): new name → old name, by body match, then a
 /// lone-pair fallback
 fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<String, String> {
-    let (ob, nb) = (&fs.old_body, &fs.new_body);
-    if removed.is_empty() || added.is_empty() {
-        return HashMap::new();
+    // Every pair that could be a rename at all: the body reappears verbatim,
+    // or the two are recognisably the same code. `similar` is the guard —
+    // deleting `foo` and adding an unrelated `bar` shares no body lines, so
+    // the pair never comes up for consideration.
+    // one index per side, so a file of N definitions is walked twice rather
+    // than once per candidate pair
+    let (old_body, new_body) = (index_bodies(&fs.old_body), index_bodies(&fs.new_body));
+    let mut pairs: Vec<(bool, bool, usize, &String, &String)> = vec![];
+    for r in removed {
+        let rb = old_body
+            .get(r.as_str())
+            .map(|(whole, _)| *whole)
+            .filter(|b| b.len() >= 8);
+        for a in added {
+            let exact = rb.is_some() && new_body.get(a.as_str()).map(|(w, _)| *w) == rb;
+            if !exact && !alike(&old_body, r, &new_body, a) {
+                continue;
+            }
+            // One name inside the other is a rename on sight — `is_hidden` →
+            // `is_hidden_entry`, `get_stream` → `_get_stream` — and outranks
+            // any body evidence. A shared tail is not: `get_value` and
+            // `set_value` are two functions, not one renamed.
+            let (short, long) = if r.len() <= a.len() { (r, a) } else { (a, r) };
+            pairs.push((
+                long.contains(short.as_str()),
+                exact,
+                name_overlap(r, a),
+                r,
+                a,
+            ));
+        }
     }
-    let mut ren = exact_renames(fs, removed, added);
-    let rem_left: Vec<&String> = removed
-        .iter()
-        .filter(|r| !ren.values().any(|v| v == *r))
-        .collect();
-    let add_left: Vec<&String> = added.iter().filter(|a| !ren.contains_key(*a)).collect();
-    // The bodies did not match exactly, so the pair is a rename only if the
-    // two are recognisably the same code. Without this, deleting `foo` and
-    // adding an unrelated `bar` in one file reads as "renames foo → bar" and
-    // then earns a bogus incomplete-rename note.
-    if rem_left.len() == 1 && add_left.len() == 1 && similar(ob, rem_left[0], nb, add_left[0]) {
-        ren.insert(add_left[0].clone(), rem_left[0].clone());
+    // Best pair first, across the whole file rather than per removed name.
+    // An unmistakable name wins outright: two functions can share a body to
+    // the byte — two stream openers differing only in their name, a helper
+    // and the function that now wraps it — and then the body says nothing
+    // about which became which. Failing that an exact body outranks a merely
+    // similar one, and the closest spelling breaks what is left. Ordering by
+    // name last keeps the result stable.
+    pairs.sort_by_key(|(obvious, exact, overlap, r, a)| {
+        (std::cmp::Reverse((*obvious, *exact, *overlap)), *r, *a)
+    });
+    let mut ren = HashMap::new();
+    let (mut taken, mut claimed): (HashSet<&String>, HashSet<&String>) = Default::default();
+    for (_, _, _, r, a) in pairs {
+        if taken.contains(r) || claimed.contains(a) {
+            continue;
+        }
+        taken.insert(r);
+        claimed.insert(a);
+        ren.insert(a.clone(), r.clone());
     }
     ren
 }
 
-/// new name → old name, for every removed def whose body reappears verbatim
-/// under an added name; each added name is claimed once.
-fn exact_renames(
-    fs: &FileSymbols,
-    removed: &[String],
-    added: &[String],
-) -> HashMap<String, String> {
-    let mut ren = HashMap::new();
-    for r in removed {
-        let rb = match body_of(&fs.old_body, r) {
-            Some(b) if b.len() >= 8 => b,
-            _ => continue,
-        };
-        if let Some(a) = added
-            .iter()
-            .find(|a| !ren.contains_key(*a) && body_of(&fs.new_body, a) == Some(rb))
-        {
-            ren.insert(a.clone(), r.clone());
-        }
-    }
-    ren
+/// How much of two names is shared at either end: `get_stream` and
+/// `_get_stream` share ten characters, `get_stream` and `read_text` none.
+fn name_overlap(a: &str, b: &str) -> usize {
+    let prefix = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+    let suffix = a
+        .bytes()
+        .rev()
+        .zip(b.bytes().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    (prefix + suffix).min(a.len().min(b.len()))
 }
 
 /// P12.1 moves: a removed (non-renamed) def whose body reappears same-name in
@@ -794,10 +909,29 @@ fn relocation_source(fs: &FileSymbols, a: &str) -> Option<String> {
         _ => return None,
     };
     let aset: HashSet<&String> = al.iter().collect();
+    // What the source still has. An extraction takes code OUT of it, so a
+    // shared line that is still there was not extracted: a new function
+    // modelled on an existing one shares its shape without touching it, and
+    // used to be reported as extracted from the function it resembles.
+    let kept = |x: &str| -> HashSet<&String> {
+        fs.new_body
+            .iter()
+            .find(|(nm, _, _, _)| nm == x)
+            .map(|(_, _, _, l)| l.iter().collect())
+            .unwrap_or_default()
+    };
     fs.old_body
         .iter()
         .filter(|(x, _, _, _)| x != a && fs.new_defs.contains(x))
-        .map(|(x, _, _, xl)| (x, xl.iter().filter(|l| aset.contains(*l)).count()))
+        .map(|(x, _, _, xl)| {
+            let still = kept(x);
+            (
+                x,
+                xl.iter()
+                    .filter(|l| aset.contains(*l) && !still.contains(*l))
+                    .count(),
+            )
+        })
         .filter(|(_, shared)| *shared >= 3 && shared * 2 >= al.len())
         // the first of equally good candidates wins
         .fold(None, |best: Option<(&String, usize)>, (x, shared)| {
@@ -1374,19 +1508,25 @@ impl FileSymbols {
     }
 }
 
-/// Two definitions on opposite sides of a change are the same code under a new
-/// name when their body lines overlap: every line the shorter of the two has,
-/// up to a third of them, has to appear in the other. A one-line body matching
-/// one line passes — that is all the evidence a one-liner can offer — while two
-/// unrelated definitions share nothing and are rejected.
-fn similar(old: &[extract::Body], from: &str, new: &[extract::Body], to: &str) -> bool {
-    let lines = |list: &[extract::Body], name: &str| {
-        list.iter()
-            .find(|(nm, _, _, _)| nm == name)
-            .map(|(_, _, _, l)| l.clone())
-            .unwrap_or_default()
+/// name → (whole body, its lines), so a pass that asks about many pairs walks
+/// the definition list once instead of once per question.
+type BodyIndex<'a> = HashMap<&'a str, (&'a str, &'a [String])>;
+
+fn index_bodies(list: &[extract::Body]) -> BodyIndex<'_> {
+    list.iter()
+        .map(|(nm, _, whole, lines)| (nm.as_str(), (whole.as_str(), lines.as_slice())))
+        .collect()
+}
+
+/// Two definitions on opposite sides of a change are the same code under a
+/// new name when their body lines overlap: every line the shorter of the two
+/// has, up to a third of them, has to appear in the other. A one-line body
+/// matching one line passes — that is all the evidence a one-liner can offer
+/// — while two unrelated definitions share nothing and are rejected.
+fn alike(old: &BodyIndex, from: &str, new: &BodyIndex, to: &str) -> bool {
+    let (Some((_, o)), Some((_, n))) = (old.get(from), new.get(to)) else {
+        return false;
     };
-    let (o, n) = (lines(old, from), lines(new, to));
     if o.is_empty() || n.is_empty() {
         return false;
     }
@@ -1910,9 +2050,13 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let generated = lang::is_generated_path(&change.path);
     let old_lines: Vec<&str> = old.unwrap_or("").lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
-    for (i, h) in raw.iter().enumerate() {
-        sems[i].noise = generated || formatting_only(h, &old_lines, &new_lines);
-    }
+    mark_shape(
+        &raw,
+        &mut sems,
+        (&old_lines, &new_lines),
+        generated,
+        degraded,
+    );
     let ext = change.path.rsplit('.').next().unwrap_or("");
     let spec = lang::for_path(&change.path);
     let old_doc = old.and_then(|o| spec.and_then(|s| ts_comment_lines(s, o)));
@@ -1938,6 +2082,26 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         .map(|h| side_shift(h, &old_lines, &new_lines, ext))
         .collect();
     (raw, sems, degraded, comment_only, switched)
+}
+
+/// Two facts a hunk carries about its own shape rather than its semantics:
+/// whether it is skippable, and whether it covers the old file entire.
+///
+/// A degraded file has no sides to compare — every hunk looked identical on
+/// both of them, and the whole file was dimmed as "formatting only", which is
+/// the one thing it certainly is not.
+fn mark_shape(
+    raw: &[RawHunk],
+    sems: &mut [HunkSem],
+    (old_lines, new_lines): (&[&str], &[&str]),
+    generated: bool,
+    degraded: bool,
+) {
+    for (h, sem) in raw.iter().zip(sems) {
+        sem.noise = generated || (!degraded && formatting_only(h, old_lines, new_lines));
+        let [o0, o1] = h.old_range;
+        sem.whole_old_file = !old_lines.is_empty() && o0 == 1 && o1 >= old_lines.len();
+    }
 }
 
 /// P15 detail layer: what the hunk did to the members of its container. The
@@ -1985,9 +2149,15 @@ fn comment_only_hunk(
         if seg.iter().all(|l| l.trim().is_empty()) {
             return None; // nothing but blank lines: not a meaningful side
         }
-        Some((r[0]..=r[1]).zip(seg.iter()).all(|(line_no, l)| {
-            is_comment_line(l.trim(), ext) || doc.is_some_and(|d| d.contains(&line_no))
-        }))
+        let comment = |(line_no, l): (usize, &&str)| {
+            // With a parsed grammar the doc set is the authority on strings:
+            // a lone `"""` closing a `patch = """…"""` assignment is code,
+            // and only the textual check ever called it a comment.
+            let textual = is_comment_line(l.trim(), ext)
+                && !(doc.is_some() && l.trim().starts_with(['"', '\'']));
+            textual || doc.is_some_and(|d| d.contains(&line_no))
+        };
+        Some((r[0]..=r[1]).zip(seg.iter()).all(comment))
     };
     match (
         side(new_lines, h.new_range, new_doc),
@@ -2101,7 +2271,23 @@ fn is_comment_line(trimmed: &str, ext: &str) -> bool {
     if trimmed.starts_with("#!") {
         return true;
     }
-    comment_markers(ext).iter().any(|m| trimmed.starts_with(m))
+    comment_markers(ext)
+        .iter()
+        .any(|m| trimmed.starts_with(m) && marker_fits(trimmed, m))
+}
+
+/// `*` opens a block comment's continuation line, and it also opens a
+/// dereference or a wrapped multiplication: `*limitedAlphal/(1 + …)` is code,
+/// and reading it as a comment reported a formula rewrite as "replaces 2
+/// lines with comments". Only the spelling with a separator after it counts.
+fn marker_fits(trimmed: &str, marker: &str) -> bool {
+    if marker != "*" {
+        return true;
+    }
+    matches!(
+        trimmed.as_bytes().get(1),
+        None | Some(b' ' | b'\t' | b'/' | b'*')
+    )
 }
 
 /// How a hunk moved code across the comment boundary.
