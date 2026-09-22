@@ -323,7 +323,7 @@ static SPECS: &[LangSpec] = &[
         prose: false,
         data: false,
         template: None,
-        locals: &["short_var_declaration", "var_spec"],
+        locals: &["short_var_declaration", "var_spec", "const_spec"],
     },
     LangSpec {
         name: "c",

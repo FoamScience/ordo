@@ -33,7 +33,7 @@
           ],
           "group": "g0",
           "order_index": 0,
-          "rationale": "uses helper, defined in util.py"
+          "rationale": "uses helper, added in util.py"
         }
       ]
     },

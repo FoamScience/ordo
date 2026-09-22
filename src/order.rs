@@ -176,14 +176,62 @@ fn docs_rank(path: &str, docs_last: bool) -> u8 {
 
 /// How a removal reads. The pipeline decides *what* left; this decides how to
 /// say it, which is the only place wording belongs.
-fn removal_phrase(r: &Removal) -> String {
-    match &r.kind {
-        RemovalKind::MovedTo(path) => format!("moves {} to {path}", r.name),
-        RemovalKind::Section => format!("removes section {}", r.name),
-        RemovalKind::Import => format!("removes import {}", r.name),
-        RemovalKind::Def => format!("removes {}", r.name),
+///
+/// Every removal the hunk covers is named, not just the first: a deleted
+/// class or workflow file reads "removes a, b, c" where naming one member of
+/// it — whichever happened to come first — claimed the rest survived.
+/// Grouped by kind so one hunk does not repeat the verb per name.
+fn removal_phrase(rs: &[&Removal]) -> String {
+    let mut frags = vec![];
+    for (kind, verb) in [
+        (RemovalKind::Def, "removes"),
+        (RemovalKind::Section, "removes section"),
+        (RemovalKind::Import, "removes import"),
+    ] {
+        let mut names: Vec<&str> = rs
+            .iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| r.name.as_str())
+            .collect();
+        // one name per thing removed, in the order they were removed: a class
+        // and its members can declare the same name twice (a property and its
+        // getter), and "removes buffer, buffer" reads as a bug in the tool
+        let mut seen = std::collections::HashSet::new();
+        names.retain(|n| seen.insert(*n));
+        if !names.is_empty() {
+            frags.push(format!("{verb} {}", name_list(&names)));
+        }
     }
+    // a move keeps its destination, so the names that went to the same place
+    // are named together rather than repeating the path per name
+    let moved: Vec<(&str, &str)> = rs
+        .iter()
+        .filter_map(|r| match &r.kind {
+            RemovalKind::MovedTo(path) => Some((r.name.as_str(), path.as_str())),
+            _ => None,
+        })
+        .collect();
+    for (path, names) in group_by_src(&moved) {
+        frags.push(format!("moves {} to {path}", name_list(&names)));
+    }
+    // A hunk that deleted a whole module has one thing to say, not six: the
+    // first two fragments carry it and the rest are counted.
+    let more = frags.len().saturating_sub(REMOVAL_FRAGS);
+    frags.truncate(REMOVAL_FRAGS);
+    let mut out = join_frags(&frags);
+    if more > 0 {
+        out += &format!(", and {more} more");
+    }
+    out
 }
+
+/// How many kinds of removal one hunk spells out before it starts counting.
+const REMOVAL_FRAGS: usize = 2;
+
+/// The longest detail that may stand in for the rationale. Past this it is
+/// the detail layer's to show — a css-in-js object's computed keys run to
+/// three times the length of the container's own name.
+const DETAIL_MAX: usize = 80;
 
 fn cat_rank(c: Category) -> u8 {
     match c {
@@ -213,7 +261,7 @@ pub fn order_all(
     let FileFacts { symbols, changed } = *facts;
     let flat = flatten(files);
     let (groups, group_idx) = group_hunks(&flat);
-    let (gdef, guse) = group_symbols(&flat, &groups, &group_idx, symbols);
+    let (gdef, guse) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
     // `users`/`definers` invert the per-group sets once (symbol → the groups
     // using / defining it, ascending), so a group's defs look up their users
     // directly instead of scanning every other group: the corpus reaches ~15k
@@ -372,12 +420,44 @@ fn group_symbols(
     groups: &[GroupInfo],
     group_idx: &[usize],
     symbols: &[crate::FileSymbols],
+    paths: &[String],
 ) -> (Vec<HashSet<String>>, Vec<HashSet<String>>) {
     let mut gdef: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     let mut guse: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
+    // What this change defines, and where. An import links to it only when
+    // the statement's own module names that file: a test file that happens to
+    // define `render` must not become the definer of every
+    // `import { render } from "lib"` in the change.
+    let defined_in: HashMap<&str, usize> = flat
+        .sem
+        .iter()
+        .enumerate()
+        .flat_map(|(i, s)| {
+            let file = flat.coord[i].0;
+            s.defines.iter().map(move |d| (d.as_str(), file))
+        })
+        .collect();
     for (i, s) in flat.sem.iter().enumerate() {
         let gi = group_idx[i];
         gdef[gi].extend(s.defines.iter().cloned());
+        // An added file whose `from a import foo` and `foo()` land in one
+        // insertion has nothing in `uses` to link on — the import declares
+        // the name the call refers to. The import is the dependency then, as
+        // long as the module it names is the file this change defines it in
+        // (tasks-3uv.12).
+        let my_file = flat.coord[i].0;
+        for im in &s.imports {
+            let Some(&home) = defined_in.get(im.as_str()) else {
+                continue;
+            };
+            let module = symbols
+                .get(my_file)
+                .and_then(|f| f.imported_from.get(im.as_str()))
+                .and_then(|(_, module)| module.as_deref());
+            if home != my_file && module.is_some_and(|m| names_file(m, &paths[home])) {
+                guse[gi].insert(im.clone());
+            }
+        }
         for u in &s.uses {
             guse[gi].insert(u.clone());
             // `from lib import helper as h` then `h()`: the definition is
@@ -393,6 +473,19 @@ fn group_symbols(
         }
     }
     (gdef, guse)
+}
+
+/// Whether an import's module names this file. A module is written the way
+/// the language spells it — `./util`, `../a/b`, `pkg.mod`, `a.b.c` — so the
+/// comparison is on the path's own segments without its extension, which is
+/// all the two spellings share.
+fn names_file(module: &str, path: &str) -> bool {
+    let stem = path.rsplit('/').next().unwrap_or(path);
+    let stem = stem.split_once('.').map_or(stem, |(s, _)| s);
+    let tail = module
+        .rsplit(['/', '.'])
+        .find(|s| !s.is_empty() && *s != "js" && *s != "ts");
+    tail == Some(stem)
 }
 
 /// symbol → the groups whose set holds it, ascending
@@ -895,11 +988,12 @@ impl<'a> RatCtx<'a> {
     // #3/#4: verb for a definition hunk. New symbol → "adds"/"adds type"; a
     // pre-existing symbol whose header changed → "changes signature of"/"changes
     // type" (a def-category hunk means the declaration line itself moved).
-    fn def_verb(&self, file: usize, sym: &str, is_type: bool) -> &'static str {
-        let existed = self
-            .symbols
-            .get(file)
-            .is_some_and(|s| s.old_defs.contains(sym));
+    fn def_verb(&self, file: usize, sym: &str, is_type: bool, inserted: bool) -> &'static str {
+        let existed = !inserted
+            && self
+                .symbols
+                .get(file)
+                .is_some_and(|s| s.old_defs.contains(sym));
         let body_only = self
             .changed
             .get(file)
@@ -957,16 +1051,58 @@ impl<'a> RatCtx<'a> {
         (!frags.is_empty()).then(|| frags.join("; "))
     }
     // "uses foo, defined in a.py" / "uses foo, defined above|below"
+    /// Whether the hunk's own rows removed something the pipeline tracked —
+    /// a definition, a section, a module-level binding — rather than only
+    /// lines.
+    /// What the hunk's own rows removed, named: a tracked definition, else a
+    /// member the detail layer named — a method or a field, which a file's
+    /// removal list does not carry.
+    fn removed_phrase(&self, file: usize, s: &HunkSem) -> Option<String> {
+        let [o0, o1] = s.old_range;
+        if o0 > o1 {
+            return None;
+        }
+        let tracked: Vec<&Removal> = self
+            .changed
+            .get(file)
+            .map(|c| {
+                c.removals
+                    .iter()
+                    .filter(|r| r.kind != RemovalKind::Import && (o0..=o1).contains(&r.row))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !tracked.is_empty() {
+            return Some(removal_phrase(&tracked));
+        }
+        s.details.iter().find(|d| d.starts_with("removes")).cloned()
+    }
+
+    /// Whether this file's new side declares nothing at all: a deletion, or
+    /// a file emptied to the same effect.
+    fn file_emptied(&self, file: usize) -> bool {
+        self.symbols.get(file).is_some_and(|s| {
+            s.new_defs.is_empty() && s.new_imports.is_empty() && s.new_binds.is_empty()
+        })
+    }
+
     fn use_of_phrase(&self, sym: &str, mine: usize, b: usize) -> String {
+        // a symbol this change introduces is "added", not "defined": the
+        // reader would otherwise take the definition for pre-existing code
+        let verb = if self.symbols[self.group_file[b]].old_defs.contains(sym) {
+            "defined"
+        } else {
+            "added"
+        };
         if self.group_file[b] != self.group_file[mine] {
-            format!("uses {sym}, defined in {}", self.paths[self.group_file[b]])
+            format!("uses {sym}, {verb} in {}", self.paths[self.group_file[b]])
         } else {
             let dir = if self.group_row[b] < self.group_row[mine] {
                 "above"
             } else {
                 "below"
             };
-            format!("uses {sym}, defined {dir}")
+            format!("uses {sym}, {verb} {dir}")
         }
     }
 }
@@ -1004,7 +1140,10 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
     let my_file = ctx.group_file[mine];
     noise_rationale(s, ctx, my_file)
         .or_else(|| import_rationale(s, ctx, my_file))
-        .or_else(|| switch_rationale(s, ctx.switched.get(i).copied().flatten()))
+        .or_else(|| {
+            let shift = ctx.switched.get(i).copied().flatten();
+            switch_rationale(s, shift, ctx.removed_phrase(my_file, s))
+        })
         .or_else(|| {
             let is_comment = ctx.comment.get(i).copied().unwrap_or(false);
             is_comment.then(|| comment_rationale(s.old_range, s.new_empty, s.enclosing.as_deref()))
@@ -1078,7 +1217,11 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
 // code switched off (or back on) is neither an edit nor a comment change: it
 // is the reviewer-visible act of disabling code, and saying so beats "adds
 // comment", which is what the comment branch would call it
-fn switch_rationale(s: &HunkSem, shift: Option<crate::SideShift>) -> Option<String> {
+fn switch_rationale(
+    s: &HunkSem,
+    shift: Option<crate::SideShift>,
+    removed: Option<String>,
+) -> Option<String> {
     let [o0, o1] = s.old_range;
     let shift = shift?;
     let container = s.enclosing.as_deref().map(short_container);
@@ -1089,12 +1232,18 @@ fn switch_rationale(s: &HunkSem, shift: Option<crate::SideShift>) -> Option<Stri
         // "removes N lines" is the vocabulary the deletion branch uses
         crate::SideShift::CodeToComment => {
             let n = o1.saturating_sub(o0) + 1;
+            let comment = if n == 1 { "a comment" } else { "comments" };
+            // What left, when the pipeline knows its name. A method deleted
+            // under a new comment header read as "replaces 2 lines with
+            // comments": true of the bytes, silent about the code.
+            if let Some(what) = removed {
+                return Some(format!("{what}, replaced by {comment}"));
+            }
             let what = if n == 1 {
                 "1 line".to_string()
             } else {
                 format!("{n} lines")
             };
-            let comment = if n == 1 { "a comment" } else { "comments" };
             return Some(match container {
                 Some(nm) => format!("replaces {what} with {comment} in {nm}"),
                 None => format!("replaces {what} with {comment}"),
@@ -1129,12 +1278,17 @@ struct DefVerbs<'a> {
 // extracted / added / changed)
 fn classify_defs<'a>(
     real: &[&'a str],
-    is_type: bool,
+    s: &HunkSem,
     ctx: &RatCtx<'a>,
     my_file: usize,
 ) -> DefVerbs<'a> {
     let mut v = DefVerbs::default();
     let changed = ctx.changed.get(my_file);
+    // Nothing inside inserted lines can be an edit of what was there: a new
+    // yaml document repeating its neighbours' keys, a new overload of an
+    // existing name, a second `impl` block. The name may be old; this
+    // occurrence of it is not.
+    let inserted = s.old_range[0] > s.old_range[1];
     for &d in real {
         if let Some(src) = changed.and_then(|c| c.moved_in.get(d)) {
             v.moved.push((d, src.as_str()));
@@ -1143,7 +1297,7 @@ fn classify_defs<'a>(
         } else if let Some(src) = changed.and_then(|c| c.relocated.get(d)) {
             v.extracted.push((d, src.as_str()));
         } else {
-            match ctx.def_verb(my_file, d, is_type) {
+            match ctx.def_verb(my_file, d, s.is_type, inserted) {
                 "adds" => v.added.push(d),
                 "adds type" => v.added_types.push(d),
                 "edits" => v.edited.push(d),
@@ -1297,7 +1451,7 @@ fn def_side_rationale(s: &HunkSem, sem: &[&HunkSem], mine: usize, ctx: &RatCtx) 
         return None;
     }
     let my_file = ctx.group_file[mine];
-    let verbs = classify_defs(&real, s.is_type, ctx, my_file);
+    let verbs = classify_defs(&real, s, ctx, my_file);
     let frags = def_frags(&verbs, s, ctx.is_prose(my_file));
     let mut out = join_frags(&frags);
     if let Some((d, prov)) = provenance(&real, mine, sem, ctx) {
@@ -1325,7 +1479,16 @@ fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> 
         let from_code =
             |b: usize| ctx.group_file[b] != my_file && !is_test_path(&ctx.paths[ctx.group_file[b]]);
         if let Some((u, b)) = defined_elsewhere(s, mine, ctx, from_code) {
-            return Some(format!("tests {u} ({})", ctx.paths[ctx.group_file[b]]));
+            // A test updated to spell a renamed symbol the new way asserts no
+            // new coverage: the same test, following the rename. "tests X"
+            // would claim the change tests something it only renamed.
+            let renamed = ctx
+                .changed
+                .get(ctx.group_file[b])
+                .is_some_and(|c| c.rename.contains_key(u.as_str()));
+            if !renamed {
+                return Some(format!("tests {u} ({})", ctx.paths[ctx.group_file[b]]));
+            }
         }
     }
     if let Some((u, b)) = defined_elsewhere(s, mine, ctx, |_| true) {
@@ -1389,14 +1552,25 @@ fn shape_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> String {
             format!("edits {nm}")
         };
     }
-    // #5/#7 removal: a deletion hunk whose old lines held a removed symbol
     let [o0, o1] = s.old_range;
-    let removed = ctx.changed.get(my_file).and_then(|c| {
-        c.removals
-            .iter()
-            .find(|r| r.row >= o0 && r.row <= o1)
-            .map(removal_phrase)
-    });
+    // A file whose new side holds nothing at all, deleted from its first
+    // line: naming one of its constructs — or twenty-five of them — buries
+    // the fact that the file is gone.
+    if o0 == 1 && s.new_empty && ctx.file_emptied(my_file) {
+        return "deletes the file".to_string();
+    }
+    // #5/#7 removal: a deletion hunk whose old lines held a removed symbol
+    let removed = ctx
+        .changed
+        .get(my_file)
+        .map(|c| {
+            c.removals
+                .iter()
+                .filter(|r| (o0..=o1).contains(&r.row))
+                .collect::<Vec<_>>()
+        })
+        .filter(|rs| !rs.is_empty())
+        .map(|rs| removal_phrase(&rs));
     removed.unwrap_or_else(|| size_rationale(s))
 }
 
@@ -1426,6 +1600,20 @@ fn size_rationale(s: &HunkSem) -> String {
 // no container worth naming. Inside a definition "edits f" stays — it is true
 // and short, and the details ride alongside it.
 fn detail_rationale(s: &HunkSem) -> Option<String> {
+    // A removal is what the hunk did, wherever it sits: "edits Foam.MRFZones"
+    // hides a deleted method behind the class that still exists. A hunk with
+    // no new side is a pure deletion, which `shape_rationale` says shorter,
+    // and a detail longer than a line is one a reviewer reads in the detail
+    // layer rather than in place of the container's name.
+    if !s.new_empty {
+        let removal = s
+            .details
+            .iter()
+            .find(|d| d.starts_with("removes") && d.len() <= DETAIL_MAX);
+        if let Some(d) = removal {
+            return Some(d.clone());
+        }
+    }
     let bare = s.enclosing.is_none() || s.enclosing_kind == Some(crate::ContainerKind::Call);
     // a pure deletion has its own wording in `shape_rationale` ("removes section Usage"),
     // shorter than the detail that says the same with its container

@@ -86,7 +86,7 @@
           ],
           "group": "g2",
           "order_index": 2,
-          "rationale": "uses helper, defined above"
+          "rationale": "uses helper, added above"
         }
       ]
     }

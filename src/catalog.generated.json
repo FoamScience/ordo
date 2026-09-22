@@ -1002,7 +1002,7 @@
           "without": null,
           "text": "^any$",
           "text_not": null,
-          "path_not": null,
+          "path_not": "{**/tests/**,**/__tests__/**,**/test/**,**/*.test.*,**/*.spec.*,**/test_*}",
           "max_params": null,
           "max_lines": null,
           "max_nesting": null,

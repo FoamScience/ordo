@@ -25,6 +25,10 @@ name = "any"
 lang = ["typescript", "tsx"]
 kind = "predefined_type"
 text = "^any$"
+# A test feeds a validator the value the types forbid, casts a mock, or stubs
+# a browser API: `any` is the tool for it, and a labeled sample of 2000 hunks
+# judged 53 findings in test files unwarranted and none warranted.
+path-not = "{**/tests/**,**/__tests__/**,**/test/**,**/*.test.*,**/*.spec.*,**/test_*}"
 note = '''
 `any` — opts out of type checking and infects everything it touches.
 1. write the real type
