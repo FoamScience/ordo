@@ -62,6 +62,47 @@ fn every_catalog_rule_fires_on_a_sample() {
     );
 }
 
+/// The python rules that replaced walker code keep the walker's edges.
+///
+/// `rulesets/catalog/samples/python-edges.py` holds one statement per block
+/// with `# => names` on one of its lines; each block runs as its own file, so a
+/// keyword on a later line, a comment inside the call, a nested call and a
+/// dotted name are all pinned, positives and negatives alike.
+#[test]
+fn the_python_rules_keep_the_walkers_edges() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("rulesets/catalog/samples/python-edges.py");
+    let text = std::fs::read_to_string(&path).expect("read edges");
+    let (header, rest) = text.split_once("\n\n").expect("a header block");
+    let mut checked = 0;
+    for block in rest.split("\n\n").filter(|b| !b.trim().is_empty()) {
+        let first = block.lines().next().unwrap_or("");
+        let (_, want) = block
+            .lines()
+            .find_map(|l| l.rsplit_once("# => "))
+            .unwrap_or_else(|| panic!("no `# => names` marker in: {first}"));
+        let want: BTreeSet<String> = want
+            .split(',')
+            .map(|n| n.trim().to_string())
+            .filter(|n| n != "none")
+            .collect();
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": "edge.py", "old": "", "new": format!("{header}\n\n{block}\n") }]
+        }));
+        let got: BTreeSet<String> = out
+            .files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .flat_map(|h| h.findings.iter())
+            .filter(|f| f.source == FindingSource::Catalog)
+            .map(|f| f.name.clone())
+            .collect();
+        assert_eq!(got, want, "{first}");
+        checked += 1;
+    }
+    assert!(checked > 40, "only {checked} blocks; the split broke");
+}
+
 /// A catalog finding must not lend its name to one of the caller's rules.
 ///
 /// `any_noise` and `priority` resolve a finding back to a rule by name, and the
