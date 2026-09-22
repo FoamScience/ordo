@@ -2587,35 +2587,9 @@ fn run(
     // nobody is touching.
     let mut dirty = true;
     let result: std::io::Result<()> = 'outer: loop {
-        loop {
-            match rx.try_recv() {
-                Ok(LoadMsg::Progress(s)) => {
-                    dirty = true;
-                    if let State::Loading(status) = &mut state {
-                        *status = s;
-                    }
-                }
-                Ok(LoadMsg::Empty(msg)) => {
-                    post_msg = Some(msg);
-                    break 'outer Ok(());
-                }
-                Ok(LoadMsg::Done(r)) => {
-                    dirty = true;
-                    let mut r = *r;
-                    timing = Some(std::mem::take(&mut r.timing));
-                    state = State::Ready(Box::new(session.fresh_app(r)));
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    // the worker dropped its sender without a Done/Empty —
-                    // only possible if it panicked; abort rather than spin
-                    if matches!(state, State::Loading(_)) {
-                        post_msg = Some("ordo: loading failed unexpectedly".to_string());
-                        break 'outer Ok(());
-                    }
-                    break;
-                }
-            }
+        if let Some(msg) = drain_worker(&rx, &mut session, &mut state, &mut timing, &mut dirty) {
+            post_msg = Some(msg);
+            break 'outer Ok(());
         }
 
         if dirty {
@@ -2690,44 +2664,127 @@ fn run(
     Ok(())
 }
 
+/// Every message the worker has queued. `Some(msg)` ends the session before
+/// a review is up: an empty change set, or a worker that dropped its sender
+/// without a Done/Empty — only possible if it panicked; abort rather than spin.
+fn drain_worker(
+    rx: &mpsc::Receiver<LoadMsg>,
+    session: &mut Session,
+    state: &mut State,
+    timing: &mut Option<String>,
+    dirty: &mut bool,
+) -> Option<String> {
+    loop {
+        match rx.try_recv() {
+            Ok(LoadMsg::Progress(s)) => {
+                *dirty = true;
+                if let State::Loading(status) = state {
+                    *status = s;
+                }
+            }
+            Ok(LoadMsg::Empty(msg)) => return Some(msg),
+            Ok(LoadMsg::Done(r)) => {
+                *dirty = true;
+                let mut r = *r;
+                *timing = Some(std::mem::take(&mut r.timing));
+                *state = State::Ready(Box::new(session.fresh_app(r)));
+            }
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return matches!(state, State::Loading(_))
+                    .then(|| "ordo: loading failed unexpectedly".to_string());
+            }
+        }
+    }
+}
+
 /// Run one action against the focused pane; true means quit.
 fn apply(app: &mut App, a: Action) -> bool {
-    // An open popup consumes input itself: Esc/q dismiss it (without
-    // quitting), Next/Prev/PageUp/PageDown scroll its own body rather than
-    // the pane underneath, and everything else is a no-op while it's up.
     if app.popup.is_some() {
-        match a {
-            Action::Quit => app.popup = None,
-            Action::Next => popup_scroll(app, 1),
-            Action::Prev => popup_scroll(app, -1),
-            Action::PageDown => popup_scroll(app, PAGE as isize),
-            Action::PageUp => popup_scroll(app, -(PAGE as isize)),
-            Action::ScrollLeft => popup_hscroll(app, -1),
-            Action::ScrollRight => popup_hscroll(app, 1),
-            _ => {}
-        }
+        apply_in_popup(app, a);
         return false;
     }
-
-    // The canvas is a floating view with its own selection: j/k move between
-    // cards, Enter goes to one, Esc closes. Anything else is a no-op rather
-    // than leaking through to the pane underneath.
     if app.canvas.is_some() && app.focus == Pane::Deps {
-        match a {
-            Action::Quit => close_deps(app),
-            Action::Next => move_card(app, 1),
-            Action::Prev => move_card(app, -1),
-            Action::First => move_card(app, isize::MIN / 2),
-            Action::Last => move_card(app, isize::MAX / 2),
-            Action::JumpToEdge => jump_to_card(app),
-            Action::Focus(p) if p != Pane::Deps => {
-                close_deps(app);
-                app.focus = p;
-            }
-            _ => {}
-        }
+        apply_on_canvas(app, a);
         return false;
     }
+    if app.focus == Pane::Code && apply_in_code(app, a) {
+        return false;
+    }
+    apply_anywhere(app, a)
+}
+
+/// An open popup consumes input itself: Esc/q dismiss it (without quitting),
+/// Next/Prev/PageUp/PageDown scroll its own body rather than the pane
+/// underneath, and everything else is a no-op while it's up.
+fn apply_in_popup(app: &mut App, a: Action) {
+    match a {
+        Action::Quit => app.popup = None,
+        Action::Next => popup_scroll(app, 1),
+        Action::Prev => popup_scroll(app, -1),
+        Action::PageDown => popup_scroll(app, PAGE as isize),
+        Action::PageUp => popup_scroll(app, -(PAGE as isize)),
+        Action::ScrollLeft => popup_hscroll(app, -1),
+        Action::ScrollRight => popup_hscroll(app, 1),
+        _ => {}
+    }
+}
+
+/// The canvas is a floating view with its own selection: j/k move between
+/// cards, Enter goes to one, Esc closes. Anything else is a no-op rather than
+/// leaking through to the pane underneath.
+fn apply_on_canvas(app: &mut App, a: Action) {
+    match a {
+        Action::Quit => close_deps(app),
+        Action::Next => move_card(app, 1),
+        Action::Prev => move_card(app, -1),
+        Action::First => move_card(app, isize::MIN / 2),
+        Action::Last => move_card(app, isize::MAX / 2),
+        Action::JumpToEdge => jump_to_card(app),
+        Action::Focus(p) if p != Pane::Deps => {
+            close_deps(app);
+            app.focus = p;
+        }
+        _ => {}
+    }
+}
+
+/// The actions that only mean something with the code pane focused: cursor
+/// motion, search, horizontal scroll. `false` for any other action.
+fn apply_in_code(app: &mut App, a: Action) -> bool {
+    match a {
+        Action::CursorLeft => cursor_move(app, |c, lines| move_col(c, lines, -1)),
+        Action::CursorRight => cursor_move(app, |c, lines| move_col(c, lines, 1)),
+        Action::WordNext => cursor_move(app, word_next),
+        Action::WordPrev => cursor_move(app, word_prev),
+        Action::WordEnd => cursor_move(app, word_end),
+        Action::ParaPrev => cursor_move(app, para_prev),
+        Action::ParaNext => cursor_move(app, para_next),
+        Action::MarkPrev => mark_move(app, false),
+        Action::MarkNext => mark_move(app, true),
+        Action::SearchOpen => {
+            app.prompt = Some(Prompt {
+                text: String::new(),
+                anchor: app.cursor,
+            });
+        }
+        Action::SymbolNext => symbol_search(app, true),
+        Action::SymbolPrev => symbol_search(app, false),
+        Action::SearchNext => cycle_search(app, 1),
+        Action::SearchPrev => cycle_search(app, -1),
+        Action::ScrollLeft => {
+            app.hscroll = app.hscroll.saturating_sub(1);
+        }
+        Action::ScrollRight => {
+            app.hscroll = app.hscroll.saturating_add(1);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Every other action, whichever pane has focus; `true` means quit.
+fn apply_anywhere(app: &mut App, a: Action) -> bool {
     match a {
         // an active search is showing state too: clear its highlights first,
         // the way dismissing a popup does, so Esc after a search doesn't end
@@ -2781,29 +2838,7 @@ fn apply(app: &mut App, a: Action) -> bool {
             Pane::Code => cursor_move(app, line_end),
             Pane::Why | Pane::Deps => app.why_scroll = last_line(app.why_len),
         },
-        Action::CursorLeft if app.focus == Pane::Code => {
-            cursor_move(app, |c, lines| move_col(c, lines, -1))
-        }
-        Action::CursorRight if app.focus == Pane::Code => {
-            cursor_move(app, |c, lines| move_col(c, lines, 1))
-        }
-        Action::WordNext if app.focus == Pane::Code => cursor_move(app, word_next),
-        Action::WordPrev if app.focus == Pane::Code => cursor_move(app, word_prev),
-        Action::WordEnd if app.focus == Pane::Code => cursor_move(app, word_end),
-        Action::ParaPrev if app.focus == Pane::Code => cursor_move(app, para_prev),
-        Action::ParaNext if app.focus == Pane::Code => cursor_move(app, para_next),
-        Action::MarkPrev if app.focus == Pane::Code => mark_move(app, false),
-        Action::MarkNext if app.focus == Pane::Code => mark_move(app, true),
         Action::Churn => fill_churn(app),
-        Action::CursorLeft
-        | Action::CursorRight
-        | Action::WordNext
-        | Action::WordPrev
-        | Action::WordEnd
-        | Action::ParaPrev
-        | Action::ParaNext
-        | Action::MarkPrev
-        | Action::MarkNext => {} // only meaningful with the code pane focused
         // `K`/`F12` dispatches on the focused pane rather than adding a
         // second key: the code pane's symbol hover and the why pane's dep
         // preview are the same "show me more about what's under the cursor"
@@ -2813,29 +2848,25 @@ fn apply(app: &mut App, a: Action) -> bool {
             Pane::Why | Pane::Deps => preview_edge(app),
             Pane::List => {}
         },
-        Action::SearchOpen if app.focus == Pane::Code => {
-            app.prompt = Some(Prompt {
-                text: String::new(),
-                anchor: app.cursor,
-            });
-        }
-        Action::SymbolNext if app.focus == Pane::Code => symbol_search(app, true),
-        Action::SymbolPrev if app.focus == Pane::Code => symbol_search(app, false),
-        Action::SearchNext if app.focus == Pane::Code => cycle_search(app, 1),
-        Action::SearchPrev if app.focus == Pane::Code => cycle_search(app, -1),
-        Action::SearchOpen
+        Action::Fold(how) => fold(app, how),
+        // `apply_in_code` handles these when the code pane has focus; they
+        // mean nothing anywhere else
+        Action::CursorLeft
+        | Action::CursorRight
+        | Action::WordNext
+        | Action::WordPrev
+        | Action::WordEnd
+        | Action::ParaPrev
+        | Action::ParaNext
+        | Action::MarkPrev
+        | Action::MarkNext
+        | Action::SearchOpen
         | Action::SymbolNext
         | Action::SymbolPrev
         | Action::SearchNext
-        | Action::SearchPrev => {} // only meaningful with the code pane focused
-        Action::Fold(how) => fold(app, how),
-        Action::ScrollLeft if app.focus == Pane::Code => {
-            app.hscroll = app.hscroll.saturating_sub(1);
-        }
-        Action::ScrollRight if app.focus == Pane::Code => {
-            app.hscroll = app.hscroll.saturating_add(1);
-        }
-        Action::ScrollLeft | Action::ScrollRight => {} // only meaningful with the code pane focused
+        | Action::SearchPrev
+        | Action::ScrollLeft
+        | Action::ScrollRight => {}
         Action::Help => {
             app.popup = Some(Popup::new(
                 format!("keybindings — {}", app.keys.name),
