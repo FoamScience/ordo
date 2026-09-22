@@ -1143,13 +1143,16 @@ fn split_sources(input: &Input) -> Sources {
 
 /// syntax highlight each new file once, up front (indexed by path)
 fn highlight_all(changes: &[Change], syn: &Syntax, progress: &dyn Fn(String)) -> Highlights {
-    let candidates: Vec<&Change> = changes.iter().filter(|c| c.new.is_some()).collect();
+    let candidates: Vec<(&str, &str)> = changes
+        .iter()
+        .filter_map(|c| Some((c.path.as_str(), c.new.as_deref()?)))
+        .collect();
     let total = candidates.len();
     let mut highlights: Highlights = HashMap::new();
-    for (i, c) in candidates.iter().enumerate() {
+    for (i, (path, new)) in candidates.iter().enumerate() {
         progress(highlight_progress(i, total));
-        if let Some(h) = highlight_file(&c.path, c.new.as_ref().unwrap(), syn) {
-            highlights.insert(c.path.clone(), h);
+        if let Some(h) = highlight_file(path, new, syn) {
+            highlights.insert(path.to_string(), h);
         }
     }
     highlights

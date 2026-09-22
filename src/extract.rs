@@ -134,10 +134,11 @@ pub fn compute_hunks(old: &str, new: &str) -> Vec<RawHunk> {
     let diff = TextDiff::from_lines(old, new);
     let mut hunks = vec![];
     for group in diff.grouped_ops(0) {
-        let os = group.first().unwrap().old_range().start;
-        let oe = group.last().unwrap().old_range().end;
-        let ns = group.first().unwrap().new_range().start;
-        let ne = group.last().unwrap().new_range().end;
+        let (Some(first), Some(last)) = (group.first(), group.last()) else {
+            unreachable!("grouped_ops yields no empty group");
+        };
+        let (os, oe) = (first.old_range().start, last.old_range().end);
+        let (ns, ne) = (first.new_range().start, last.new_range().end);
         let old_range = if oe > os { [os + 1, oe] } else { [os + 1, os] };
         let new_range = if ne > ns { [ns + 1, ne] } else { [ns + 1, ns] };
         let (new_r0, new_r1) = if ne > ns {
