@@ -9,7 +9,7 @@ use crate::commands::run_strategy;
 use crate::draw::centred;
 use crate::highlight::highlight_file;
 use crate::keys::action_help;
-use crate::keys::key_label;
+use crate::keys::chord_setting;
 use crate::keys::keymap;
 use crate::keys::parse_hex;
 use crate::keys::ACTION_NAMES;
@@ -201,10 +201,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
             .binds
             .iter()
             .map(|(prefix, key, action)| {
-                let keys = match prefix {
-                    Some(p) => format!("{} {}", key_label(*p), key_label(*key)),
-                    None => key_label(*key),
-                };
+                let keys = chord_setting(*prefix, *key);
                 let name = ACTION_NAMES
                     .iter()
                     .find(|(_, a)| a == action)

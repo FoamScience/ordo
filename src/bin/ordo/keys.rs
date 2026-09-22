@@ -383,6 +383,19 @@ pub(super) enum Category {
     Help,
 }
 
+impl Category {
+    /// the order the help popup and the docs list the categories in
+    pub(super) const ORDER: [Category; 7] = [
+        Category::General,
+        Category::Navigation,
+        Category::Panes,
+        Category::Search,
+        Category::Review,
+        Category::Editor,
+        Category::Help,
+    ];
+}
+
 pub(super) fn category_label(c: Category) -> &'static str {
     match c {
         Category::General => "general",
@@ -800,6 +813,15 @@ pub(super) fn key_label(key: Key) -> String {
     format!("{prefix}{body}")
 }
 
+/// A chord as the `[binds]` section spells it: prefix and key space-separated,
+/// always — the form `parse_key_config` reads back.
+pub(super) fn chord_setting(prefix: Option<Key>, key: Key) -> String {
+    match prefix {
+        Some(p) => format!("{} {}", key_label(p), key_label(key)),
+        None => key_label(key),
+    }
+}
+
 /// A bind's full chord: `gg`/`ge` (no space — vim's own convention for a
 /// plain-char chord) vs. `C-w C-w` (spaced — either half carries a modifier
 /// or a named key, and vim always writes those chords spaced).
@@ -843,17 +865,8 @@ pub(super) fn build_help(keys: &Keymap) -> Vec<String> {
             }),
         }
     }
-    let order = [
-        Category::General,
-        Category::Navigation,
-        Category::Panes,
-        Category::Search,
-        Category::Review,
-        Category::Editor,
-        Category::Help,
-    ];
     let mut out = vec![];
-    for &cat in &order {
+    for &cat in &Category::ORDER {
         let group: Vec<&Row> = rows.iter().filter(|r| r.category == cat).collect();
         if group.is_empty() {
             continue;

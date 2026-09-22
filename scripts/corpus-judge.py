@@ -20,7 +20,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -28,13 +27,14 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from corpuslib import ROOT, commit_input, engine_output, git, repos, template
+
 try:
     from typesafe_sdk import Noul, TypeSafeClient
 except ImportError:  # --report-only needs no judge
     Noul = TypeSafeClient = None
 
-ROOT = Path(__file__).resolve().parent.parent
-ENGINE = ROOT / "target/release/ordo-engine"
+
 QUESTIONS = {
     "faithful": "Does the rationale accurately describe what this diff changes?",
     "matches_commit": "Is the rationale consistent with the commit message?",
@@ -48,30 +48,12 @@ QUESTIONS = {
 CUTS = {"faithful": 0.58, "matches_commit": 0.24, "noise_correct": 0.15, "finding": 0.5}
 
 
-def repos():
-    text = (ROOT / "corpus/manifest.toml").read_text()
-    field = lambda b, k: (m.group(1) if (m := re.search(rf'^{k}\s*=\s*"?([^"\n]+)"?', b, re.M)) else None)
-    for b in text.split("[[repo]]")[1:]:
-        yield field(b, "name"), field(b, "lang"), field(b, "rev")
-
-
-def git(repo, *args):
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True,
-                          errors="replace").stdout
-
-
 def commit_output(repo, sha):
-    parent = git(repo, "rev-parse", "--verify", "-q", f"{sha}^").strip()
-    if not parent:
+    """(parent sha, engine output) for one commit, or (None, None)."""
+    parent, inp = commit_input(repo, sha)
+    if parent is None:
         return None, None
-    names = [l.split("\t", 2)[2] for l in git(repo, "diff", "--numstat", "--no-renames", parent, sha).splitlines()
-             if not l.startswith("-\t-\t")]
-    if not names:
-        return None, None
-    inp = {"changes": [{"path": p, "old": git(repo, "show", f"{parent}:{p}"),
-                        "new": git(repo, "show", f"{sha}:{p}")} for p in names]}
-    r = subprocess.run([ENGINE, "order", "--json"], input=json.dumps(inp), capture_output=True, text=True)
-    return parent, json.loads(r.stdout)
+    return parent, engine_output(inp)
 
 
 def hunk_diff(repo, parent, sha, path, new_range):
@@ -82,10 +64,6 @@ def hunk_diff(repo, parent, sha, path, new_range):
             end = text.find("\n@@ ", m.end())
             return text[m.start():end if end > 0 else None]
     return None
-
-
-def template(rationale):
-    return rationale.split(" ", 1)[0] if rationale else "change"
 
 
 def walk(corpus, per_repo):
