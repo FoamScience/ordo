@@ -106,3 +106,128 @@ __eq__ without __hash__ — defining __eq__ makes instances unhashable (can't be
 1. immutable value → @dataclass(frozen=True) generates both
 2. by hand → define __hash__ over the same fields as __eq__
 3. intentionally unhashable → set `__hash__ = None` explicitly'''
+
+# Nine constructs the python walker in `src/advisories.rs` used to match.
+# A keyword argument is matched as a node (`(keyword_argument name: … value:
+# (true))`), never as text, so a comment or a nested call cannot fire it; a
+# child count is a query with anchors (`.`). `corpus/catalog.txt` records the
+# rows, and `rulesets/catalog/samples/python-edges.py` pins the edges.
+
+[[rule]]
+name = "shell-injection"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (attribute) @f
+       arguments: (argument_list (keyword_argument name: (identifier) @k value: (true)))) @c
+ (#match? @f "^subprocess\\.")
+ (#eq? @k "shell"))
+'''
+verdict = '''
+subprocess(..., shell=True) — the command string is parsed by the shell (injection).
+Pass an argument list and drop shell=True; if a shell is truly required, shlex.quote every interpolated value.'''
+
+[[rule]]
+name = "tls-no-verify"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (attribute) @s) @c
+ (#eq? @s "ssl._create_unverified_context"))
+((call function: (_) @f
+       arguments: (argument_list (keyword_argument name: (identifier) @k value: (false)))) @c
+ (#match? @f "^(requests\\.|httpx\\.|.*ession\\.|(.*\\.)?(get|post|put|delete|patch|head|request)$)")
+ (#eq? @k "verify"))
+'''
+verdict = '''
+TLS verification disabled — certificates go unchecked, opening a MITM.
+1. fix the trust store / pass verify=<ca_bundle>
+2. pin the expected certificate
+3. verify=False (only ever for a throwaway local script)'''
+
+[[rule]]
+name = "yaml-load"
+lang = ["python", "xonsh"]
+kind = "call"
+text = '^yaml\.load(_all)?\('
+text-not = 'Loader\s*=[^,]*Safe'
+verdict = '''
+yaml.load without a safe Loader — constructs arbitrary objects / runs code on untrusted input.
+1. yaml.safe_load(...)
+2. yaml.load(..., Loader=SafeLoader)
+3. an unsafe Loader (only for data you fully trust)'''
+
+[[rule]]
+name = "broad-suppress"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (_) @f arguments: (argument_list (identifier) @e)) @c
+ (#match? @f "^(contextlib\\.)?suppress$")
+ (#match? @e "^(BaseException|Exception)$"))
+'''
+note = '''
+suppress(Exception/BaseException) — the explicit-API twin of bare except; swallows bugs and KeyboardInterrupt.
+1. suppress(SpecificError)
+2. try/except SpecificError with handling
+3. a broad suppress (name the concrete type instead)'''
+[[rule]]
+name = "dynamic-type"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (identifier) @f
+       arguments: (argument_list . (_) . (_) . (_) .)) @c
+ (#eq? @f "type"))
+'''
+note = '''
+dynamic type() class creation — opaque to readers and tools.
+1. a normal class / @dataclass
+2. namedtuple / Enum for simple shapes
+3. type() only for genuinely runtime-computed classes'''
+
+[[rule]]
+name = "bare-except"
+lang = ["python", "xonsh"]
+query = '''
+((except_clause . (block)) @e)
+'''
+verdict = '''
+bare `except:` — also swallows SystemExit / KeyboardInterrupt and hides bugs.
+Catch the narrowest exception; use `except Exception:` for a deliberate catch-all.'''
+
+[[rule]]
+name = "empty-catch"
+lang = ["python", "xonsh"]
+query = '''
+((except_clause (_) (block . (pass_statement) .) .) @e)
+'''
+verdict = '''
+empty catch — the error is silently swallowed and failures vanish.
+Handle it, re-raise, or at minimum log; never an empty handler.'''
+
+[[rule]]
+name = "fire-and-forget-task"
+lang = ["python", "xonsh"]
+query = '''
+((expression_statement . (call function: (_) @f) .) @s
+ (#match? @f "^asyncio\\.(create_task|ensure_future)$|\\.create_task$"))
+'''
+verdict = '''
+fire-and-forget task — the loop keeps only a weak ref, so it can be GC'd mid-flight and vanish.
+1. await it, or gather it with others
+2. an asyncio.TaskGroup (3.11+)
+3. store the task in a set + add_done_callback to keep it alive'''
+
+[[rule]]
+name = "sql-injection"
+lang = ["python", "xonsh"]
+query = '''
+((call function: (attribute attribute: (identifier) @m)
+       arguments: (argument_list . [(binary_operator)
+                                    (string (interpolation))
+                                    (call function: (attribute attribute: (identifier) @fmt))])) @c
+ (#match? @m "^execute(many|script)?$")
+ (#eq? @fmt "format"))
+'''
+verdict = '''
+formatted string as a SQL statement — injection by construction.
+1. parameterized query → cur.execute(sql, params)
+2. a query builder / ORM
+3. string interpolation into SQL (never with external input)'''

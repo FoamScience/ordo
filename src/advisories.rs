@@ -26,13 +26,19 @@
 //! node whose kind merely *contains* `expression`; `when.kind` takes exact
 //! kinds, so a rule would fire on a different set of rows.
 //!
-//! *Needs a second predicate over an argument.* `yaml-load` (unless a Safe
-//! loader is named), `shell-injection` (`shell=True`), `tls-no-verify`
-//! (`verify=False`), `broad-suppress`, `dynamic-type` (exactly three
-//! arguments), `sql-injection` (a built, not literal, first argument),
-//! `fire-and-forget-task`, `bare-except` and python's `empty-catch` all
-//! inspect an argument or a body the pattern language cannot reach far enough
-//! into.
+//! *The row is not the node's own.* `lru-cache-on-method` is decided on the
+//! decorated definition but reported on the `def` line inside it, and a rule
+//! reports the node it matched.
+//!
+//! What *looked* like the same problem — `yaml-load` unless a Safe loader is
+//! named, `shell-injection` (`shell=True`), `tls-no-verify` (`verify=False`),
+//! `broad-suppress`, `dynamic-type` (exactly three arguments), `sql-injection`
+//! (a built, not literal, first argument), `fire-and-forget-task`,
+//! `bare-except` and `empty-catch` — turned out statable: a keyword argument
+//! is a `(keyword_argument name: … value: (true))` pattern, a child count is
+//! a query with anchors, and the one text test left (yaml's Safe loader) is
+//! a `text-not` regex. They live in `rulesets/catalog/python.toml` now, on
+//! the same rows, which `corpus/catalog.txt` records.
 //!
 //! `operator-logical` is the one remaining case that is merely awkward rather
 //! than impossible: it needs to match `operator&&` in a signature but not in a
@@ -118,10 +124,6 @@ fn named<'a>(node: Node<'a>) -> Vec<Node<'a>> {
     node.named_children(&mut cur).collect()
 }
 
-const EMPTY_CATCH: &str = "\
-empty catch — the error is silently swallowed and failures vanish.
-Handle it, re-raise, or at minimum log; never an empty handler.";
-
 // ------------------------------------------------------------------- python
 
 const METACLASS_LADDER: &str = "\
@@ -130,20 +132,6 @@ metaclass — 90% of the time the wrong tool. Lightest sufficient step:
 2. react to subclassing (register/validate/defaults) → __init_subclass__
 3. replace the class after it's built → class decorator
 4. rewrite the class as it's built, or control instance creation → metaclass";
-
-const BARE_EXCEPT: &str = "\
-bare `except:` — also swallows SystemExit / KeyboardInterrupt and hides bugs.
-Catch the narrowest exception; use `except Exception:` for a deliberate catch-all.";
-
-const DYNAMIC_TYPE: &str = "\
-dynamic type() class creation — opaque to readers and tools.
-1. a normal class / @dataclass
-2. namedtuple / Enum for simple shapes
-3. type() only for genuinely runtime-computed classes";
-
-const SHELL_PY: &str = "\
-subprocess(..., shell=True) — the command string is parsed by the shell (injection).
-Pass an argument list and drop shell=True; if a shell is truly required, shlex.quote every interpolated value.";
 
 const BLOCKING_ASYNC: &str = "\
 blocking call in an async function — stalls the whole event loop, defeating async.
@@ -157,41 +145,11 @@ lru_cache/cache on a method — the cache holds `self`, pinning every instance f
 2. cache a module-level function taking only hashable args
 3. lru_cache on the bound method (only if instances are singletons)";
 
-const SQL_INJECT: &str = "\
-formatted string as a SQL statement — injection by construction.
-1. parameterized query → cur.execute(sql, params)
-2. a query builder / ORM
-3. string interpolation into SQL (never with external input)";
-
-const YAML_LOAD: &str = "\
-yaml.load without a safe Loader — constructs arbitrary objects / runs code on untrusted input.
-1. yaml.safe_load(...)
-2. yaml.load(..., Loader=SafeLoader)
-3. an unsafe Loader (only for data you fully trust)";
-
-const TLS_VERIFY: &str = "\
-TLS verification disabled — certificates go unchecked, opening a MITM.
-1. fix the trust store / pass verify=<ca_bundle>
-2. pin the expected certificate
-3. verify=False (only ever for a throwaway local script)";
-
-const FIRE_FORGET: &str = "\
-fire-and-forget task — the loop keeps only a weak ref, so it can be GC'd mid-flight and vanish.
-1. await it, or gather it with others
-2. an asyncio.TaskGroup (3.11+)
-3. store the task in a set + add_done_callback to keep it alive";
-
 const HALF_CM: &str = "\
 half a context-manager protocol — only one of __enter__/__exit__ is defined, so `with` can't use it.
 1. @contextlib.contextmanager over a generator
 2. implement both halves (__enter__ and __exit__)
 3. leave it (only if it is deliberately not a context manager)";
-
-const SUPPRESS_BROAD: &str = "\
-suppress(Exception/BaseException) — the explicit-API twin of bare except; swallows bugs and KeyboardInterrupt.
-1. suppress(SpecificError)
-2. try/except SpecificError with handling
-3. a broad suppress (name the concrete type instead)";
 
 fn walk_python(node: Node, src: &[u8], _path: &str, out: &mut Out) {
     match node.kind() {
@@ -209,140 +167,8 @@ fn walk_python(node: Node, src: &[u8], _path: &str, out: &mut Out) {
             scan_async_blocking(node, src, out);
         }
         "decorated_definition" => py_lru_method(node, src, out),
-        "expression_statement" if py_fire_and_forget(node, src) => {
-            push(out, node, "fire-and-forget-task", FIRE_FORGET, true);
-        }
-        "except_clause" => {
-            let kids = named(node);
-            if kids.first().map(|c| c.kind()) == Some("block") {
-                push(out, node, "bare-except", BARE_EXCEPT, true);
-            } else if kids
-                .last()
-                .is_some_and(|b| b.kind() == "block" && only_pass(*b))
-            {
-                push(out, node, "empty-catch", EMPTY_CATCH, true);
-            }
-        }
-        "call" => {
-            let fname = callee_text(node, "function", src);
-            match fname {
-                Some("type")
-                    if node
-                        .child_by_field_name("arguments")
-                        .map(|a| named(a).len())
-                        == Some(3) =>
-                {
-                    push(out, node, "dynamic-type", DYNAMIC_TYPE, false);
-                }
-                Some("ssl._create_unverified_context") => {
-                    push(out, node, "tls-no-verify", TLS_VERIFY, true)
-                }
-                Some("yaml.load") | Some("yaml.load_all") if !py_safe_loader(node, src) => {
-                    push(out, node, "yaml-load", YAML_LOAD, true)
-                }
-                Some("contextlib.suppress") | Some("suppress") if py_broad_suppress(node, src) => {
-                    push(out, node, "broad-suppress", SUPPRESS_BROAD, false)
-                }
-                _ => {}
-            }
-            if fname.is_some_and(|f| f.starts_with("subprocess."))
-                && py_kw_is(node, "shell", "True", src)
-            {
-                push(out, node, "shell-injection", SHELL_PY, true);
-            }
-            if fname.is_some_and(py_sql_sink) && py_dynamic_sql(node, src) {
-                push(out, node, "sql-injection", SQL_INJECT, true);
-            }
-            if fname.is_some_and(py_http_callee) && py_kw_is(node, "verify", "False", src) {
-                push(out, node, "tls-no-verify", TLS_VERIFY, true);
-            }
-        }
         _ => {}
     }
-}
-
-// a call to `x.execute` / `.executemany` / `.executescript` (a DB cursor sink)
-fn py_sql_sink(f: &str) -> bool {
-    matches!(
-        f.rsplit('.').next(),
-        Some("execute" | "executemany" | "executescript")
-    ) && f.contains('.')
-}
-
-// the first argument to execute* is a built (not literal) string
-fn py_dynamic_sql(call: Node, src: &[u8]) -> bool {
-    let Some(arg) = call
-        .child_by_field_name("arguments")
-        .and_then(|a| named(a).into_iter().next())
-    else {
-        return false;
-    };
-    match arg.kind() {
-        "string" => has_descendant(arg, "interpolation"),
-        "binary_operator" => true, // `"..." % x` or `"..." + x`
-        "call" => callee_text(arg, "function", src).is_some_and(|c| c.ends_with(".format")),
-        _ => false,
-    }
-}
-
-fn py_http_callee(f: &str) -> bool {
-    f.starts_with("requests.")
-        || f.starts_with("httpx.")
-        || f.contains("ession.") // Session. / session.
-        || matches!(
-            f.rsplit('.').next(),
-            Some("get" | "post" | "put" | "delete" | "patch" | "head" | "request")
-        )
-}
-
-// call has a keyword argument `name` whose value renders exactly as `val`
-fn py_kw_is(call: Node, name: &str, val: &str, src: &[u8]) -> bool {
-    call.child_by_field_name("arguments").is_some_and(|args| {
-        named(args).iter().any(|a| {
-            a.kind() == "keyword_argument"
-                && a.child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(src).ok())
-                    == Some(name)
-                && a.child_by_field_name("value")
-                    .and_then(|v| v.utf8_text(src).ok())
-                    == Some(val)
-        })
-    })
-}
-
-// a yaml.load call that names a Safe loader
-fn py_safe_loader(call: Node, src: &[u8]) -> bool {
-    call.child_by_field_name("arguments").is_some_and(|args| {
-        named(args).iter().any(|a| {
-            a.kind() == "keyword_argument"
-                && a.child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(src).ok())
-                    == Some("Loader")
-                && a.child_by_field_name("value")
-                    .and_then(|v| v.utf8_text(src).ok())
-                    .is_some_and(|v| v.contains("Safe"))
-        })
-    })
-}
-
-// suppress(...) covering Exception / BaseException
-fn py_broad_suppress(call: Node, src: &[u8]) -> bool {
-    call.child_by_field_name("arguments").is_some_and(|args| {
-        named(args)
-            .iter()
-            .any(|a| matches!(a.utf8_text(src), Ok("Exception") | Ok("BaseException")))
-    })
-}
-
-// asyncio.create_task(...) / ensure_future(...) whose result is discarded
-fn py_fire_and_forget(stmt: Node, src: &[u8]) -> bool {
-    let kids = named(stmt);
-    if kids.len() != 1 || kids[0].kind() != "call" {
-        return false;
-    }
-    callee_text(kids[0], "function", src).is_some_and(|c| {
-        c == "asyncio.create_task" || c == "asyncio.ensure_future" || c.ends_with(".create_task")
-    })
 }
 
 // lru_cache/cache decorating a method whose first parameter is self/cls
@@ -403,21 +229,6 @@ fn scan_async_blocking(node: Node, src: &[u8], out: &mut Out) {
             _ => scan_async_blocking(ch, src, out),
         }
     }
-}
-
-fn has_descendant(node: Node, kind: &str) -> bool {
-    let mut cur = node.walk();
-    for ch in node.named_children(&mut cur) {
-        if ch.kind() == kind || has_descendant(ch, kind) {
-            return true;
-        }
-    }
-    false
-}
-
-fn only_pass(block: Node) -> bool {
-    let kids = named(block);
-    kids.len() == 1 && kids[0].kind() == "pass_statement"
 }
 
 fn python_metaclass(class: Node, src: &[u8]) -> Option<Finding> {
