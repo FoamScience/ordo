@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import random
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,7 +29,10 @@ def commit_output(repo, sha):
     parent, inp = commit_input(repo, sha)
     if parent is None:
         return None, None
-    blobs = {c["path"]: (c["old"].splitlines(), c["new"].splitlines()) for c in inp["changes"]}
+    # split on "\n" alone: str.splitlines() also breaks on form feed and the
+    # unicode separators, and a file that contains one (execa's escape-sequence
+    # tests carry seven) then numbers its lines differently from the engine
+    blobs = {c["path"]: (c["old"].split("\n"), c["new"].split("\n")) for c in inp["changes"]}
     return blobs, engine_output(inp)
 
 
@@ -90,6 +94,47 @@ def draw_pool(corpus, per_repo, taken):
     return [h for h in pool if h["key"] not in taken]
 
 
+def draw_keys(corpus, keys):
+    """The hunks named by `keys` (repo:sha:path:new_start), one engine run per
+    commit. A targeted draw: the stratified pool answers "what does ordo emit",
+    this answers "show me exactly these", which is what chasing a bucket of the
+    judged sweep back to labels needs."""
+    want = defaultdict(set)
+    for k in keys:
+        repo, sha, rest = k.split(":", 2)
+        path, _, line = rest.rpartition(":")
+        want[(repo, sha)].add((path, int(line)))
+    lang_of = {name: lang for name, lang, _ in repos()}
+    picked = []
+    for (name, short), members in sorted(want.items()):
+        if name not in lang_of:
+            print(f"  {name}: not in corpus/manifest.toml", file=sys.stderr)
+            continue
+        repo = corpus / name
+        full = git(repo, "rev-parse", "--verify", "-q", short).strip()
+        if not full:
+            print(f"  {name}:{short} not in the clone", file=sys.stderr)
+            continue
+        subject = git(repo, "show", "-s", "--format=%s", full).strip()
+        blobs, out = commit_output(repo, full)
+        if not out:
+            continue
+        found = set()
+        for f in out["files"]:
+            if f.get("unsupported") or f.get("degraded"):
+                continue
+            old_lines, new_lines = blobs[f["path"]]
+            for h in f["hunks"]:
+                at = (f["path"], h["new_range"][0])
+                if at in members:
+                    found.add(at)
+                    picked.append(hunk_entry(name, lang_of[name], full, subject, f,
+                                             h, old_lines, new_lines))
+        for path, line in sorted(members - found):
+            print(f"  {name}:{short}:{path}:{line} matches no hunk", file=sys.stderr)
+    return picked
+
+
 def stratify(pool, n, seed):
     """`n` hunks: the rare strata first (findings, noise), then round-robin
     over template x language until full."""
@@ -137,10 +182,22 @@ def main():
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--exclude", type=Path, action="append", default=[],
                     help="jsonl whose keys must not be drawn again (keeps a training draw off the gold set)")
+    ap.add_argument("--keys", type=Path,
+                    help="draw exactly these keys (one per line) instead of stratifying a pool")
     a = ap.parse_args()
     taken = {json.loads(l)["key"] for f in a.exclude for l in f.read_text().splitlines() if l.strip()}
     corpus = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus"))
-    rows = unlabeled_rows(stratify(draw_pool(corpus, a.per_repo, taken), a.n, a.seed))
+    if a.keys:
+        keys = [l.strip() for l in a.keys.read_text().splitlines() if l.strip()]
+        excluded = [k for k in keys if k in taken]
+        if excluded:
+            print(f"  skipping {len(excluded)} keys already in --exclude", file=sys.stderr)
+        keys = [k for k in keys if k not in taken]
+        picked = draw_keys(corpus, keys)
+        print(f"asked for {len(keys)} keys, found {len(picked)}")
+    else:
+        picked = stratify(draw_pool(corpus, a.per_repo, taken), a.n, a.seed)
+    rows = unlabeled_rows(picked)
     a.out.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in rows))
     by = defaultdict(int)
     for h in rows:
