@@ -339,3 +339,115 @@ fn a_doc_fence_orders_the_doc_without_joining_its_cluster() {
     );
     assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
 }
+
+fn two(a: (&str, &str), b: (&str, &str)) -> ordo::model::Output {
+    run_json(serde_json::json!({ "changes": [
+        { "path": a.0, "old": "const x0 = 0;\n", "new": format!("const x0 = 0;\n{}", a.1) },
+        { "path": b.0, "old": "const y0 = 0;\n", "new": format!("const y0 = 0;\n{}", b.1) }
+    ]}))
+}
+
+/// tasks-3uv.37: execa 4b2e316e. `duplex` is a member of an object literal,
+/// reached only as `addProperties.duplex`; a test that says `duplex` means
+/// something of its own, not the member.
+#[test]
+fn an_object_member_is_not_a_definition_for_another_file() {
+    let out = two(
+        (
+            "lib/handle.js",
+            "const addProperties = {\n\tduplex: ({value}) => ({stream: value}),\n\twebTransform({value}) {\n\t\treturn {stream: value};\n\t},\n};\n",
+        ),
+        ("test/duplex.js", "function f(duplex) {}\nf(duplex);\n"),
+    );
+    assert!(out.edges.is_empty(), "{:?}", out.edges);
+    let handle = out
+        .files
+        .iter()
+        .find(|f| f.path == "lib/handle.js")
+        .unwrap();
+    let scopes: Vec<_> = handle.hunks[0]
+        .symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.scope.as_deref()))
+        .collect();
+    assert!(
+        scopes.contains(&("duplex", Some("addProperties"))),
+        "{scopes:?}"
+    );
+}
+
+/// …but an exported object's members are what other files import, so they
+/// stay at file scope and still reach a bare use.
+#[test]
+fn an_exported_object_member_still_reaches_another_file() {
+    let out = two(
+        ("lib/api.js", "module.exports = {\n\tload: () => 1,\n};\n"),
+        ("main.js", "const y = load();\n"),
+    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: load"], "{why:?}");
+}
+
+/// tasks-3uv.37: execa da7aec7a. `const writable = new Writable(…)` inside a
+/// test is that test's own variable; an export called `writable` in lib/ is a
+/// namesake.
+#[test]
+fn a_file_that_binds_the_name_itself_does_not_reach_out() {
+    let out = two(
+        ("lib/early.js", "export const writable = () => 1;\n"),
+        (
+            "test/lines.js",
+            "const run = async () => {\n\tconst writable = make();\n\tawait go(writable);\n};\n",
+        ),
+    );
+    assert!(out.edges.is_empty(), "{:?}", out.edges);
+    assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
+}
+
+fn cpp(a: (&str, &str), b: (&str, &str)) -> ordo::model::Output {
+    run_json(serde_json::json!({ "changes": [
+        { "path": a.0, "old": "int x0;\n", "new": format!("int x0;\n{}", a.1) },
+        { "path": b.0, "old": "int y0;\n", "new": format!("int y0;\n{}", b.1) }
+    ]}))
+}
+
+/// A header's prototype is a top-level `declaration`, so it looks like the
+/// header binding the name itself; in c/c++ it is the link to the definition.
+#[test]
+fn a_header_prototype_still_reaches_its_definition() {
+    let out = cpp(
+        (
+            "toSubFieldTemplates.C",
+            "template<class T>\nint Foam::toSubField(const T& a)\n{\n    return 1;\n}\n",
+        ),
+        (
+            "toSubField.H",
+            "template<class T>\nint toSubField(const T& a);\n",
+        ),
+    );
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: toSubField"], "{why:?}");
+}
+
+/// `X<T>::size` is a member of X and scoped like one; `Foam::toSubField` may
+/// be a namespace function, so it stays at file scope and keeps its callers.
+#[test]
+fn only_a_class_qualifier_scopes_an_out_of_class_definition() {
+    let member = cpp(
+        (
+            "Field.C",
+            "template<class T>\nint Foam::Field<T>::size() const\n{\n    return 1;\n}\n",
+        ),
+        ("user.C", "int f()\n{\n    return size();\n}\n"),
+    );
+    assert!(member.edges.is_empty(), "{:?}", member.edges);
+    let free = cpp(
+        (
+            "sub.C",
+            "int Foam::toSubField(int a)\n{\n    return a;\n}\n",
+        ),
+        ("user.C", "int f()\n{\n    return toSubField(1);\n}\n"),
+    );
+    let why: Vec<&str> = free.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: toSubField"], "{why:?}");
+}

@@ -93,7 +93,7 @@
     "fix_with_finding": 1,
     "hunks": 17376,
     "longest_rationale": 237,
-    "merged": 2,
+    "merged": 0,
     "other_commits": 247,
     "other_with_finding": 15,
     "pairs": 148,
@@ -159,15 +159,15 @@
     "fix_code_first": 8,
     "fix_commits": 10,
     "fix_with_finding": 2,
-    "hunks": 13878,
+    "hunks": 13850,
     "longest_rationale": 240,
-    "merged": 1,
+    "merged": 0,
     "other_commits": 153,
     "other_with_finding": 33,
     "pairs": 115,
     "unsupported_files": 0,
     "with_details": 770,
-    "with_symbols": 2399
+    "with_symbols": 2371
   },
   "ripgrep": {
     "anonymous": 0,

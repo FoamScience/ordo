@@ -969,6 +969,12 @@ pub fn is_ident(kind: &str) -> bool {
     IDENT_KINDS.contains(&kind)
 }
 
+/// c and c++ declare in one place and define in another: a declaration is a
+/// prototype or an `extern` pointing at a definition, not a local of its own.
+pub fn splits_declarations(spec: &LangSpec) -> bool {
+    matches!(spec.name, "c" | "cpp")
+}
+
 /// Is this identifier the member half of an access — `element.angle`, `p->len`?
 /// Still a use (the rationale says what the hunk touched), but never evidence
 /// that the *definition* lives in another changed file: the name belongs to
