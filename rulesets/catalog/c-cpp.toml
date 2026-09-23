@@ -40,11 +40,11 @@ name = "raw-new-delete"
 lang = "cpp"
 kind = ["new_expression", "delete_expression"]
 note = '''
-raw new/delete — ownership leaks on every early return or exception.
-1. value semantics / a container (vector, string)
-2. unique_ptr via make_unique (single owner)
-3. shared_ptr via make_shared (shared owner)
-4. raw new only inside a RAII wrapper you fully own'''
+raw new/delete — check the result reaches an owner before the next early return or throw.
+1. already handed to an RAII holder on the same line (a smart pointer, a tmp<>/handle type you own) — nothing to do
+2. value semantics / a container (vector, string)
+3. unique_ptr via make_unique (single owner)
+4. shared_ptr via make_shared (shared owner)'''
 
 [[rule]]
 name = "c-style-cast"
