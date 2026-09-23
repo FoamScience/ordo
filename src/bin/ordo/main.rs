@@ -1907,11 +1907,14 @@ fn display_rows(
         let folded = collapsed.contains(gid);
         if last != Some(gid) {
             let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
-            let n = counts.get(gid).copied().unwrap_or(0);
-            // a folded group still says how much it is hiding — otherwise the
-            // list silently shrinks and a reviewer can lose track of what is left
-            let marker = if folded { "▸" } else { "▾" };
-            rows.push(DisplayRow::Header(format!("{marker} {reason} ({n})")));
+            // only a folded group counts its hunks: the open one shows them
+            let header = if folded {
+                let n = counts.get(gid).copied().unwrap_or(0);
+                format!("▸ {reason} ({n})")
+            } else {
+                format!("▾ {reason}")
+            };
+            rows.push(DisplayRow::Header(header));
             last = Some(gid);
         }
         if !folded {

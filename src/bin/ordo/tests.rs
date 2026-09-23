@@ -3736,8 +3736,8 @@ fn display_rows_inserts_one_header_per_contiguous_group_run() {
     let DisplayRow::Header(reason) = &rows[0] else {
         panic!("expected a header")
     };
-    // the header carries its fold marker and how many hunks it covers
-    assert_eq!(reason, "▾ same definition: run (2)");
+    // an open header does not count its hunks; a folded one does
+    assert_eq!(reason, "▾ same definition: run");
 }
 
 // ---- reviewing rules: the client half ----
