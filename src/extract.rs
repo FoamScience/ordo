@@ -2135,7 +2135,10 @@ impl<'a> Walker<'a> {
         } else {
             &self.stack[..]
         };
-        let scope = (!scope_stack.is_empty()).then(|| scope_stack.join(lang::scope_sep(spec)));
+        let mut scope: Vec<String> = scope_stack.to_vec();
+        scope.extend(object_owner(node, self.src));
+        scope.extend(qualified_scope(node, self.src));
+        let scope = (!scope.is_empty()).then(|| scope.join(lang::scope_sep(spec)));
         self.c
             .sym_decls
             .push((sr, own.to_string(), kind.to_string(), scope));
@@ -2448,6 +2451,36 @@ fn declarator_ident(node: Node) -> Option<Node> {
     lang::is_ident(node.kind()).then_some(node)
 }
 
+/// The class of an out-of-class c++ definition. `A::f` may name a namespace,
+/// so only `X<T>::f` and `X::X` / `X::~X` count as class members.
+fn qualified_scope(node: Node, src: &[u8]) -> Vec<String> {
+    qualified_parts(node, src).unwrap_or_default()
+}
+
+fn qualified_parts(node: Node, src: &[u8]) -> Option<Vec<String>> {
+    let mut at = node.child_by_field_name("declarator")?;
+    while at.kind() != "qualified_identifier" {
+        at = match at.child_by_field_name("declarator") {
+            Some(d) => d,
+            None if at.kind() == "reference_declarator" => at.named_child(0)?,
+            None => return None,
+        };
+    }
+    let mut parts = vec![];
+    let mut class_like = false;
+    while at.kind() == "qualified_identifier" {
+        let scope = at.child_by_field_name("scope")?;
+        let text = scope.utf8_text(src).ok()?;
+        let bare = tidy_ident(text.split('<').next().unwrap_or(text).trim());
+        let name = at.child_by_field_name("name")?;
+        let own = name.utf8_text(src).ok().map(|n| n.trim_start_matches('~'));
+        class_like = scope.kind() == "template_type" || own == Some(bare.as_str());
+        parts.push(bare);
+        at = name;
+    }
+    class_like.then_some(parts)
+}
+
 fn lua_binding_idents(node: Node) -> Vec<Node> {
     let mut out = vec![];
     let mut cur = node.walk();
@@ -2520,6 +2553,43 @@ fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -
         }
         (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)))
     })
+}
+
+/// The object literal a definition is a member of (`const o = { f: () => … }`
+/// gives `o`), so it scopes like a method. Exported objects stay file-scope.
+fn object_owner(node: Node, src: &[u8]) -> Option<String> {
+    let mut obj = node.parent()?;
+    if obj.kind() == "pair" {
+        obj = obj.parent()?;
+    }
+    if obj.kind() != "object" {
+        return None;
+    }
+    let mut at = obj;
+    while let Some(up) = at.parent() {
+        match up.kind() {
+            "pair" | "object" | "spread_element" => at = up,
+            "variable_declarator" => {
+                return up
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(src).ok())
+                    .map(tidy_ident);
+            }
+            "export_statement" => return None,
+            "assignment_expression" => {
+                let left = up
+                    .child_by_field_name("left")
+                    .and_then(|l| l.utf8_text(src).ok())
+                    .unwrap_or("");
+                if left == "module.exports" || left.starts_with("exports.") {
+                    return None;
+                }
+                return Some(tidy_ident(left));
+            }
+            _ => return call_container(at, src),
+        }
+    }
+    None
 }
 
 // A member is a call's container only when it is a *direct* child of that
@@ -3173,6 +3243,8 @@ fn bound_name(node: Node, src: &[u8]) -> Option<String> {
         // (A list is not always a scope: lua reaches a real binding through an
         // `expression_list`, so this names the scope kinds rather than
         // rejecting every `*_list`.)
+        // A c++ `template_declaration` is a wrapper too: a nested template
+        // head otherwise names the inner one after its first parameter.
         if matches!(
             k,
             "arguments"
@@ -3182,6 +3254,7 @@ fn bound_name(node: Node, src: &[u8]) -> Option<String> {
                 | "block"
                 | "declaration_list"
                 | "field_declaration_list"
+                | "template_declaration"
         ) {
             return None;
         }

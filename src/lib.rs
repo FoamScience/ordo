@@ -1444,6 +1444,8 @@ pub(crate) struct FileSymbols {
     /// the same for the new side
     new_defs: HashSet<String>,
     pub(crate) new_imports: HashSet<String>,
+    /// names the new side binds locally; none for c/c++, see `lang::splits_declarations`
+    pub(crate) new_locals: HashSet<String>,
     /// name this file binds → (the symbol its own file calls it, the module it
     /// came from). An edge can only be matched on the origin, and only the
     /// module says which file is allowed to answer for it — see
@@ -1496,6 +1498,9 @@ impl FileSymbols {
             old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
             old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
             old_locals: old.map_or(HashSet::new(), |(o, sp)| extract::local_names(sp, o)),
+            new_locals: new
+                .filter(|(_, sp)| !lang::splits_declarations(sp))
+                .map_or(HashSet::new(), |(n, sp)| extract::local_names(sp, n)),
             new_defs,
             new_imports,
             old_body,

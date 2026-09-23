@@ -446,3 +446,19 @@ fn a_deletion_whose_replacement_is_next_door_says_so() {
     assert!(r.len() > 1, "the deletion and its replacement split: {r:?}");
     assert!(r.contains(&"replaces 3 lines, added below"), "{r:?}");
 }
+
+/// tasks-3uv.37: openfoam d423f755 FieldField.C. A member template of a class
+/// template is two `template<…>` heads on one definition; the inner one was
+/// named after the outer's first parameter, `Field`, which then made this file
+/// the definer of every `Field` in the change.
+#[test]
+fn a_member_template_is_not_named_after_its_template_parameter() {
+    let hs = hunks(
+        "F.C",
+        "int a;\n",
+        "int a;\ntemplate<template<class> class Field, class Type>\ntemplate<class Type2>\nint FieldField<Field, Type>::NewCalculatedType(const X& ff)\n{\n    return 1;\n}\n",
+    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].defines, vec!["NewCalculatedType"]);
+    assert_eq!(hs[0].rationale, "adds NewCalculatedType");
+}

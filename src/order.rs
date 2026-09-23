@@ -358,10 +358,7 @@ pub fn order_all(
     let rationale = (0..flat.sem.len())
         .map(|i| clamp_rationale(rationale_for(i, &flat.sem, &group_idx, &ctx)))
         .collect();
-    // A doc's code fence naming a symbol is worth an edge — it puts the doc
-    // after the code it documents — but not a cluster: an illustration is not
-    // participation in the change, and one README bound whole unrelated
-    // commits together through it (tasks-3uv.14).
+    // a doc's code fence orders the doc after the code, but never joins its cluster
     let clusters = components(
         &groups,
         gedges.iter().chain(&contain_gedges).filter(|(_, b)| {
@@ -995,13 +992,18 @@ impl Binding<'_> {
         let same_file = self.group_file[definer] == self.group_file[user];
         definer != user
             && (cross_file || same_file)
-            // `element.angle` is a field of whatever `element` is; a top-level
-            // `angle` in another changed file is a namesake, not its
-            // definition. Within one file the two are usually the same thing,
-            // and the rationale there is worth keeping.
-            && (same_file
-                || !self.member_only[user].contains(s))
+            && (same_file || self.reaches_out(user, s))
             && self.resolves(definer, user, s)
+    }
+
+    /// May another file answer a use of `s` in `user`? Not for `obj.s`, nor
+    /// when the file binds `s` itself and does not import it.
+    fn reaches_out(&self, user: usize, s: &str) -> bool {
+        let binds = self.symbols.get(self.group_file[user]).is_some_and(|f| {
+            !f.imported_from.contains_key(s)
+                && (f.new_binds.contains(s) || f.new_locals.contains(s))
+        });
+        !self.member_only[user].contains(s) && !binds
     }
 
     /// Does the using file's own import statement allow `definer` to be where
@@ -1099,11 +1101,9 @@ impl<'a> RatCtx<'a> {
     fn ok(&self, mine: usize, other: usize) -> bool {
         other != mine && (self.cross_file || self.group_file[other] == self.group_file[mine])
     }
-    // ...and, across files, the other side must have written the name plainly:
-    // the wording must not claim a link `edge_allowed` refused (see its
-    // member-access note)
+    // wording must not claim a link `edge_allowed` refused
     fn reads_name(&self, user: usize, mine: usize, sym: &str) -> bool {
-        self.group_file[user] == self.group_file[mine] || !self.member_only[user].contains(sym)
+        self.group_file[user] == self.group_file[mine] || self.bind().reaches_out(user, sym)
     }
     // ...and `other` really is where `sym` comes from, by the same rule the
     // def→use graph uses: the rationale must not name a definition the graph
