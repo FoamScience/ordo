@@ -1645,9 +1645,14 @@ fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> 
     if let Some((u, b)) = defined_elsewhere(s, mine, ctx, |_| true) {
         return Some(ctx.use_of_phrase(u, mine, b));
     }
+    // like a function the hunk adds, a container it adds carries its own
+    // locals: listing them again would only repeat what was added
+    if let (Some(nm), true) = (&s.enclosing, adds_whole(s)) {
+        return Some(container_phrase(s, &short_container(nm)));
+    }
     Some(
         scope_rationale(s, ctx, my_file).unwrap_or_else(|| match &s.enclosing {
-            Some(nm) => format!("edits {}", short_container(nm)),
+            Some(nm) => container_phrase(s, &short_container(nm)),
             None => {
                 let names: Vec<&str> = s.uses.iter().map(String::as_str).collect();
                 format!("uses {}", name_list(&names))
@@ -1698,9 +1703,9 @@ fn shape_rationale(i: usize, s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Strin
         // prefixing it would read as "edits section front matter"
         let nm = short_container(nm);
         return if ctx.is_prose(my_file) && s.enclosing_kind.is_none() {
-            format!("edits {}", prose_noun(1, &nm))
+            container_phrase(s, &prose_noun(1, &nm))
         } else {
-            format!("edits {nm}")
+            container_phrase(s, &nm)
         };
     }
     let [o0, o1] = s.old_range;
@@ -1776,6 +1781,34 @@ fn split_import_renames<'r>(
     let mut seen = std::collections::HashSet::new();
     pairs.retain(|p| seen.insert(p.clone()));
     (import_rename_phrase(&pairs), rest)
+}
+
+fn pure_insertion(s: &HunkSem) -> bool {
+    s.old_range[1] < s.old_range[0]
+}
+
+/// The hunk adds its whole container. Not said of a binding, which the binding
+/// wording already names, nor of a namespace, which scopes rather than exists.
+fn adds_whole(s: &HunkSem) -> bool {
+    use crate::ContainerKind::{Binding, Namespace};
+    pure_insertion(s) && s.adds_enclosing && !matches!(s.enclosing_kind, Some(Binding | Namespace))
+}
+
+/// Up to this many inserted lines still read as an edit of their container —
+/// an entry in a table, an item in a list. The labeled corpus judged "edits X"
+/// faithful on 94% of one-line insertions and 13% of those past fifteen.
+const SMALL_INSERTION: usize = 3;
+
+/// What a hunk did to the container it sits in: a larger pure insertion adds
+/// the container, or adds lines to it.
+fn container_phrase(s: &HunkSem, nm: &str) -> String {
+    if adds_whole(s) {
+        return format!("adds {nm}");
+    }
+    if !pure_insertion(s) || s.new_len <= SMALL_INSERTION {
+        return format!("edits {nm}");
+    }
+    format!("adds {} lines to {nm}", s.new_len)
 }
 
 // a direction and a size. A pure deletion of body lines (no tracked

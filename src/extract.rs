@@ -36,6 +36,9 @@ pub struct HunkSem {
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
     pub member_uses: Vec<String>,
+    /// the enclosing container lies wholly inside this hunk and is at least
+    /// `ADDS_ENCLOSING_SHARE` of it: the hunk adds the container
+    pub adds_enclosing: bool,
     /// a type-def (class/struct/enum/…) starts in this hunk (#4 wording)
     pub is_type: bool,
     /// formatting-only / generated-file hunk — skippable for review (P12.2)
@@ -111,6 +114,7 @@ impl HunkSem {
             imports: vec![],
             uses: vec![],
             member_uses: vec![],
+            adds_enclosing: false,
             is_type: false,
             noise: false,
             members: vec![],
@@ -321,6 +325,10 @@ struct DefRec {
     callable: bool,
 }
 
+/// How much of a hunk a container must fill before the hunk counts as adding
+/// it: a small call inside a large added block is not what the block adds.
+const ADDS_ENCLOSING_SHARE: (usize, usize) = (1, 2);
+
 // Structural-smell thresholds (P13.1) — change-shape signals, not style rules.
 const LARGE_LINES: usize = 60;
 const DEEP_NESTING: usize = 4;
@@ -409,6 +417,10 @@ impl Parsed<'_> {
             in_header: container.is_some_and(|d| d.callable && d.header_e.is_some_and(|e| r1 <= e)),
             uses: self.uses(r0, r1, &defines, &imports),
             member_uses: self.member_uses(r0, r1),
+            adds_enclosing: container.is_some_and(|d| {
+                let (num, den) = ADDS_ENCLOSING_SHARE;
+                r0 <= d.s && d.e <= r1 && (d.e - d.s + 1) * den >= (r1 - r0 + 1) * num
+            }),
             is_type: (r0..=r1).any(|r| self.c.type_rows.contains(&r)),
             noise: false,
             members: sorted_unique(
