@@ -13,7 +13,7 @@ on input: --max-tokens stops the walk once usage crosses it (checked after every
 most one hunk). Commits are taken newest-first per repo, round-robin across
 repos, so a partial sweep still covers every language.
 
-usage: TYPESAFE_API_KEY=... scripts/corpus-judge.py --max-tokens 3000000 [--per-repo 60] [--base-url URL]
+usage: scripts/corpus-judge.py --max-tokens 3000000 [--per-repo 60] [--base-url JEFF_URL]
        scripts/corpus-judge.py --report-only   # re-summarise an existing --out
 """
 import argparse
@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from corpuslib import ROOT, commit_input, engine_output, git, repos, template
+from judgelib import JEFF_URL
 
 try:
     from typesafe_sdk import Noul, TypeSafeClient
@@ -44,7 +45,7 @@ QUESTIONS = {
 # corpus/gold.jsonl with jev-1.13.0 (scripts/judge-gold.py scores): faithful
 # 0.67 @0.58, matches_commit 0.98 @0.24, noise_correct 0.78 @0.15, finding
 # 0.76 @0.50. Balanced rather than raw accuracy, since raw is won by the base
-# rate (faithful 0.74 @0.39 is mostly "say yes"). Re-derive on a model bump.
+# rate (faithful 0.74 @0.39 is mostly "say yes"). Fitted to jev: re-derive for the jeff judge.
 CUTS = {"faithful": 0.58, "matches_commit": 0.24, "noise_correct": 0.15, "finding": 0.5}
 
 
@@ -236,17 +237,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-tokens", type=int, default=0, help="stop once usage crosses this")
     ap.add_argument("--per-repo", type=int, default=60)
-    ap.add_argument("--base-url", default=None)
+    ap.add_argument("--base-url", default=JEFF_URL, help="the jeff server")
     ap.add_argument("--out", type=Path, default=Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus")) / "judged.jsonl")
     ap.add_argument("--report", type=Path, default=ROOT / "corpus/judged.json")
     ap.add_argument("--report-only", action="store_true")
-    ap.add_argument("--workers", type=int, default=6, help="jev allows 1200 rpm; 6 workers at ~0.4s each is ~850")
+    ap.add_argument("--workers", type=int, default=6, help="concurrent requests to the judge")
     a = ap.parse_args()
     if a.report_only:
         return summarise(a.out, a.report)
 
-    client = TypeSafeClient(api_key=os.environ["TYPESAFE_API_KEY"], base_url=a.base_url) \
-        if a.base_url else TypeSafeClient(api_key=os.environ["TYPESAFE_API_KEY"])
+    # jeff accepts any key unless started with JEFF_API_KEYS
+    client = TypeSafeClient(api_key=os.environ.get("JEFF_API_KEY", "local"), base_url=a.base_url)
     corpus = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus"))
     Sweep(client, corpus, a.out, a.per_repo, a.max_tokens, a.workers).run()
     summarise(a.out, a.report)

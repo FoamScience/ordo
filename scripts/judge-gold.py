@@ -6,7 +6,7 @@ noise_correct, one per finding) as nouls, then reports agreement at a 0.5 cut
 and a threshold-free ranking score (AUC) per question, so a judge with a yes
 bias still shows whether its ordering carries signal.
 
-usage: TYPESAFE_API_KEY=... scripts/judge-gold.py [--base-url http://localhost:8017] [--gold corpus/gold.jsonl] [--out judged.jsonl]
+usage: scripts/judge-gold.py [--base-url JEFF_URL] [--gold corpus/gold.jsonl] [--out judged.jsonl]
 """
 import argparse
 import json
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from typesafe_sdk import Noul, TypeSafeClient
 
-from judgelib import QUESTIONS, noul_instructions, state_text
+from judgelib import JEFF_URL, QUESTIONS, noul_instructions, state_text
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -75,14 +75,14 @@ def report(judge, n_req, secs, scored, per_rule):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default=None, help="jeff, or unset for jev")
+    ap.add_argument("--base-url", default=JEFF_URL, help="the jeff server")
     ap.add_argument("--gold", type=Path, default=ROOT / "corpus/gold.jsonl")
     ap.add_argument("--out", type=Path, default=None, help="per-hunk judge scores, jsonl")
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
 
-    client = TypeSafeClient(api_key=os.environ["TYPESAFE_API_KEY"], base_url=a.base_url) \
-        if a.base_url else TypeSafeClient(api_key=os.environ["TYPESAFE_API_KEY"])
+    # jeff accepts any key unless started with JEFF_API_KEYS
+    client = TypeSafeClient(api_key=os.environ.get("JEFF_API_KEY", "local"), base_url=a.base_url)
     rows = [json.loads(l) for l in a.gold.read_text().splitlines() if l.strip()]
     if a.limit:
         rows = rows[:a.limit]
@@ -113,7 +113,7 @@ def main():
             out.write(json.dumps({"key": r["key"], "scores": got}) + "\n")
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{len(rows)} ({time.time() - t0:.0f}s)", file=sys.stderr)
-    report('jev' if not a.base_url else a.base_url, n_req, time.time() - t0, scored, per_rule)
+    report(a.base_url, n_req, time.time() - t0, scored, per_rule)
 
 
 if __name__ == "__main__":
