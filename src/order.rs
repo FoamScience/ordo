@@ -261,7 +261,7 @@ pub fn order_all(
     let FileFacts { symbols, changed } = *facts;
     let flat = flatten(files);
     let (groups, group_idx) = group_hunks(&flat);
-    let (gdef, guse, gmember) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
+    let (gdef, guse, glocal) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
     // `users`/`definers` invert the per-group sets once (symbol → the groups
     // using / defining it, ascending), so a group's defs look up their users
     // directly instead of scanning every other group: the corpus reaches ~15k
@@ -292,7 +292,7 @@ pub fn order_all(
         group_file: &group_file,
         paths,
         symbols,
-        member_only: &gmember,
+        stays_local: &glocal,
     };
     let (mut edges, gedges) =
         def_use_edges(&groups, &flat.sem, &gdef, &users, &bind, options.cross_file);
@@ -349,7 +349,7 @@ pub fn order_all(
         symbols,
         changed,
         renamed_to: &renamed_to,
-        member_only: &gmember,
+        stays_local: &glocal,
         comment: &flat.comment,
         switched: &flat.switched,
         replaced: &replaced,
@@ -358,12 +358,15 @@ pub fn order_all(
     let rationale = (0..flat.sem.len())
         .map(|i| clamp_rationale(rationale_for(i, &flat.sem, &group_idx, &ctx)))
         .collect();
-    // a doc's code fence orders the doc after the code, but never joins its cluster
+    // a doc's code fence orders the doc after the code in another file, but
+    // never joins its cluster; a doc's own sections still cluster together
+    let prose = |g: usize| crate::lang::for_path(&paths[group_file[g]]).is_some_and(|s| s.prose);
     let clusters = components(
         &groups,
-        gedges.iter().chain(&contain_gedges).filter(|(_, b)| {
-            !crate::lang::for_path(&paths[group_file[*b]]).is_some_and(|s| s.prose)
-        }),
+        gedges
+            .iter()
+            .chain(&contain_gedges)
+            .filter(|&&(a, b)| group_file[a] == group_file[b] || !prose(b)),
     );
 
     OrderedAll {
@@ -513,8 +516,8 @@ fn group_symbols(
 ) {
     let mut gdef: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     let mut guse: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
-    // the names a group only ever wrote as `obj.name` — see `Binding::member_only`
-    let mut gmember: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
+    // the names a group's uses must not resolve in another file — see `Binding::stays_local`
+    let mut glocal: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     // What this change defines, and where. An import links to it only when
     // the statement's own module names that file: a test file that happens to
     // define `render` must not become the definer of every
@@ -549,7 +552,7 @@ fn group_symbols(
                 guse[gi].insert(im.clone());
             }
         }
-        gmember[gi].extend(s.member_uses.iter().cloned());
+        glocal[gi].extend(s.member_uses.iter().cloned());
         for u in &s.uses {
             guse[gi].insert(u.clone());
             // `from lib import helper as h` then `h()`: the definition is
@@ -566,7 +569,7 @@ fn group_symbols(
     }
     // a name one hunk of the group wrote plainly is a real reference for the
     // whole group, so only the names no member spelled bare stay member-only
-    for (gi, m) in gmember.iter_mut().enumerate() {
+    for (gi, m) in glocal.iter_mut().enumerate() {
         let bare: HashSet<&str> = groups[gi]
             .members
             .iter()
@@ -579,8 +582,15 @@ fn group_symbols(
             })
             .collect();
         m.retain(|n| !bare.contains(n.as_str()));
+        // …and a name the group's own file binds where the use sees it
+        m.extend(
+            groups[gi]
+                .members
+                .iter()
+                .flat_map(|&i| flat.sem[i].own_bound.iter().cloned()),
+        );
     }
-    (gdef, guse, gmember)
+    (gdef, guse, glocal)
 }
 
 /// Whether an import's module names this file. A module is written the way
@@ -938,8 +948,9 @@ struct Binding<'a> {
     group_file: &'a [usize],
     paths: &'a [String],
     symbols: &'a [crate::FileSymbols],
-    /// per group, the names it only ever wrote as `obj.name`
-    member_only: &'a [HashSet<String>],
+    /// per group, the names its uses must not resolve in another file: ones it
+    /// only wrote as `obj.name`, and ones its own file binds where it sees them
+    stays_local: &'a [HashSet<String>],
 }
 
 impl Binding<'_> {
@@ -997,13 +1008,9 @@ impl Binding<'_> {
     }
 
     /// May another file answer a use of `s` in `user`? Not for `obj.s`, nor
-    /// when the file binds `s` itself and does not import it.
+    /// for a variable the using file binds in the use's own scope.
     fn reaches_out(&self, user: usize, s: &str) -> bool {
-        let binds = self.symbols.get(self.group_file[user]).is_some_and(|f| {
-            !f.imported_from.contains_key(s)
-                && (f.new_binds.contains(s) || f.new_locals.contains(s))
-        });
-        !self.member_only[user].contains(s) && !binds
+        !self.stays_local[user].contains(s)
     }
 
     /// Does the using file's own import statement allow `definer` to be where
@@ -1067,7 +1074,7 @@ struct RatCtx<'a> {
     /// other way to know the name came back renamed next door.
     renamed_to: &'a HashMap<&'a str, &'a str>,
     /// see `group_symbols`; `bind()` needs it to rebuild the edge gate
-    member_only: &'a [HashSet<String>],
+    stays_local: &'a [HashSet<String>],
     comment: &'a [bool],
     /// how the hunk moved code across the comment boundary, if it did
     switched: &'a [Option<crate::SideShift>],
@@ -1086,7 +1093,7 @@ impl<'a> RatCtx<'a> {
             group_file: self.group_file,
             paths: self.paths,
             symbols: self.symbols,
-            member_only: self.member_only,
+            stays_local: self.stays_local,
         }
     }
     // groups defining / using `sym`, in group order

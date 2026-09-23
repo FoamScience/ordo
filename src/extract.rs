@@ -36,6 +36,10 @@ pub struct HunkSem {
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
     pub member_uses: Vec<String>,
+    /// the subset of `uses` bound where this hunk can see it — in its enclosing
+    /// definition or at top level: the file's own variable, never another
+    /// file's definition
+    pub own_bound: Vec<String>,
     /// the enclosing container lies wholly inside this hunk and is at least
     /// `ADDS_ENCLOSING_SHARE` of it: the hunk adds the container
     pub adds_enclosing: bool,
@@ -114,6 +118,7 @@ impl HunkSem {
             imports: vec![],
             uses: vec![],
             member_uses: vec![],
+            own_bound: vec![],
             adds_enclosing: false,
             is_type: false,
             noise: false,
@@ -253,6 +258,14 @@ struct Collected {
     /// graph can refuse a cross-file definition for a name that only ever
     /// appeared as `obj.name`
     member_uses: Vec<(usize, String)>,
+    /// every name an import statement in this file binds
+    import_names: HashSet<String>,
+    /// the imported names that stand for a whole package (every go import,
+    /// js's `* as ns`), so `name.member` is that package's own member
+    package_names: HashSet<String>,
+    /// names bound outside any definition — none for c/c++, whose top-level
+    /// declarations point at definitions elsewhere (`lang::splits_declarations`)
+    top_binds: HashSet<String>,
     /// parameter names (local bindings) seen anywhere in the file
     bound: HashSet<String>,
     /// named members of a container (enum variant, struct field, object
@@ -407,6 +420,8 @@ impl Parsed<'_> {
         let enclosing = container.map(|d| d.name.clone());
         let (defines, imports) = self.declared(r0, r1);
         let shape = self.def_shape(r0, r1);
+        let uses = self.uses(r0, r1, &defines, &imports);
+        let own_bound = self.own_bound(&uses, container);
         HunkSem {
             category: self.category(r0, r1),
             // a plain definition is the default and says nothing extra; only a
@@ -415,8 +430,9 @@ impl Parsed<'_> {
                 .map(|d| d.kind)
                 .filter(|k| *k != ContainerKind::Definition),
             in_header: container.is_some_and(|d| d.callable && d.header_e.is_some_and(|e| r1 <= e)),
-            uses: self.uses(r0, r1, &defines, &imports),
             member_uses: self.member_uses(r0, r1),
+            own_bound,
+            uses,
             adds_enclosing: container.is_some_and(|d| {
                 let (num, den) = ADDS_ENCLOSING_SHARE;
                 r0 <= d.s && d.e <= r1 && (d.e - d.s + 1) * den >= (r1 - r0 + 1) * num
@@ -599,6 +615,22 @@ impl Parsed<'_> {
                 .filter(|n| !declared.contains(n) && !self.c.bound.contains(n))
                 .collect(),
         )
+    }
+
+    fn own_bound(&self, uses: &[String], container: Option<&DefRec>) -> Vec<String> {
+        let seen = |n: &str| {
+            self.c.top_binds.contains(n)
+                || container.is_some_and(|d| {
+                    self.c
+                        .local_binds
+                        .iter()
+                        .any(|(row, b)| b == n && (d.s..=d.e).contains(row))
+                })
+        };
+        uses.iter()
+            .filter(|u| !self.c.import_names.contains(*u) && seen(u))
+            .cloned()
+            .collect()
     }
 
     /// Names this hunk wrote only as the member half of an access. A name it
@@ -1904,12 +1936,19 @@ impl<'a> Walker<'a> {
         for (row, name) in names {
             self.c.decls.push((sr, er, name.clone()));
             self.c.import_decls.push((sr, er, name.clone()));
+            self.c.import_names.insert(name.clone());
+            if self.spec.name == "go" {
+                self.c.package_names.insert(name.clone());
+            }
             // a name the language reports on the statement's own row has no
             // row of its own (python's `from x import a, b`, js's clause)
             if row != sr {
                 self.c.import_rows_of.push((row, name));
             }
         }
+        self.c
+            .package_names
+            .extend(namespace_imports(node, self.src));
         true // don't descend: import identifiers are declarations, not uses
     }
 
@@ -2195,6 +2234,9 @@ impl<'a> Walker<'a> {
     // falls through: the bound value can still hold defs and uses
     fn visit_locals(&mut self, node: Node) {
         for (id, name) in bound_names(node, self.src, self.spec) {
+            if self.stack.is_empty() && !lang::splits_declarations(self.spec) {
+                self.c.top_binds.insert(name.clone());
+            }
             self.c.local_binds.push((id.start_position().row, name));
             self.c.bind_ids.insert(id.id());
         }
@@ -2337,6 +2379,14 @@ impl<'a> Walker<'a> {
         true
     }
 
+    fn qualified_by_package(&self, node: Node) -> bool {
+        node.parent()
+            .and_then(|p| p.named_child(0))
+            .filter(|operand| operand.id() != node.id())
+            .and_then(|operand| operand.utf8_text(self.src).ok())
+            .is_some_and(|t| self.c.package_names.contains(t.trim()))
+    }
+
     fn visit_ident(&mut self, node: Node) -> bool {
         if !lang::is_ident(node.kind()) {
             return false;
@@ -2358,7 +2408,9 @@ impl<'a> Walker<'a> {
         // never resolve to a definition and only clutters `uses`.
         if let Some(t) = trimmed(node, src).filter(|t| !t.chars().all(|c| c.is_ascii_digit())) {
             let (row, id) = (node.start_position().row, node.id());
-            if lang::is_member_ident(node.kind()) {
+            // `util.Trim` in go, `ns.helper` after `import * as ns`: qualified
+            // by an import, the name is that package's own, not a field
+            if lang::is_member_ident(node.kind()) && !self.qualified_by_package(node) {
                 self.c.push_member_use(row, t.to_string(), id);
             } else {
                 self.c.push_use(row, t.to_string(), id);
@@ -2568,7 +2620,9 @@ fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -
 }
 
 /// The object literal a definition is a member of (`const o = { f: () => … }`
-/// gives `o`), so it scopes like a method. Exported objects stay file-scope.
+/// gives `o`), so it scopes like a method; that holds for `export const o`
+/// too, whose members are reached as `o.f`. Only an object that is itself the
+/// export (`export default {…}`, `module.exports = {…}`) stays file-scope.
 fn object_owner(node: Node, src: &[u8]) -> Option<String> {
     let mut obj = node.parent()?;
     if obj.kind() == "pair" {
@@ -2593,7 +2647,10 @@ fn object_owner(node: Node, src: &[u8]) -> Option<String> {
                     .child_by_field_name("left")
                     .and_then(|l| l.utf8_text(src).ok())
                     .unwrap_or("");
-                if left == "module.exports" || left.starts_with("exports.") {
+                if left == "module.exports"
+                    || left.starts_with("module.exports.")
+                    || left.starts_with("exports.")
+                {
                     return None;
                 }
                 return Some(tidy_ident(left));
@@ -4467,6 +4524,25 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
         }
         _ => None,
     }
+}
+
+/// the names js's `import * as ns` binds
+fn namespace_imports(node: Node, src: &[u8]) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = node.walk();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "namespace_import" {
+            out.extend(
+                n.named_child(0)
+                    .and_then(|id| trimmed(id, src))
+                    .map(str::to_string),
+            );
+            continue;
+        }
+        stack.extend(n.named_children(&mut cur));
+    }
+    out
 }
 
 /// every package a go `import (...)` block or single import names
