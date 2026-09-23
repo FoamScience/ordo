@@ -462,3 +462,51 @@ fn a_member_template_is_not_named_after_its_template_parameter() {
     assert_eq!(hs[0].defines, vec!["NewCalculatedType"]);
     assert_eq!(hs[0].rationale, "adds NewCalculatedType");
 }
+
+/// tasks-3uv.36: excalidraw ec070911 LibraryMenu.tsx added a whole
+/// `useEffect(…)` and read "adds local target (6 uses)": a local inside the
+/// block named as if it were the change.
+#[test]
+fn a_hunk_that_adds_a_whole_call_says_so() {
+    let body = "  useEffect(() => {\n    const target = pick();\n    if (target) {\n      close(target);\n    }\n  }, [pick]);\n";
+    let hs = hunks(
+        "Menu.tsx",
+        "export const Menu = memo(() => {\n  const a = 1;\n  return a;\n});\n",
+        &format!("export const Menu = memo(() => {{\n  const a = 1;\n{body}  return a;\n}});\n"),
+    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].rationale, "adds useEffect");
+}
+
+/// tasks-3uv.36: vue cd197456 and friends. A pure insertion edits nothing:
+/// past a few lines it adds lines to its container, and "edits X" was judged
+/// unfaithful on 13 of 15 labeled insertions of fifteen lines or more.
+#[test]
+fn a_large_insertion_into_a_function_adds_lines_to_it() {
+    let lines: String = (0..6).map(|i| format!("    log({i});\n")).collect();
+    let hs = hunks(
+        "a.py",
+        "def run():\n    start()\n    stop()\n",
+        &format!("def run():\n    start()\n{lines}    stop()\n"),
+    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert_eq!(hs[0].rationale, "adds 6 lines to run");
+}
+
+/// …and up to three inserted lines still read as an edit: an entry in a
+/// table, an item in a list.
+#[test]
+fn a_small_insertion_still_edits_its_container() {
+    let at = |n: usize| {
+        let lines: String = (0..n).map(|i| format!("    log({i})\n")).collect();
+        hunks(
+            "a.py",
+            "def run():\n    start()\n    stop()\n",
+            &format!("def run():\n    start()\n{lines}    stop()\n"),
+        )[0]
+        .rationale
+        .clone()
+    };
+    assert_eq!(at(3), "edits run");
+    assert_eq!(at(4), "adds 4 lines to run");
+}
