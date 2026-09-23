@@ -47,7 +47,11 @@ def main():
         # can be megabytes, and a plain lookup never reads them
         blobs = {}
         if a.diff:
-            blobs = {c["path"]: (c["old"].splitlines(), c["new"].splitlines()) for c in inp["changes"]}
+            # split on "\n" alone: str.splitlines() also breaks on form feed and
+            # the unicode separators, and a file that contains one (execa's
+            # escape-sequence tests carry seven) then numbers its lines
+            # differently from the engine
+            blobs = {c["path"]: (c["old"].split("\n"), c["new"].split("\n")) for c in inp["changes"]}
         for f in out["files"]:
             if path and path not in f["path"]:
                 continue
