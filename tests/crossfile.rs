@@ -451,3 +451,69 @@ fn only_a_class_qualifier_scopes_an_out_of_class_definition() {
     let why: Vec<&str> = free.edges.iter().map(|e| e.why.as_str()).collect();
     assert_eq!(why, vec!["def→use: toSubField"], "{why:?}");
 }
+
+fn edges_of(out: &ordo::model::Output) -> Vec<&str> {
+    out.edges.iter().map(|e| e.why.as_str()).collect()
+}
+
+/// `util.Trim` in go and `ns.helper()` after `import * as ns` are qualified by
+/// an import: the name is that package's own, not a field of some object.
+#[test]
+fn a_call_qualified_by_an_import_still_reaches_its_definition() {
+    let go = run_json(serde_json::json!({ "changes": [
+        { "path": "util/strs.go", "old": "package util\n",
+          "new": "package util\n\nfunc Trim(s string) string {\n\treturn s\n}\n" },
+        { "path": "main.go", "old": "package main\n\nimport \"example.com/app/util\"\n\nfunc a() {}\n",
+          "new": "package main\n\nimport \"example.com/app/util\"\n\nfunc a() {\n\tutil.Trim(\"x\")\n}\n" }
+    ]}));
+    assert_eq!(edges_of(&go), vec!["def→use: Trim"]);
+    let js = two(
+        ("lib/helper.js", "export function helper() { return 1; }\n"),
+        (
+            "main.js",
+            "import * as ns from './lib/helper.js';\nconst y = ns.helper();\n",
+        ),
+    );
+    assert_eq!(edges_of(&js), vec!["def→use: helper"]);
+    // a default import is an object: its member is not the package's own
+    let obj = two(
+        ("lib/port.js", "export function port() { return 1; }\n"),
+        (
+            "main.js",
+            "import cfg from './config.js';\nconst y = cfg.port;\n",
+        ),
+    );
+    assert!(edges_of(&obj).is_empty(), "{:?}", obj.edges);
+}
+
+/// A local of the same name in another function does not shadow a go
+/// same-package call: only a binding the use can see stays local.
+#[test]
+fn a_local_elsewhere_in_the_file_does_not_block_a_same_package_call() {
+    let pad: String = (0..6)
+        .map(|i| format!("func f{i}() int {{\n\treturn {i}0\n}}\n\n"))
+        .collect();
+    let old = format!("package pkg\n\nfunc other() {{\n\tx := 1\n\t_ = x\n}}\n\n{pad}func use() int {{\n\treturn 0\n}}\n");
+    let new = old
+        .replace("x := 1\n\t_ = x", "s := 1\n\t_ = s")
+        .replace("return 0\n}\n", "return s()\n}\n");
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "pkg/a.go", "old": "package pkg\n", "new": "package pkg\n\nfunc s() int {\n\treturn 1\n}\n" },
+        { "path": "pkg/b.go", "old": old, "new": new }
+    ]}));
+    assert!(edges_of(&out).contains(&"def→use: s"), "{:?}", out.edges);
+}
+
+/// `module.exports.api = {…}` is an export like `exports.api = {…}`: its
+/// members stay at file scope.
+#[test]
+fn a_nested_module_exports_object_stays_at_file_scope() {
+    let out = two(
+        (
+            "lib/api.js",
+            "module.exports.api = {\n\tload: () => 1,\n};\n",
+        ),
+        ("main.js", "const y = load();\n"),
+    );
+    assert_eq!(edges_of(&out), vec!["def→use: load"]);
+}
