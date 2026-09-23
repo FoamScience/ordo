@@ -969,6 +969,16 @@ pub fn is_ident(kind: &str) -> bool {
     IDENT_KINDS.contains(&kind)
 }
 
+/// Is this identifier the member half of an access — `element.angle`, `p->len`?
+/// Still a use (the rationale says what the hunk touched), but never evidence
+/// that the *definition* lives in another changed file: the name belongs to
+/// whatever object it hangs off, and a same-named export elsewhere is a
+/// coincidence. The shorthand kinds stay out: `{angle}` really does reference
+/// the variable `angle`.
+pub fn is_member_ident(kind: &str) -> bool {
+    matches!(kind, "property_identifier" | "field_identifier")
+}
+
 /// Does this path look like a test file? (tests/ dir, test_*, *_test, *_spec)
 pub fn is_test_path(p: &str) -> bool {
     // slash-wrapped, so `d` matches inside the path and `d[1..]` at its start
