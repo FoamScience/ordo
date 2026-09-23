@@ -396,3 +396,53 @@ fn any_in_a_test_file_is_not_flagged() {
         assert!(!named(p), "{p} is a test path");
     }
 }
+
+/// tasks-3uv.34: click 333c28d7 renamed `LazyFile` to `_LazyFile` in utils.py;
+/// types.py dropped the old import in one hunk and added the new one in
+/// another, and the deletion read "removes import LazyFile".
+#[test]
+fn a_dropped_import_whose_symbol_was_renamed_reads_as_a_rename() {
+    let out = run(json!({"changes": [
+        {"path": "utils.py",
+         "old": "def safecall(f):\n    return f\n",
+         "new": "def _safecall(f):\n    return f\n"},
+        {"path": "types.py",
+         "old": "from .utils import safecall\nimport os\n\n\ndef go():\n    return safecall(os)\n",
+         "new": "import os\nfrom .utils import _safecall\n\n\ndef go():\n    return _safecall(os)\n"}
+    ]}));
+    let r = rationales(&out);
+    assert!(
+        r.iter().any(|x| x == "renames import safecall → _safecall"),
+        "{r:?}"
+    );
+    assert!(r.iter().all(|x| !x.contains("removes import")), "{r:?}");
+}
+
+/// tasks-3uv.34: the rename wording is evidence-gated — a dropped import with
+/// no def-side rename behind it is still a removal, whatever else the file
+/// imports.
+#[test]
+fn a_dropped_import_with_no_rename_behind_it_still_removes() {
+    let out = run(json!({"changes": [
+        {"path": "types.py",
+         "old": "from .utils import User\nimport os\n\n\ndef go():\n    return User(os)\n",
+         "new": "import os\nfrom .utils import UserProfile\n\n\ndef go():\n    return UserProfile(os)\n"}
+    ]}));
+    let r = rationales(&out);
+    assert!(r.iter().any(|x| x == "removes import User"), "{r:?}");
+}
+
+/// tasks-3uv.33: click 61b69e96 _termui_impl.py rewrote a dispatch; the
+/// splitter broke at the construct boundary, so the old lines and their
+/// replacement landed in two hunks and the deletion read "removes 3 lines".
+#[test]
+fn a_deletion_whose_replacement_is_next_door_says_so() {
+    let hs = hunks(
+        "p.py",
+        "def pick(win):\n    cmd = lookup(win)\n    if win:\n        return tempfile([\"more\"])\n    return pipe([\"less\"])\n\n    log(cmd)\n",
+        "def pick(win):\n    cmd = lookup(win)\n\n    log(cmd)\n    use_tmp = win\n    params = cmd[1:]\n    if use_tmp:\n        return tempfile(params)\n    return pipe(params)\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.len() > 1, "the deletion and its replacement split: {r:?}");
+    assert!(r.contains(&"replaces 3 lines, added below"), "{r:?}");
+}
