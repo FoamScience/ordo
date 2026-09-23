@@ -30,13 +30,19 @@ def commit_input(repo, sha):
     parent = git(repo, "rev-parse", "--verify", "-q", f"{sha}^").strip()
     if not parent:
         return None, None
-    names = [l.split("\t", 2)[2] for l in git(repo, "diff", "--numstat", "--no-renames", parent, sha).splitlines()
+    inp = range_input(repo, parent, sha)
+    return (parent, inp) if inp else (None, None)
+
+
+def range_input(repo, base, head):
+    """Engine input for everything between two revisions, or None when no
+    text changed."""
+    names = [l.split("\t", 2)[2] for l in git(repo, "diff", "--numstat", "--no-renames", base, head).splitlines()
              if not l.startswith("-\t-\t")]
     if not names:
-        return None, None
-    inp = {"changes": [{"path": p, "old": git(repo, "show", f"{parent}:{p}"),
-                        "new": git(repo, "show", f"{sha}:{p}")} for p in names]}
-    return parent, inp
+        return None
+    return {"changes": [{"path": p, "old": git(repo, "show", f"{base}:{p}"),
+                         "new": git(repo, "show", f"{head}:{p}")} for p in names]}
 
 
 def engine_output(inp):

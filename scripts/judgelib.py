@@ -1,5 +1,9 @@
 """What every judge script asks about a labeled hunk: the state text and the
 nouls, in one place so a judge is trained and scored on the same words."""
+import os
+
+# the judge is a jeff server (~/repo/jeff); nothing here talks to a hosted API
+JEFF_URL = os.environ.get("JEFF_URL", "http://127.0.0.1:8017")
 
 QUESTIONS = {
     "faithful": "Does the rationale accurately describe what this diff changes?",
