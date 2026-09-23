@@ -316,6 +316,27 @@ pub fn order_all(
         perm.extend(mem);
     }
 
+    // ambiguity is dropped: two files renaming different defs to the same old
+    // spelling say nothing about which one an importer followed
+    let mut renamed_to: HashMap<&str, Option<&str>> = HashMap::new();
+    for c in changed {
+        for (new, old) in &c.rename {
+            renamed_to
+                .entry(old.as_str())
+                .and_modify(|e| {
+                    if *e != Some(new.as_str()) {
+                        *e = None;
+                    }
+                })
+                .or_insert(Some(new.as_str()));
+        }
+    }
+    let renamed_to: HashMap<&str, &str> = renamed_to
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v?)))
+        .collect();
+
+    let replaced = replaced_nearby(&flat);
     let ctx = RatCtx {
         groups: &groups,
         definers: &definers,
@@ -326,8 +347,10 @@ pub fn order_all(
         paths,
         symbols,
         changed,
+        renamed_to: &renamed_to,
         comment: &flat.comment,
         switched: &flat.switched,
+        replaced: &replaced,
         cross_file: options.cross_file,
     };
     let rationale = (0..flat.sem.len())
@@ -372,6 +395,60 @@ fn flatten(files: &[crate::PerFileHunks]) -> Flat<'_> {
         comment,
         switched,
     }
+}
+
+/// How many old-side lines may lie between two hunks and still read as one
+/// edit: the blank line and the closing token the splitter left between a
+/// deletion and the code that replaced it.
+const NEIGHBOUR_GAP: usize = 3;
+/// …and how many hunks may sit between them. The splitter breaks at construct
+/// boundaries, so the insertion is next door but not always immediately next.
+const NEIGHBOUR_HUNKS: usize = 2;
+/// How much of what the deletion dropped the neighbour must add back before it
+/// counts as the replacement, as a fraction: a 56-line block deleted beside a
+/// four-line edit was deleted, whatever the edit did.
+const NEIGHBOUR_SHARE: (usize, usize) = (1, 2);
+
+/// Where a pure deletion's replacement went, when the change put it in a
+/// neighbouring hunk. The splitter breaks at construct boundaries, so a
+/// rewritten dispatch reads as two hunks: one dropping the old lines, one
+/// adding the new. On its own the deletion says "removes 3 lines", which is
+/// true of its own rows and reads to a reviewer as code disappearing.
+fn replaced_nearby(flat: &Flat) -> Vec<Option<&'static str>> {
+    let span = |[a, b]: [usize; 2]| (b + 1).saturating_sub(a);
+    // what the neighbour added over what it dropped
+    let growth = |s: &HunkSem| s.new_len.saturating_sub(span(s.old_range));
+    (0..flat.sem.len())
+        .map(|i| {
+            let s = flat.sem[i];
+            let [o0, o1] = s.old_range;
+            if !s.new_empty || o1 < o0 {
+                return None;
+            }
+            let (num, den) = NEIGHBOUR_SHARE;
+            let enough = |s: &HunkSem| growth(s) * den >= (o1 + 1 - o0) * num;
+            let lo = i.saturating_sub(NEIGHBOUR_HUNKS);
+            let hi = (i + NEIGHBOUR_HUNKS + 1).min(flat.sem.len());
+            (lo..hi)
+                .filter(|&j| j != i && flat.coord[j].0 == flat.coord[i].0)
+                .filter(|&j| enough(flat.sem[j]))
+                .filter_map(|j| {
+                    let [n0, n1] = flat.sem[j].old_range;
+                    // lines lying between the two hunks, either way round
+                    let between = if j < i {
+                        let end = n1.max(n0.saturating_sub(1)).min(o0 - 1);
+                        o0 - 1 - end
+                    } else {
+                        n0.max(o1 + 1) - 1 - o1
+                    };
+                    (between <= NEIGHBOUR_GAP).then_some((between, j))
+                })
+                // nearest wins; on a tie the earlier hunk does, so the answer
+                // does not depend on which word sorts first
+                .min()
+                .map(|(_, j)| if j < i { "above" } else { "below" })
+        })
+        .collect()
 }
 
 /// P1: group by (file, enclosing definition); top-level hunks (no enclosing
@@ -940,9 +1017,16 @@ struct RatCtx<'a> {
     paths: &'a [String],
     symbols: &'a [crate::FileSymbols],
     changed: &'a [crate::FileChanges],
+    /// old definition name → the name it was renamed to, across every file of
+    /// the change. An import hunk that only drops the old spelling has no
+    /// other way to know the name came back renamed next door.
+    renamed_to: &'a HashMap<&'a str, &'a str>,
     comment: &'a [bool],
     /// how the hunk moved code across the comment boundary, if it did
     switched: &'a [Option<crate::SideShift>],
+    /// see `replaced_nearby`: for a pure deletion, where the hunk next door
+    /// put the lines that took its place
+    replaced: &'a [Option<&'static str>],
     cross_file: bool,
 }
 
@@ -1151,7 +1235,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
         .or_else(|| def_side_rationale(s, sem, mine, ctx))
         .or_else(|| use_side_rationale(s, mine, ctx))
         .or_else(|| scope_rationale(s, ctx, my_file))
-        .unwrap_or_else(|| shape_rationale(s, ctx, my_file))
+        .unwrap_or_else(|| shape_rationale(i, s, ctx, my_file))
 }
 
 // P12.2: noise hunks are skippable — say why, skip semantic wording.
@@ -1199,7 +1283,18 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
     }
     let names: Vec<&str> = s.imports.iter().map(String::as_str).collect();
     if s.new_empty {
-        return Some(format!("removes import {}", name_list(&names)));
+        let (mut pairs, mut gone): (Vec<String>, Vec<&str>) = (vec![], vec![]);
+        for &n in &names {
+            match import_renamed_to(ctx, my_file, n) {
+                Some(to) => pairs.push(format!("{n} → {to}")),
+                None => gone.push(n),
+            }
+        }
+        let frags: Vec<String> = import_rename_phrase(&pairs)
+            .into_iter()
+            .chain((!gone.is_empty()).then(|| format!("removes import {}", name_list(&gone))))
+            .collect();
+        return Some(join_frags(&frags));
     }
     let all_new = s.imports.iter().all(|im| {
         !ctx.symbols
@@ -1540,7 +1635,7 @@ fn scope_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> 
 // nothing named a construct: say what the hunk did to its container, else to
 // the file — a removal, a direction and a size — rather than the bare word
 // "change", which told a reviewer nothing at all
-fn shape_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> String {
+fn shape_rationale(i: usize, s: &HunkSem, ctx: &RatCtx, my_file: usize) -> String {
     if let Some(nm) = &s.enclosing {
         // "section" is the word for a prose *definition*; a region already
         // names what it is ("preamble", "front matter", "#ifdef X"), so
@@ -1570,8 +1665,61 @@ fn shape_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> String {
                 .collect::<Vec<_>>()
         })
         .filter(|rs| !rs.is_empty())
-        .map(|rs| removal_phrase(&rs));
-    removed.unwrap_or_else(|| size_rationale(s))
+        .map(|rs| {
+            let (renamed, rest) = split_import_renames(&rs, ctx, my_file);
+            let frags: Vec<String> = renamed
+                .into_iter()
+                .chain((!rest.is_empty()).then(|| removal_phrase(&rest)))
+                .collect();
+            join_frags(&frags)
+        });
+    removed.unwrap_or_else(|| size_rationale(s, ctx.replaced.get(i).copied().flatten()))
+}
+
+/// An import statement that only loses names reads as a removal, and usually
+/// is one. It is not when the definition was renamed elsewhere in the same
+/// change and this file imports the new spelling in another hunk: nothing
+/// left, the name moved. Only a def-side rename counts as evidence — pairing
+/// dropped and added imports on spelling alone would turn `User` →
+/// `UserProfile` into a rename it never was.
+fn import_renamed_to<'c>(ctx: &RatCtx<'c>, my_file: usize, name: &str) -> Option<&'c str> {
+    let new_imports = ctx.symbols.get(my_file).map(|f| &f.new_imports)?;
+    ctx.renamed_to
+        .get(name)
+        .filter(|to| new_imports.contains(**to))
+        .copied()
+}
+
+/// "renames import A → B" for the dropped names the change renamed, and
+/// whatever is left for the caller to word as a removal.
+fn import_rename_phrase(pairs: &[String]) -> Option<String> {
+    (!pairs.is_empty()).then(|| {
+        let refs: Vec<&str> = pairs.iter().map(String::as_str).collect();
+        format!("renames import {}", name_list(&refs))
+    })
+}
+
+fn split_import_renames<'r>(
+    rs: &[&'r Removal],
+    ctx: &RatCtx,
+    my_file: usize,
+) -> (Option<String>, Vec<&'r Removal>) {
+    let mut pairs: Vec<String> = vec![];
+    let mut rest: Vec<&Removal> = vec![];
+    for r in rs {
+        match (r.kind == RemovalKind::Import)
+            .then(|| import_renamed_to(ctx, my_file, &r.name))
+            .flatten()
+        {
+            Some(to) => pairs.push(format!("{} → {to}", r.name)),
+            None => rest.push(r),
+        }
+    }
+    // one pair per rename: a name can be dropped twice in one hunk, and
+    // "renames import X → Y, X → Y" reads as a bug in the tool
+    let mut seen = std::collections::HashSet::new();
+    pairs.retain(|p| seen.insert(p.clone()));
+    (import_rename_phrase(&pairs), rest)
 }
 
 // a direction and a size. A pure deletion of body lines (no tracked
@@ -1581,11 +1729,17 @@ fn shape_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> String {
 // nothing in: a `#define` (not a definition since macros left `defines`), a
 // continuation line inside a shell command, the prose ahead of an added
 // document's first heading.
-fn size_rationale(s: &HunkSem) -> String {
+fn size_rationale(s: &HunkSem, replaced: Option<&str>) -> String {
     let [o0, o1] = s.old_range;
     let lines = |n: usize| format!("{n} line{}", if n == 1 { "" } else { "s" });
     if s.new_empty && o1 >= o0 {
-        return format!("removes {}", lines(o1 - o0 + 1));
+        let n = lines(o1 - o0 + 1);
+        // the lines came back next door — see `replaced_nearby`. Counting them
+        // as gone is true of this hunk's rows and false of the change.
+        return match replaced {
+            Some(where_) => format!("replaces {n}, added {where_}"),
+            None => format!("removes {n}"),
+        };
     }
     let n = lines(s.new_len.max(1));
     if o1 < o0 {
