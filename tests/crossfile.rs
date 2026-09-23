@@ -282,3 +282,60 @@ fn a_package_relative_import_names_no_module_and_blocks_nothing() {
         assert_eq!(out.edges.len(), 1, "`{imp}`: {:?}", out.edges);
     }
 }
+
+/// tasks-3uv.14: `element.angle` names a field of whatever `element` is. A
+/// top-level `angle` in another changed file is a namesake, and taking it for
+/// the definition bound two unrelated commits into one cluster.
+#[test]
+fn a_property_access_does_not_reach_a_namesake_in_another_file() {
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "math.ts", "old": "export function other() { return 1; }\n",
+          "new": "export function other() { return 1; }\nexport function angle(a: number) { return a; }\n" },
+        { "path": "render.ts", "old": "export const draw = (element: any) => {\n  return 0;\n};\n",
+          "new": "export const draw = (element: any) => {\n  return element.angle + 1;\n};\n" }
+    ]}));
+    assert!(out.edges.is_empty(), "{:?}", out.edges);
+    assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
+    let r: Vec<&str> = out
+        .files
+        .iter()
+        .flat_map(|f| &f.hunks)
+        .map(|h| h.rationale.as_str())
+        .collect();
+    assert!(r.iter().all(|x| !x.contains("render.ts")), "{r:?}");
+}
+
+/// …and a bare mention of the same name still resolves: one plain spelling
+/// anywhere in the group is enough.
+#[test]
+fn a_bare_mention_still_reaches_the_other_file() {
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "math.ts", "old": "export function other() { return 1; }\n",
+          "new": "export function other() { return 1; }\nexport function angle(a: number) { return a; }\n" },
+        { "path": "render.ts", "old": "export const draw = () => {\n  return 0;\n};\n",
+          "new": "export const draw = () => {\n  return angle(1);\n};\n" }
+    ]}));
+    let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
+    assert_eq!(why, vec!["def→use: angle"], "{why:?}");
+}
+
+/// tasks-3uv.14: a doc's code fence keeps its edge — it puts the doc after the
+/// code it documents — but an illustration is not participation in the change,
+/// so it must not pull the doc into the code's cluster. One README mentioning
+/// `Index` merged two unrelated ripgrep commits.
+#[test]
+fn a_doc_fence_orders_the_doc_without_joining_its_cluster() {
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "config.py", "old": "def parse_cfg(p):\n    return 1\n",
+          "new": "def parse_cfg(p, strict=False):\n    return 1\n" },
+        { "path": "README.md", "old": "# Usage\n\n```python\nx = old_helper(1)\n```\n",
+          "new": "# Usage\n\n```python\nx = parse_cfg(\"a.toml\", strict=True)\n```\n" }
+    ]}));
+    assert_eq!(
+        out.edges.len(),
+        1,
+        "the ordering edge stays: {:?}",
+        out.edges
+    );
+    assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
+}

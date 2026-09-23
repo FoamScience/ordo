@@ -261,7 +261,7 @@ pub fn order_all(
     let FileFacts { symbols, changed } = *facts;
     let flat = flatten(files);
     let (groups, group_idx) = group_hunks(&flat);
-    let (gdef, guse) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
+    let (gdef, guse, gmember) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
     // `users`/`definers` invert the per-group sets once (symbol → the groups
     // using / defining it, ascending), so a group's defs look up their users
     // directly instead of scanning every other group: the corpus reaches ~15k
@@ -292,6 +292,7 @@ pub fn order_all(
         group_file: &group_file,
         paths,
         symbols,
+        member_only: &gmember,
     };
     let (mut edges, gedges) =
         def_use_edges(&groups, &flat.sem, &gdef, &users, &bind, options.cross_file);
@@ -348,6 +349,7 @@ pub fn order_all(
         symbols,
         changed,
         renamed_to: &renamed_to,
+        member_only: &gmember,
         comment: &flat.comment,
         switched: &flat.switched,
         replaced: &replaced,
@@ -356,7 +358,16 @@ pub fn order_all(
     let rationale = (0..flat.sem.len())
         .map(|i| clamp_rationale(rationale_for(i, &flat.sem, &group_idx, &ctx)))
         .collect();
-    let clusters = components(&groups, gedges.iter().chain(&contain_gedges));
+    // A doc's code fence naming a symbol is worth an edge — it puts the doc
+    // after the code it documents — but not a cluster: an illustration is not
+    // participation in the change, and one README bound whole unrelated
+    // commits together through it (tasks-3uv.14).
+    let clusters = components(
+        &groups,
+        gedges.iter().chain(&contain_gedges).filter(|(_, b)| {
+            !crate::lang::for_path(&paths[group_file[*b]]).is_some_and(|s| s.prose)
+        }),
+    );
 
     OrderedAll {
         coord: flat.coord,
@@ -498,9 +509,15 @@ fn group_symbols(
     group_idx: &[usize],
     symbols: &[crate::FileSymbols],
     paths: &[String],
-) -> (Vec<HashSet<String>>, Vec<HashSet<String>>) {
+) -> (
+    Vec<HashSet<String>>,
+    Vec<HashSet<String>>,
+    Vec<HashSet<String>>,
+) {
     let mut gdef: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     let mut guse: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
+    // the names a group only ever wrote as `obj.name` — see `Binding::member_only`
+    let mut gmember: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     // What this change defines, and where. An import links to it only when
     // the statement's own module names that file: a test file that happens to
     // define `render` must not become the definer of every
@@ -535,6 +552,7 @@ fn group_symbols(
                 guse[gi].insert(im.clone());
             }
         }
+        gmember[gi].extend(s.member_uses.iter().cloned());
         for u in &s.uses {
             guse[gi].insert(u.clone());
             // `from lib import helper as h` then `h()`: the definition is
@@ -549,7 +567,23 @@ fn group_symbols(
             }
         }
     }
-    (gdef, guse)
+    // a name one hunk of the group wrote plainly is a real reference for the
+    // whole group, so only the names no member spelled bare stay member-only
+    for (gi, m) in gmember.iter_mut().enumerate() {
+        let bare: HashSet<&str> = groups[gi]
+            .members
+            .iter()
+            .flat_map(|&i| {
+                let s = flat.sem[i];
+                s.uses
+                    .iter()
+                    .filter(|u| !s.member_uses.contains(u))
+                    .map(String::as_str)
+            })
+            .collect();
+        m.retain(|n| !bare.contains(n.as_str()));
+    }
+    (gdef, guse, gmember)
 }
 
 /// Whether an import's module names this file. A module is written the way
@@ -907,6 +941,8 @@ struct Binding<'a> {
     group_file: &'a [usize],
     paths: &'a [String],
     symbols: &'a [crate::FileSymbols],
+    /// per group, the names it only ever wrote as `obj.name`
+    member_only: &'a [HashSet<String>],
 }
 
 impl Binding<'_> {
@@ -956,8 +992,15 @@ impl Binding<'_> {
     /// The whole gate for a def→use edge from `definer` to `user`: not the
     /// same group, same file unless cross-file edges are on, and `resolves`.
     fn edge_allowed(&self, definer: usize, user: usize, s: &str, cross_file: bool) -> bool {
+        let same_file = self.group_file[definer] == self.group_file[user];
         definer != user
-            && (cross_file || self.group_file[definer] == self.group_file[user])
+            && (cross_file || same_file)
+            // `element.angle` is a field of whatever `element` is; a top-level
+            // `angle` in another changed file is a namesake, not its
+            // definition. Within one file the two are usually the same thing,
+            // and the rationale there is worth keeping.
+            && (same_file
+                || !self.member_only[user].contains(s))
             && self.resolves(definer, user, s)
     }
 
@@ -1021,6 +1064,8 @@ struct RatCtx<'a> {
     /// the change. An import hunk that only drops the old spelling has no
     /// other way to know the name came back renamed next door.
     renamed_to: &'a HashMap<&'a str, &'a str>,
+    /// see `group_symbols`; `bind()` needs it to rebuild the edge gate
+    member_only: &'a [HashSet<String>],
     comment: &'a [bool],
     /// how the hunk moved code across the comment boundary, if it did
     switched: &'a [Option<crate::SideShift>],
@@ -1039,6 +1084,7 @@ impl<'a> RatCtx<'a> {
             group_file: self.group_file,
             paths: self.paths,
             symbols: self.symbols,
+            member_only: self.member_only,
         }
     }
     // groups defining / using `sym`, in group order
@@ -1053,16 +1099,26 @@ impl<'a> RatCtx<'a> {
     fn ok(&self, mine: usize, other: usize) -> bool {
         other != mine && (self.cross_file || self.group_file[other] == self.group_file[mine])
     }
+    // ...and, across files, the other side must have written the name plainly:
+    // the wording must not claim a link `edge_allowed` refused (see its
+    // member-access note)
+    fn reads_name(&self, user: usize, mine: usize, sym: &str) -> bool {
+        self.group_file[user] == self.group_file[mine] || !self.member_only[user].contains(sym)
+    }
     // ...and `other` really is where `sym` comes from, by the same rule the
     // def→use graph uses: the rationale must not name a definition the graph
     // refused to draw an edge to
     /// Provenance from the definition's side: `mine` defines `sym`, `other`
     /// uses it. Only the import gate applies — see `Binding::import_allows`.
     fn used_by(&self, mine: usize, other: usize, sym: &str) -> bool {
-        self.ok(mine, other) && self.bind().import_allows(other, mine, sym)
+        self.ok(mine, other)
+            && self.reads_name(other, mine, sym)
+            && self.bind().import_allows(other, mine, sym)
     }
     fn ok_for(&self, mine: usize, other: usize, sym: &str) -> bool {
-        self.ok(mine, other) && self.bind().resolves(other, mine, sym)
+        self.ok(mine, other)
+            && self.reads_name(mine, other, sym)
+            && self.bind().resolves(other, mine, sym)
     }
     // markdown (currently the only prose language): rationale wording says
     // "section" instead of naming a construct kind.

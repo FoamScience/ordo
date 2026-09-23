@@ -33,6 +33,9 @@ pub struct HunkSem {
     /// the names that left, filled in by `classify_imports`.
     pub imports: Vec<String>,
     pub uses: Vec<String>,
+    /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
+    /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
+    pub member_uses: Vec<String>,
     /// a type-def (class/struct/enum/…) starts in this hunk (#4 wording)
     pub is_type: bool,
     /// formatting-only / generated-file hunk — skippable for review (P12.2)
@@ -107,6 +110,7 @@ impl HunkSem {
             defines: vec![],
             imports: vec![],
             uses: vec![],
+            member_uses: vec![],
             is_type: false,
             noise: false,
             members: vec![],
@@ -240,6 +244,11 @@ struct Collected {
     /// hunk that swaps one line of a ten-line block names that import alone
     import_rows_of: Vec<(usize, String)>,
     uses: Vec<(usize, String)>,
+    /// (row, name) of the uses that were the member half of an access — see
+    /// `lang::is_member_ident`. A subset of `uses`, kept apart so the edge
+    /// graph can refuse a cross-file definition for a name that only ever
+    /// appeared as `obj.name`
+    member_uses: Vec<(usize, String)>,
     /// parameter names (local bindings) seen anywhere in the file
     bound: HashSet<String>,
     /// named members of a container (enum variant, struct field, object
@@ -399,6 +408,7 @@ impl Parsed<'_> {
                 .filter(|k| *k != ContainerKind::Definition),
             in_header: container.is_some_and(|d| d.callable && d.header_e.is_some_and(|e| r1 <= e)),
             uses: self.uses(r0, r1, &defines, &imports),
+            member_uses: self.member_uses(r0, r1),
             is_type: (r0..=r1).any(|r| self.c.type_rows.contains(&r)),
             noise: false,
             members: sorted_unique(
@@ -575,6 +585,29 @@ impl Parsed<'_> {
                 .filter(|(row, _)| (r0..=r1).contains(row))
                 .map(|(_, n)| n.clone())
                 .filter(|n| !declared.contains(n) && !self.c.bound.contains(n))
+                .collect(),
+        )
+    }
+
+    /// Names this hunk wrote only as the member half of an access. A name it
+    /// also wrote bare is left out: one plain mention is enough for the edge
+    /// graph to take it as a real reference.
+    fn member_uses(&self, r0: usize, r1: usize) -> Vec<String> {
+        // every member occurrence is also in `uses`, so a name is member-only
+        // when the two counts agree
+        fn count(v: &[(usize, String)], r0: usize, r1: usize) -> HashMap<&str, usize> {
+            let mut m: HashMap<&str, usize> = HashMap::new();
+            for (_, n) in v.iter().filter(|(row, _)| (r0..=r1).contains(row)) {
+                *m.entry(n.as_str()).or_default() += 1;
+            }
+            m
+        }
+        let all = count(&self.c.uses, r0, r1);
+        sorted_unique(
+            count(&self.c.member_uses, r0, r1)
+                .into_iter()
+                .filter(|(n, k)| all.get(n) == Some(k))
+                .map(|(n, _)| n.to_string())
                 .collect(),
         )
     }
@@ -1596,6 +1629,12 @@ impl Collected {
         self.all_idents.push((row, self.uses.len() - 1, id));
     }
 
+    /// the same, for an identifier that was the member half of an access
+    fn push_member_use(&mut self, row: usize, name: String, id: usize) {
+        self.member_uses.push((row, name.clone()));
+        self.push_use(row, name, id);
+    }
+
     /// a one-row declaration of `name` with symbol identity
     fn push_decl(&mut self, row: usize, name: &str, kind: &str, scope: Option<String>) {
         self.decls.push((row, row, name.to_string()));
@@ -2303,8 +2342,12 @@ impl<'a> Walker<'a> {
         // parameter (`$1`, `$2`) — no language has a numeric symbol, so it can
         // never resolve to a definition and only clutters `uses`.
         if let Some(t) = trimmed(node, src).filter(|t| !t.chars().all(|c| c.is_ascii_digit())) {
-            self.c
-                .push_use(node.start_position().row, t.to_string(), node.id());
+            let (row, id) = (node.start_position().row, node.id());
+            if lang::is_member_ident(node.kind()) {
+                self.c.push_member_use(row, t.to_string(), id);
+            } else {
+                self.c.push_use(row, t.to_string(), id);
+            }
         }
         false
     }
