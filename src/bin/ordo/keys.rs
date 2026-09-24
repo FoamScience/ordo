@@ -67,6 +67,13 @@ pub(super) enum Action {
     ParaNext,
     MarkPrev,
     MarkNext,
+    /// `v` — start (or drop) a line selection at the code cursor
+    SelectLines,
+    /// `c` — open the command bar on `:comment`, with the text already there
+    /// when the selected lines have one
+    Comment,
+    CommentNext,
+    CommentPrev,
     /// `H` — how often these lines have changed before, and who last touched
     /// them. Explicit because it shells out to `git log -L` (see `hunk_churn`)
     Churn,
@@ -255,6 +262,10 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, ch('['), Action::MarkPrev),
                 (None, ch(']'), Action::MarkNext),
                 (None, ch('H'), Action::Churn),
+                (None, ch('v'), Action::SelectLines),
+                (None, ch('c'), Action::Comment),
+                (Some(ch('g')), ch('c'), Action::CommentNext),
+                (Some(ch('g')), ch('C'), Action::CommentPrev),
                 // `z` prefix (vim's own convention for view-scrolling
                 // commands, e.g. zh/zl to scroll a `nowrap` window sideways)
                 (Some(ch('z')), ch('h'), Action::ScrollLeft),
@@ -449,6 +460,10 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
         Action::ParaNext => (Category::Navigation, "jump to the next blank line"),
         Action::MarkPrev => (Category::Navigation, "jump to the previous use of a name added here"),
         Action::MarkNext => (Category::Navigation, "jump to the next use of a name added here"),
+        Action::SelectLines => (Category::Review, "select lines from the code cursor, for :comment"),
+        Action::Comment => (Category::Review, "comment on the code-pane line or selection"),
+        Action::CommentNext => (Category::Review, "jump to the next line comment"),
+        Action::CommentPrev => (Category::Review, "jump to the previous line comment"),
         Action::Churn => (
             Category::Review,
             "how often these lines changed before, and who touched them last",
@@ -524,6 +539,10 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("para-next", Action::ParaNext),
     ("mark-prev", Action::MarkPrev),
     ("mark-next", Action::MarkNext),
+    ("select-lines", Action::SelectLines),
+    ("comment", Action::Comment),
+    ("comment-next", Action::CommentNext),
+    ("comment-prev", Action::CommentPrev),
     ("churn", Action::Churn),
     ("hover", Action::Hover),
     ("search", Action::SearchOpen),

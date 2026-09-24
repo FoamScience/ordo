@@ -3,11 +3,13 @@
 use super::*;
 use crate::code_view::*;
 use crate::commands::*;
+use crate::comments::*;
 use crate::config::*;
 use crate::draw::*;
 use crate::editor::*;
 use crate::findings::*;
 use crate::git::*;
+use crate::handoff::*;
 use crate::highlight::*;
 use crate::history::*;
 use crate::keys::*;
@@ -1768,6 +1770,7 @@ fn code_view_marks_only_the_rows_uses_at_names() {
         &theme("dark").unwrap(),
         0,
         usize::MAX,
+        &LineMarks::default(),
     );
     // the marker rides the gutter's last column, so the code never shifts
     let marks: Vec<String> = rows
@@ -1837,6 +1840,7 @@ fn code_view_horizontal_scroll_keeps_gutter_fixed_and_handles_multibyte() {
         &theme("dark").unwrap(),
         0,
         usize::MAX,
+        &LineMarks::default(),
     );
     let (scrolled, right_clip_5, _) = code_view(
         &it,
@@ -1850,6 +1854,7 @@ fn code_view_horizontal_scroll_keeps_gutter_fixed_and_handles_multibyte() {
         &theme("dark").unwrap(),
         0,
         usize::MAX,
+        &LineMarks::default(),
     );
     assert_eq!(unscrolled.len(), 1);
     assert_eq!(scrolled.len(), 1);
@@ -1907,6 +1912,7 @@ fn code_view_tints_only_the_refined_span_of_a_paired_line() {
         &theme,
         0,
         usize::MAX,
+        &LineMarks::default(),
     );
     // the added row is the one carrying the add tint (the removed row
     // comes first, on the del tint)
@@ -1953,6 +1959,7 @@ fn code_view_tints_a_whole_unpaired_line() {
         &theme,
         0,
         usize::MAX,
+        &LineMarks::default(),
     );
     let added = rows.last().unwrap();
     assert!(
@@ -1982,6 +1989,7 @@ fn code_view_reports_no_clipping_when_the_line_fits() {
         &theme("dark").unwrap(),
         0,
         usize::MAX,
+        &LineMarks::default(),
     );
     assert!(!right_clip);
 }
@@ -2018,6 +2026,7 @@ fn code_view_window_matches_the_same_slice_of_the_whole_view() {
                 &theme,
                 start,
                 rows,
+                &LineMarks::default(),
             )
         };
         let (full, clip_full, total) = call(0, usize::MAX);
@@ -3038,6 +3047,9 @@ fn test_app(why_len: usize) -> App {
         symbol_ledger: vec![],
         notes: HashMap::new(),
         notes_path: None,
+        comments: vec![],
+        comments_path: None,
+        selection: None,
         deltas: vec![],
         delta_gone: 0,
         collapsed: HashSet::new(),
@@ -4847,4 +4859,163 @@ fn consumers_in_a_rules_file_resolve_beside_it() {
         vec![dir.join("../pipeline")]
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The handoff prompt carries the reviewer's notes anchored to file and line;
+/// ordo's own notes and findings only when asked for with `all`.
+#[test]
+fn the_review_prompt_anchors_notes_and_adds_ordo_only_with_all() {
+    let mut app = test_app(0);
+    app.items[0].new_range = [12, 18];
+    app.items[0].symbols = vec![sym("fetch", "function_definition", None)];
+    app.items[0].notes = vec!["fetch became async; 1 call never awaits it".to_string()];
+    assert_eq!(
+        review_prompt(&app, false),
+        None,
+        "no note, nothing to hand back"
+    );
+    let k = note_key(&app.items[0]).unwrap();
+    app.notes
+        .insert(k, "retry forever is wrong here".to_string());
+    let mine = review_prompt(&app, false).unwrap();
+    assert!(
+        mine.contains("## a.rs:12-18\nretry forever is wrong here"),
+        "{mine}"
+    );
+    assert!(
+        mine.contains("(1 point)") && !mine.contains("ordo:"),
+        "{mine}"
+    );
+    let all = review_prompt(&app, true).unwrap();
+    assert!(all.contains("- ordo: fetch became async"), "{all}");
+}
+
+#[test]
+fn osc52_wraps_the_text_as_base64() {
+    assert_eq!(osc52("hi"), "\x1b]52;c;aGk=\x07");
+}
+
+/// `:send` pipes the prompt to `$ORDO_SEND`, a failing command says why, and
+/// a hanging one is stopped. One test: they share the variable.
+#[test]
+fn send_pipes_to_the_configured_command() {
+    let out = std::env::temp_dir().join(format!("ordo-send-{}", std::process::id()));
+    // SAFETY: no other test reads or writes ORDO_SEND
+    unsafe { std::env::set_var(crate::handoff::SEND_ENV, format!("cat > {}", out.display())) };
+    assert!(send("the review").is_ok());
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "the review");
+    unsafe { std::env::set_var(crate::handoff::SEND_ENV, "echo nope >&2; exit 3") };
+    let err = send("x").unwrap_err();
+    assert!(err.contains("nope"), "{err}");
+    // one that never returns is stopped rather than freezing the review
+    unsafe { std::env::set_var(crate::handoff::SEND_ENV, "exec sleep 60") };
+    let t = std::time::Instant::now();
+    let err = send("x").unwrap_err();
+    assert!(err.contains("no answer"), "{err}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(30));
+    unsafe { std::env::remove_var(crate::handoff::SEND_ENV) };
+    let _ = std::fs::remove_file(&out);
+}
+
+fn lines_of(text: &str) -> Vec<String> {
+    text.lines().map(str::to_string).collect()
+}
+
+/// A comment follows its lines when an edit above moves them, and stays put
+/// but stale when the lines themselves change.
+#[test]
+fn a_line_comment_follows_its_lines_and_goes_stale_when_they_change() {
+    let before = lines_of("a\nfetch()\nretry()\nz\n");
+    let mut c = LineComment::new("f.py", 2, 3, "bound the retries", &before);
+    c.relocate(&lines_of("new\nnew\na\nfetch()\nretry()\nz\n"));
+    assert_eq!((c.start, c.end, c.stale), (4, 5, false));
+    c.relocate(&lines_of("a\nfetch(timeout=1)\nretry()\nz\n"));
+    assert_eq!((c.start, c.end, c.stale), (4, 5, true));
+}
+
+/// `:comment` comments on the `v` selection, the same range again replaces
+/// it, and no text deletes it.
+#[test]
+fn comment_adds_replaces_and_deletes_on_the_selection() {
+    let mut app = test_app(0);
+    app.sources.insert(
+        "a.rs".to_string(),
+        (vec![], lines_of("fn a() {}\nfn b() {}\nfn c() {}\n")),
+    );
+    app.cursor = Cursor { line: 2, col: 0 };
+    app.selection = Some(1);
+    execute_command(&mut app, "comment these two should be one").unwrap();
+    assert_eq!(app.comments.len(), 1);
+    assert_eq!((app.comments[0].start, app.comments[0].end), (2, 3));
+    assert_eq!(app.selection, None, "a comment ends the selection");
+    app.selection = Some(1);
+    execute_command(&mut app, "comment merge them").unwrap();
+    assert_eq!(app.comments.len(), 1);
+    assert_eq!(app.comments[0].text, "merge them");
+    let prompt = review_prompt(&app, false).unwrap();
+    assert!(prompt.contains("## a.rs:2-3\nmerge them"), "{prompt}");
+    app.selection = Some(1);
+    execute_command(&mut app, "comment").unwrap();
+    assert!(app.comments.is_empty());
+    assert!(
+        execute_command(&mut app, "comment").is_err(),
+        "nothing left to delete"
+    );
+}
+
+/// `gc` walks the review's comments in file and line order, selecting the
+/// hunk that holds each and putting the cursor on it.
+#[test]
+fn comment_next_jumps_across_files_in_order() {
+    let mut app = test_app(0);
+    app.items = vec![test_item("a.rs"), test_item("b.rs")];
+    app.items[0].new_range = [1, 3];
+    app.items[1].new_range = [5, 9];
+    app.view = vec![0, 1];
+    app.reviewed = vec![false, false];
+    let text = lines_of("1\n2\n3\n4\n5\n6\n7\n8\n9\n");
+    app.sources
+        .insert("a.rs".to_string(), (vec![], text.clone()));
+    app.sources
+        .insert("b.rs".to_string(), (vec![], text.clone()));
+    app.comments = vec![
+        LineComment::new("b.rs", 7, 7, "second", &text),
+        LineComment::new("a.rs", 3, 3, "first", &text),
+    ];
+    app.cursor = Cursor { line: 0, col: 0 };
+    comment_move(&mut app, true);
+    assert_eq!((app.sel, app.cursor.line), (0, 2));
+    comment_move(&mut app, true);
+    assert_eq!((app.sel, app.cursor.line), (1, 6));
+    comment_move(&mut app, false);
+    assert_eq!((app.sel, app.cursor.line), (0, 2));
+}
+
+/// The paging keys scroll the selected dependency card through its file,
+/// stop at the file's end, and moving to another card starts it at its hunk.
+#[test]
+fn a_canvas_card_scrolls_and_resets_on_moving() {
+    let mut app = test_app(0);
+    app.items = vec![test_item("a.rs"), test_item("b.rs")];
+    app.items[1].new_range = [3, 4];
+    app.items[0].edges = vec![EdgeRef {
+        label: "b".to_string(),
+        target: Some(1),
+        dependency: true,
+    }];
+    app.view = vec![0, 1];
+    app.reviewed = vec![false, false];
+    let text: Vec<String> = (1..=40).map(|i| i.to_string()).collect();
+    app.sources.insert("b.rs".to_string(), (vec![], text));
+    open_deps(&mut app);
+    scroll_card(&mut app, 10);
+    assert_eq!(app.canvas.as_ref().unwrap().scroll, 10);
+    scroll_card(&mut app, 1000);
+    assert_eq!(
+        app.canvas.as_ref().unwrap().scroll,
+        37,
+        "no further than the last line"
+    );
+    move_card(&mut app, -1);
+    assert_eq!(app.canvas.as_ref().unwrap().scroll, 0);
 }

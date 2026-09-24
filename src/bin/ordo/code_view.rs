@@ -609,6 +609,26 @@ fn overlay_cursor(spans: Vec<Span<'static>>, target: usize) -> Vec<Span<'static>
 pub(super) const GUTTER_W: usize = 1 + 5;
 /// gutter glyph on a row `uses_at` names
 pub(super) const MARK: &str = "▸";
+/// sign-bar glyph on a row a line comment covers
+pub(super) const COMMENTED: &str = "●";
+
+/// The reviewer's own marks on the new side, 1-based and inclusive: the lines
+/// comments cover, and the `v` selection being made.
+#[derive(Default)]
+pub(super) struct LineMarks {
+    pub(super) commented: Vec<(usize, usize)>,
+    pub(super) selected: Option<(usize, usize)>,
+}
+
+impl LineMarks {
+    fn commented(&self, ln: usize) -> bool {
+        self.commented.iter().any(|&(a, b)| a <= ln && ln <= b)
+    }
+
+    fn selected(&self, ln: usize) -> bool {
+        self.selected.is_some_and(|(a, b)| a <= ln && ln <= b)
+    }
+}
 
 // The whole new file with the changed hunk highlighted in place: removed lines
 // on a red-tinted row (shown at the change point), added lines on a green tint,
@@ -626,6 +646,7 @@ pub(super) fn code_view(
     theme: &Theme,
     start: usize,
     rows: usize,
+    marks: &LineMarks,
 ) -> (Vec<Line<'static>>, bool, usize) {
     let mut out = vec![];
     let Some((ol, nl)) = sources.get(&it.path) else {
@@ -700,6 +721,8 @@ pub(super) fn code_view(
             line,
             added,
             use_row: use_rows.contains(&ln),
+            commented: marks.commented(ln),
+            selected: marks.selected(ln),
             hl: hl.and_then(|h| h.get(i)),
             refined: if added {
                 it.refined.added.get(ln - n0).and_then(|s| s.as_ref())
@@ -738,6 +761,8 @@ struct SourceRow<'a> {
     added: bool,
     /// a row `uses_at` names
     use_row: bool,
+    commented: bool,
+    selected: bool,
     hl: Option<&'a LineSpans>,
     /// the columns that differ from the paired old line, when added
     refined: Option<&'a Vec<(usize, usize)>>,
@@ -811,11 +836,21 @@ impl RowPainter<'_> {
         let theme = self.theme;
         let bg = if r.added { theme.add_bg } else { Color::Reset };
         let num = self.num();
-        let mut spans = vec![
+        let sign = if r.commented {
+            Span::styled(COMMENTED, Style::default().fg(theme.accent))
+        } else {
             Span::styled(
                 if r.added { BAR } else { " " },
                 Style::default().fg(theme.add_fg),
-            ),
+            )
+        };
+        let num = if r.selected {
+            num.add_modifier(Modifier::REVERSED)
+        } else {
+            num
+        };
+        let mut spans = vec![
+            sign,
             Span::styled(format!("{:>4}", r.ln), num.bg(bg)),
             if r.use_row {
                 Span::styled(MARK, Style::default().fg(theme.accent).bg(bg))

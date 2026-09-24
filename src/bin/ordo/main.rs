@@ -20,9 +20,14 @@ use crate::code_view::theme_names;
 use crate::code_view::Syntax;
 use crate::code_view::Theme;
 use crate::commands::carry_across_reload;
+use crate::commands::comment_lines;
 use crate::commands::handle_command_key;
 use crate::commands::open_command_bar;
+use crate::commands::review_comments;
 use crate::commands::CommandOutcome;
+use crate::comments::comments_file_path;
+use crate::comments::load_comments;
+use crate::comments::LineComment;
 use crate::config::config_commit_edit;
 use crate::config::config_path;
 use crate::config::config_toggle;
@@ -38,6 +43,7 @@ use crate::draw::jump_to_edge;
 use crate::draw::move_card;
 use crate::draw::open_deps;
 use crate::draw::preview_edge;
+use crate::draw::scroll_card;
 use crate::draw::set_geometry;
 use crate::draw::zoom_card;
 use crate::editor::open_editor;
@@ -107,12 +113,14 @@ use ratatui::Frame;
 use tree_sitter::Tree;
 mod code_view;
 mod commands;
+mod comments;
 mod config;
 mod consumers;
 mod draw;
 mod editor;
 mod findings;
 mod git;
+mod handoff;
 mod highlight;
 mod history;
 mod keys;
@@ -953,6 +961,8 @@ struct LoadResult {
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
     notes: HashMap<u64, String>,
     notes_path: Option<PathBuf>,
+    comments: Vec<LineComment>,
+    comments_path: Option<PathBuf>,
     deltas: Vec<Delta>,
     delta_gone: usize,
 }
@@ -1098,6 +1108,16 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
             save_notes(p, &notes);
         }
     }
+    let comments_path = notes_path.as_deref().and_then(comments_file_path);
+    let mut comments = comments_path
+        .as_deref()
+        .map(load_comments)
+        .unwrap_or_default();
+    for c in &mut comments {
+        if let Some((_, new)) = sources.get(&c.path) {
+            c.relocate(new);
+        }
+    }
     let reviewed: Vec<bool> = items
         .iter()
         .map(|it| mark_key(&rev, it, &sources).is_some_and(|k| marks.contains_key(&k)))
@@ -1131,6 +1151,8 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         symbol_ledger: out.ledger.clone(),
         notes,
         notes_path,
+        comments,
+        comments_path,
         deltas,
         delta_gone,
     })));
@@ -1366,6 +1388,9 @@ struct Canvas {
     /// the selected card fills the frame: the anchor whole, a side card its
     /// own half (see `canvas_layout`)
     zoomed: bool,
+    /// how far the selected card is scrolled past the top of its hunk; a
+    /// card shows a few rows, and the rest of the hunk is reached this way
+    scroll: usize,
 }
 
 /// One card: a hunk this one depends on, or one that depends on it.
@@ -1575,6 +1600,12 @@ struct App {
     notes: HashMap<u64, String>,
     /// where notes get persisted; `None` when the cache dir can't be resolved
     notes_path: Option<PathBuf>,
+    /// line and range comments, every file of the repository (see `comments`)
+    comments: Vec<LineComment>,
+    comments_path: Option<PathBuf>,
+    /// the code-pane line a `v` selection started on, 0-based; the range runs
+    /// from it to the cursor
+    selection: Option<usize>,
     /// the engine's change ledger, kept so `:mode` can rebuild the headers.
     /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
@@ -2380,6 +2411,8 @@ impl Session {
             symbol_ledger,
             notes,
             notes_path,
+            comments,
+            comments_path,
             deltas,
             delta_gone,
         } = r;
@@ -2438,6 +2471,9 @@ impl Session {
             symbol_ledger,
             notes,
             notes_path,
+            comments,
+            comments_path,
+            selection: None,
             deltas,
             delta_gone,
             collapsed: HashSet::new(),
@@ -2765,6 +2801,10 @@ fn apply_on_canvas(app: &mut App, a: Action) {
         Action::First => move_card(app, isize::MIN / 2),
         Action::Last => move_card(app, isize::MAX / 2),
         Action::JumpToEdge => jump_to_card(app),
+        Action::HalfDown => scroll_card(app, (PAGE / 2) as isize),
+        Action::HalfUp => scroll_card(app, -((PAGE / 2) as isize)),
+        Action::PageDown => scroll_card(app, PAGE as isize),
+        Action::PageUp => scroll_card(app, -(PAGE as isize)),
         // the same digit that opened it, or the zoom key: more of the
         // selected card, the way the same digit zooms any other pane
         Action::Focus(Pane::Deps) | Action::Zoom => zoom_card(app),
@@ -2789,6 +2829,12 @@ fn apply_in_code(app: &mut App, a: Action) -> bool {
         Action::ParaNext => cursor_move(app, para_next),
         Action::MarkPrev => mark_move(app, false),
         Action::MarkNext => mark_move(app, true),
+        Action::SelectLines => {
+            app.selection = match app.selection {
+                Some(_) => None,
+                None => Some(app.cursor.line),
+            }
+        }
         Action::SearchOpen => {
             app.prompt = Some(Prompt {
                 text: String::new(),
@@ -2817,6 +2863,8 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
         // the way dismissing a popup does, so Esc after a search doesn't end
         // the review session
         Action::Quit if app.search.is_some() => app.search = None,
+        // a selection is dropped before anything is quit
+        Action::Quit if app.selection.is_some() => app.selection = None,
         Action::Quit => return true,
         // asking for the pane you are already in means "give me more of it"
         // `4` addresses the canvas whether or not it exists yet, so it opens
@@ -2887,6 +2935,7 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
         | Action::ParaNext
         | Action::MarkPrev
         | Action::MarkNext
+        | Action::SelectLines
         | Action::SearchOpen
         | Action::SymbolNext
         | Action::SymbolPrev
@@ -2901,6 +2950,18 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
             ));
         }
         Action::CommandOpen => open_command_bar(app, String::new()),
+        Action::Comment => {
+            let (start, end) = comment_lines(app);
+            let path = &app.items[app.sel].path;
+            let have = app
+                .comments
+                .iter()
+                .find(|c| c.path == *path && (c.start, c.end) == (start, end))
+                .map_or(String::new(), |c| c.text.clone());
+            open_command_bar(app, format!("comment {have}"));
+        }
+        Action::CommentNext => comment_move(app, true),
+        Action::CommentPrev => comment_move(app, false),
         Action::CommandGoto => open_command_bar(app, "goto ".to_string()),
         // intercepted in `run` before it reaches here (needs the terminal)
         Action::OpenEditor => {}
@@ -3008,6 +3069,49 @@ fn mark_move(app: &mut App, forward: bool) {
     }
 }
 
+/// `gc` / `gC` — the next or previous line comment in this review, in file
+/// and line order: selects a hunk of its file (the one holding the line, or
+/// the nearest) and puts the code cursor on it.
+fn comment_move(app: &mut App, forward: bool) {
+    let here = (app.items[app.sel].path.clone(), app.cursor.line + 1);
+    let all: Vec<(String, usize)> = review_comments(app)
+        .into_iter()
+        .map(|c| (c.path.clone(), c.start))
+        .collect();
+    let target = if forward {
+        all.into_iter().find(|c| *c > here)
+    } else {
+        all.into_iter().rev().find(|c| *c < here)
+    };
+    let Some((path, line)) = target else {
+        return;
+    };
+    let hunk = app
+        .view
+        .iter()
+        .copied()
+        .filter(|&i| app.items[i].path == path)
+        .min_by_key(|&i| {
+            let [a, b] = app.items[i].new_range;
+            if a <= line && line <= b {
+                0
+            } else {
+                a.abs_diff(line).min(b.abs_diff(line))
+            }
+        });
+    let Some(i) = hunk else {
+        return;
+    };
+    if i != app.sel {
+        select(app, i);
+    }
+    app.focus = Pane::Code;
+    cursor_move(app, move |_, _| Cursor {
+        line: line - 1,
+        col: 0,
+    });
+}
+
 /// Move the code cursor with `f`, clamp it to the file, and scroll to follow.
 /// No-op when the selected item's file content isn't loaded.
 fn cursor_move(app: &mut App, f: impl FnOnce(Cursor, &[String]) -> Cursor) {
@@ -3081,6 +3185,7 @@ fn scrolled(cur: u16, by: isize, len: usize) -> u16 {
 
 fn select(app: &mut App, to: usize) {
     app.sel = to;
+    app.selection = None;
     app.scroll = auto_scroll(&app.items[to]);
     app.hscroll = 0;
     app.why_scroll = 0;
