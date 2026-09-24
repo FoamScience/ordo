@@ -132,6 +132,7 @@ pub fn range_input(dir: &Path, base: &str, head: &str) -> Option<Input> {
     (!changes.is_empty()).then(|| Input {
         changes,
         options: Options::default(),
+        consumers: vec![],
     })
 }
 

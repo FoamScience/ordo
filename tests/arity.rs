@@ -175,3 +175,12 @@ fn the_old_name_surviving_in_a_string_says_nothing() {
     );
     assert!(renames(&n).is_empty(), "{n:?}");
 }
+
+#[test]
+fn a_bare_star_is_not_a_positional_parameter() {
+    let n = notes(serde_json::json!({"changes": [
+      {"path": "api.py",
+       "old": "def fetch(u):\n    return u\n\ndef main():\n    return fetch('a')\n",
+       "new": "def fetch(u, *, retries=3):\n    return u\n\ndef main():\n    return fetch('a')\n"}]}));
+    assert!(arity(&n).is_empty(), "{n:?}");
+}

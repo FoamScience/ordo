@@ -4372,6 +4372,7 @@ fn re_running_the_current_strategy_keeps_the_group_reasons() {
             cross_file: true,
             ..Options::default()
         },
+        consumers: vec![],
     };
     let out = ordo::run(input);
     let mut app = test_app(0);
@@ -4777,4 +4778,73 @@ fn ordinary_commit_range_is_unchanged() {
         }
         _ => panic!("expected a plain commit Range"),
     }
+}
+
+/// A sibling repository whose pyproject points back at this one is found, and
+/// only its files that import a changed module are handed over.
+#[test]
+fn a_sibling_that_imports_the_changed_module_becomes_a_consumer() {
+    let base = std::env::temp_dir().join(format!("ordo-consumers-{}", std::process::id()));
+    let (pump, pipeline, other) = (base.join("pump"), base.join("pipeline"), base.join("other"));
+    for d in [&pump, &pipeline, &other] {
+        std::fs::create_dir_all(d).unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(d)
+            .status()
+            .unwrap();
+    }
+    std::fs::write(
+        pipeline.join("pyproject.toml"),
+        "[tool.uv.sources]\npump = { path = \"../pump\", editable = true }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pipeline.join("driver.py"),
+        "from script.run import main\nmain(1)\n",
+    )
+    .unwrap();
+    std::fs::write(pipeline.join("unrelated.py"), "print(1)\n").unwrap();
+    std::fs::write(other.join("uses.py"), "from script.run import main\n").unwrap();
+    for d in [&pipeline, &other] {
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(d)
+            .status()
+            .unwrap();
+    }
+    let changes = vec![ordo::model::Change {
+        path: "script/run.py".into(),
+        old: Some("def main(a):\n    pass\n".into()),
+        new: Some("def main(a, b):\n    pass\n".into()),
+        diff: None,
+    }];
+    let found = crate::consumers::gather(&pump, &changes, &[]);
+    let paths: Vec<&str> = found.iter().map(|c| c.path.as_str()).collect();
+    // `other` imports it too, but nothing there says it depends on this repo
+    assert_eq!(paths, vec!["../pipeline/driver.py"]);
+    let declared = crate::consumers::gather(&pump, &changes, &[other.clone()]);
+    assert_eq!(
+        declared.len(),
+        2,
+        "{:?}",
+        declared.iter().map(|c| &c.path).collect::<Vec<_>>()
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `consumers` in a rules file resolves beside that file, like an `include`.
+#[test]
+fn consumers_in_a_rules_file_resolve_beside_it() {
+    let dir = std::env::temp_dir().join(format!("ordo-consumers-cfg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("rules.toml");
+    std::fs::write(&f, "consumers = [\"../pipeline\"]\n").unwrap();
+    let report = report_from(vec![f], &[]);
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    assert_eq!(
+        report.rule_set(true).consumers,
+        vec![dir.join("../pipeline")]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

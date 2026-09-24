@@ -590,6 +590,7 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
             disable: app.disables.clone(),
             ..Options::default()
         },
+        consumers: vec![],
     };
     let out = ordo::run(input);
     let items = build_items(&out);

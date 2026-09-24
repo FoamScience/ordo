@@ -286,6 +286,56 @@ rather than an orphaned reference.
 opened is invisible to the pure engine — finding that one needs repo access,
 which is the reviewer's job rather than the engine's.
 
+### Contracts that changed without a line saying so
+
+Some edits read fine line by line and still break every caller, silently. Only
+a diff sees them, because each needs the old side of a definition next to the
+new one and the calls that were written against the old:
+
+```
+api.py:L1  changes signature of fetch
+  fetch became async; 2 calls never await it, so it never runs (cli.py:L4, cli.py:L5)
+  fetch's parameters went from (u, retries) to (u, timeout, retries); 1 call left as it was passes 2 or more by position, which now land on different parameters (cli.py:L3)
+```
+
+| the change | what goes wrong, quietly |
+| --- | --- |
+| `def f` → `async def f` | a call not awaited gets a coroutine: never runs, always truthy |
+| `@property` dropped | `obj.x` is now a bound method: `if obj.x:` is always true |
+| a parameter inserted or reordered mid-signature | calls left as they were hand values to the wrong parameters |
+| a parameter renamed or removed | a call still passing it by name raises when that line runs |
+| a default changed | every call leaving it out changes behaviour, with no line in the diff |
+| a base method's parameters changed | overrides still taking the old ones |
+| a new `@abstractmethod` | subclasses that do not define it can no longer be made |
+| `raise KeyError` → `raise MissingKey` | handlers catching only the old type |
+| a `with` or an `await` removed | the body lost its lock, transaction or wait |
+| an enum member's value changed | stored or sent copies of the old value stop mapping back |
+| a symbol renamed or moved | `mock.patch("pkg.cfg.old")`, entry points and other strings still naming it |
+| a test drops assertions or gains a skip | next to an edit of the code it exercises: asked, not judged |
+| an added import | it closes an import cycle among the changed files |
+| a function added to two files | nearly verbatim: the next fix reaches one |
+
+Python and JS/TS only, where these shapes exist; elsewhere the walk costs time
+and finds nothing. Every check speaks only when it can name the calls, and
+matches a function by bare name and a method only through `self.`/`this.` in its
+own file.
+
+**Other repositories.** A script's `main` changed, and its only caller is in the
+repository next door, which imports it. The reviewer hands such files to the
+engine as `consumers` — read only as callers, never ordered or shown as hunks —
+and the notes above name their calls, as `../pipeline/driver.py:L3`. It finds
+them two ways: repositories listed in a rules file, relative to that file, and
+sibling repositories whose `pyproject.toml`, `uv.lock`, `requirements.txt` or
+`package.json` points back at this one by relative path:
+
+```toml
+# <repo>/.ordo/rules.toml
+consumers = ["../../pipeline"]
+```
+
+Only tracked files that mention a changed module (`script.run`) are read, at
+most 200 and 8 MB. Through the engine directly it is `consumers` on the input.
+
 The changeset as a whole carries `notes` too — facts about the shape of the
 change, never judgments about it:
 

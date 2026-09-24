@@ -2,6 +2,7 @@
 //! Public entry: [`run`] takes an [`Input`] and returns the v1 [`Output`].
 mod advisories;
 pub mod catalog;
+mod contract;
 mod extract;
 mod lang;
 pub mod model;
@@ -188,6 +189,7 @@ pub fn run(input: Input) -> Output {
     let notes = changeset_notes(&files, &ledger);
     arity_check(&mut files, &ledger, &input.changes);
     incomplete_rename(&mut files, &ledger, &input.changes, &symbols);
+    contract::run(&mut files, &ledger, &input.changes, &input.consumers);
     // every pass is done with the trees; the client calls `run` again on each
     // reload, and holding this changeset's trees until then buys nothing
     lang::forget_trees();

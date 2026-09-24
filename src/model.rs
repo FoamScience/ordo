@@ -7,6 +7,19 @@ pub struct Input {
     pub changes: Vec<Change>,
     #[serde(default)]
     pub options: Options,
+    /// Files outside the change that use it — another repository's code that
+    /// imports this one. Read only as callers: a definition whose contract the
+    /// change alters is checked against their calls too. They are never
+    /// ordered, and never output.
+    #[serde(default)]
+    pub consumers: Vec<Consumer>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Consumer {
+    /// how a note names it, e.g. `../pipeline/run_all.py`
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
