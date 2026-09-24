@@ -198,6 +198,44 @@ Notes live beside the marks, in
 `${XDG_CACHE_HOME:-~/.cache}/ordo/notes/<repo>.json`, and `:note` with no text
 clears the one on the selected symbol.
 
+### Comments on lines
+
+A point narrower than a symbol goes on its lines. In the code pane, `v` starts
+a selection at the cursor and moving extends it; `c` opens `:comment` on the
+selection, or on the cursor's line with none, already holding the text when
+those lines have a comment, so the same key edits it. `:comment` with no text
+deletes, `gc` / `gC` walk the review's comments in file and line order, and
+`:comments` lists them. A commented line carries `●` in the gutter, and the why
+pane shows the comments inside the selected hunk.
+
+Unlike a note, a comment stays on its lines. When an edit above moves them, it
+finds them again by a hash of their text and moves along; when the lines
+themselves change, it keeps its place and says so — `(lines changed since)` —
+rather than vanishing. Comments live beside the notes, in
+`${XDG_CACHE_HOME:-~/.cache}/ordo/comments/<repo>.json`, which records the
+lines' hash, never their text.
+
+### Handing the review back
+
+When an agent wrote the change, the review goes back to it as one prompt:
+every note, anchored to the file and the new-side line range of its hunk, and
+every line comment on its own lines.
+`:yank` puts it on the clipboard through the terminal (OSC 52, so it works over
+ssh), `:send` pipes it to the command in `$ORDO_SEND`, and either one with
+`all` adds ordo's own notes and findings — the contract notes above, the catalog
+— for when you agree with them and would rather not retype them:
+
+```
+Review of HEAD~1..HEAD (2 points). Each is anchored to a file and a line range
+of the changed code; address them, or say why not.
+
+## api.py:12-18
+the retry path here needs a bounded backoff
+- ordo: fetch became async; 1 call never awaits it, so it never runs (cli.py:L4)
+```
+
+Notes stay after sending; a note is yours until you clear it.
+
 ### The change ledger
 
 One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk

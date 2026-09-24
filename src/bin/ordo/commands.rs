@@ -2,6 +2,8 @@
 use crate::build_globs;
 use crate::build_items;
 use crate::code_view::Theme;
+use crate::comments::save_comments;
+use crate::comments::LineComment;
 use crate::compute_view;
 use crate::config::ConfigUi;
 use crate::draw::draft_rule;
@@ -16,6 +18,9 @@ use crate::git::git;
 use crate::git::resolve;
 use crate::git::Target;
 use crate::group_reasons;
+use crate::handoff::review_prompt;
+use crate::handoff::send;
+use crate::handoff::yank;
 use crate::hidden_breakdown;
 use crate::keys::Keymap;
 use crate::keys::Pane;
@@ -108,6 +113,26 @@ pub(super) const COMMANDS: &[Cmd] = &[
         name: "note",
         args: "[text]",
         help: "anchor a note to the selected hunk's symbol; no text clears it",
+    },
+    Cmd {
+        name: "comment",
+        args: "[text]",
+        help: "comment on the code-pane line, or the `v` selection; no text deletes what is there",
+    },
+    Cmd {
+        name: "comments",
+        args: "",
+        help: "list every line comment in this review",
+    },
+    Cmd {
+        name: "yank",
+        args: "[all]",
+        help: "copy the review as an agent prompt: your notes; `all` adds ordo's own notes and findings",
+    },
+    Cmd {
+        name: "send",
+        args: "[all]",
+        help: "pipe the review prompt to the command in $ORDO_SEND (the herdr plugin sets it)",
     },
     Cmd {
         name: "mode",
@@ -753,6 +778,48 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
             set_note(app, arg.trim())?;
             Ok(CommandOutcome::None)
         }
+        "comment" => {
+            set_comment(app, arg.trim())?;
+            Ok(CommandOutcome::None)
+        }
+        "comments" => {
+            let lines = comment_list(app);
+            if lines.is_empty() {
+                return Err(
+                    "no line comments in this review — `v` to select, `c` to comment".to_string(),
+                );
+            }
+            app.popup = Some(Popup::new(
+                "comments".to_string(),
+                lines.into_iter().map(prose).collect(),
+            ));
+            Ok(CommandOutcome::None)
+        }
+        "yank" | "send" => {
+            let all = match arg.trim() {
+                "" => false,
+                "all" => true,
+                other => return Err(format!("usage: :{name} [all], not '{other}'")),
+            };
+            let Some(prompt) = review_prompt(app, all) else {
+                return Err(if all {
+                    "nothing to hand back: no notes or comments, and ordo found nothing".to_string()
+                } else {
+                    "nothing to hand back — :note a symbol, :comment a line, or `all` for ordo's own".to_string()
+                });
+            };
+            let head = if name == "yank" {
+                yank(&prompt)?;
+                "copied to the clipboard (OSC 52)".to_string()
+            } else {
+                format!("sent to `{}`", send(&prompt)?)
+            };
+            app.popup = Some(Popup::new(
+                head,
+                prompt.lines().map(|l| prose(l.to_string())).collect(),
+            ));
+            Ok(CommandOutcome::None)
+        }
         "mode" => {
             let to = parse_mode(arg.trim(), app.mode)?;
             let led = app.symbol_ledger.clone();
@@ -866,6 +933,77 @@ fn set_note(app: &mut App, text: &str) -> Result<(), String> {
         save_notes(p, &app.notes);
     }
     Ok(())
+}
+
+/// The code-pane lines `:comment` acts on, 1-based: the `v` selection, or
+/// the cursor's line.
+pub(super) fn comment_lines(app: &App) -> (usize, usize) {
+    let here = app.cursor.line + 1;
+    match app.selection {
+        Some(anchor) => {
+            let a = anchor + 1;
+            (a.min(here), a.max(here))
+        }
+        None => (here, here),
+    }
+}
+
+/// `:comment` — add or replace the comment on the selected lines, or with no
+/// text delete every comment touching them
+fn set_comment(app: &mut App, text: &str) -> Result<(), String> {
+    let path = app.items[app.sel].path.clone();
+    let Some((_, lines)) = app.sources.get(&path) else {
+        return Err(format!("{path} has no new side to comment on"));
+    };
+    let (start, end) = comment_lines(app);
+    let touches = |c: &LineComment| c.path == path && c.start <= end && start <= c.end;
+    if text.is_empty() {
+        let before = app.comments.len();
+        app.comments.retain(|c| !touches(c));
+        if app.comments.len() == before {
+            return Err("no comment on these lines to delete".to_string());
+        }
+    } else {
+        let fresh = LineComment::new(&path, start, end, text, lines);
+        match app
+            .comments
+            .iter_mut()
+            .find(|c| c.path == path && (c.start, c.end) == (start, end))
+        {
+            Some(c) => *c = fresh,
+            None => app.comments.push(fresh),
+        }
+    }
+    app.selection = None;
+    if let Some(p) = app.comments_path.as_deref() {
+        save_comments(p, &app.comments);
+    }
+    Ok(())
+}
+
+/// every comment on a file of this review, in file and line order
+pub(super) fn review_comments(app: &App) -> Vec<&LineComment> {
+    let mut out: Vec<&LineComment> = app
+        .comments
+        .iter()
+        .filter(|c| app.items.iter().any(|it| it.path == c.path))
+        .collect();
+    out.sort_by(|a, b| (&a.path, a.start).cmp(&(&b.path, b.start)));
+    out
+}
+
+fn comment_list(app: &App) -> Vec<String> {
+    review_comments(app)
+        .into_iter()
+        .map(|c| {
+            let stale = if c.stale {
+                "  (lines changed since)"
+            } else {
+                ""
+            };
+            format!("{}  {}{stale}", c.at(), c.text)
+        })
+        .collect()
 }
 
 /// `:mode [ledger|hunks]` — bare `:mode` toggles

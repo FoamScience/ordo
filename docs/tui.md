@@ -92,7 +92,9 @@ code and the cards stack in one labelled column instead.
 zoom key) fills the frame with the selected card: the hunk takes the whole
 canvas, a side card takes its own half top to bottom with the hunk moved across
 to the other half. Below 96 columns there is no half to take, so only the hunk
-zooms.
+zooms. A card shows the first rows of its hunk; the paging keys (`C-d`/`C-u`,
+`C-f`/`C-b`, `PageDown`/`PageUp`) scroll the selected one through the rest of
+its file, and moving to another card starts that one at its hunk again.
 
 Changed lines are refined the way Neovim's `DiffText` refines `DiffChange`: a
 removed line is paired with the added line it became, and only the differing
@@ -212,6 +214,10 @@ always drives the code pane.
 | **review** | | |
 | toggle reviewed on the selected hunk | `x` | `Space`, `Enter` |
 | how often these lines changed before, and who touched them last | `H` |  |
+| select lines from the code cursor, for :comment | `v` |  |
+| comment on the code-pane line or selection | `c` |  |
+| jump to the next line comment | `gc` |  |
+| jump to the previous line comment | `gC` |  |
 | fold/unfold the selected hunk's group | `za` | `C-k C-l` |
 | unfold the selected hunk's group | `zo` |  |
 | fold the selected hunk's group | `zc` |  |
@@ -241,6 +247,10 @@ command's own arguments:
 | `:rule` | draft a rule matching the selected hunk's shape |
 | `:delta` | what changed since this review was last opened |
 | `:note [text]` | anchor a note to the selected hunk's symbol; no text clears it |
+| `:comment [text]` | comment on the code-pane line, or the `v` selection; no text deletes what is there |
+| `:comments` | list every line comment in this review |
+| `:yank [all]` | copy the review as an agent prompt: your notes; `all` adds ordo's own notes and findings |
+| `:send [all]` | pipe the review prompt to the command in $ORDO_SEND (the herdr plugin sets it) |
 | `:mode [ledger|hunks]` | list by symbol (default) or by hunk; no argument toggles |
 | `:goto <path>` | select the first hunk of &lt;path&gt;, focus the code pane |
 | `:e <rev>` | review a different revision, without restarting |

@@ -29,7 +29,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["tui"]
-tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:toml"]
+tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:toml", "dep:base64"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -57,6 +57,8 @@ tree-sitter-highlight = { version = "0.25", optional = true }
 tree-sitter-toml-ng = "0.7"
 # rules-file parsing (the `ordo` reviewer only, see model::Rule)
 toml = { version = "0.8", optional = true }
+# `:yank` reaches the clipboard through the terminal (OSC 52), which wants base64
+base64 = { version = "0.22", optional = true }
 tree-sitter-json = "0.24"
 tree-sitter-yaml = "0.7"
 tree-sitter-jinja = "0.13"

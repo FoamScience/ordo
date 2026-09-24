@@ -2,8 +2,10 @@
 use crate::clamp_cursor;
 use crate::code_view::code_view;
 use crate::code_view::slice_range;
+use crate::code_view::LineMarks;
 use crate::code_view::Theme;
 use crate::code_view::GUTTER_W;
+use crate::commands::comment_lines;
 use crate::commands::Cmd;
 use crate::commands::COMMANDS;
 use crate::config::draw_config;
@@ -91,6 +93,8 @@ fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
 #[derive(Default)]
 pub(super) struct WhyContext<'a> {
     note: Option<&'a str>,
+    /// the reviewer's line comments inside this hunk, already worded
+    comments: &'a [String],
     out_of_order: &'a [String],
     delta: Option<&'a str>,
     cascade: Option<&'a str>,
@@ -151,6 +155,9 @@ fn annotation_rows(ctx: &WhyContext, theme: &Theme) -> Vec<WhyRow> {
     // and it outranks anything the engine derived
     if let Some(n) = ctx.note {
         rows.push(text_row(format!("note: {n}"), theme.warn));
+    }
+    for c in ctx.comments {
+        rows.push(text_row(c.clone(), theme.warn));
     }
     rows
 }
@@ -370,6 +377,7 @@ pub(super) fn open_deps(app: &mut App) {
         anchor: app.sel,
         sel: Some(0),
         zoomed: false,
+        scroll: 0,
     });
     app.focus = Pane::Deps;
 }
@@ -426,6 +434,26 @@ pub(super) fn move_card(app: &mut App, delta: isize) {
     let next = at.saturating_add(delta).clamp(-1, n as isize - 1);
     if let Some(c) = app.canvas.as_mut() {
         c.sel = usize::try_from(next).ok();
+        c.scroll = 0;
+    }
+}
+
+/// The paging keys on the canvas: scroll the selected card (or the anchor)
+/// through its file, from the top of its hunk to the file's last line.
+pub(super) fn scroll_card(app: &mut App, by: isize) {
+    let Some(c) = app.canvas.as_ref() else { return };
+    let idx = match c.sel {
+        None => c.anchor,
+        Some(i) => match cards_for(app, c.anchor).get(i) {
+            Some(card) => card.idx,
+            None => return,
+        },
+    };
+    let it = &app.items[idx];
+    let len = app.sources.get(&it.path).map_or(0, |(_, new)| new.len());
+    let room = len.saturating_sub(it.new_range[0]);
+    if let Some(c) = app.canvas.as_mut() {
+        c.scroll = (c.scroll as isize + by).clamp(0, room as isize) as usize;
     }
 }
 
@@ -895,7 +923,8 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
 }
 
 /// One framed card: a few rows of the target hunk, rendered by the same
-/// `code_view` the code pane uses, so syntax and diff tint are identical.
+/// `code_view` the code pane uses, so syntax and diff tint are identical. The
+/// selected card starts `Canvas::scroll` rows further down.
 fn card_widget(
     f: &mut Frame,
     app: &App,
@@ -921,7 +950,12 @@ fn card_widget(
     // start at the hunk, not at the top of its file: `code_view`'s `start` is
     // an offset into the whole file, and passing 0 showed every card the
     // module docstring instead of the code the card is about
-    let start = it.new_range[0].saturating_sub(1);
+    let scrolled = if selected {
+        app.canvas.as_ref().map_or(0, |c| c.scroll)
+    } else {
+        0
+    };
+    let start = it.new_range[0].saturating_sub(1) + scrolled;
     let (lines, _, _) = code_view(
         it,
         &app.sources,
@@ -934,6 +968,7 @@ fn card_widget(
         theme,
         start,
         rows,
+        &LineMarks::default(),
     );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -1135,6 +1170,7 @@ fn why_content(app: &App) -> Vec<WhyRow> {
         &app.theme,
         &WhyContext {
             note: note_for(app, app.sel),
+            comments: &comments_in(app, app.sel),
             out_of_order: &out_of_order_labels(app, app.sel),
             delta: delta_line(app, app.sel),
             cascade: cascade_line(app, app.sel).as_deref(),
@@ -1273,6 +1309,7 @@ fn draw_code(f: &mut Frame, app: &mut App, code_area: Option<Rect>, body: Rect) 
         &app.theme,
         app.scroll as usize,
         app.code_height as usize,
+        &line_marks(app),
     );
     let title = code_title(app, right_clip);
     app.code_len = code_total;
@@ -1766,6 +1803,48 @@ pub(super) fn coverage(app: &App) -> (usize, usize, usize, usize) {
         }
     }
     (done, app.view.len(), both, edges)
+}
+
+/// What the code pane marks on the selected item's file: its comments, and
+/// the selection being made.
+fn line_marks(app: &App) -> LineMarks {
+    let path = &app.items[app.sel].path;
+    LineMarks {
+        commented: app
+            .comments
+            .iter()
+            .filter(|c| c.path == *path)
+            .map(|c| (c.start, c.end))
+            .collect(),
+        selected: app.selection.map(|_| comment_lines(app)),
+    }
+}
+
+/// Item `i`'s line comments, as the why pane lists them.
+fn comments_in(app: &App, i: usize) -> Vec<String> {
+    let it = &app.items[i];
+    let [a, b] = it.new_range;
+    app.comments
+        .iter()
+        .filter(|c| c.path == it.path && c.start <= b.max(a) && a <= c.end)
+        .map(|c| {
+            let stale = if c.stale {
+                " (lines changed since)"
+            } else {
+                ""
+            };
+            format!(
+                "● L{}{} {}{stale}",
+                c.start,
+                if c.end > c.start {
+                    format!("-{}", c.end)
+                } else {
+                    String::new()
+                },
+                c.text
+            )
+        })
+        .collect()
 }
 
 /// The note anchored to item `i`'s symbol, if any.
