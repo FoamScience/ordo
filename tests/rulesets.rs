@@ -87,6 +87,7 @@ fn every_shipped_ruleset_loads_and_every_rule_fires_on_its_sample() {
                 rules: rules.clone(),
                 ..Default::default()
             },
+            consumers: vec![],
         };
         let out: Output = ordo::run(input);
         assert!(

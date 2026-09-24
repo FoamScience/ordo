@@ -2698,7 +2698,14 @@ pub fn signatures(spec: &LangSpec, content: &str) -> Vec<SigInfo> {
         {
             if let (Some(name), Some(params)) = (node_name(node, src), params_of(node)) {
                 let mut cur = params.walk();
-                let kinds: Vec<&str> = params.named_children(&mut cur).map(|c| c.kind()).collect();
+                // python's bare `*` ends what a call can pass by position, and
+                // `/` is punctuation, not a parameter
+                let kinds: Vec<&str> = params
+                    .named_children(&mut cur)
+                    .map(|c| c.kind())
+                    .take_while(|k| *k != "keyword_separator")
+                    .filter(|k| *k != "positional_separator")
+                    .collect();
                 let variadic = kinds
                     .iter()
                     .any(|k| lang::param_kind(k) == lang::ParamKind::Variadic);
@@ -2777,6 +2784,620 @@ pub fn call_sites(spec: &LangSpec, content: &str) -> Vec<CallSite> {
     }
     walk(tree.root_node(), src, &mut out);
     out
+}
+
+/// What a callable promises its callers beyond its arity, for the contract
+/// checks that compare a definition's old side with its new one.
+#[derive(Clone)]
+pub struct DefFacts {
+    pub name: String,
+    /// 0-based rows it spans, decorators included
+    pub rows: (usize, usize),
+    /// the class it is a method of
+    pub owner: Option<String>,
+    pub is_async: bool,
+    /// read as an attribute rather than called: python's `@property` /
+    /// `@cached_property`, a js `get x()`
+    pub getter: bool,
+    /// in order, the receiver (`self`, `cls`, `this`) left out
+    pub params: Vec<Param>,
+    /// `@abstractmethod`: a subclass that does not define it cannot be made
+    pub is_abstract: bool,
+    /// exception types its own body raises, last dotted part, sorted
+    pub raises: Vec<String>,
+    /// what its own body's `with` statements enter, as written
+    pub withs: Vec<String>,
+    /// its own body's calls, as written, split by whether they are awaited
+    pub awaited: Vec<String>,
+    pub not_awaited: Vec<String>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    /// the default's source text
+    pub default: Option<String>,
+    pub slot: Slot,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Slot {
+    /// passable by position (and, in python, by name)
+    Positional,
+    /// after python's `*` or `*args`: by name only
+    KeywordOnly,
+    /// `*args`, `...rest`
+    Rest,
+    /// `**kwargs`: takes any name
+    AnyKeyword,
+}
+
+/// Every named callable in `content`, with the facts `DefFacts` keeps.
+pub fn def_facts(spec: &LangSpec, content: &str) -> Vec<DefFacts> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    fn walk(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<DefFacts>) {
+        if is_def_node(node, spec) && lang::has_signature(node.kind()) {
+            if let Some(name) = node_name(node, src) {
+                let mut cur = node.walk();
+                let keywords: Vec<&str> = node.children(&mut cur).map(|c| c.kind()).collect();
+                let holder = node
+                    .parent()
+                    .filter(|p| p.kind() == "decorated_definition")
+                    .unwrap_or(node);
+                // what `raises`, `withs` and the awaits are read from: only the
+                // languages that spell them pay for the walk
+                let body = if matches!(
+                    spec.name,
+                    "python" | "xonsh" | "javascript" | "typescript" | "tsx"
+                ) {
+                    own_body(
+                        node,
+                        &[
+                            "with_item",
+                            "await",
+                            "await_expression",
+                            "call",
+                            "call_expression",
+                            "raise_statement",
+                        ],
+                    )
+                } else {
+                    vec![]
+                };
+                out.push(DefFacts {
+                    name,
+                    rows: (holder.start_position().row, holder.end_position().row),
+                    owner: owning_class(node, src),
+                    is_async: keywords.contains(&"async"),
+                    getter: keywords.contains(&"get")
+                        || decorated(node, src, &["property", "cached_property"]),
+                    is_abstract: decorated(node, src, &["abstractmethod"]),
+                    raises: raises(&body, src),
+                    withs: body
+                        .iter()
+                        .filter(|n| n.kind() == "with_item")
+                        .filter_map(|w| w.named_child(0))
+                        .map(|v| flat(v, src))
+                        .collect(),
+                    awaited: body
+                        .iter()
+                        .filter(|n| matches!(n.kind(), "await" | "await_expression"))
+                        .filter_map(|a| a.named_child(0))
+                        .filter(|c| c.child_by_field_name("arguments").is_some())
+                        .map(|c| flat(c, src))
+                        .collect(),
+                    not_awaited: body
+                        .iter()
+                        .filter(|n| matches!(n.kind(), "call" | "call_expression"))
+                        .filter(|c| {
+                            c.parent()
+                                .is_none_or(|p| !matches!(p.kind(), "await" | "await_expression"))
+                        })
+                        .map(|c| flat(*c, src))
+                        .collect(),
+                    params: params_of(node).map_or(vec![], |p| params(p, src)),
+                });
+            }
+        }
+        let mut cur = node.walk();
+        for ch in node.named_children(&mut cur) {
+            walk(ch, src, spec, out);
+        }
+    }
+    walk(tree.root_node(), src, spec, &mut out);
+    out
+}
+
+fn params(list: Node, src: &[u8]) -> Vec<Param> {
+    let text = |n: Option<Node>| {
+        n.and_then(|n| n.utf8_text(src).ok())
+            .map(|t| t.trim().to_string())
+    };
+    let mut out = vec![];
+    let mut keyword_only = false;
+    let mut cur = list.walk();
+    for (i, p) in list.named_children(&mut cur).enumerate() {
+        let slot = match p.kind() {
+            "keyword_separator" => {
+                keyword_only = true;
+                continue;
+            }
+            "positional_separator" | "comment" => continue,
+            "dictionary_splat_pattern" => Slot::AnyKeyword,
+            k if lang::param_kind(k) == lang::ParamKind::Variadic => {
+                keyword_only = true;
+                Slot::Rest
+            }
+            _ if keyword_only => Slot::KeywordOnly,
+            _ => Slot::Positional,
+        };
+        let default = text(
+            p.child_by_field_name("value")
+                .or_else(|| p.child_by_field_name("right")),
+        );
+        // the name: a plain identifier, or the named part of a typed/defaulted one
+        let name = if lang::is_ident(p.kind()) {
+            text(Some(p))
+        } else {
+            text(
+                p.child_by_field_name("name")
+                    .or_else(|| p.child_by_field_name("left"))
+                    .or_else(|| p.child_by_field_name("pattern"))
+                    .or_else(|| {
+                        let mut c = p.walk();
+                        let first = p.named_children(&mut c).find(|c| lang::is_ident(c.kind()));
+                        first
+                    }),
+            )
+        };
+        let Some(name) = name else {
+            continue;
+        };
+        if i == 0 && matches!(name.as_str(), "self" | "cls" | "this") {
+            continue;
+        }
+        out.push(Param {
+            name,
+            default,
+            slot,
+        });
+    }
+    out
+}
+
+fn owning_class(node: Node, src: &[u8]) -> Option<String> {
+    let mut n = node.parent();
+    while let Some(p) = n {
+        if lang::has_signature(p.kind()) {
+            return None;
+        }
+        if lang::is_type_kind(p.kind()) || p.kind() == "class" {
+            return node_name(p, src);
+        }
+        n = p.parent();
+    }
+    None
+}
+
+/// the nodes of `kinds` in a def's own body, nested defs left out
+fn own_body<'t>(def: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
+    let mut out = vec![];
+    let Some(body) = def.child_by_field_name("body") else {
+        return out;
+    };
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if kinds.contains(&n.kind()) {
+            out.push(n);
+        }
+        if n.id() != body.id() && lang::has_signature(n.kind()) {
+            continue;
+        }
+        let mut cur = n.walk();
+        stack.extend(n.named_children(&mut cur));
+    }
+    out.sort_by_key(|n| n.start_byte());
+    out
+}
+
+/// a node's text with its whitespace runs collapsed
+fn flat(n: Node, src: &[u8]) -> String {
+    n.utf8_text(src)
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+/// An enum's members and their values as written: `class Color(Enum)`'s
+/// `RED = 1`, a ts `enum Color { Red = 1 }`.
+pub fn enum_values(spec: &LangSpec, content: &str) -> Vec<(String, String, String, usize)> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    let python_enum = |c: &ClassFacts| {
+        c.bases
+            .iter()
+            .any(|b| b.ends_with("Enum") || b.ends_with("Flag"))
+    };
+    let enums: Vec<String> = class_facts(spec, content)
+        .into_iter()
+        .filter(python_enum)
+        .map(|c| c.name)
+        .collect();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let mut cur = node.walk();
+        stack.extend(node.named_children(&mut cur));
+        let (owner, name, value) = match node.kind() {
+            // an `assignment` directly in an enum class body: `expression_statement` > `block` > class
+            "assignment" => {
+                let class = node
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .and_then(|b| b.parent())
+                    .filter(|c| c.kind() == "class_definition")
+                    .and_then(|c| node_name(c, src));
+                let Some(class) = class.filter(|c| enums.contains(c)) else {
+                    continue;
+                };
+                (
+                    class,
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                )
+            }
+            "enum_assignment" => {
+                let Some(class) = node
+                    .parent()
+                    .and_then(|b| b.parent())
+                    .and_then(|e| node_name(e, src))
+                else {
+                    continue;
+                };
+                (
+                    class,
+                    node.child_by_field_name("name"),
+                    node.child_by_field_name("value"),
+                )
+            }
+            _ => continue,
+        };
+        if let (Some(n), Some(v)) = (name, value) {
+            out.push((owner, flat(n, src), flat(v, src), node.start_position().row));
+        }
+    }
+    out
+}
+
+/// python's `raise X` / `raise X(...)` among a def's own-body nodes
+fn raises(body: &[Node], src: &[u8]) -> Vec<String> {
+    let mut out: Vec<String> = body
+        .iter()
+        .filter(|n| n.kind() == "raise_statement")
+        .filter_map(|n| n.named_child(0))
+        .map(|x| {
+            if x.kind() == "call" {
+                x.child_by_field_name("function").unwrap_or(x)
+            } else {
+                x
+            }
+        })
+        .filter_map(|t| t.utf8_text(src).ok())
+        .filter_map(|t| t.trim().rsplit('.').next().map(str::to_string))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Every call to `name` in `content` (as `calls_to` matches it) that sits in
+/// the body of a `try`, with the exception types the enclosing handlers
+/// name — `*` for a bare `except:`.
+pub fn guarded_calls(
+    spec: &LangSpec,
+    content: &str,
+    name: &str,
+    receiver: bool,
+) -> Vec<(usize, Vec<String>)> {
+    let rows: Vec<usize> = calls_to(spec, content, name, receiver)
+        .into_iter()
+        .map(|c| c.row)
+        .collect();
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let mut cur = node.walk();
+        stack.extend(node.named_children(&mut cur));
+        if node.child_by_field_name("arguments").is_none()
+            || !rows.contains(&node.start_position().row)
+        {
+            continue;
+        }
+        let mut caught = vec![];
+        let (mut child, mut up) = (node, node.parent());
+        while let Some(p) = up {
+            if p.kind() == "try_statement"
+                && p.child_by_field_name("body")
+                    .is_some_and(|b| b.id() == child.id())
+            {
+                let mut cur = p.walk();
+                for clause in p
+                    .named_children(&mut cur)
+                    .filter(|c| c.kind() == "except_clause")
+                {
+                    let mut cc = clause.walk();
+                    let first = clause
+                        .named_children(&mut cc)
+                        .find(|c| c.kind() != "block" && c.kind() != "comment");
+                    match first.and_then(|t| t.utf8_text(src).ok()) {
+                        None => caught.push("*".to_string()),
+                        Some(t) => caught.extend(
+                            t.split(" as ")
+                                .next()
+                                .unwrap_or(t)
+                                .trim_matches(|c| c == '(' || c == ')')
+                                .split(',')
+                                .filter_map(|x| x.trim().rsplit('.').next().map(str::to_string))
+                                .filter(|x| !x.is_empty()),
+                        ),
+                    }
+                }
+            }
+            if lang::has_signature(p.kind()) {
+                break;
+            }
+            (child, up) = (p, p.parent());
+        }
+        if !caught.is_empty() {
+            out.push((node.start_position().row, caught));
+        }
+    }
+    out.sort();
+    out.dedup_by_key(|(r, _)| *r);
+    out
+}
+
+/// Is `node` decorated with one of `names`, however qualified (`abc.abstractmethod`)?
+fn decorated(node: Node, src: &[u8], names: &[&str]) -> bool {
+    decorators(node, src).iter().any(|d| {
+        d.rsplit('.')
+            .next()
+            .is_some_and(|last| names.contains(&last))
+    })
+}
+
+/// A class and the names of the classes it derives from, last dotted part
+/// only: `class C(abc.ABC, Base)` gives `[ABC, Base]`.
+pub struct ClassFacts {
+    pub name: String,
+    /// 0-based
+    pub row: usize,
+    pub bases: Vec<String>,
+}
+
+pub fn class_facts(spec: &LangSpec, content: &str) -> Vec<ClassFacts> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let mut cur = node.walk();
+        stack.extend(node.named_children(&mut cur));
+        if !matches!(
+            node.kind(),
+            "class_definition" | "class_declaration" | "class"
+        ) {
+            continue;
+        }
+        let Some(name) = node_name(node, src) else {
+            continue;
+        };
+        // python's `superclasses`, js's `class_heritage`
+        let mut cur = node.walk();
+        let list = node.child_by_field_name("superclasses").or_else(|| {
+            let heritage = node
+                .named_children(&mut cur)
+                .find(|c| c.kind() == "class_heritage");
+            heritage
+        });
+        let bases = list.map_or(vec![], |l| {
+            let mut cur = l.walk();
+            l.named_children(&mut cur)
+                .filter(|b| b.kind() != "keyword_argument")
+                .filter_map(|b| b.utf8_text(src).ok())
+                .filter_map(|t| t.trim().rsplit('.').next().map(str::to_string))
+                .collect()
+        });
+        out.push(ClassFacts {
+            name,
+            row: node.start_position().row,
+            bases,
+        });
+    }
+    out
+}
+
+/// python hangs decorators on a `decorated_definition` wrapper, js/ts on the
+/// method itself
+fn decorators(node: Node, src: &[u8]) -> Vec<String> {
+    let holder = node
+        .parent()
+        .filter(|p| p.kind() == "decorated_definition")
+        .unwrap_or(node);
+    let mut cur = holder.walk();
+    holder
+        .named_children(&mut cur)
+        .filter(|c| c.kind() == "decorator")
+        .filter_map(|d| d.utf8_text(src).ok())
+        .map(|t| {
+            let t = t.trim().trim_start_matches('@');
+            t.split('(').next().unwrap_or(t).trim().to_string()
+        })
+        .collect()
+}
+
+/// Every `obj.name` in `content` that is not assigned to, as (0-based row,
+/// whether it is called). With `self_only`, only `self.name` / `this.name`.
+pub fn member_reads(
+    spec: &LangSpec,
+    content: &str,
+    name: &str,
+    self_only: bool,
+) -> Vec<(usize, bool)> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    let text = |n: Option<Node>| n.and_then(|n| n.utf8_text(src).ok()).map(str::trim);
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let member = node
+            .child_by_field_name("attribute")
+            .or_else(|| node.child_by_field_name("property"));
+        let receiver = text(node.child_by_field_name("object"));
+        if member.is_some()
+            && text(member) == Some(name)
+            && (!self_only || matches!(receiver, Some("self" | "this")))
+        {
+            let parent = node.parent();
+            let assigned = parent.is_some_and(|p| {
+                p.child_by_field_name("left")
+                    .is_some_and(|l| l.id() == node.id())
+            });
+            if !assigned {
+                let called = parent.is_some_and(|p| {
+                    p.child_by_field_name("function")
+                        .is_some_and(|f| f.id() == node.id())
+                });
+                out.push((node.start_position().row, called));
+            }
+        }
+        let mut cur = node.walk();
+        stack.extend(node.named_children(&mut cur));
+    }
+    out.sort_unstable();
+    out
+}
+
+/// One call's arguments, for checking it against a changed signature.
+pub struct CallFacts {
+    /// 0-based
+    pub row: usize,
+    /// its source text, whitespace-normalized, to tell a call left as it was
+    /// from one the change rewrote
+    pub text: String,
+    pub positional: usize,
+    pub keywords: Vec<String>,
+    /// `*xs` / `**kw` / `...xs`: how many it passes cannot be counted
+    pub spread: bool,
+    /// its result is thrown away or only tested for truth — the two uses
+    /// where getting a coroutine or a promise instead of a value goes unnoticed
+    pub discarded: bool,
+}
+
+/// Every call to `name` in `content`: a bare `name(...)`, or with `receiver`
+/// a `self.name(...)` / `this.name(...)` — any other `obj.name()` may be a
+/// different `name`.
+pub fn calls_to(spec: &LangSpec, content: &str, name: &str, receiver: bool) -> Vec<CallFacts> {
+    all_calls(spec, content)
+        .into_iter()
+        .filter(|(n, r, _)| n == name && *r == receiver)
+        .map(|(.., c)| c)
+        .collect()
+}
+
+/// Every call in `content` a contract check can match to a definition, as
+/// (callee name, whether through `self.`/`this.`, the call), in row order.
+pub fn all_calls(spec: &LangSpec, content: &str) -> Vec<(String, bool, CallFacts)> {
+    let mut out = vec![];
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    let text = |n: Node| n.utf8_text(src).map(str::trim).unwrap_or("");
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let mut cur = node.walk();
+        stack.extend(node.named_children(&mut cur));
+        let (Some(f), Some(args)) = (
+            node.child_by_field_name("function"),
+            node.child_by_field_name("arguments"),
+        ) else {
+            continue;
+        };
+        let member = f
+            .child_by_field_name("attribute")
+            .or_else(|| f.child_by_field_name("property"));
+        let callee = match member {
+            Some(m)
+                if f.child_by_field_name("object")
+                    .is_some_and(|o| matches!(text(o), "self" | "this")) =>
+            {
+                (text(m), true)
+            }
+            None if lang::is_ident(f.kind()) => (text(f), false),
+            _ => continue,
+        };
+        let mut cur = args.walk();
+        let (mut positional, mut keywords, mut spread) = (0, vec![], false);
+        for a in args.named_children(&mut cur) {
+            match a.kind() {
+                "keyword_argument" => {
+                    keywords.extend(a.child_by_field_name("name").map(|n| text(n).to_string()))
+                }
+                "list_splat" | "dictionary_splat" | "spread_element" => spread = true,
+                "comment" => {}
+                _ => positional += 1,
+            }
+        }
+        out.push((
+            callee.0.to_string(),
+            callee.1,
+            CallFacts {
+                row: node.start_position().row,
+                text: text(node).split_whitespace().collect::<Vec<_>>().join(" "),
+                positional,
+                keywords,
+                spread,
+                discarded: result_unused_or_tested(node),
+            },
+        ));
+    }
+    out.sort_by_key(|(.., c)| c.row);
+    out
+}
+
+fn result_unused_or_tested(call: Node) -> bool {
+    let mut n = call;
+    let mut parent = call.parent();
+    while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
+        n = p;
+        parent = p.parent();
+    }
+    let Some(p) = parent else {
+        return false;
+    };
+    let logical = p.kind() == "binary_expression"
+        && p.child_by_field_name("operator")
+            .is_some_and(|o| matches!(o.kind(), "&&" | "||"));
+    p.kind() == "expression_statement"
+        || logical
+        || matches!(p.kind(), "not_operator" | "boolean_operator")
+        || (p.kind() == "unary_expression" && p.child(0).is_some_and(|op| op.kind() == "!"))
+        || p.child_by_field_name("condition")
+            .is_some_and(|c| c.id() == n.id())
 }
 
 /// Every 0-based row where `name` appears as an *identifier* in `content` —

@@ -263,6 +263,26 @@
               "description": "rule names not to report, as globs; applied to the catalog as well as to `rules`"
             }
           }
+        },
+        "consumers": {
+          "type": "array",
+          "description": "files outside the change that call into it, e.g. another repository importing this one; read only as callers for the contract checks, never ordered or output",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "content"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "how a note names the file"
+              },
+              "content": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },

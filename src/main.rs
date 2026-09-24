@@ -81,6 +81,7 @@ fn review(args: &[String]) {
             full_context,
             ..Default::default()
         },
+        consumers: vec![],
     };
     let out = ordo::run(input);
     if as_sarif {

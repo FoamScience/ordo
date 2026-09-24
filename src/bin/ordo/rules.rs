@@ -99,6 +99,8 @@ pub(super) struct RuleSet {
     pub(super) catalog: bool,
     pub(super) disables: Vec<String>,
     pub(super) includes: Vec<String>,
+    /// other repositories that import this one, resolved; see `consumers`
+    pub(super) consumers: Vec<PathBuf>,
 }
 
 pub(super) struct RulesReport {
@@ -116,6 +118,7 @@ pub(super) struct RulesReport {
     /// the construct catalog too — a catalog entry is a rule, and silencing it
     /// by name is the same gesture
     disables: Vec<String>,
+    consumers: Vec<PathBuf>,
 }
 
 impl RulesReport {
@@ -125,6 +128,7 @@ impl RulesReport {
             catalog,
             disables: self.disables.clone(),
             includes: self.includes.clone(),
+            consumers: self.consumers.clone(),
         }
     }
 
@@ -180,6 +184,7 @@ struct Layering {
     catalog: Option<bool>,
     /// bundled rulesets pulled in by `include`
     includes: Vec<String>,
+    consumers: Vec<PathBuf>,
 }
 
 fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut Layering) {
@@ -203,6 +208,9 @@ fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut La
         }
     }
     acc.disables.extend(doc.disable);
+    // relative to the file that names them, the way an `include` is
+    acc.consumers
+        .extend(doc.consumers.iter().map(|c| base.join(c)));
     if let Some(c) = doc.catalog {
         // any file saying no wins: the switch is off, not voted on
         acc.catalog = Some(acc.catalog.unwrap_or(true) && c);
@@ -306,6 +314,7 @@ pub(super) fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesRepo
         catalog: acc.catalog.unwrap_or(true),
         includes: acc.includes,
         disables: acc.disables,
+        consumers: acc.consumers,
     }
 }
 
@@ -493,6 +502,8 @@ pub(super) struct RulesDoc {
     /// `catalog = false` in any rules file turns the built-in construct
     /// catalog off for good, the way `--no-catalog` does for one run
     pub(super) catalog: Option<bool>,
+    /// repositories that import this one, as written
+    consumers: Vec<String>,
     pub(super) problems: Vec<String>,
 }
 
@@ -516,6 +527,8 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         #[serde(default)]
         catalog: Option<bool>,
         #[serde(default)]
+        consumers: Vec<String>,
+        #[serde(default)]
         rule: Vec<toml::Value>,
     }
     let empty = |problems| RulesDoc {
@@ -523,6 +536,7 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         include: vec![],
         disable: vec![],
         catalog: None,
+        consumers: vec![],
         problems,
     };
     let doc: RulesFile = match toml::from_str(text) {
@@ -557,6 +571,7 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         include: doc.include,
         disable: doc.disable,
         catalog: doc.catalog,
+        consumers: doc.consumers,
         problems,
     }
 }

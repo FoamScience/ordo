@@ -108,6 +108,7 @@ use tree_sitter::Tree;
 mod code_view;
 mod commands;
 mod config;
+mod consumers;
 mod draw;
 mod editor;
 mod findings;
@@ -1026,6 +1027,15 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let t = std::time::Instant::now();
     progress("ordering…".to_string());
     let mut input = input;
+    let root = git(&["rev-parse", "--show-toplevel"]);
+    if !root.trim().is_empty() {
+        progress("looking for other repositories that import this one…".to_string());
+        input.consumers = consumers::gather(
+            std::path::Path::new(root.trim()),
+            &input.changes,
+            &rules.consumers,
+        );
+    }
     input.options.rules = rules.rules;
     input.options.catalog = rules.catalog;
     input.options.disable = rules.disables;

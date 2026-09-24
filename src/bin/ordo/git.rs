@@ -418,6 +418,7 @@ pub(super) fn gather_range(
     Input {
         changes,
         options: Options::default(),
+        consumers: vec![],
     }
 }
 
@@ -476,6 +477,7 @@ pub(super) fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> 
     Input {
         changes,
         options: Options::default(),
+        consumers: vec![],
     }
 }
 
@@ -543,5 +545,6 @@ pub(super) fn gather_worktree_range(
     Input {
         changes,
         options: Options::default(),
+        consumers: vec![],
     }
 }
