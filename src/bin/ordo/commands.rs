@@ -34,6 +34,7 @@ use crate::prose;
 use crate::search::cycle_index;
 use crate::select;
 use crate::set_mode;
+use crate::watch::WatchMode;
 use crate::App;
 use crate::CommandBar;
 use crate::Hidden;
@@ -123,6 +124,11 @@ pub(super) const COMMANDS: &[Cmd] = &[
         name: "comments",
         args: "",
         help: "list every line comment in this review",
+    },
+    Cmd {
+        name: "watch",
+        args: "[on|off|auto]",
+        help: "follow the working tree: mark the review stale (on), or reload by itself (auto)",
     },
     Cmd {
         name: "yank",
@@ -776,6 +782,25 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
         }
         "note" => {
             set_note(app, arg.trim())?;
+            Ok(CommandOutcome::None)
+        }
+        "watch" => {
+            let mode = match arg.trim() {
+                "" if app.watch == WatchMode::Off => WatchMode::Hint,
+                "" => WatchMode::Off,
+                a => WatchMode::parse(a)
+                    .ok_or_else(|| format!("usage: :watch [on|off|auto], not '{a}'"))?,
+            };
+            if mode != WatchMode::Off && !app.uncommitted {
+                return Err(format!(
+                    "nothing to watch: {} is committed — :e zz or :e main...zz reviews work that is still changing",
+                    app.rev
+                ));
+            }
+            app.watch = mode;
+            if mode == WatchMode::Off {
+                app.stale = None;
+            }
             Ok(CommandOutcome::None)
         }
         "comment" => {

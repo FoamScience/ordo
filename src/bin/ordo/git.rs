@@ -270,6 +270,7 @@ fn commit_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
     Some(Target::Commit(field(c, "commitId").to_string()))
 }
 
+#[derive(Clone)]
 pub(super) enum Target {
     Commit(String),
     /// A `base..tip` / `base...tip` range, already resolved to two commit shas.
@@ -432,6 +433,20 @@ pub(super) fn gather_range(
 // plus `uncommittedChanges`, each entry's `filePath`. Shared by `gather_uncommitted`
 // and `gather_worktree_range`'s untracked-file branch — neither sorts nor dedups
 // here, that's each caller's own business.
+/// The uncommitted area of a repository GitButler does not manage: every
+/// tracked file that differs from `HEAD`, staged or not, and every untracked
+/// file that is not ignored.
+pub(super) fn uncommitted_paths(dir: &str) -> Vec<String> {
+    let changed = git(&["-C", dir, "diff", "--name-only", "HEAD"]);
+    let untracked = git(&["-C", dir, "ls-files", "--others", "--exclude-standard"]);
+    changed
+        .lines()
+        .chain(untracked.lines())
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn workspace_change_paths(ws: &serde_json::Value) -> Vec<String> {
     let assigned = ws
         .get("stacks")
@@ -453,8 +468,11 @@ fn workspace_change_paths(ws: &serde_json::Value) -> Vec<String> {
 }
 
 pub(super) fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
-    let ws = workspace().unwrap_or(serde_json::Value::Null);
-    let mut paths = workspace_change_paths(&ws);
+    let mut paths = match workspace() {
+        Some(ws) => workspace_change_paths(&ws),
+        None => uncommitted_paths("."),
+    };
+    paths.sort();
     paths.dedup();
     let paths = filter.apply(paths);
     let total = paths.len();

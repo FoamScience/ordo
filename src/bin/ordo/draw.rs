@@ -499,6 +499,19 @@ pub(super) fn jump_back(app: &mut App) {
 fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out = vec![];
+    // the review no longer matching the tree outranks everything else on the
+    // line: it is the one thing here that is not about the review itself
+    if let Some(stale) = &app.stale {
+        out.push(Span::styled(
+            format!(" {} ·", stale.line()),
+            Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(n) = &app.notice {
+        out.push(Span::styled(
+            format!(" {n} ·"),
+            Style::default().fg(theme.accent),
+        ));
+    }
     let mut panes: Vec<(u8, Pane, &str)> = vec![
         (1, Pane::List, "list"),
         (2, Pane::Code, "code"),

@@ -218,6 +218,7 @@ always drives the code pane.
 | comment on the code-pane line or selection | `c` |  |
 | jump to the next line comment | `gc` |  |
 | jump to the previous line comment | `gC` |  |
+| read the change again, keeping your place | `r` | `F5` |
 | fold/unfold the selected hunk's group | `za` | `C-k C-l` |
 | unfold the selected hunk's group | `zo` |  |
 | fold the selected hunk's group | `zc` |  |
@@ -249,6 +250,7 @@ command's own arguments:
 | `:note [text]` | anchor a note to the selected hunk's symbol; no text clears it |
 | `:comment [text]` | comment on the code-pane line, or the `v` selection; no text deletes what is there |
 | `:comments` | list every line comment in this review |
+| `:watch [on|off|auto]` | follow the working tree: mark the review stale (on), or reload by itself (auto) |
 | `:yank [all]` | copy the review as an agent prompt: your notes; `all` adds ordo's own notes and findings |
 | `:send [all]` | pipe the review prompt to the command in $ORDO_SEND (the herdr plugin sets it) |
 | `:mode [ledger|hunks]` | list by symbol (default) or by hunk; no argument toggles |

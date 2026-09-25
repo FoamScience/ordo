@@ -74,6 +74,8 @@ pub(super) enum Action {
     Comment,
     CommentNext,
     CommentPrev,
+    /// `r` — read the change again, keeping the place
+    Reload,
     /// `H` — how often these lines have changed before, and who last touched
     /// them. Explicit because it shells out to `git log -L` (see `hunk_churn`)
     Churn,
@@ -266,6 +268,7 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, ch('c'), Action::Comment),
                 (Some(ch('g')), ch('c'), Action::CommentNext),
                 (Some(ch('g')), ch('C'), Action::CommentPrev),
+                (None, ch('r'), Action::Reload),
                 // `z` prefix (vim's own convention for view-scrolling
                 // commands, e.g. zh/zl to scroll a `nowrap` window sideways)
                 (Some(ch('z')), ch('h'), Action::ScrollLeft),
@@ -348,6 +351,8 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, plain(KeyCode::F(12)), Action::Hover),
                 (None, ctrl('f'), Action::SearchOpen),
                 (None, plain(KeyCode::F(3)), Action::SearchNext),
+                // vscode's own "run"/refresh key, free here
+                (None, plain(KeyCode::F(5)), Action::Reload),
                 (
                     None,
                     (KeyCode::F(3), KeyModifiers::SHIFT),
@@ -464,6 +469,7 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
         Action::Comment => (Category::Review, "comment on the code-pane line or selection"),
         Action::CommentNext => (Category::Review, "jump to the next line comment"),
         Action::CommentPrev => (Category::Review, "jump to the previous line comment"),
+        Action::Reload => (Category::Review, "read the change again, keeping your place"),
         Action::Churn => (
             Category::Review,
             "how often these lines changed before, and who touched them last",
@@ -543,6 +549,7 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("comment", Action::Comment),
     ("comment-next", Action::CommentNext),
     ("comment-prev", Action::CommentPrev),
+    ("reload", Action::Reload),
     ("churn", Action::Churn),
     ("hover", Action::Hover),
     ("search", Action::SearchOpen),
@@ -647,6 +654,8 @@ pub(super) struct KeyConfig {
     pub(super) theme: Option<String>,
     /// `docs_last` — whether a docs-only hunk sorts after the code
     pub(super) docs_last: Option<bool>,
+    /// `watch` — hint, auto or off; `--watch` overrides it
+    pub(super) watch: Option<String>,
     pub(super) colors: Vec<(String, Color)>,
     pub(super) problems: Vec<String>,
 }
@@ -675,6 +684,7 @@ pub(super) fn parse_key_config(text: &str) -> KeyConfig {
         binds: vec![],
         theme: None,
         docs_last: None,
+        watch: None,
         colors: vec![],
         problems: vec![],
     };
@@ -728,6 +738,10 @@ impl KeyConfig {
             // `theme` reads naturally at the top of the file as well as
             // inside `[theme]`, and a config is read, not just written
             "theme" => self.theme = Some(v),
+            "watch" => match crate::watch::WatchMode::parse(&v) {
+                Some(_) => self.watch = Some(v),
+                None => return Some("`watch` wants hint, auto or off".to_string()),
+            },
             _ => return Some(format!("unknown setting `{k}`")),
         }
         None
