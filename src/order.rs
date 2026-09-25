@@ -502,18 +502,18 @@ fn group_hunks(flat: &Flat) -> (Vec<GroupInfo>, Vec<usize>) {
     (groups, group_idx)
 }
 
-/// What each group defines and what it uses, as symbol sets.
+/// One set of symbol names per group.
+type PerGroup = Vec<HashSet<String>>;
+
+/// What each group defines, what it uses, and which of those uses must stay
+/// in its own file (see `Binding::stays_local`).
 fn group_symbols(
     flat: &Flat,
     groups: &[GroupInfo],
     group_idx: &[usize],
     symbols: &[crate::FileSymbols],
     paths: &[String],
-) -> (
-    Vec<HashSet<String>>,
-    Vec<HashSet<String>>,
-    Vec<HashSet<String>>,
-) {
+) -> (PerGroup, PerGroup, PerGroup) {
     let mut gdef: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     let mut guse: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     // the names a group's uses must not resolve in another file — see `Binding::stays_local`
