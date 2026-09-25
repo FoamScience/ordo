@@ -34,7 +34,7 @@ never conflated under the enclosing `main`.
 | go | `field_declaration`, `const_spec`, `var_spec`, `type_spec` |
 | c / cpp | `field_declaration`, `enumerator` |
 | java | `enum_constant` |
-| lua | `field` |
+| lua / jsonnet | `field` |
 | markdown | `section` |
 | json | `pair` |
 | yaml | `block_mapping_pair`, `flow_pair` |

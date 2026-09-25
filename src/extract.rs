@@ -1879,7 +1879,7 @@ impl<'a> Walker<'a> {
         if spec.name == "nix" && kind == "attrpath" {
             return;
         }
-        self.bind_nix_params(node);
+        self.bind_expr_params(node);
         // a language's own way of spelling a reference, first one to claim
         // the node wins
         let references = [
@@ -2244,8 +2244,18 @@ impl<'a> Walker<'a> {
 
     // a nix lambda binds its parameters: `{ pkgs, lib, ... }:` and `x: …`.
     // Not a definition, so the def branch's parameter handling never sees it.
-    // Falls through: the body still holds bindings and uses.
-    fn bind_nix_params(&mut self, node: Node) {
+    // jsonnet's `f(x)` and `function(x)` name no `parameters` field, and a
+    // comprehension's `for x in …` binds `x` the same way. Falls through: the
+    // body still holds bindings and uses.
+    fn bind_expr_params(&mut self, node: Node) {
+        if self.spec.name == "jsonnet" {
+            match node.kind() {
+                "params" => self.c.bound.extend(param_names(node, self.src)),
+                "for_spec" => self.c.bound.extend(first_ident_text(node, self.src)),
+                _ => {}
+            }
+            return;
+        }
         if node.kind() != "function_expression" {
             return;
         }
@@ -3874,6 +3884,8 @@ fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
                     | "section_name" | "setting_name"
                     // nix: `meta.description = …` — the whole dotted path
                     | "attrpath"
+                    // jsonnet: `name: …`, `"quoted": …`
+                    | "field_name"
             )
         });
         found
@@ -3889,6 +3901,11 @@ fn config_key_name(node: Node, src: &[u8]) -> Option<String> {
     // and "edits <<" says nothing. The pair stays anonymous, so the alias in
     // its value is still read as a use of the anchor it merges in.
     if text.is_empty() || text == "<<" {
+        return None;
+    }
+    // jsonnet's computed field `[k]: …` is named by whatever `k` holds at run
+    // time, which a reader of the source cannot know
+    if key.kind() == "field_name" && text.starts_with('[') {
         return None;
     }
     Some(text.to_string())
@@ -4483,6 +4500,15 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
         ("bash", "command") => {
             let arg = node.child_by_field_name("argument")?;
             let text = unquote(arg.utf8_text(src).ok()?.trim());
+            (!text.is_empty()).then(|| vec![(row, text.to_string())])
+        }
+        // jsonnet: `import "lib.libsonnet"`, `importstr`, `importbin`
+        ("jsonnet", "import_expr") => {
+            let mut cur = node.walk();
+            let path = node
+                .named_children(&mut cur)
+                .find(|c| c.kind() == "string")?;
+            let text = unquote(path.utf8_text(src).ok()?.trim());
             (!text.is_empty()).then(|| vec![(row, text.to_string())])
         }
         // nix: the path `import ./overlays.nix` pulls in
