@@ -236,6 +236,36 @@ the retry path here needs a bounded backoff
 
 Notes stay after sending; a note is yours until you clear it.
 
+### Reviewing work that is still changing
+
+An agent keeps editing while you read. `ordo --watch zz` (or `main...zz`)
+notices: every two seconds it fingerprints the working tree — `git status`, the
+size and mtime of each changed file, and `HEAD` — and once the tree has held
+still for the debounce (1500 ms, `--watch-debounce <ms>`), the status line
+says `stale · 3 files changed · r reloads`. No file-watcher library: polling
+has no per-platform backend and misses nothing on a network or overlay
+filesystem.
+
+`r` reads the change again and keeps your place. The selected hunk is found
+again by its symbol and file — through a rename too, by the engine's ledger —
+or, when it is gone, the next one in the reading order takes its place. Scroll
+and cursor stay where they were relative to it, and the filters, the text
+search and the jump stack come along. The status line then says what moved:
+`reloaded · 2 changed · 1 reordered · 1 gone`. `:e` keeps your place the same
+way.
+
+`--watch=auto` reloads by itself, but never while a prompt, a popup, the
+command bar or the config is open, nor within three seconds of a key. Two
+things are only ever reported:
+- **A commit** empties `zz` of what was committed. The status line says so,
+  and suggests `:e main...zz`, which keeps the committed work in view.
+- **A rebase or branch switch** moves the base under the review, which a
+  reload would silently re-anchor.
+
+`watch = "hint"` in `tui.toml` turns it on for every review; `:watch on`,
+`off` and `auto` change it live. A committed revision cannot drift, so there
+it says `nothing to watch`.
+
 ### The change ledger
 
 One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk

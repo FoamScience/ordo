@@ -97,12 +97,14 @@ use crate::marks::save_marks;
 use crate::marks::save_notes;
 use crate::marks::save_snaps;
 use crate::marks::Delta;
+use crate::reload::{place_of, restore, Place};
 use crate::rules::load_rules_report;
 use crate::rules::RuleSet;
 use crate::search::accept_search;
 use crate::search::cancel_search;
 use crate::search::cycle_search;
 use crate::search::symbol_search;
+use crate::watch::{Drift, Fingerprint, Stale, WatchMode};
 use ordo::model::{Change, Input, Output, Symbol};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
@@ -125,8 +127,10 @@ mod highlight;
 mod history;
 mod keys;
 mod marks;
+mod reload;
 mod rules;
 mod search;
+mod watch;
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PAGE: u16 = 15;
@@ -137,7 +141,7 @@ ordo — interactive review of a commit, ordered for comprehension.
 usage:
   ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]...
        [--sarif <file>]... [--coverage <file>]... [--all] [--only-comments]
-       [--no-catalog]
+       [--no-catalog] [--watch[=hint|auto]] [--watch-debounce <ms>]
   ordo --init-config [--force]
   ordo help [<topic>]
   ordo --version
@@ -165,6 +169,16 @@ default — it is what a reviewer gets with no configuration — and this turns 
 off for one run. `catalog = false` in a rules file turns it off for good, and
 `disable = [\"goto\"]` silences a single entry by name, the same gesture that
 silences one of your own rules.
+
+--watch follows a review of work that is still changing (`zz`, `base...zz`):
+when the working tree drifts from what was loaded — once it has been quiet for
+the debounce, 1500 ms unless --watch-debounce says otherwise — the status line
+says `stale` and `r` reads the change again, keeping your place: the same hunk,
+scroll, search, filters and jumps. --watch=auto reloads by itself, but never
+while a prompt, popup or the command bar is open, nor within 3 s of a key. A
+rebase or branch switch is only reported. `watch = \"hint\"` in tui.toml turns
+it on for good; `:watch on|off|auto` changes it live. A committed revision has
+nothing to watch.
 
 --sarif <file> reads analyzer results in SARIF 2.1.0 — what semgrep, CodeQL,
 ruff, eslint, shellcheck and `clippy --message-format` all emit — and attaches
@@ -497,6 +511,9 @@ struct ParsedArgs {
     coverage: Vec<String>,
     /// `--no-catalog`: run only the caller's own rules this once
     no_catalog: bool,
+    /// `--watch[=hint|auto]`, else tui.toml `watch`
+    watch: WatchMode,
+    debounce: Duration,
 }
 
 /// The user-facing documentation, embedded in the binary so `ordo help
@@ -643,6 +660,18 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
         sarif: raw.sarif,
         coverage: raw.coverage,
         no_catalog: raw.no_catalog,
+        watch: raw
+            .watch
+            .or_else(|| {
+                cfg.as_ref()
+                    .and_then(|c| c.watch.as_deref())
+                    .and_then(WatchMode::parse)
+            })
+            .unwrap_or_default(),
+        debounce: raw
+            .debounce_ms
+            .and_then(|v| v.parse().ok())
+            .map_or(watch::DEBOUNCE, Duration::from_millis),
     })
 }
 
@@ -664,6 +693,9 @@ struct RawArgs {
     coverage: Vec<String>,
     want_init: bool,
     force: bool,
+    watch: Option<WatchMode>,
+    /// as written: checked once the flags are all read
+    debounce_ms: Option<String>,
 }
 
 /// A flag whose value is the next argument.
@@ -674,6 +706,7 @@ enum Pending {
     Rules,
     Sarif,
     Coverage,
+    Debounce,
 }
 
 /// The flag loop: what each argument said, with nothing resolved yet.
@@ -693,6 +726,8 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         coverage: vec![],
         want_init: false,
         force: false,
+        watch: None,
+        debounce_ms: None,
     };
     // `ordo help [<topic>]` short-circuits everything else: it takes an
     // argument the flag loop below would otherwise read as a revision.
@@ -713,6 +748,20 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             "--rules" => pending = Some(Pending::Rules),
             "--sarif" => pending = Some(Pending::Sarif),
             "--coverage" => pending = Some(Pending::Coverage),
+            "--watch-debounce" => pending = Some(Pending::Debounce),
+            s if s.starts_with("--watch-debounce=") => raw.take_value(
+                Pending::Debounce,
+                s["--watch-debounce=".len()..].to_string(),
+            ),
+            "--watch" => raw.watch = Some(WatchMode::Hint),
+            s if s.starts_with("--watch=") => {
+                let mode = &s["--watch=".len()..];
+                let Some(m) = WatchMode::parse(mode) else {
+                    eprintln!("ordo: --watch wants hint, auto or off, not '{mode}'\n\n{USAGE}");
+                    return Err(2);
+                };
+                raw.watch = Some(m);
+            }
             s if s.starts_with("--keys=") => {
                 raw.take_value(Pending::Preset, s["--keys=".len()..].to_string())
             }
@@ -759,6 +808,18 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             eprintln!("ordo: --theme needs a value\n\n{USAGE}");
             Err(2)
         }
+        Some(Pending::Debounce) => {
+            eprintln!("ordo: --watch-debounce needs milliseconds\n\n{USAGE}");
+            Err(2)
+        }
+        _ if raw
+            .debounce_ms
+            .as_ref()
+            .is_some_and(|v| v.parse::<u64>().is_err()) =>
+        {
+            eprintln!("ordo: --watch-debounce wants whole milliseconds\n\n{USAGE}");
+            Err(2)
+        }
         _ => Ok(raw),
     }
 }
@@ -777,6 +838,7 @@ impl RawArgs {
             Pending::Rules => self.extra_rules.push(value),
             Pending::Sarif => self.sarif.push(value),
             Pending::Coverage => self.coverage.push(value),
+            Pending::Debounce => self.debounce_ms = Some(value),
         }
     }
 }
@@ -865,6 +927,8 @@ fn main() -> std::io::Result<()> {
         sarif,
         coverage,
         no_catalog,
+        watch,
+        debounce,
     } = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
@@ -904,6 +968,8 @@ fn main() -> std::io::Result<()> {
         rules_report,
         sarif,
         coverage,
+        watch,
+        debounce,
     )
 }
 
@@ -965,6 +1031,9 @@ struct LoadResult {
     comments_path: Option<PathBuf>,
     deltas: Vec<Delta>,
     delta_gone: usize,
+    /// the working tree this review was read from, when it can drift (see
+    /// `watch`); taken before reading, so an edit landing mid-load shows up
+    fingerprint: Option<Fingerprint>,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -1019,6 +1088,8 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     };
     // resolved before `target` is consumed below; per-file churn counts from it
     let churn_sha = review_commit_sha(&target);
+    let fingerprint = matches!(target, Target::Uncommitted | Target::WorktreeRange(_))
+        .then(|| watch::fingerprint("."));
     let t = std::time::Instant::now();
     let input = match target {
         Target::Commit(sha) => gather(&sha, &filter, &progress),
@@ -1155,6 +1226,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         comments_path,
         deltas,
         delta_gone,
+        fingerprint,
     })));
 }
 
@@ -1606,6 +1678,14 @@ struct App {
     /// the code-pane line a `v` selection started on, 0-based; the range runs
     /// from it to the cursor
     selection: Option<usize>,
+    /// `--watch`: whether to look for drift, and whether to reload on it
+    watch: WatchMode,
+    /// the working tree no longer matches this review (see `watch`)
+    stale: Option<Stale>,
+    /// one line for the status bar until the next key: what a reload changed
+    notice: Option<String>,
+    /// `r` or `:watch`: read the review again, keeping the place
+    reload_requested: bool,
     /// the engine's change ledger, kept so `:mode` can rebuild the headers.
     /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
@@ -2329,6 +2409,63 @@ fn draw_loading(f: &mut Frame, rev: &str, status: &str, theme: &Theme) {
     f.render_widget(p, inner);
 }
 
+/// One pass of `--watch`: take in whatever the watcher has seen, and say
+/// whether to read the review again now — asked for with `r`, or `auto` with
+/// the tree settled and the reviewer neither typing nor inside a prompt, a
+/// popup or the command bar. A moved base is shown and never followed.
+fn watch_tick(session: &mut Session, app: &mut App, idle: Duration) -> bool {
+    if std::mem::take(&mut app.reload_requested) {
+        return true;
+    }
+    if app.watch == WatchMode::Off || !session.uncommitted {
+        // dropping the receiver ends the thread at its next fingerprint
+        session.watcher = None;
+        return false;
+    }
+    let rx = session.watcher.get_or_insert_with(watch::spawn_watcher);
+    let now = std::time::Instant::now();
+    while let Ok(fp) = rx.try_recv() {
+        app.stale = session
+            .drift
+            .observe(fp, now, session.debounce, watch::descends);
+    }
+    auto_reload_now(app, idle)
+}
+
+/// `--watch=auto`'s one rule: the tree settled into something worth reading,
+/// and the reviewer is neither typing nor inside a prompt, a popup, the
+/// command bar (where comments are written) or the config.
+fn auto_reload_now(app: &App, idle: Duration) -> bool {
+    app.watch == WatchMode::Auto
+        && matches!(app.stale, Some(Stale::Drift(_) | Stale::Committed(_)))
+        && idle >= watch::IDLE
+        && app.popup.is_none()
+        && app.command.is_none()
+        && app.prompt.is_none()
+        && app.config.is_none()
+}
+
+/// The status-bar line after a reload: what reading the change again moved,
+/// from the same snapshot comparison `:delta` shows.
+fn reload_summary(app: &App) -> String {
+    let count = |d: Delta| app.deltas.iter().filter(|&&x| x == d).count();
+    let parts: Vec<String> = [
+        (count(Delta::Changed), "changed"),
+        (count(Delta::Moved), "reordered"),
+        (count(Delta::New), "new"),
+        (app.delta_gone, "gone"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    if parts.is_empty() {
+        "reloaded · nothing changed".to_string()
+    } else {
+        format!("reloaded · {}", parts.join(" · "))
+    }
+}
+
 enum State {
     Loading(String),
     Ready(Box<App>),
@@ -2352,6 +2489,17 @@ struct Session {
     rules_report: Vec<String>,
     sarif: Vec<String>,
     coverage: Vec<String>,
+    /// what is being reviewed, so a reload can read it again
+    target: Target,
+    /// where the reviewer was, handed from the review a reload replaces to
+    /// the one it builds
+    carry: Option<Place>,
+    watch: WatchMode,
+    debounce: Duration,
+    /// the loaded review's fingerprint against what the watcher sees
+    drift: Drift,
+    /// fingerprints from the watcher thread, once watching has begun
+    watcher: Option<mpsc::Receiver<Fingerprint>>,
 }
 
 impl Session {
@@ -2373,17 +2521,18 @@ impl Session {
         rx
     }
 
-    /// `:e`: everything indexing the *old* review — selection, cursor, scroll,
-    /// search, the jump stack, any open popup — is dropped by simply not
-    /// carrying `app` forward into the new `App` the next `Done` builds (same
-    /// as a fresh launch); the reviewed marks come back from the on-disk cache
-    /// keyed by the new rev (see `mark_key`/`load`), not from `app.marks`. The
-    /// keymap and theme are carried forward — display preferences independent
-    /// of which hunks are loaded — and the path filter is re-read from
-    /// `base_filter` rather than `app.path_filter`, so a live `:filter` resets
-    /// along with everything else.
+    /// `:e`, `r`, or `--watch`: read `target` again into a fresh `App`. The
+    /// reviewer's place — selection by hunk identity, scroll, cursor, search,
+    /// filters, the jump stack — rides along as a `Place` and is restored once
+    /// the new review is built (see `reload`); the keymap and theme are carried
+    /// as they are. Reviewed marks come back from the on-disk cache keyed by
+    /// the new rev, not from `app.marks`. An open popup is not carried: it was
+    /// about the old review.
     fn reload(&mut self, app: &App, target: Target, new_rev: String) -> mpsc::Receiver<LoadMsg> {
         let (carried_keys, carried_theme) = carry_across_reload(app);
+        self.carry = Some(place_of(app));
+        self.watch = app.watch;
+        self.target = target.clone();
         self.review_sha = review_commit_sha(&target);
         self.uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
         self.rev = new_rev;
@@ -2415,7 +2564,9 @@ impl Session {
             comments_path,
             deltas,
             delta_gone,
+            fingerprint,
         } = r;
+        self.drift = fingerprint.map(Drift::new).unwrap_or_default();
         let sel0 = view[0];
         let scroll = auto_scroll(&items[sel0]);
         let cursor = cursor_for(&items[sel0], &sources);
@@ -2474,6 +2625,10 @@ impl Session {
             comments,
             comments_path,
             selection: None,
+            watch: self.watch,
+            stale: None,
+            notice: None,
+            reload_requested: false,
             deltas,
             delta_gone,
             collapsed: HashSet::new(),
@@ -2491,6 +2646,12 @@ impl Session {
         // back to hunks
         let led = fresh.symbol_ledger.clone();
         set_mode(&mut fresh, ViewMode::Ledger, &led);
+        if let Some(place) = self.carry.take() {
+            restore(&mut fresh, place);
+            fresh.notice = Some(reload_summary(&fresh));
+        } else if self.watch != WatchMode::Off && !self.uncommitted {
+            fresh.notice = Some(format!("nothing to watch: {} is committed", self.rev));
+        }
         fresh
     }
 }
@@ -2614,6 +2775,8 @@ fn run(
     rules_report: Vec<String>,
     sarif: Vec<String>,
     coverage: Vec<String>,
+    watch: WatchMode,
+    debounce: Duration,
 ) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -2635,8 +2798,15 @@ fn run(
         rules_report,
         sarif,
         coverage,
+        target: target.clone(),
+        carry: None,
+        watch,
+        debounce,
+        drift: Drift::default(),
+        watcher: None,
     };
     let mut rx = session.spawn_load(target);
+    let mut last_key = std::time::Instant::now();
     let mut state = State::Loading("starting…".to_string());
     let mut timing: Option<String> = None;
     let mut post_msg: Option<String> = None;
@@ -2649,6 +2819,18 @@ fn run(
         if let Some(msg) = drain_worker(&rx, &mut session, &mut state, &mut timing, &mut dirty) {
             post_msg = Some(msg);
             break 'outer Ok(());
+        }
+        if let State::Ready(app) = &mut state {
+            let was = app.stale.clone();
+            let go = watch_tick(&mut session, app, last_key.elapsed());
+            dirty |= app.stale != was;
+            if go {
+                dirty = true;
+                let (target, rev) = (session.target.clone(), session.rev.clone());
+                rx = session.reload(app, target, rev.clone());
+                state = State::Loading(format!("reading {rev} again…"));
+                continue;
+            }
         }
 
         if dirty {
@@ -2674,6 +2856,10 @@ fn run(
             Ok(_) => continue,
             Err(e) => break 'outer Err(e),
         };
+        last_key = std::time::Instant::now();
+        if let State::Ready(app) = &mut state {
+            app.notice = None;
+        }
         let app = match &mut state {
             State::Loading(_) => {
                 let keys = session
@@ -2960,6 +3146,7 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
                 .map_or(String::new(), |c| c.text.clone());
             open_command_bar(app, format!("comment {have}"));
         }
+        Action::Reload => app.reload_requested = true,
         Action::CommentNext => comment_move(app, true),
         Action::CommentPrev => comment_move(app, false),
         Action::CommandGoto => open_command_bar(app, "goto ".to_string()),

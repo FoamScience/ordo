@@ -16,6 +16,7 @@ use crate::keys::*;
 use crate::marks::*;
 use crate::rules::*;
 use crate::search::*;
+use crate::watch::*;
 use ordo::model::HunkOut;
 use ordo::model::Options;
 use ordo::model::Strategy;
@@ -3050,6 +3051,10 @@ fn test_app(why_len: usize) -> App {
         comments: vec![],
         comments_path: None,
         selection: None,
+        watch: WatchMode::Off,
+        stale: None,
+        notice: None,
+        reload_requested: false,
         deltas: vec![],
         delta_gone: 0,
         collapsed: HashSet::new(),
@@ -4835,7 +4840,7 @@ fn a_sibling_that_imports_the_changed_module_becomes_a_consumer() {
     let paths: Vec<&str> = found.iter().map(|c| c.path.as_str()).collect();
     // `other` imports it too, but nothing there says it depends on this repo
     assert_eq!(paths, vec!["../pipeline/driver.py"]);
-    let declared = crate::consumers::gather(&pump, &changes, &[other.clone()]);
+    let declared = crate::consumers::gather(&pump, &changes, std::slice::from_ref(&other));
     assert_eq!(
         declared.len(),
         2,
@@ -5018,4 +5023,180 @@ fn a_canvas_card_scrolls_and_resets_on_moving() {
     );
     move_card(&mut app, -1);
     assert_eq!(app.canvas.as_ref().unwrap().scroll, 0);
+}
+
+/// A review of `names`, one hunk per symbol in `f.py`, ten lines apart.
+fn review_of(names: &[&str]) -> App {
+    let mut app = test_app(0);
+    app.items = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let mut it = test_item("f.py");
+            it.symbols = vec![sym(n, "function_definition", None)];
+            it.new_range = [i * 10 + 1, i * 10 + 5];
+            it
+        })
+        .collect();
+    app.view = (0..names.len()).collect();
+    app.reviewed = vec![false; names.len()];
+    let lines: Vec<String> = (1..=80).map(|i| format!("line {i}")).collect();
+    app.sources.insert("f.py".to_string(), (vec![], lines));
+    app
+}
+
+/// Reloading keeps the reviewer on the same hunk when others arrive around it,
+/// with the cursor and scroll where they were relative to it.
+#[test]
+fn a_reload_keeps_the_selected_hunk_and_the_place_in_it() {
+    let mut old = review_of(&["a", "b", "c"]);
+    select(&mut old, 1);
+    old.cursor = Cursor { line: 12, col: 3 };
+    old.scroll = auto_scroll(&old.items[1]) + 2;
+    old.jumps = vec![(2, Cursor { line: 0, col: 0 })];
+    let place = place_of(&old);
+    let mut new = review_of(&["a", "new", "b", "c"]);
+    restore(&mut new, place);
+    assert_eq!(new.items[new.sel].symbols[0].name, "b");
+    assert_eq!(
+        new.cursor,
+        Cursor { line: 22, col: 3 },
+        "two lines into b, as before"
+    );
+    assert_eq!(new.scroll, auto_scroll(&new.items[new.sel]) + 2);
+    assert_eq!(new.jumps.len(), 1);
+    assert_eq!(
+        new.items[new.jumps[0].0].symbols[0].name, "c",
+        "the jump follows its hunk"
+    );
+}
+
+/// A hunk that is gone leaves the reviewer on what now sits where it was.
+#[test]
+fn a_reload_whose_hunk_is_gone_lands_on_the_next_in_reading_order() {
+    let mut old = review_of(&["a", "b", "c"]);
+    select(&mut old, 1);
+    let place = place_of(&old);
+    let mut new = review_of(&["a", "c"]);
+    restore(&mut new, place);
+    assert_eq!(new.items[new.sel].symbols[0].name, "c");
+}
+
+/// A renamed symbol is followed through the engine's ledger.
+#[test]
+fn a_reload_follows_a_renamed_symbol() {
+    let mut old = review_of(&["a", "parse", "c"]);
+    select(&mut old, 1);
+    let place = place_of(&old);
+    let mut new = review_of(&["a", "c", "load"]);
+    new.symbol_ledger = vec![ordo::model::LedgerEntry {
+        name: "load".to_string(),
+        kind: None,
+        scope: None,
+        path: "f.py".to_string(),
+        at: "h2".to_string(),
+        change: ordo::model::SymbolChange::Renamed,
+        from: Some("parse".to_string()),
+        used_by: vec![],
+    }];
+    restore(&mut new, place);
+    assert_eq!(new.items[new.sel].symbols[0].name, "load");
+}
+
+/// Filters and a text search survive a reload; a filter that would now leave
+/// nothing is dropped rather than leaving an empty review.
+#[test]
+fn a_reload_keeps_filters_and_the_text_search() {
+    let mut old = review_of(&["a", "b"]);
+    old.search = Some(Search {
+        kind: SearchKind::Text,
+        pattern: "line 1".to_string(),
+        matches: vec![],
+        index: 0,
+    });
+    old.show_all = false;
+    let place = place_of(&old);
+    let mut new = review_of(&["a", "b"]);
+    restore(&mut new, place);
+    assert!(!new.show_all);
+    let s = new.search.as_ref().expect("search carried");
+    assert_eq!(s.pattern, "line 1");
+    assert!(!s.matches.is_empty(), "and run again on the new text");
+}
+
+/// `--watch=auto` reloads only when stale, idle, and nothing is open.
+#[test]
+fn auto_reload_waits_for_an_idle_reviewer_with_nothing_open() {
+    let mut app = review_of(&["a"]);
+    let idle = std::time::Duration::from_secs(10);
+    app.stale = Some(Stale::Drift(2));
+    app.watch = WatchMode::Hint;
+    assert!(!auto_reload_now(&app, idle), "hint only marks");
+    app.watch = WatchMode::Auto;
+    assert!(auto_reload_now(&app, idle));
+    assert!(
+        !auto_reload_now(&app, std::time::Duration::from_millis(500)),
+        "a key just now"
+    );
+    app.popup = Some(Popup::new("x", vec![]));
+    assert!(!auto_reload_now(&app, idle), "a popup is open");
+    app.popup = None;
+    app.stale = Some(Stale::BaseMoved);
+    assert!(
+        !auto_reload_now(&app, idle),
+        "a moved base is never followed"
+    );
+}
+
+/// `:watch` on a committed revision says there is nothing to watch.
+#[test]
+fn watch_on_a_committed_revision_is_refused() {
+    let mut app = review_of(&["a"]);
+    app.uncommitted = false;
+    assert!(execute_command(&mut app, "watch on").is_err());
+    app.uncommitted = true;
+    execute_command(&mut app, "watch auto").unwrap();
+    assert_eq!(app.watch, WatchMode::Auto);
+    execute_command(&mut app, "watch").unwrap();
+    assert_eq!(app.watch, WatchMode::Off);
+}
+
+#[test]
+fn watch_flags_parse_and_a_bad_debounce_is_refused() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let raw = flag_loop(argv(&["zz", "--watch"])).ok().unwrap();
+    assert_eq!(raw.watch, Some(WatchMode::Hint));
+    let raw = flag_loop(argv(&["zz", "--watch=auto", "--watch-debounce", "500"]))
+        .ok()
+        .unwrap();
+    assert_eq!(raw.watch, Some(WatchMode::Auto));
+    assert_eq!(raw.debounce_ms.as_deref(), Some("500"));
+    assert!(flag_loop(argv(&["zz", "--watch=sometimes"])).is_err());
+    assert!(flag_loop(argv(&["zz", "--watch-debounce=soon"])).is_err());
+}
+
+/// `zz` in a repository GitButler does not manage: plain git's changed and
+/// untracked files, ignored ones left out.
+#[test]
+fn the_uncommitted_area_of_a_plain_git_repository() {
+    let dir = std::env::temp_dir().join(format!("ordo-zz-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let sh = |cmd: &str| {
+        Command::new("sh")
+            .args(["-c", cmd])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+    };
+    sh(
+        "git init -q && git config user.email t@t && git config user.name t \
+        && printf a > a.py && printf b > b.py && printf 'out\\n' > .gitignore \
+        && git add . && git commit -qm init \
+        && printf A > a.py && printf n > new.py && mkdir out && printf x > out/x.py",
+    );
+    let mut got = uncommitted_paths(dir.to_str().unwrap());
+    got.sort();
+    assert_eq!(got, vec!["a.py", "new.py"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }

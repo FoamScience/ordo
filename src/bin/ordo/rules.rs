@@ -603,7 +603,12 @@ pub(super) fn init_config(preset: &str, theme_name: &str) -> String {
         let _ = writeln!(out, "{line}");
     }
     let _ = writeln!(out, "preset = \"{}\"", km.name);
-    let _ = writeln!(out, "theme = \"{}\"\n", t.name);
+    let _ = writeln!(out, "theme = \"{}\"", t.name);
+    // off by default; the line says what the other two do
+    let _ = writeln!(
+        out,
+        "# watch = \"off\"  # hint: mark a review of `zz` stale when the tree drifts; auto: reload it\n"
+    );
 
     for line in [
         "",

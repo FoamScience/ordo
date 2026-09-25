@@ -197,7 +197,7 @@ pub(super) enum Delta {
 
 /// A hunk's identity across runs: its symbol, and the file it lives in. Not
 /// the content and not the revision — those are what the delta is measuring.
-fn snap_key(item: &Item) -> String {
+pub(super) fn snap_key(item: &Item) -> String {
     format!(
         "{:016x}",
         fnv1a(format!("{}\u{0}{}", item.path, symbol_identity_key(item)).as_bytes())
