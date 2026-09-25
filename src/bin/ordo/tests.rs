@@ -3076,7 +3076,7 @@ fn test_app(why_len: usize) -> App {
         watch: WatchMode::Off,
         stale: None,
         notice: None,
-        wave_lines: Default::default(),
+        waves: Default::default(),
         reload_requested: false,
         deltas: vec![],
         delta_gone: 0,
@@ -4919,6 +4919,18 @@ fn the_review_prompt_anchors_notes_and_adds_ordo_only_with_all() {
     );
     let all = review_prompt(&app, true).unwrap();
     assert!(all.contains("- ordo: fetch became async"), "{all}");
+    // in a review of waves, a point says which turn wrote the code
+    app.items[0].wave = Some(2);
+    app.waves
+        .intents
+        .insert(2, "asked: add retry to fetch\n\nagent: done".to_string());
+    let waved = review_prompt(&app, false).unwrap();
+    assert!(
+        waved.contains(
+            "## a.rs:12-18\n(wave 2, when you were asked: add retry to fetch)\nretry forever"
+        ),
+        "{waved}"
+    );
 }
 
 #[test]

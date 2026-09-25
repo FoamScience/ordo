@@ -150,6 +150,36 @@ pub(super) struct FileWaves {
 
 pub(super) type WaveLines = std::collections::HashMap<String, FileWaves>;
 
+/// What a review of waves knows about them: which wave each line belongs to,
+/// and what each wave's agent turn was asked and answered.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Waves {
+    pub(super) lines: WaveLines,
+    pub(super) intents: std::collections::HashMap<usize, String>,
+}
+
+impl Waves {
+    /// `base` against `tip` (`None`: the working tree), or nothing when the
+    /// range does not touch the chain.
+    pub(super) fn read(repo: &str, base: &str, tip: Option<&str>, paths: &[String]) -> Waves {
+        let lines = line_waves(repo, base, tip, paths);
+        let intents = if lines.is_empty() {
+            Default::default()
+        } else {
+            intents(repo)
+        };
+        Waves { lines, intents }
+    }
+
+    /// The first thing wave `n` was asked, on one line.
+    pub(super) fn asked(&self, n: usize) -> Option<&str> {
+        self.intents
+            .get(&n)?
+            .lines()
+            .find_map(|l| l.strip_prefix("asked: "))
+    }
+}
+
 /// Which wave touched each line of `paths` between `base` and `tip`; `tip`
 /// `None` is the working tree, whose lines no wave has recorded yet count as
 /// the wave after the last. Empty unless `base` or `tip` is a wave, so a
@@ -251,8 +281,142 @@ pub(super) fn hunk_wave(
     }
 }
 
+/// A Claude Code session's transcript: `session` is a path to one, or the
+/// session id, found under `~/.claude/projects/*/<id>.jsonl`.
+fn claude_transcript(session: &str) -> Option<std::path::PathBuf> {
+    let direct = std::path::PathBuf::from(session);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let projects = std::path::PathBuf::from(std::env::var_os("HOME")?).join(".claude/projects");
+    std::fs::read_dir(projects)
+        .ok()?
+        .flatten()
+        .map(|d| d.path().join(format!("{session}.jsonl")))
+        .find(|p| p.is_file())
+}
+
+/// Longest text of one field in a wave's message.
+const INTENT_CHARS: usize = 600;
+
+/// What the agent was asked and what it said it did, from a Claude Code
+/// transcript: the prompts typed after `since` (ISO UTC, compared to the
+/// second), or the last one when there were none, and the agent's last
+/// message. Subagent threads and injected meta messages are not the turn.
+pub(super) fn claude_intent(jsonl: &str, since: Option<&str>) -> Option<String> {
+    let mut prompts: Vec<(String, String)> = vec![];
+    let mut last_said = None;
+    for line in jsonl.lines() {
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if r["isSidechain"] == true || r["isMeta"] == true {
+            continue;
+        }
+        let at = r["timestamp"].as_str().unwrap_or("").to_string();
+        let content = &r["message"]["content"];
+        match r["type"].as_str() {
+            Some("user") => {
+                if let Some(text) = content.as_str().filter(|t| !is_harness(t)) {
+                    prompts.push((at, text.trim().to_string()));
+                }
+            }
+            Some("assistant") => {
+                let said: Vec<&str> = content
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|c| c["type"] == "text")
+                    .filter_map(|c| c["text"].as_str())
+                    .collect();
+                if !said.is_empty() {
+                    last_said = Some(said.join("\n"));
+                }
+            }
+            _ => {}
+        }
+    }
+    let second = |t: &str| t.get(..19).unwrap_or(t).to_string();
+    let mut asked: Vec<&str> = prompts
+        .iter()
+        .filter(|(at, _)| since.is_none_or(|s| second(at) > second(s)))
+        .map(|(_, p)| p.as_str())
+        .collect();
+    if asked.is_empty() {
+        asked.extend(prompts.last().map(|(_, p)| p.as_str()));
+    }
+    if asked.is_empty() && last_said.is_none() {
+        return None;
+    }
+    let clip = |t: &str| {
+        let t = t.trim();
+        match t.char_indices().nth(INTENT_CHARS) {
+            Some((i, _)) => format!("{}…", &t[..i]),
+            None => t.to_string(),
+        }
+    };
+    let mut out = vec![];
+    for a in asked {
+        out.push(format!("asked: {}", clip(a)));
+    }
+    if let Some(said) = last_said {
+        out.push(format!("agent: {}", clip(&said)));
+    }
+    Some(out.join("\n\n"))
+}
+
+/// A message Claude Code wrote into the user's side itself: a slash command,
+/// its output, a background task finishing.
+fn is_harness(text: &str) -> bool {
+    [
+        "<command-",
+        "<local-command-",
+        "<task-notification",
+        "<bash-",
+    ]
+    .iter()
+    .any(|tag| text.starts_with(tag))
+}
+
+/// The intent to record for the next wave from Claude session `session`:
+/// what was asked since the last wave was taken.
+fn claude_message(repo: &str, session: &str) -> Result<String, String> {
+    let path = claude_transcript(session)
+        .ok_or_else(|| format!("no Claude Code transcript for session {session}"))?;
+    let jsonl = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let since = list(repo).last().and_then(|(_, sha)| {
+        git_env(
+            repo,
+            &[("TZ", "UTC")],
+            &["log", "-1", "--format=%cd", "--date=iso-strict-local", sha],
+        )
+        .ok()
+    });
+    let intent = claude_intent(&jsonl, since.as_deref()).unwrap_or_default();
+    Ok(format!("{intent}\n\nAgent-Session: claude {session}"))
+}
+
+/// Each wave's recorded intent: its commit message past the subject.
+pub(super) fn intents(repo: &str) -> std::collections::HashMap<usize, String> {
+    list(repo)
+        .into_iter()
+        .filter_map(|(n, sha)| {
+            let body = git_env(repo, &[], &["log", "-1", "--format=%b", &sha]).ok()?;
+            let body: Vec<&str> = body
+                .lines()
+                .filter(|l| !l.starts_with("Agent-Session:"))
+                .collect();
+            let body = body.join("\n").trim().to_string();
+            (!body.is_empty()).then_some((n, body))
+        })
+        .collect()
+}
+
 const USAGE: &str = "\
 usage: ordo wave [-m <message>]   record the working tree as the next wave
+       ordo wave --claude <session>
+                                  … with what a Claude Code session was asked
+                                  since the last wave, and its answer
        ordo wave --list           the recorded waves
        ordo wave --clear          forget them all
 
@@ -266,6 +430,7 @@ pub(super) fn cli(args: &[String]) -> i32 {
     let result = match args.as_slice() {
         [] => record(".", ""),
         ["-m", message] => record(".", message),
+        ["--claude", session] => claude_message(".", session).and_then(|m| record(".", &m)),
         ["--list"] => {
             for (n, sha) in list(".") {
                 let subject = crate::git::git(&["log", "-1", "--format=%s%n%b", &sha]);
@@ -422,5 +587,40 @@ mod tests {
         assert_eq!(lines["a.rs"].new[2], Some(3));
         assert_eq!(lines["a.rs"].old[3], Some(3), "4 went after the last wave");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_intent_is_what_was_asked_since_the_last_wave_and_the_last_answer() {
+        let jsonl = [
+            r#"{"type":"user","timestamp":"2026-09-25T09:00:00.000Z","message":{"content":"old ask"}}"#,
+            r#"{"type":"user","timestamp":"2026-09-25T10:00:00.000Z","message":{"content":"add retry to fetch"}}"#,
+            r#"{"type":"user","isMeta":true,"timestamp":"2026-09-25T10:00:01.000Z","message":{"content":"injected"}}"#,
+            r#"{"type":"user","timestamp":"2026-09-25T10:00:02.000Z","message":{"content":"<command-name>/compact</command-name>"}}"#,
+            r#"{"type":"user","timestamp":"2026-09-25T10:00:02.500Z","message":{"content":"<task-notification>done</task-notification>"}}"#,
+            r#"{"type":"user","timestamp":"2026-09-25T10:00:03.000Z","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#,
+            r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"a subagent"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Added retry with backoff."}]}}"#,
+            "not json",
+        ]
+        .join("\n");
+        assert_eq!(
+            claude_intent(&jsonl, Some("2026-09-25T09:30:00+00:00")).as_deref(),
+            Some("asked: add retry to fetch\n\nagent: Added retry with backoff.")
+        );
+        let everything = claude_intent(&jsonl, None).unwrap();
+        assert!(
+            everything.starts_with("asked: old ask\n\nasked: add retry"),
+            "{everything}"
+        );
+        // nothing asked since: the last ask still says what the turn was for
+        let later = claude_intent(&jsonl, Some("2026-09-25T11:00:00+00:00")).unwrap();
+        assert!(later.starts_with("asked: add retry to fetch"), "{later}");
+        let waves = Waves {
+            intents: [(3, later)].into(),
+            ..Waves::default()
+        };
+        assert_eq!(waves.asked(3), Some("add retry to fetch"));
+        assert_eq!(waves.asked(4), None);
     }
 }

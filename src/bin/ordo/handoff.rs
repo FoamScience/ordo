@@ -45,6 +45,18 @@ pub(super) fn review_prompt(app: &App, all: bool) -> Option<String> {
             format!("{}:{start}", it.path)
         };
         let _ = writeln!(points, "\n## {at}");
+        // the turn that wrote it, so the agent answers in terms of what it
+        // was doing then
+        if let Some(w) = it.wave {
+            match app.waves.asked(w) {
+                Some(asked) => {
+                    let _ = writeln!(points, "(wave {w}, when you were asked: {asked})");
+                }
+                None => {
+                    let _ = writeln!(points, "(wave {w})");
+                }
+            }
+        }
         if let Some(note) = mine {
             let _ = writeln!(points, "{note}");
             n += 1;
