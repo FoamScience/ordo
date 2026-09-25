@@ -266,6 +266,27 @@ things are only ever reported:
 `off` and `auto` change it live. A committed revision cannot drift, so there
 it says `nothing to watch`.
 
+### Waves
+
+An agent works in turns, and a turn is a natural unit to review. `ordo wave`
+records the working tree as the next wave, a commit chained to the previous
+one under `refs/worktree/ordo/waves/`. It builds the snapshot through a scratch
+copy of the index, so your index, branches and GitButler workspace are never
+touched, and a turn that changed nothing records nothing. The first wave is
+the starting point:
+
+```sh
+ordo wave                  # before the agent starts: wave/0
+ordo wave -m "add retry"   # after each turn: wave/1, wave/2, …
+ordo wave/1..wave/2        # review one turn
+ordo wave/0..wave/last     # everything so far
+ordo wave --list           # what is recorded; --clear forgets it
+```
+
+`:wave` records one from inside a review. The refs are per worktree, so two
+linked worktrees keep separate chains. herdr-ordo records a wave each time the
+agent goes from working back to idle, opt in with `WAVES=1`.
+
 ### The change ledger
 
 One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk

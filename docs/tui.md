@@ -251,6 +251,7 @@ command's own arguments:
 | `:comment [text]` | comment on the code-pane line, or the `v` selection; no text deletes what is there |
 | `:comments` | list every line comment in this review |
 | `:watch [on|off|auto]` | follow the working tree: mark the review stale (on), or reload by itself (auto) |
+| `:wave [message]` | record the working tree as the next wave; `ordo wave/2..wave/3` reviews one |
 | `:yank [all]` | copy the review as an agent prompt: your notes; `all` adds ordo's own notes and findings |
 | `:send [all]` | pipe the review prompt to the command in $ORDO_SEND (the herdr plugin sets it) |
 | `:mode [ledger|hunks]` | list by symbol (default) or by hunk; no argument toggles |

@@ -333,6 +333,7 @@ pub(super) fn resolve_range(arg: &str) -> Option<Target> {
 // (sha, HEAD~2, tag) follow, and finally a GitButler commit CLI ID. The
 // GitButler steps are skipped entirely on a repo `but` doesn't manage.
 pub(super) fn resolve(arg: &str) -> Option<Target> {
+    let arg = &crate::waves::expand(arg);
     if arg == "zz" {
         return Some(Target::Uncommitted);
     }
