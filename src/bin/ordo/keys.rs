@@ -114,6 +114,10 @@ pub(super) enum Action {
     /// pane's horizontal window without moving the cursor
     ScrollLeft,
     ScrollRight,
+    /// `gw`/`gW` (vim), `Alt-PageDown`/`Alt-PageUp` (vscode) — show only the
+    /// next / previous wave, through all of them and back to everything
+    WaveNext,
+    WavePrev,
 }
 
 /// What the reading-order list is a list *of*. The ledger is the default: a
@@ -296,6 +300,8 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 // vim's own jumplist key, and free here — `ge`/OpenEditor
                 // took the `g` prefix's `e`, not `C-o`
                 (None, ctrl('o'), Action::JumpBack),
+                (Some(ch('g')), ch('w'), Action::WaveNext),
+                (Some(ch('g')), ch('W'), Action::WavePrev),
             ],
         }),
         "vscode" => Some(Keymap {
@@ -377,6 +383,8 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, (KeyCode::Enter, KeyModifiers::CONTROL), Action::JumpToEdge),
                 // vscode's own default "Go Back" binding
                 (None, (KeyCode::Left, KeyModifiers::ALT), Action::JumpBack),
+                (None, (KeyCode::PageDown, KeyModifiers::ALT), Action::WaveNext),
+                (None, (KeyCode::PageUp, KeyModifiers::ALT), Action::WavePrev),
             ],
         }),
         _ => None,
@@ -487,6 +495,11 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
             Category::Navigation,
             "scroll the code pane (or an open popup) right",
         ),
+        Action::WaveNext => (
+            Category::Navigation,
+            "show only the next wave (after the last, all of them again)",
+        ),
+        Action::WavePrev => (Category::Navigation, "show only the previous wave"),
         Action::Hover => (
             Category::Editor,
             "code pane: show the symbol under the cursor and its history · why pane: preview the current dep line's target",
@@ -570,6 +583,8 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("fold-close-all", Action::Fold(Fold::CloseAll)),
     ("scroll-left", Action::ScrollLeft),
     ("scroll-right", Action::ScrollRight),
+    ("wave-next", Action::WaveNext),
+    ("wave-prev", Action::WavePrev),
 ];
 
 pub(super) fn action_by_name(name: &str) -> Option<Action> {

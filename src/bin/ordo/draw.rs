@@ -1291,7 +1291,11 @@ fn draw_list(f: &mut Frame, app: &App, rev: &str, list_area: Option<Rect>, body:
     let list = List::new(rows)
         .block(pane_block(
             format!(
-                " 1 {rev} — {done}/{total} reviewed{}{} · {} ",
+                " 1 {rev}{} — {done}/{total} reviewed{}{} · {} ",
+                match app.only_wave {
+                    Some(w) => format!(" · wave {w}"),
+                    None => String::new(),
+                },
                 // edge coverage is the number that tracks understanding; it is
                 // omitted when the review has no def→use links to cover
                 if edges_total > 0 {

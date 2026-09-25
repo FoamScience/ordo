@@ -294,6 +294,14 @@ into another wave stays, saying which wave and whether you reviewed it
 (`dep ← parse_rev · wave 1 ✓`); `K` previews it, `gd` switches to that wave
 and goes there, and `C-o` comes back to where you were. `:only-wave last` is
 the newest, `:only-wave all` lifts it, and `:audit` counts what it hides.
+`gw` and `gW` (`Alt-PageDown`/`Alt-PageUp` in vscode) step through the waves
+one at a time and back to all of them; the list's title names the wave in
+view and the status line what it was asked.
+
+A review up to `wave/last` follows the chain: with `--watch`, a newly
+recorded wave marks it `stale · wave 4 recorded · r reloads`, and the reload
+reads `wave/last` again, so the new wave is in (`--watch=auto` does it by
+itself when you pause).
 
 `ordo wave --claude <session>` also records what the agent's turn was for:
 the prompts a Claude Code session was given since the last wave, and its last

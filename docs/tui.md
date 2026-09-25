@@ -196,6 +196,8 @@ always drives the code pane.
 | scroll the code pane (or an open popup) right | `zl` | `S-Right` |
 | why pane: jump to the current dep line's target hunk | `gd`, `Enter` | `C-Enter` |
 | jump back to the position before the last dep jump | `C-o` | `A-Left` |
+| show only the next wave (after the last, all of them again) | `gw` | `A-PageDown` |
+| show only the previous wave | `gW` | `A-PageUp` |
 | **panes** | | |
 | focus the next pane | `C-w C-w`, `C-w w` | `F6` |
 | focus the previous pane | `C-w W`, `C-w p` | `S-F6` |
