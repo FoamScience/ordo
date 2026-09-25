@@ -946,6 +946,9 @@ struct LoadResult {
     /// the working tree this review was read from, when it can drift (see
     /// `watch`); taken before reading, so an edit landing mid-load shows up
     fingerprint: Option<Fingerprint>,
+    /// which wave touched each line, kept so a re-order can tag its new items
+    /// without asking git again
+    wave_lines: waves::WaveLines,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -1002,6 +1005,11 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let churn_sha = review_commit_sha(&target);
     let fingerprint = matches!(target, Target::Uncommitted | Target::WorktreeRange(_))
         .then(|| watch::fingerprint("."));
+    let wave_span = match &target {
+        Target::Range(base, tip) => Some((base.clone(), Some(tip.clone()))),
+        Target::WorktreeRange(base) => Some((base.clone(), None)),
+        Target::Commit(_) | Target::Uncommitted => None,
+    };
     let t = std::time::Instant::now();
     let input = match target {
         Target::Commit(sha) => gather(&sha, &filter, &progress),
@@ -1040,6 +1048,13 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let mut items = build_items(&out);
     place_overlays(&mut items, &sarif, &coverage, &mut ledger);
     refine_items(&mut items, &sources);
+    let wave_lines = wave_span
+        .map(|(base, tip)| {
+            let paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
+            waves::line_waves(".", &base, tip.as_deref(), &paths)
+        })
+        .unwrap_or_default();
+    waves::tag(&mut items, &wave_lines);
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None);
     if view.is_empty() {
@@ -1139,6 +1154,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         deltas,
         delta_gone,
         fingerprint,
+        wave_lines,
     })));
 }
 
@@ -1323,6 +1339,9 @@ struct Item {
     /// change parts) — `None` when the whole review is one cluster, so
     /// `:quickfix` has no cluster worth naming.
     cluster: Option<usize>,
+    /// the wave that last changed this hunk's lines (see `waves::hunk_wave`);
+    /// `None` outside a review of waves
+    wave: Option<usize>,
 }
 
 /// One `dep` line's rendered label plus the target hunk's resolved position in
@@ -1601,6 +1620,8 @@ struct App {
     /// the engine's change ledger, kept so `:mode` can rebuild the headers.
     /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
+    /// see `LoadResult::wave_lines`
+    wave_lines: waves::WaveLines,
     /// group ids whose hunks are folded away under their header (`za` and
     /// friends); empty means everything is expanded
     collapsed: HashSet<String>,
@@ -1753,6 +1774,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 executed: None,
                 refined: ordo::refine::Refined::default(),
                 cluster: cluster_of.get(h.id.as_str()).copied(),
+                wave: None,
             })
         })
         .collect()
@@ -2477,6 +2499,7 @@ impl Session {
             deltas,
             delta_gone,
             fingerprint,
+            wave_lines,
         } = r;
         self.drift = fingerprint.map(Drift::new).unwrap_or_default();
         let sel0 = view[0];
@@ -2532,6 +2555,7 @@ impl Session {
             groups,
             mode: ViewMode::default(),
             symbol_ledger,
+            wave_lines,
             notes,
             notes_path,
             comments,

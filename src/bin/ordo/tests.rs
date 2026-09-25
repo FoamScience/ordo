@@ -1731,6 +1731,7 @@ fn test_item(path: &str) -> Item {
         executed: None,
         refined: ordo::refine::Refined::default(),
         cluster: None,
+        wave: None,
     }
 }
 
@@ -3054,6 +3055,7 @@ fn test_app(why_len: usize) -> App {
         watch: WatchMode::Off,
         stale: None,
         notice: None,
+        wave_lines: Default::default(),
         reload_requested: false,
         deltas: vec![],
         delta_gone: 0,

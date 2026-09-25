@@ -109,6 +109,9 @@ pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContex
     if let Some(c) = ctx.churn {
         rows.push(text_row(c.to_string(), theme.mark));
     }
+    if let Some(w) = it.wave {
+        rows.push(text_row(format!("wave {w}"), theme.accent));
+    }
     rows.extend(signal_rows(it, theme));
     for e in &it.edges {
         let target = e.target.filter(|t| view.contains(t));

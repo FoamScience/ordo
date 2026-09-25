@@ -629,7 +629,8 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
         consumers: vec![],
     };
     let out = ordo::run(input);
-    let items = build_items(&out);
+    let mut items = build_items(&out);
+    crate::waves::tag(&mut items, &app.wave_lines);
     let groups = group_reasons(&out);
     if items.is_empty() {
         return Err("that strategy leaves nothing to review".to_string());

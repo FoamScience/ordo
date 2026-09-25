@@ -139,6 +139,118 @@ pub(super) fn clear(repo: &str) -> Result<usize, String> {
     Ok(waves.len())
 }
 
+/// Per file, the wave each line belongs to: `new[i]` last changed new line
+/// `i + 1`, `old[i]` removed old line `i + 1`. `None` is a line older than the
+/// first wave, or one no wave removed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct FileWaves {
+    pub(super) new: Vec<Option<usize>>,
+    pub(super) old: Vec<Option<usize>>,
+}
+
+pub(super) type WaveLines = std::collections::HashMap<String, FileWaves>;
+
+/// Which wave touched each line of `paths` between `base` and `tip`; `tip`
+/// `None` is the working tree, whose lines no wave has recorded yet count as
+/// the wave after the last. Empty unless `base` or `tip` is a wave, so a
+/// review that has nothing to do with them pays nothing, and blame never
+/// walks past `base`.
+pub(super) fn line_waves(repo: &str, base: &str, tip: Option<&str>, paths: &[String]) -> WaveLines {
+    let waves = list(repo);
+    let Some((last, last_sha)) = waves.last().cloned() else {
+        return WaveLines::new();
+    };
+    let wave_of: std::collections::HashMap<&str, usize> =
+        waves.iter().map(|(n, sha)| (sha.as_str(), *n)).collect();
+    if !wave_of.contains_key(base) && !tip.is_some_and(|t| wave_of.contains_key(t)) {
+        return WaveLines::new();
+    }
+    let pending = last + 1;
+    let not_base = format!("^{base}");
+    let blame = |args: &[&str]| blame_shas(&git_env(repo, &[], args).unwrap_or_default());
+    let mut out = WaveLines::new();
+    for path in paths {
+        let mut new_args = vec!["blame", "--porcelain", not_base.as_str()];
+        new_args.extend(tip);
+        new_args.extend(["--", path.as_str()]);
+        let new = blame(&new_args)
+            .iter()
+            .map(|sha| match wave_of.get(sha.as_str()) {
+                // blame stops at `base`: its lines are older than this range
+                _ if sha == base => None,
+                Some(n) => Some(*n),
+                None if sha.bytes().all(|b| b == b'0') => Some(pending),
+                None => None,
+            })
+            .collect();
+        // --reverse names, per line of `base`, the last commit that still had
+        // it; the wave after that one removed it. Against the working tree
+        // the last wave stands in as the tip, and a line it still had went in
+        // the edits no wave has recorded yet.
+        let range = format!("{base}..{}", tip.unwrap_or(&last_sha));
+        let old = blame(&["blame", "--porcelain", "--reverse", &range, "--", path])
+            .iter()
+            .map(|sha| {
+                let n = *wave_of.get(sha.as_str())?;
+                match tip {
+                    None if n == last => Some(pending),
+                    // still there at the tip: nothing removed it
+                    Some(t) if t == sha => None,
+                    _ => Some(n + 1),
+                }
+            })
+            .collect();
+        out.insert(path.clone(), FileWaves { new, old });
+    }
+    out
+}
+
+/// The commit of each final line, in order, from `git blame --porcelain`: a
+/// header line opens every line's entry, `<sha> <orig> <final>[ <count>]`.
+fn blame_shas(porcelain: &str) -> Vec<String> {
+    porcelain
+        .lines()
+        .filter_map(|l| {
+            let mut words = l.split(' ');
+            let sha = words.next()?;
+            let hex = matches!(sha.len(), 40 | 64) && sha.bytes().all(|b| b.is_ascii_hexdigit());
+            let numbers = words.all(|w| w.parse::<usize>().is_ok());
+            (hex && numbers).then(|| sha.to_string())
+        })
+        .collect()
+}
+
+/// Every item's wave, from `lines`.
+pub(super) fn tag(items: &mut [crate::Item], lines: &WaveLines) {
+    for it in items {
+        it.wave = hunk_wave(lines, &it.path, it.old_range, it.new_range);
+    }
+}
+
+/// A hunk's wave: the latest one among the lines it changed, its removed lines
+/// when it added none.
+pub(super) fn hunk_wave(
+    lines: &WaveLines,
+    path: &str,
+    old: [usize; 2],
+    new: [usize; 2],
+) -> Option<usize> {
+    let file = lines.get(path)?;
+    let latest = |side: &[Option<usize>], [start, end]: [usize; 2]| {
+        let lo = start.saturating_sub(1);
+        side.get(lo..end.min(side.len()))?
+            .iter()
+            .flatten()
+            .max()
+            .copied()
+    };
+    if new[1] >= new[0] && new[0] > 0 {
+        latest(&file.new, new)
+    } else {
+        latest(&file.old, old)
+    }
+}
+
 const USAGE: &str = "\
 usage: ordo wave [-m <message>]   record the working tree as the next wave
        ordo wave --list           the recorded waves
@@ -259,6 +371,56 @@ mod tests {
         assert_eq!(list(d).len(), 2);
         assert_eq!(clear(d), Ok(2));
         assert!(list(d).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blame_attributes_each_line_to_the_wave_that_changed_it() {
+        let dir = std::env::temp_dir().join(format!("ordo-wave-blame-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+        let sh = |cmd: &str| {
+            Command::new("sh")
+                .args(["-c", cmd])
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+        };
+        sh(
+            "git init -q && git config user.email t@t && git config user.name t \
+            && printf '1\\n2\\n3\\n4\\n' > a.rs && git add . && git commit -qm init",
+        );
+        record(d, "").unwrap();
+        sh("printf '1\\nTWO\\n3\\n4\\n' > a.rs");
+        record(d, "").unwrap();
+        sh("printf 'TWO\\n3\\n4\\nFIVE\\n' > a.rs");
+        record(d, "").unwrap();
+        let w = list(d);
+        let (base, tip) = (w[0].1.clone(), w[2].1.clone());
+        let lines = line_waves(d, &base, Some(&tip), &["a.rs".to_string()]);
+        assert!(
+            line_waves(d, "HEAD", Some("HEAD"), &["a.rs".to_string()]).is_empty(),
+            "a range outside the chain asks git nothing"
+        );
+        let f = &lines["a.rs"];
+        assert_eq!(
+            f.new,
+            vec![Some(1), None, None, Some(2)],
+            "TWO in 1, FIVE in 2"
+        );
+        assert_eq!(f.old[0], Some(2), "line 1 went in wave 2");
+        assert_eq!(hunk_wave(&lines, "a.rs", [1, 0], [1, 1]), Some(1));
+        assert_eq!(
+            hunk_wave(&lines, "a.rs", [1, 1], [1, 0]),
+            Some(2),
+            "a pure deletion"
+        );
+        // the working tree past the last wave is the wave after it
+        sh("printf 'TWO\\n3\\nSIX\\nFIVE\\n' > a.rs");
+        let lines = line_waves(d, &base, None, &["a.rs".to_string()]);
+        assert_eq!(lines["a.rs"].new[2], Some(3));
+        assert_eq!(lines["a.rs"].old[3], Some(3), "4 went after the last wave");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

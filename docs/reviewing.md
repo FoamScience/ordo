@@ -283,6 +283,11 @@ ordo wave/0..wave/last     # everything so far
 ordo wave --list           # what is recorded; --clear forgets it
 ```
 
+Reviewing a range of waves, each hunk carries the wave that last changed its
+lines (`wave 2` in the why pane): `git blame` along the chain, and for a
+removed line the wave after the last one that still had it. Against the
+working tree (`wave/0..zz`), edits no wave has recorded yet count as the next.
+
 `:wave` records one from inside a review. The refs are per worktree, so two
 linked worktrees keep separate chains. herdr-ordo records a wave each time the
 agent goes from working back to idle, opt in with `WAVES=1`.
