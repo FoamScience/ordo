@@ -6,7 +6,7 @@
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <img src="https://img.shields.io/badge/schema-v2-5fd4c0" alt="schema v2">
   <!-- ordo:begin langs-badge -->
-  <img src="https://img.shields.io/badge/languages-26-5fd4c0" alt="26 supported languages">
+  <img src="https://img.shields.io/badge/languages-27-5fd4c0" alt="27 supported languages">
   <!-- ordo:end langs-badge -->
 
 **Diffs arrive in file order. Nobody reads them that way.**

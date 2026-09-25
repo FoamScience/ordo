@@ -3,8 +3,8 @@
 
 <!-- ordo:begin langs -->
 python, xonsh, javascript, rust, typescript, tsx, go, c, cpp, java, lua,
-markdown, json, yaml, toml, ini, cmake, make, nix, bash, jinja, css, html,
-svelte, gotmpl, erb
+markdown, json, yaml, toml, ini, cmake, make, nix, jsonnet, bash, jinja,
+css, html, svelte, gotmpl, erb
 <!-- ordo:end langs -->
 
 Adding one is usually a single registry entry in `src/lang.rs` plus its
@@ -111,6 +111,18 @@ so it is recognised by that name rather than by node kind. Because such an
 import is nearly always bound (`overlay = import ./x.nix;`) the binding's name
 leads the rationale — the import rows are still recorded, which is what an
 `imports` glob in a rule matches on.
+
+### jsonnet
+
+`.jsonnet` and `.libsonnet`, jrsonnet's extensions included. Objects are the
+main structure, so a `field` is both a definition and a member of the object
+above it, the config shape; a method (`greet(name):: …`) is a field too, and
+hidden, forced-visible and `+:` fields all count. `local x = …` defines `x`
+at file level and inside an object or a body alike. `self.port`, `$.port` and
+`lib.port` read as uses of `port`. A computed field (`[k]: …`) has no name of
+its own: what it is called is decided at run time. `import`, `importstr` and
+`importbin` record the path, and like nix the local that holds an import
+leads the rationale.
 
 ### bash
 

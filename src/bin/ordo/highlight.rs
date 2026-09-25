@@ -181,6 +181,10 @@ pub(super) fn highlight_for_lang(lang: &str) -> Option<(tree_sitter::Language, S
             tree_sitter_nix::LANGUAGE.into(),
             tree_sitter_nix::HIGHLIGHTS_QUERY,
         ),
+        "jsonnet" => owned(
+            tree_sitter_jsonnet::LANGUAGE.into(),
+            tree_sitter_jsonnet::HIGHLIGHTS_QUERY,
+        ),
         "ini" => owned(
             tree_sitter_ini::LANGUAGE.into(),
             tree_sitter_ini::HIGHLIGHTS_QUERY,
@@ -230,6 +234,7 @@ fn fence_ext(name: &str) -> Option<&'static str> {
         "java" => "java",
         "lua" => "lua",
         "toml" => "toml",
+        "jsonnet" | "libsonnet" | "jrsonnet" => "jsonnet",
         _ => return None,
     })
 }

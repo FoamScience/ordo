@@ -120,6 +120,9 @@ fn make() -> Language {
 fn nix() -> Language {
     tree_sitter_nix::LANGUAGE.into()
 }
+fn jsonnet() -> Language {
+    tree_sitter_jsonnet::LANGUAGE.into()
+}
 fn bash() -> Language {
     tree_sitter_bash::LANGUAGE.into()
 }
@@ -550,6 +553,23 @@ static SPECS: &[LangSpec] = &[
         template: None,
         locals: &[],
     },
+    // jsonnet (jrsonnet's extensions included): objects are the main
+    // structure, so a `field` is a definition and a member of the object above
+    // it, the config shape — a method `f(x):: …` is a field too. `local x = …`
+    // is a `bind`, at file level and inside an object or a body alike. A
+    // computed field `[k]: …` has no name of its own.
+    LangSpec {
+        name: "jsonnet",
+        language: jsonnet,
+        test_blocks: &[],
+        imports: &["import_expr"],
+        defs: &["bind", "field"],
+        members: &["field"],
+        prose: false,
+        data: true,
+        template: None,
+        locals: &[],
+    },
     // bash: `foo() { … }` and `function foo { … }` share one node kind, and a
     // command is a call — so `deploy main` is a use of the function `deploy`.
     // `source x.sh` / `. x.sh` are commands too, named rather than spelled as
@@ -864,6 +884,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "cmake" => "cmake",
         "mk" | "mak" | "make" => "make",
         "nix" => "nix",
+        "jsonnet" | "libsonnet" => "jsonnet",
         "sh" | "bash" | "zsh" => "bash",
         "css" => "css",
         "html" | "htm" | "vue" => "html",
@@ -910,6 +931,7 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "cmake" => "cmake",
         "make" | "makefile" | "mk" => "make",
         "nix" => "nix",
+        "jsonnet" | "libsonnet" | "jrsonnet" => "jsonnet",
         // not `console`: that fence is a shell *session* (`$ cmd` and its
         // output), not a script — see tests/injection.rs
         "sh" | "bash" | "shell" | "zsh" => "bash",
@@ -951,6 +973,8 @@ pub const IDENT_KINDS: &[&str] = &[
     "variable",
     // bash `$APP_DIR` and the left of an assignment
     "variable_name",
+    // jsonnet: a reference, a bound name, and the `a` of `self.a`
+    "ident",
 ];
 
 /// How a qualified enclosing name joins its parts. Code nests through a dot

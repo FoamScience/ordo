@@ -2259,6 +2259,7 @@ fn comment_markers(ext: &str) -> &'static [&'static str] {
         | "gitignore" | "gitattributes" => &["#"],
         // ini accepts both spellings
         "ini" | "cfg" => &["#", ";"],
+        "jsonnet" | "libsonnet" => &["//", "/*", "*", "#"],
         _ => &["///", "//", "/*", "*"],
     }
 }
