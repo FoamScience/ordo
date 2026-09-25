@@ -123,6 +123,7 @@ mod editor;
 mod findings;
 mod git;
 mod handoff;
+mod help;
 mod highlight;
 mod history;
 mod keys;
@@ -136,149 +137,44 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PAGE: u16 = 15;
 
 const USAGE: &str = "\
-ordo — interactive review of a commit, ordered for comprehension.
+ordo — review a change in reading order: definitions before their uses.
 
-usage:
-  ordo [<rev>] [<glob>...] [--keys <preset>] [--theme <name>] [--rules <file>]...
-       [--sarif <file>]... [--coverage <file>]... [--all] [--only-comments]
-       [--no-catalog] [--watch[=hint|auto]] [--watch-debounce <ms>]
-  ordo --init-config [--force]
-  ordo help [<topic>]
-  ordo --version
+usage: ordo [<rev>] [<glob>...] [options]
+       ordo help [<topic>]
 
-<rev> is any git commit-ish (a sha, HEAD~2, a tag), a commit range (main..branch,
-or main...branch to diff from the merge base), or `zz` for the uncommitted area.
-base..zz (or base...zz for the merge base of base and HEAD) reviews everything
-done since base including uncommitted work — base's tree versus the worktree.
-Default: HEAD. Its diff is ordered by def→use with rationale, structural notes,
-advisories and PR-split clusters.
+  <rev>   what to review (default HEAD)
+            HEAD~2, a sha, a tag         one commit
+            main..feat, main...feat      a range (... diffs from the merge base)
+            zz                           uncommitted work
+            main...zz                    the branch so far, uncommitted included
+            a branch or commit ID        from `but status`, on GitButler repos
+  <glob>  keep matching paths only; `!` excludes, `*` crosses `/`. Quote them.
 
-On a GitButler-managed repo <rev> also takes the CLI IDs `but status` prints: a
-branch (by ID or name) reviews that branch's own commits, a commit ID (or a
-change-ID prefix) reviews that commit.
+examples:
+  ordo                                   the last commit
+  ordo zz                                uncommitted work
+  ordo main...feat 'src/*' '!tests/*'    a branch, sources without tests
+  ordo --watch=auto main...zz            follow an agent while it edits
+  ordo --sarif out.sarif main...feat     analyzer findings on their hunks
 
-`gD` on a hunk opens the dependency canvas: the hunk at top centre, everything
-it needs fanning left and everything that needs it fanning right, each as a card
-showing that hunk's own code. Enter goes to a card (C-o returns), Esc closes.
-The canvas takes the next free pane digit while it is open, so `4` addresses it;
-`4` again fills the frame with the selected card — the top hunk whole, a side
-card its own half when the frame is wide enough to fan.
+options:
+  --watch[=hint|auto]     flag the review stale when files change; auto reloads
+  --watch-debounce <ms>   quiet time before a change counts (default 1500)
+  --sarif <file>          attach SARIF 2.1.0 findings to hunks (repeatable)
+  --coverage <file>       count changed lines lcov never ran (repeatable)
+  --rules <file>          add a rules file (repeatable)
+  --no-catalog            skip the built-in construct catalog
+  --all                   keep generated and lock files
+  --only-comments         only comment and docstring hunks
+  --keys <vim|vscode>     key preset (default vim, or $ORDO_TUI_KEYS)
+  --theme <name>          palette (default dark, or $ORDO_TUI_THEME)
+  --init-config [--force] write tui.toml with the current keys and theme
+  -V, --version
 
---no-catalog runs only your own rules. The built-in construct catalog is on by
-default — it is what a reviewer gets with no configuration — and this turns it
-off for one run. `catalog = false` in a rules file turns it off for good, and
-`disable = [\"goto\"]` silences a single entry by name, the same gesture that
-silences one of your own rules.
-
---watch follows a review of work that is still changing (`zz`, `base...zz`):
-when the working tree drifts from what was loaded — once it has been quiet for
-the debounce, 1500 ms unless --watch-debounce says otherwise — the status line
-says `stale` and `r` reads the change again, keeping your place: the same hunk,
-scroll, search, filters and jumps. --watch=auto reloads by itself, but never
-while a prompt, popup or the command bar is open, nor within 3 s of a key. A
-rebase or branch switch is only reported. `watch = \"hint\"` in tui.toml turns
-it on for good; `:watch on|off|auto` changes it live. A committed revision has
-nothing to watch.
-
---sarif <file> reads analyzer results in SARIF 2.1.0 — what semgrep, CodeQL,
-ruff, eslint, shellcheck and `clippy --message-format` all emit — and attaches
-each finding to the hunk whose lines contain it, so they arrive in the reading
-order instead of as a separate list. Repeatable. A finding on a line this change
-did not touch is counted in `:audit` rather than shown.
-
---coverage <file> reads an lcov tracefile — what `cargo llvm-cov --lcov`,
-`coverage.py lcov` and most language toolchains emit — and reports, per hunk,
-how many of the executable lines it changed were never run. Repeatable. Only
-lcov's `DA:` records count, so a blank line, a comment or a declaration is never
-held against a hunk. This is the fact behind the engine's `code changed but no
-test touched` note, which is a guess made from file names.
-
-Generated and lock files (Cargo.lock, package-lock.json, vendor/, node_modules/,
-.min.js, …) are skipped, as is anything .gitattributes marks `linguist-generated`
-or `-diff`; --all keeps them all. Any <glob> after <rev> confines the
-review to paths matching at least one of them — `*` crosses `/`, so `src/*` is
-everything under src/ and `*.rs` matches at any depth. A glob prefixed `!` is
-negative and excludes a path that matches it, e.g. `'src/*' '!tests/*'`; with
-only negative globs given, everything except those is kept. `\\!literal` escapes
-a leading bang for a path genuinely named that way. Matching is order-independent
-and deliberately unlike .gitignore: any negative match excludes a path no matter
-where it appears relative to the positives, and a later positive never
-re-includes something a negative excluded. Quote them so the shell doesn't
-expand them first.
-
---theme selects the palette (also read from $ORDO_TUI_THEME, default dark).
-`dark` and `light` keep the terminal's own foreground colours and only tint the
-diff backgrounds; the truecolor themes — catppuccin (mocha, macchiato, frappe,
-latte), tokyonight (night, storm, moon, day), gruvbox (dark, light), nord,
-dracula, solarized (dark, light) — name every colour themselves. `:config` lists
-them and swaps live. No theme paints a window background, so terminal
-transparency survives; what a theme does assume is a background of matching
-lightness. Roles are overridable in tui.toml's [theme] section.
-
---only-comments limits the review to comment/docstring-only hunks (ordered
-among themselves, as the engine's --only-comments does) — a starting point
-only; `:only-comments` in command mode toggles it live, same as `--all`
-and a path filter (see below).
-
---keys selects a keystroke preset (also read from $ORDO_TUI_KEYS, default vim).
-The three panes — reading order, code, why — take focus one at a time; motion
-keys act on the focused pane, paging always drives the code pane.
-
-Command mode (`:` in vim, Ctrl+Shift+P in vscode) turns launch-time choices
-into live controls: `:only-comments`, `:all`, `:filter <glob>` (empty clears,
-same negative-glob syntax as the CLI), `:config` (every setting), `:strategy
-<comprehension|defs-first|file>` (re-orders in place), `:group` (toggle group
-headers in the reading-order list), `:goto <path>`, `:e <rev>` (review a
-different revision without restarting), `:q`, `:help` (lists these, generated
-from the same table `:help`'s popup shows). Typing completes command names,
-then — after a space — each command's own arguments (paths, presets, strategy
-names, revisions); Tab/C-n/Down cycle the menu forward, C-p/Up back, Enter
-accepts the highlighted entry or runs the line when nothing is highlighted,
-Esc cancels.
-
-  vim      j/k move · C-w C-w (or C-w h/j/k/l) pane · gg/G ends · C-d/C-u half
-           space/f/C-f, C-b page · x toggle reviewed · q / Esc quit · ?
-           opens a keybinding help popup (Esc/q close it without quitting)
-           : opens the command bar (see above)
-           in the code pane: h/l/w/b/e/0/$/{/} move the cursor, zh/zl scroll
-           the pane horizontally without moving it, K shows the symbol under
-           it (Esc/q close that popup without quitting)
-           / opens a text-search prompt (Enter jumps to the first match at or
-           after the cursor, Esc cancels, Backspace edits); * and # jump to
-           the next/previous occurrence of the symbol under the cursor,
-           resolved via tree-sitter identifiers rather than text; n/N cycle
-           whichever search — text or symbol — is currently active, wrapping
-           ge opens the selected hunk's file in $VISUAL/$EDITOR at its line
-           (a chord, not bare `e`, which is already word-end in the code pane)
-           in the why pane: j/k move a line cursor over reason/details/dep
-           lines; on a `dep` (def→use edge) line, K previews the referenced
-           hunk and gd (or Enter) jumps to it and focuses the code pane; C-o
-           jumps back. A dep line whose hunk isn't part of this review (a
-           glob filter, --only-comments, or an unreviewed file) previews as
-           such and gd/Enter does nothing rather than guessing where to go
-  vscode   up/down move · F6 / shift-F6 pane · C-1/C-2/C-3 pane · PageUp/PageDown
-           page · space / enter toggle reviewed · C-q / Esc quit · F1 opens a
-           keybinding help popup (Esc closes it without quitting)
-           C-Shift-P opens the command bar (vscode's own command-palette key;
-           C-P, its \"Go to File\", opens the bar pre-filled with `goto `)
-           in the code pane: left/right/C-left/C-right/Home/End move the
-           cursor, shift-left/shift-right scroll the pane horizontally
-           without moving it, F12 shows the symbol under it (Esc closes that
-           popup)
-           C-f opens the text-search prompt, F3/shift-F3 cycle its matches;
-           C-F12/shift-C-F12 jump to the next/previous occurrence of the
-           symbol under the cursor (same tree-sitter search as vim's */#)
-           C-o opens the selected hunk's file in $VISUAL/$EDITOR at its line
-           in the why pane: up/down move a line cursor over reason/details/dep
-           lines; on a `dep` (def→use edge) line, F12 previews the referenced
-           hunk and C-Enter jumps to it and focuses the code pane; Alt-Left
-           (vscode's own \"Go Back\") jumps back. A dep line whose hunk isn't
-           part of this review previews as such and C-Enter does nothing
-           rather than guessing where to go
-
-Long lines are clipped, not wrapped, so the line-number gutter stays put; a
-‹/› marker appears in the code pane's title whenever the current file has
-content scrolled past the left/right edge.
+keys (vim; vscode: F1 lists its own):
+  j/k move · 1/2/3 focus a pane · x mark reviewed · q quit
+  gD dependency canvas · gd follow a dep · C-o back · / search · c comment
+  r reload · : command bar (:help lists commands) · ? every key
 ";
 
 // A path filter's compiled matcher: an optional include set (empty/absent
@@ -563,7 +459,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
 fn topic_list() -> String {
     let mut out = String::from("topics (`ordo help <topic>`):\n");
     for (name, blurb, _) in TOPICS {
-        out.push_str(&format!("  {name:<11} {blurb}\n"));
+        out.push_str(&format!("  {name:<13}{blurb}\n"));
     }
     out
 }
@@ -607,7 +503,17 @@ fn help_topic(topic: Option<&str>) -> i32 {
     };
     match TOPICS.iter().find(|(name, _, _)| *name == topic) {
         Some((_, _, body)) => {
-            page_out(body);
+            use std::io::IsTerminal;
+            let painted = std::io::stdout().is_terminal().then(|| {
+                let t = std::env::var("ORDO_TUI_THEME")
+                    .ok()
+                    .and_then(|n| theme(&n))
+                    .or_else(|| theme("dark"))
+                    .expect("the dark theme");
+                let columns = ratatui::crossterm::terminal::size().map_or(100, |(w, _)| w as usize);
+                help::render_markdown(body, &t.syn, t.dim, columns)
+            });
+            page_out(painted.as_deref().unwrap_or(body));
             0
         }
         None => {

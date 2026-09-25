@@ -271,6 +271,26 @@ hunk's content changes underneath it. Marks older than 90 days are pruned
 automatically. The file records only opaque hashes, never a path, symbol name
 or source text.
 
+Long lines are clipped, not wrapped, so the line-number gutter stays put; a
+`‹`/`›` in the code pane's title says the file has content past the edge
+(`zh`/`zl` scroll to it).
+
+## Analyzer findings and coverage
+
+`--sarif <file>` reads SARIF 2.1.0 — what semgrep, CodeQL, ruff, eslint,
+shellcheck and `clippy --message-format` emit — and attaches each finding to
+the hunk whose lines contain it, so findings arrive in the reading order rather
+than as a separate list. A finding on a line the change did not touch is
+counted in `:audit`, not shown.
+
+`--coverage <file>` reads an lcov tracefile (`cargo llvm-cov --lcov`,
+`coverage.py lcov`, …) and reports, per hunk, how many changed executable lines
+never ran. Only `DA:` records count, so a blank line, comment or declaration is
+never held against a hunk. This is the fact behind the engine's `code changed
+but no test touched` note, which otherwise guesses from file names.
+
+Both are repeatable.
+
 ## Themes
 
 `--theme <name>` (also `$ORDO_TUI_THEME`, default `dark`); `:config` lists
