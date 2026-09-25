@@ -24,6 +24,7 @@ use crate::commands::comment_lines;
 use crate::commands::handle_command_key;
 use crate::commands::open_command_bar;
 use crate::commands::review_comments;
+use crate::commands::step_wave;
 use crate::commands::CommandOutcome;
 use crate::comments::comments_file_path;
 use crate::comments::load_comments;
@@ -2360,10 +2361,19 @@ fn watch_tick(session: &mut Session, app: &mut App, idle: Duration) -> bool {
     if std::mem::take(&mut app.reload_requested) {
         return true;
     }
+    if let Some(seen) = session.waves_seen {
+        if app.watch != WatchMode::Off && session.waves_checked.elapsed() >= watch::POLL {
+            session.waves_checked = std::time::Instant::now();
+            let n = waves::list(".").len();
+            if n > seen {
+                app.stale = Some(Stale::NewWave(n - 1));
+            }
+        }
+    }
     if app.watch == WatchMode::Off || !session.uncommitted {
         // dropping the receiver ends the thread at its next fingerprint
         session.watcher = None;
-        return false;
+        return auto_reload_now(app, idle);
     }
     let rx = session.watcher.get_or_insert_with(watch::spawn_watcher);
     let now = std::time::Instant::now();
@@ -2380,7 +2390,10 @@ fn watch_tick(session: &mut Session, app: &mut App, idle: Duration) -> bool {
 /// command bar (where comments are written) or the config.
 fn auto_reload_now(app: &App, idle: Duration) -> bool {
     app.watch == WatchMode::Auto
-        && matches!(app.stale, Some(Stale::Drift(_) | Stale::Committed(_)))
+        && matches!(
+            app.stale,
+            Some(Stale::Drift(_) | Stale::Committed(_) | Stale::NewWave(_))
+        )
         && idle >= watch::IDLE
         && app.popup.is_none()
         && app.command.is_none()
@@ -2443,6 +2456,10 @@ struct Session {
     drift: Drift,
     /// fingerprints from the watcher thread, once watching has begun
     watcher: Option<mpsc::Receiver<Fingerprint>>,
+    /// a review up to `wave/last` follows the chain: how many waves it read,
+    /// and when the count was last looked at
+    waves_seen: Option<usize>,
+    waves_checked: std::time::Instant,
 }
 
 impl Session {
@@ -2479,9 +2496,19 @@ impl Session {
         self.review_sha = review_commit_sha(&target);
         self.uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
         self.rev = new_rev;
+        self.count_waves();
         self.keys = Some(carried_keys);
         self.theme = carried_theme;
         self.spawn_load(target)
+    }
+
+    /// A review up to `wave/last` grows with the chain; note how long it is
+    /// now, so the next wave can say so.
+    fn count_waves(&mut self) {
+        self.waves_seen = self
+            .rev
+            .contains("wave/last")
+            .then(|| waves::list(".").len());
     }
 
     /// The app for a review that just loaded.
@@ -2595,7 +2622,7 @@ impl Session {
         if let Some(place) = self.carry.take() {
             restore(&mut fresh, place);
             fresh.notice = Some(reload_summary(&fresh));
-        } else if self.watch != WatchMode::Off && !self.uncommitted {
+        } else if self.watch != WatchMode::Off && !self.uncommitted && self.waves_seen.is_none() {
             fresh.notice = Some(format!("nothing to watch: {} is committed", self.rev));
         }
         fresh
@@ -2750,7 +2777,10 @@ fn run(
         debounce,
         drift: Drift::default(),
         watcher: None,
+        waves_seen: None,
+        waves_checked: std::time::Instant::now(),
     };
+    session.count_waves();
     let mut rx = session.spawn_load(target);
     let mut last_key = std::time::Instant::now();
     let mut state = State::Loading("starting…".to_string());
@@ -2773,6 +2803,11 @@ fn run(
             if go {
                 dirty = true;
                 let (target, rev) = (session.target.clone(), session.rev.clone());
+                // `wave/last` names a different wave once another is recorded
+                let target = match session.waves_seen {
+                    Some(_) => resolve(&rev).unwrap_or(target),
+                    None => target,
+                };
                 rx = session.reload(app, target, rev.clone());
                 state = State::Loading(format!("reading {rev} again…"));
                 continue;
@@ -3093,6 +3128,8 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
             open_command_bar(app, format!("comment {have}"));
         }
         Action::Reload => app.reload_requested = true,
+        Action::WaveNext => step_wave(app, true),
+        Action::WavePrev => step_wave(app, false),
         Action::CommentNext => comment_move(app, true),
         Action::CommentPrev => comment_move(app, false),
         Action::CommandGoto => open_command_bar(app, "goto ".to_string()),

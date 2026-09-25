@@ -692,6 +692,43 @@ pub(super) fn set_filters(
     Ok(())
 }
 
+/// `gw`/`gW`: the next or previous wave on its own, stepping from all of them
+/// to the first (or last) and back to all past the end. The status line says
+/// which wave and what it was asked.
+pub(super) fn step_wave(app: &mut App, forward: bool) {
+    let mut waves: Vec<usize> = app.items.iter().filter_map(|it| it.wave).collect();
+    waves.sort_unstable();
+    waves.dedup();
+    let (Some(&first), Some(&last)) = (waves.first(), waves.last()) else {
+        app.notice = Some("no waves in this review — :e wave/0..wave/last".to_string());
+        return;
+    };
+    let at = app
+        .only_wave
+        .and_then(|w| waves.iter().position(|x| *x == w));
+    let next = match (at, forward) {
+        (None, true) => Some(first),
+        (None, false) => Some(last),
+        (Some(i), true) => waves.get(i + 1).copied(),
+        (Some(i), false) => i.checked_sub(1).map(|i| waves[i]),
+    };
+    let glob = app.path_filter.clone();
+    if set_filters(app, app.comments_only, app.show_all, glob, next).is_err() {
+        app.notice = Some(format!(
+            "wave {} has nothing under the current filters",
+            next.map_or("all".to_string(), |w| w.to_string())
+        ));
+        return;
+    }
+    app.notice = Some(match next {
+        None => "all waves".to_string(),
+        Some(w) => match app.waves.asked(w) {
+            Some(asked) => format!("wave {w} · asked: {asked}"),
+            None => format!("wave {w}"),
+        },
+    });
+}
+
 /// Bring item `idx` into view when only `:only-wave` hides it, by switching to
 /// its wave; whether it is in view now. Another filter hiding it is the
 /// reviewer's own choice and stays.
@@ -831,7 +868,7 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
                 a => WatchMode::parse(a)
                     .ok_or_else(|| format!("usage: :watch [on|off|auto], not '{a}'"))?,
             };
-            if mode != WatchMode::Off && !app.uncommitted {
+            if mode != WatchMode::Off && !app.uncommitted && !app.rev.contains("wave/last") {
                 return Err(format!(
                     "nothing to watch: {} is committed — :e zz or :e main...zz reviews work that is still changing",
                     app.rev

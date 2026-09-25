@@ -5264,3 +5264,34 @@ fn a_dep_into_another_wave_is_labelled_and_followed_across() {
     let hidden = hidden_breakdown(&app.items, false, true, None, Some(2));
     assert_eq!((hidden.wave, hidden.unaccounted), (1, 0));
 }
+
+/// `gw` walks all → each wave → all again, `gW` the other way, and the status
+/// line names the wave with what it was asked.
+#[test]
+fn stepping_through_waves_cycles_back_to_all_of_them() {
+    let mut app = test_app(0);
+    app.items = vec![test_item("a.rs"), test_item("b.rs"), test_item("c.rs")];
+    app.items[0].wave = Some(1);
+    app.items[1].wave = Some(3);
+    app.view = vec![0, 1, 2];
+    app.reviewed = vec![false; 3];
+    app.waves
+        .intents
+        .insert(3, "asked: add retry\n\nagent: done".to_string());
+    let mut seen = vec![];
+    for _ in 0..3 {
+        step_wave(&mut app, true);
+        seen.push((app.only_wave, app.view.clone()));
+    }
+    assert_eq!(
+        seen,
+        vec![
+            (Some(1), vec![0]),
+            (Some(3), vec![1]),
+            (None, vec![0, 1, 2])
+        ]
+    );
+    step_wave(&mut app, false);
+    assert_eq!(app.only_wave, Some(3));
+    assert_eq!(app.notice.as_deref(), Some("wave 3 · asked: add retry"));
+}

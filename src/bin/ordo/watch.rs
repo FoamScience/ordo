@@ -130,6 +130,8 @@ pub(super) enum Stale {
     /// `HEAD` moved somewhere that does not contain the old one: a rebase or
     /// a branch switch, which is never reloaded on its own
     BaseMoved,
+    /// a review up to `wave/last`, and wave `n` was recorded since
+    NewWave(usize),
 }
 
 impl Stale {
@@ -141,6 +143,7 @@ impl Stale {
                 s(*n)
             ),
             Stale::BaseMoved => "stale · HEAD moved (rebase or branch switch) · r reloads".to_string(),
+            Stale::NewWave(n) => format!("stale · wave {n} recorded · r reloads"),
         }
     }
 }
