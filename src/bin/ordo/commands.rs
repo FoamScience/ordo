@@ -131,6 +131,11 @@ pub(super) const COMMANDS: &[Cmd] = &[
         help: "follow the working tree: mark the review stale (on), or reload by itself (auto)",
     },
     Cmd {
+        name: "only-wave",
+        args: "<N|last|all>",
+        help: "show only the hunks one wave changed; dep lines still reach the others",
+    },
+    Cmd {
         name: "wave",
         args: "[message]",
         help: "record the working tree as the next wave; `ordo wave/2..wave/3` reviews one",
@@ -245,6 +250,9 @@ pub(super) fn build_audit(
             None => "outside the path filter".to_string(),
         },
     ));
+    if hidden.wave > 0 {
+        out.push(row(hidden.wave, "changed in another wave (:only-wave all)"));
+    }
 
     out.push(String::new());
     out.push("dropped by the engine before ordering".to_string());
@@ -640,7 +648,7 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
         .map(|it| mark_key(&app.rev, it, &app.sources).is_some_and(|k| app.marks.contains_key(&k)))
         .collect();
     let glob = app.path_filter.as_ref().map(|(_, g)| g);
-    let view = compute_view(&items, app.comments_only, app.show_all, glob);
+    let view = compute_view(&items, app.comments_only, app.show_all, glob, app.only_wave);
     if view.is_empty() {
         return Err("that strategy leaves nothing visible under the current filters".to_string());
     }
@@ -666,20 +674,44 @@ pub(super) fn set_filters(
     comments_only: bool,
     show_all: bool,
     path_filter: Option<(String, PathGlobs)>,
+    only_wave: Option<usize>,
 ) -> Result<(), String> {
     let glob = path_filter.as_ref().map(|(_, g)| g);
-    let view = compute_view(&app.items, comments_only, show_all, glob);
+    let view = compute_view(&app.items, comments_only, show_all, glob, only_wave);
     if view.is_empty() {
         return Err("that filter combination leaves nothing to review".to_string());
     }
     app.comments_only = comments_only;
     app.show_all = show_all;
     app.path_filter = path_filter;
+    app.only_wave = only_wave;
     app.view = view;
     if !app.view.contains(&app.sel) {
         select(app, app.view[0]);
     }
     Ok(())
+}
+
+/// Bring item `idx` into view when only `:only-wave` hides it, by switching to
+/// its wave; whether it is in view now. Another filter hiding it is the
+/// reviewer's own choice and stays.
+pub(super) fn reveal(app: &mut App, idx: usize) -> bool {
+    if app.view.contains(&idx) {
+        return true;
+    }
+    if app.only_wave.is_none() {
+        return false;
+    }
+    let wave = app.items[idx].wave;
+    set_filters(
+        app,
+        app.comments_only,
+        app.show_all,
+        app.path_filter.clone(),
+        wave,
+    )
+    .is_ok()
+        && app.view.contains(&idx)
 }
 
 fn run_goto(app: &mut App, path: &str) -> Result<(), String> {
@@ -740,6 +772,7 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
                 !app.comments_only,
                 app.show_all,
                 app.path_filter.clone(),
+                app.only_wave,
             )?;
             Ok(CommandOutcome::None)
         }
@@ -749,6 +782,7 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
                 app.comments_only,
                 !app.show_all,
                 app.path_filter.clone(),
+                app.only_wave,
             )?;
             Ok(CommandOutcome::None)
         }
@@ -760,7 +794,7 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
                 let globs = build_globs(&[arg.to_string()])?;
                 Some((arg.to_string(), globs))
             };
-            set_filters(app, app.comments_only, app.show_all, next)?;
+            set_filters(app, app.comments_only, app.show_all, next, app.only_wave)?;
             Ok(CommandOutcome::None)
         }
         "strategy" => {
@@ -807,6 +841,32 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
             if mode == WatchMode::Off {
                 app.stale = None;
             }
+            Ok(CommandOutcome::None)
+        }
+        "only-wave" => {
+            let waves: Vec<usize> = app.items.iter().filter_map(|it| it.wave).collect();
+            let Some(&last) = waves.iter().max() else {
+                return Err(
+                    "no waves in this review — review a range of them, like :e wave/0..wave/last"
+                        .to_string(),
+                );
+            };
+            let wave = match arg.trim() {
+                "all" | "" => None,
+                "last" => Some(last),
+                n => Some(
+                    n.parse()
+                        .map_err(|_| format!("usage: :only-wave <N|last|all>, not '{n}'"))?,
+                ),
+            };
+            set_filters(
+                app,
+                app.comments_only,
+                app.show_all,
+                app.path_filter.clone(),
+                wave,
+            )
+            .map_err(|_| format!("wave {} changed nothing in view", arg.trim()))?;
             Ok(CommandOutcome::None)
         }
         "wave" => {
@@ -908,6 +968,7 @@ fn audit_lines(app: &App) -> Vec<Line<'static>> {
         app.comments_only,
         app.show_all,
         app.path_filter.as_ref().map(|(_, g)| g),
+        app.only_wave,
     );
     build_audit(
         &app.items,

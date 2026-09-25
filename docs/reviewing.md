@@ -288,6 +288,13 @@ lines (`wave 2` in the why pane): `git blame` along the chain, and for a
 removed line the wave after the last one that still had it. Against the
 working tree (`wave/0..zz`), edits no wave has recorded yet count as the next.
 
+`:only-wave 3` narrows the view to what wave 3 changed, while the engine
+still orders the whole range, so the def→use graph stays whole. A dep line
+into another wave stays, saying which wave and whether you reviewed it
+(`dep ← parse_rev · wave 1 ✓`); `K` previews it, `gd` switches to that wave
+and goes there, and `C-o` comes back to where you were. `:only-wave last` is
+the newest, `:only-wave all` lifts it, and `:audit` counts what it hides.
+
 `:wave` records one from inside a review. The refs are per worktree, so two
 linked worktrees keep separate chains. herdr-ordo records a wave each time the
 agent goes from working back to idle, opt in with `WAVES=1`.

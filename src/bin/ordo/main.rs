@@ -1056,7 +1056,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         .unwrap_or_default();
     waves::tag(&mut items, &wave_lines);
     let groups = group_reasons(&out);
-    let view = compute_view(&items, only_comments, true, None);
+    let view = compute_view(&items, only_comments, true, None, None);
     if view.is_empty() {
         let _ = tx.send(LoadMsg::Empty(empty_message(&rev, only_comments, &filter)));
         return;
@@ -1490,6 +1490,8 @@ struct App {
     /// `:filter <glob>` — the typed pattern (for display) and its compiled
     /// matcher; `None` when no live filter is active
     path_filter: Option<(String, PathGlobs)>,
+    /// `:only-wave` — show only the hunks one wave changed
+    only_wave: Option<usize>,
     /// the open command bar, if any — see `CommandBar`
     command: Option<CommandBar>,
     sel: usize,
@@ -1869,6 +1871,7 @@ fn compute_view(
     comments_only: bool,
     show_all: bool,
     glob: Option<&PathGlobs>,
+    wave: Option<usize>,
 ) -> Vec<usize> {
     items
         .iter()
@@ -1876,6 +1879,7 @@ fn compute_view(
         .filter(|(_, it)| !comments_only || it.comment)
         .filter(|(_, it)| show_all || !it.noise)
         .filter(|(_, it)| glob.is_none_or(|g| g.is_match(&it.path)))
+        .filter(|(_, it)| wave.is_none_or(|w| it.wave == Some(w)))
         .map(|(i, _)| i)
         .collect()
 }
@@ -1890,6 +1894,8 @@ struct Hidden {
     comment: usize,
     noise: usize,
     glob: usize,
+    /// changed in another wave than `:only-wave`'s
+    wave: usize,
     unaccounted: usize,
 }
 
@@ -1898,6 +1904,7 @@ fn hidden_breakdown(
     comments_only: bool,
     show_all: bool,
     glob: Option<&PathGlobs>,
+    wave: Option<usize>,
 ) -> Hidden {
     let mut h = Hidden::default();
     for it in items {
@@ -1907,10 +1914,12 @@ fn hidden_breakdown(
             h.noise += 1;
         } else if glob.is_some_and(|g| !g.is_match(&it.path)) {
             h.glob += 1;
+        } else if wave.is_some_and(|w| it.wave != Some(w)) {
+            h.wave += 1;
         }
     }
-    let shown = compute_view(items, comments_only, show_all, glob).len();
-    h.unaccounted = items.len() - shown - h.comment - h.noise - h.glob;
+    let shown = compute_view(items, comments_only, show_all, glob, wave).len();
+    h.unaccounted = items.len() - shown - h.comment - h.noise - h.glob - h.wave;
     h
 }
 
@@ -2514,6 +2523,7 @@ impl Session {
             comments_only,
             show_all: true,
             path_filter: None,
+            only_wave: None,
             command: None,
             sel: sel0,
             scroll,

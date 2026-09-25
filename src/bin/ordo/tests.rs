@@ -1529,7 +1529,7 @@ fn hidden_breakdown_partitions_the_hidden_set_exactly() {
     let items = vec![noisy, both, outside, shown];
     let globs = build_globs(&["src/*".to_string()]).unwrap();
 
-    let h = hidden_breakdown(&items, false, false, Some(&globs));
+    let h = hidden_breakdown(&items, false, false, Some(&globs), None);
     // an item hidden twice is charged once, to the first reason
     assert_eq!(
         h,
@@ -1537,11 +1537,12 @@ fn hidden_breakdown_partitions_the_hidden_set_exactly() {
             comment: 0,
             noise: 2,
             glob: 1,
+            wave: 0,
             unaccounted: 0
         }
     );
     assert_eq!(
-        compute_view(&items, false, false, Some(&globs)).len() + h.noise + h.glob,
+        compute_view(&items, false, false, Some(&globs), None).len() + h.noise + h.glob,
         items.len()
     );
 }
@@ -1554,13 +1555,14 @@ fn hidden_breakdown_charges_only_comments_before_noise() {
     b.noise = true; // hidden by only-comments first, not by noise
     let items = vec![a, b];
 
-    let h = hidden_breakdown(&items, true, false, None);
+    let h = hidden_breakdown(&items, true, false, None, None);
     assert_eq!(
         h,
         Hidden {
             comment: 1,
             noise: 0,
             glob: 0,
+            wave: 0,
             unaccounted: 0
         }
     );
@@ -1586,6 +1588,7 @@ fn build_audit_reports_every_reason_and_flags_an_unaccounted_remainder() {
         comment: 0,
         noise: 1,
         glob: 0,
+        wave: 0,
         unaccounted: 0,
     };
     let text = build_audit(&items, 2, &clean, &ledger, None).join("\n");
@@ -1605,6 +1608,7 @@ fn build_audit_reports_every_reason_and_flags_an_unaccounted_remainder() {
         comment: 0,
         noise: 0,
         glob: 0,
+        wave: 0,
         unaccounted: 1,
     };
     let text = build_audit(&items, 2, &leak, &ledger, Some("src/*")).join("\n");
@@ -1621,12 +1625,15 @@ fn compute_view_applies_only_comments_show_all_and_glob_independently() {
     let c = test_item("tests/c.rs");
     let items = vec![a, b, c];
 
-    assert_eq!(compute_view(&items, false, true, None), vec![0, 1, 2]);
-    assert_eq!(compute_view(&items, true, true, None), vec![0]); // only-comments
-    assert_eq!(compute_view(&items, false, false, None), vec![0, 2]); // hide noise
+    assert_eq!(compute_view(&items, false, true, None, None), vec![0, 1, 2]);
+    assert_eq!(compute_view(&items, true, true, None, None), vec![0]); // only-comments
+    assert_eq!(compute_view(&items, false, false, None, None), vec![0, 2]); // hide noise
 
     let globs = build_globs(&["src/*".to_string()]).unwrap();
-    assert_eq!(compute_view(&items, false, true, Some(&globs)), vec![0, 1]);
+    assert_eq!(
+        compute_view(&items, false, true, Some(&globs), None),
+        vec![0, 1]
+    );
 }
 
 #[test]
@@ -1644,7 +1651,14 @@ fn set_filters_clamps_selection_off_a_hunk_that_falls_out_of_view() {
     });
 
     let globs = build_globs(&["a.rs".to_string()]).unwrap();
-    set_filters(&mut app, false, true, Some(("a.rs".to_string(), globs))).unwrap();
+    set_filters(
+        &mut app,
+        false,
+        true,
+        Some(("a.rs".to_string(), globs)),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(app.view, vec![0]);
     assert_eq!(app.sel, 0, "selection must move off the now-hidden item");
@@ -1659,7 +1673,13 @@ fn set_filters_rejects_a_combination_that_would_empty_the_view() {
     app.reviewed = vec![false];
 
     let globs = build_globs(&["nope/*".to_string()]).unwrap();
-    let err = set_filters(&mut app, false, true, Some(("nope/*".to_string(), globs)));
+    let err = set_filters(
+        &mut app,
+        false,
+        true,
+        Some(("nope/*".to_string(), globs)),
+        None,
+    );
     assert!(err.is_err());
     // rejected: state is untouched, still pointing at the one real item
     assert_eq!(app.view, vec![0]);
@@ -3005,6 +3025,7 @@ fn test_app(why_len: usize) -> App {
         comments_only: false,
         show_all: true,
         path_filter: None,
+        only_wave: None,
         command: None,
         sel: 0,
         scroll: 0,
@@ -3675,7 +3696,10 @@ fn filter_command_glob_type_supports_negatives_too() {
     let mut a = test_item("src/a.rs");
     a.comment = false;
     let items = vec![test_item("src/a.rs"), test_item("tests/b.rs")];
-    assert_eq!(compute_view(&items, false, true, Some(&globs)), vec![0]);
+    assert_eq!(
+        compute_view(&items, false, true, Some(&globs), None),
+        vec![0]
+    );
 }
 
 // ---- theme selection ----
@@ -5201,4 +5225,30 @@ fn the_uncommitted_area_of_a_plain_git_repository() {
     got.sort();
     assert_eq!(got, vec!["a.py", "new.py"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One wave in view: a dep line into another wave says which, and whether it
+/// is reviewed; `gd` switches to that wave and `C-o` switches back.
+#[test]
+fn a_dep_into_another_wave_is_labelled_and_followed_across() {
+    let mut app = test_app(0);
+    app.items = vec![test_item("a.rs"), test_item("b.rs")];
+    app.items[0].wave = Some(2);
+    app.items[1].wave = Some(1);
+    app.items[0].edges = vec![edge("← b.rs:L1   uses it", Some(1))];
+    app.view = vec![0, 1];
+    app.reviewed = vec![false, true];
+    set_filters(&mut app, false, true, None, Some(2)).unwrap();
+    assert_eq!(app.view, vec![0]);
+    let rows = why_content(&app);
+    let dep = rows.iter().position(|r| r.text.starts_with("dep")).unwrap();
+    assert!(rows[dep].text.ends_with("· wave 1 ✓"), "{}", rows[dep].text);
+    assert!(matches!(rows[dep].kind, WhyKind::Edge(Some(1))));
+    app.why_sel = dep;
+    jump_to_edge(&mut app);
+    assert_eq!((app.sel, app.only_wave), (1, Some(1)));
+    jump_back(&mut app);
+    assert_eq!((app.sel, app.only_wave), (0, Some(2)));
+    let hidden = hidden_breakdown(&app.items, false, true, None, Some(2));
+    assert_eq!((hidden.wave, hidden.unaccounted), (1, 0));
 }

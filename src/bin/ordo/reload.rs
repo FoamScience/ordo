@@ -75,6 +75,7 @@ pub(super) struct Place {
     comments_only: bool,
     show_all: bool,
     path_filter: Option<(String, PathGlobs)>,
+    only_wave: Option<usize>,
     strategy: String,
     show_groups: bool,
     zoom: bool,
@@ -97,6 +98,7 @@ pub(super) fn place_of(app: &App) -> Place {
         comments_only: app.comments_only,
         show_all: app.show_all,
         path_filter: app.path_filter.clone(),
+        only_wave: app.only_wave,
         strategy: app.strategy.clone(),
         show_groups: app.show_groups,
         zoom: app.zoom,
@@ -124,8 +126,16 @@ pub(super) fn restore(app: &mut App, p: Place) {
     }
     // a filter that would now leave nothing to review is dropped rather than
     // kept: an empty review is not a place
-    if set_filters(app, p.comments_only, p.show_all, p.path_filter.clone()).is_err() {
-        let _ = set_filters(app, false, true, None);
+    if set_filters(
+        app,
+        p.comments_only,
+        p.show_all,
+        p.path_filter.clone(),
+        p.only_wave,
+    )
+    .is_err()
+    {
+        let _ = set_filters(app, false, true, None, None);
     }
     let to = find_hunk(&app.items, &app.symbol_ledger, &p.sel)
         .filter(|i| app.view.contains(i))
