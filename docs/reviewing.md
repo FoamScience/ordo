@@ -295,6 +295,13 @@ into another wave stays, saying which wave and whether you reviewed it
 and goes there, and `C-o` comes back to where you were. `:only-wave last` is
 the newest, `:only-wave all` lifts it, and `:audit` counts what it hides.
 
+`ordo wave --claude <session>` also records what the agent's turn was for:
+the prompts a Claude Code session was given since the last wave, and its last
+answer, read from the session's transcript under `~/.claude/projects/`. It
+goes in the wave's commit message, the why pane shows it beside the wave
+(`wave 2 · asked: add retry to fetch`), and `:send` quotes it on each point,
+so the agent reads a review of wave 2 in terms of what it was doing then.
+
 `:wave` records one from inside a review. The refs are per worktree, so two
 linked worktrees keep separate chains. herdr-ordo records a wave each time the
 agent goes from working back to idle, opt in with `WAVES=1`.

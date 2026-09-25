@@ -104,6 +104,8 @@ pub(super) struct WhyContext<'a> {
     /// dep targets `:only-wave` hides, each with its wave and reviewed state:
     /// still followable, since `gd` switches to their wave
     other_waves: &'a [(usize, String)],
+    /// what this hunk's wave was asked (`Waves::asked`)
+    wave_asked: Option<&'a str>,
 }
 
 pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContext) -> Vec<WhyRow> {
@@ -115,7 +117,11 @@ pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContex
         rows.push(text_row(c.to_string(), theme.mark));
     }
     if let Some(w) = it.wave {
-        rows.push(text_row(format!("wave {w}"), theme.accent));
+        let row = match ctx.wave_asked {
+            Some(asked) => format!("wave {w} · asked: {asked}"),
+            None => format!("wave {w}"),
+        };
+        rows.push(text_row(row, theme.accent));
     }
     rows.extend(signal_rows(it, theme));
     for e in &it.edges {
@@ -1209,6 +1215,7 @@ pub(super) fn why_content(app: &App) -> Vec<WhyRow> {
             cascade: cascade_line(app, app.sel).as_deref(),
             churn: churn_line(app, app.sel).as_deref(),
             other_waves: &other_waves(app, app.sel),
+            wave_asked: app.items[app.sel].wave.and_then(|w| app.waves.asked(w)),
         },
     )
 }

@@ -947,8 +947,8 @@ struct LoadResult {
     /// `watch`); taken before reading, so an edit landing mid-load shows up
     fingerprint: Option<Fingerprint>,
     /// which wave touched each line, kept so a re-order can tag its new items
-    /// without asking git again
-    wave_lines: waves::WaveLines,
+    /// without asking git again, and what each wave's agent turn was
+    waves: waves::Waves,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -1048,13 +1048,13 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let mut items = build_items(&out);
     place_overlays(&mut items, &sarif, &coverage, &mut ledger);
     refine_items(&mut items, &sources);
-    let wave_lines = wave_span
+    let waves = wave_span
         .map(|(base, tip)| {
             let paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
-            waves::line_waves(".", &base, tip.as_deref(), &paths)
+            waves::Waves::read(".", &base, tip.as_deref(), &paths)
         })
         .unwrap_or_default();
-    waves::tag(&mut items, &wave_lines);
+    waves::tag(&mut items, &waves.lines);
     let groups = group_reasons(&out);
     let view = compute_view(&items, only_comments, true, None, None);
     if view.is_empty() {
@@ -1154,7 +1154,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         deltas,
         delta_gone,
         fingerprint,
-        wave_lines,
+        waves,
     })));
 }
 
@@ -1622,8 +1622,8 @@ struct App {
     /// the engine's change ledger, kept so `:mode` can rebuild the headers.
     /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
-    /// see `LoadResult::wave_lines`
-    wave_lines: waves::WaveLines,
+    /// see `LoadResult::waves`
+    waves: waves::Waves,
     /// group ids whose hunks are folded away under their header (`za` and
     /// friends); empty means everything is expanded
     collapsed: HashSet<String>,
@@ -2508,7 +2508,7 @@ impl Session {
             deltas,
             delta_gone,
             fingerprint,
-            wave_lines,
+            waves,
         } = r;
         self.drift = fingerprint.map(Drift::new).unwrap_or_default();
         let sel0 = view[0];
@@ -2565,7 +2565,7 @@ impl Session {
             groups,
             mode: ViewMode::default(),
             symbol_ledger,
-            wave_lines,
+            waves,
             notes,
             notes_path,
             comments,
