@@ -6,8 +6,10 @@ use crate::code_view::LineMarks;
 use crate::code_view::Theme;
 use crate::code_view::GUTTER_W;
 use crate::commands::comment_lines;
+use crate::commands::reveal;
 use crate::commands::Cmd;
 use crate::commands::COMMANDS;
+use crate::compute_view;
 use crate::config::draw_config;
 use crate::display_row_of;
 use crate::display_rows;
@@ -63,7 +65,7 @@ pub(super) enum WhyKind {
 }
 
 pub(super) struct WhyRow {
-    text: String,
+    pub(super) text: String,
     style: Style,
     pub(super) kind: WhyKind,
 }
@@ -99,6 +101,9 @@ pub(super) struct WhyContext<'a> {
     delta: Option<&'a str>,
     cascade: Option<&'a str>,
     churn: Option<&'a str>,
+    /// dep targets `:only-wave` hides, each with its wave and reviewed state:
+    /// still followable, since `gd` switches to their wave
+    other_waves: &'a [(usize, String)],
 }
 
 pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContext) -> Vec<WhyRow> {
@@ -114,9 +119,16 @@ pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContex
     }
     rows.extend(signal_rows(it, theme));
     for e in &it.edges {
-        let target = e.target.filter(|t| view.contains(t));
+        let elsewhere = e
+            .target
+            .and_then(|t| ctx.other_waves.iter().find(|(i, _)| *i == t));
+        let target = e.target.filter(|t| view.contains(t) || elsewhere.is_some());
+        let text = match elsewhere {
+            Some((_, wave)) => format!("dep {} · {wave}", e.label),
+            None => format!("dep {}", e.label),
+        };
         rows.push(WhyRow {
-            text: format!("dep {}", e.label),
+            text,
             style: edge_style(target, theme),
             kind: WhyKind::Edge(target),
         });
@@ -464,7 +476,11 @@ pub(super) fn jump_to_edge(app: &mut App) {
     let Some(Some(idx)) = edge_at_cursor(app) else {
         return;
     };
-    stack_push(&mut app.jumps, (app.sel, app.cursor));
+    let from = (app.sel, app.cursor);
+    if !reveal(app, idx) {
+        return;
+    }
+    stack_push(&mut app.jumps, from);
     select(app, idx);
     app.focus = Pane::Code;
 }
@@ -477,7 +493,8 @@ pub(super) fn jump_to_edge(app: &mut App) {
 pub(super) fn jump_back(app: &mut App) {
     let (idx, cursor) = loop {
         match stack_pop_valid(&mut app.jumps, app.items.len()) {
-            Some((idx, cursor)) if app.view.contains(&idx) => break (idx, cursor),
+            // one `gd` into another wave switched to it; coming back switches back
+            Some((idx, cursor)) if reveal(app, idx) => break (idx, cursor),
             Some(_) => continue, // hidden by a live filter — try the next one
             None => return,
         }
@@ -1179,7 +1196,7 @@ pub(super) fn draw(f: &mut Frame, app: &mut App, rev: &str) {
 }
 
 /// The why pane's rows for the selected hunk.
-fn why_content(app: &App) -> Vec<WhyRow> {
+pub(super) fn why_content(app: &App) -> Vec<WhyRow> {
     why_rows(
         &app.items[app.sel],
         &app.view,
@@ -1191,8 +1208,33 @@ fn why_content(app: &App) -> Vec<WhyRow> {
             delta: delta_line(app, app.sel),
             cascade: cascade_line(app, app.sel).as_deref(),
             churn: churn_line(app, app.sel).as_deref(),
+            other_waves: &other_waves(app, app.sel),
         },
     )
+}
+
+/// The dep targets of item `i` that only `:only-wave` hides, labelled with
+/// their wave and whether they are reviewed.
+fn other_waves(app: &App, i: usize) -> Vec<(usize, String)> {
+    if app.only_wave.is_none() {
+        return vec![];
+    }
+    let glob = app.path_filter.as_ref().map(|(_, g)| g);
+    let reachable = compute_view(&app.items, app.comments_only, app.show_all, glob, None);
+    app.items[i]
+        .edges
+        .iter()
+        .filter_map(|e| e.target)
+        .filter(|t| !app.view.contains(t) && reachable.contains(t))
+        .map(|t| {
+            let wave = match app.items[t].wave {
+                Some(w) => format!("wave {w}"),
+                None => "before the waves".to_string(),
+            };
+            let mark = if app.reviewed[t] { " ✓" } else { "" };
+            (t, format!("{wave}{mark}"))
+        })
+        .collect()
 }
 
 // left — reading order
