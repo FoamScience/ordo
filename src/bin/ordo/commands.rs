@@ -131,6 +131,11 @@ pub(super) const COMMANDS: &[Cmd] = &[
         help: "follow the working tree: mark the review stale (on), or reload by itself (auto)",
     },
     Cmd {
+        name: "wave",
+        args: "[message]",
+        help: "record the working tree as the next wave; `ordo wave/2..wave/3` reviews one",
+    },
+    Cmd {
         name: "yank",
         args: "[all]",
         help: "copy the review as an agent prompt: your notes; `all` adds ordo's own notes and findings",
@@ -801,6 +806,13 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<CommandOutcom
             if mode == WatchMode::Off {
                 app.stale = None;
             }
+            Ok(CommandOutcome::None)
+        }
+        "wave" => {
+            app.notice = Some(match crate::waves::record(".", arg)? {
+                Some(n) => format!("recorded wave/{n}"),
+                None => "nothing changed since the last wave".to_string(),
+            });
             Ok(CommandOutcome::None)
         }
         "comment" => {

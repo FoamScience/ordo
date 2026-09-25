@@ -132,6 +132,7 @@ mod reload;
 mod rules;
 mod search;
 mod watch;
+mod waves;
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PAGE: u16 = 15;
@@ -140,6 +141,7 @@ const USAGE: &str = "\
 ordo — review a change in reading order: definitions before their uses.
 
 usage: ordo [<rev>] [<glob>...] [options]
+       ordo wave [-m <message>] | --list | --clear
        ordo help [<topic>]
 
   <rev>   what to review (default HEAD)
@@ -148,6 +150,7 @@ usage: ordo [<rev>] [<glob>...] [options]
             zz                           uncommitted work
             main...zz                    the branch so far, uncommitted included
             a branch or commit ID        from `but status`, on GitButler repos
+            wave/2..wave/3               one agent turn, recorded by `ordo wave`
   <glob>  keep matching paths only; `!` excludes, `*` crosses `/`. Quote them.
 
 examples:
@@ -640,6 +643,9 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
     if let Some(first) = argv.first() {
         if first == "help" || first == "--help" || first == "-h" {
             return Err(help_topic(argv.get(1).map(String::as_str)));
+        }
+        if first == "wave" {
+            return Err(waves::cli(&argv[1..]));
         }
     }
     let mut pending: Option<Pending> = None;
