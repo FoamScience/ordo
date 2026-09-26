@@ -22,7 +22,7 @@ pub struct Consumer {
     pub content: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Change {
     pub path: String,
     #[serde(default)]

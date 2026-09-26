@@ -173,6 +173,7 @@ options:
   --keys <vim|vscode>     key preset (default vim, or $ORDO_TUI_KEYS)
   --theme <name>          palette (default dark, or $ORDO_TUI_THEME)
   --init-config [--force] write tui.toml with the current keys and theme
+  --json                  print the engine input for <rev> and exit, no TUI
   -V, --version
 
 keys (vim; vscode: F1 lists its own):
@@ -414,6 +415,9 @@ struct ParsedArgs {
     /// `--watch[=hint|auto]`, else tui.toml `watch`
     watch: WatchMode,
     debounce: Duration,
+    /// `--json`: print the engine input and exit, for scripts that want ordo's
+    /// revision and path handling without the TUI
+    json: bool,
 }
 
 /// The user-facing documentation, embedded in the binary so `ordo help
@@ -549,6 +553,22 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
         write_init_config(&preset, &theme_name, raw.force)?;
         return Err(0);
     }
+    // `--json` prints what was gathered, before rules, overlays or the TUI
+    // exist; a flag for any of those would be quietly dropped
+    if raw.json {
+        let unused = [
+            ("--only-comments", raw.only_comments),
+            ("--no-catalog", raw.no_catalog),
+            ("--rules", !raw.extra_rules.is_empty()),
+            ("--sarif", !raw.sarif.is_empty()),
+            ("--coverage", !raw.coverage.is_empty()),
+            ("--watch", raw.watch.is_some()),
+        ];
+        if let Some((flag, _)) = unused.iter().find(|(_, set)| *set) {
+            eprintln!("ordo: {flag} has no effect with --json\n\n{USAGE}");
+            return Err(2);
+        }
+    }
     let globs = build_globs(&raw.globs).map_err(|e| {
         eprintln!("ordo: {e}");
         2
@@ -582,6 +602,7 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
             .debounce_ms
             .and_then(|v| v.parse().ok())
             .map_or(watch::DEBOUNCE, Duration::from_millis),
+        json: raw.json,
     })
 }
 
@@ -606,6 +627,7 @@ struct RawArgs {
     watch: Option<WatchMode>,
     /// as written: checked once the flags are all read
     debounce_ms: Option<String>,
+    json: bool,
 }
 
 /// A flag whose value is the next argument.
@@ -638,6 +660,7 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         force: false,
         watch: None,
         debounce_ms: None,
+        json: false,
     };
     // `ordo help [<topic>]` short-circuits everything else: it takes an
     // argument the flag loop below would otherwise read as a revision.
@@ -695,6 +718,7 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             "--only-comments" => raw.only_comments = true,
             "--init-config" => raw.want_init = true,
             "--force" => raw.force = true,
+            "--json" => raw.json = true,
             "-h" | "--help" | "help" => return Err(help_topic(None)),
             "-V" | "--version" | "version" => {
                 println!(
@@ -842,6 +866,7 @@ fn main() -> std::io::Result<()> {
         no_catalog,
         watch,
         debounce,
+        json,
     } = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
@@ -853,6 +878,10 @@ fn main() -> std::io::Result<()> {
         );
         std::process::exit(1);
     };
+    if json {
+        println!("{}", input_json(&gather_input(target, &filter, &|_| {})));
+        return Ok(());
+    }
     // the single commit the `K` popup's history section reviews from — a
     // range's tip, or HEAD standing in for the uncommitted area (`zz`)
     let review_sha = review_commit_sha(&target);
@@ -987,6 +1016,20 @@ struct LoadSpec {
     coverage: Vec<String>,
 }
 
+/// What `--json` prints: the gathered changes in the engine's input shape.
+fn input_json(input: &Input) -> serde_json::Value {
+    serde_json::json!({ "changes": input.changes })
+}
+
+fn gather_input(target: Target, filter: &Filter, progress: &dyn Fn(String)) -> Input {
+    match target {
+        Target::Commit(sha) => gather(&sha, filter, progress),
+        Target::Range(base, tip) => gather_range(&base, &tip, filter, progress),
+        Target::Uncommitted => gather_uncommitted(filter, progress),
+        Target::WorktreeRange(base) => gather_worktree_range(&base, filter, progress),
+    }
+}
+
 fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let LoadSpec {
         target,
@@ -1012,12 +1055,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         Target::Commit(_) | Target::Uncommitted => None,
     };
     let t = std::time::Instant::now();
-    let input = match target {
-        Target::Commit(sha) => gather(&sha, &filter, &progress),
-        Target::Range(base, tip) => gather_range(&base, &tip, &filter, &progress),
-        Target::Uncommitted => gather_uncommitted(&filter, &progress),
-        Target::WorktreeRange(base) => gather_worktree_range(&base, &filter, &progress),
-    };
+    let input = gather_input(target, &filter, &progress);
     // `only_comments` becomes the starting state of the live `:only-comments`
     // filter (see `compute_view`) rather than an engine option — the engine
     // always sees every hunk, so toggling it back off has something to show.
