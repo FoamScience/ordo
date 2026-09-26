@@ -5213,6 +5213,43 @@ fn watch_flags_parse_and_a_bad_debounce_is_refused() {
     assert!(flag_loop(argv(&["zz", "--watch-debounce=soon"])).is_err());
 }
 
+#[test]
+fn json_flag_keeps_the_revision_and_globs() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let raw = flag_loop(argv(&["main...zz", "src/*", "--json"]))
+        .ok()
+        .unwrap();
+    assert!(raw.json);
+    assert_eq!(raw.rev.as_deref(), Some("main...zz"));
+    assert_eq!(raw.globs, vec!["src/*"]);
+}
+
+#[test]
+fn json_refuses_flags_it_would_ignore() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(parse_argv(argv(&["zz", "--json", "--only-comments"])).is_err());
+    assert!(parse_argv(argv(&["zz", "--json", "--sarif", "f.sarif"])).is_err());
+    assert!(parse_argv(argv(&["zz", "--json", "--all", "src/*"])).is_ok());
+}
+
+#[test]
+fn json_output_is_engine_input() {
+    let input = Input {
+        changes: vec![Change {
+            path: "a.rs".into(),
+            old: None,
+            new: Some("fn a() {}\n".into()),
+            diff: None,
+        }],
+        options: Default::default(),
+        consumers: vec![],
+    };
+    let back: Input = serde_json::from_value(input_json(&input)).unwrap();
+    assert_eq!(back.changes[0].path, "a.rs");
+    assert_eq!(back.changes[0].old, None);
+    assert_eq!(back.changes[0].new.as_deref(), Some("fn a() {}\n"));
+}
+
 /// `zz` in a repository GitButler does not manage: plain git's changed and
 /// untracked files, ignored ones left out.
 #[test]
