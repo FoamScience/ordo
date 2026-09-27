@@ -4222,6 +4222,13 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
         }
         let (header, whole, lines) = body_parts(node, src, spec);
         o.bodies.push((name, header, whole, lines));
+    } else if !in_import && !import {
+        // a test block is a row too, so a deleted test is named ("removes
+        // test 'parses flags'") rather than counted in lines; every label has a
+        // space in it (`test 'x'`, `rgtest! x`), so no use can ever match it
+        if let Some(label) = test_block_label(node, src, spec) {
+            o.defs.push((label, row));
+        }
     }
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
