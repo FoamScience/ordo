@@ -155,6 +155,7 @@ def sarif(comments: list[dict]) -> dict:
         "runs": [{
             "tool": {"driver": {"name": "review-bot"}},
             "results": [{
+                "kind": "review",
                 "level": "warning",
                 "message": {"text": c["comment"]},
                 "locations": [{"physicalLocation": {
@@ -180,6 +181,7 @@ def self_test():
     assert "\033[35mx\033[0m is unused" in show(c)
     r = sarif([c, {**c, "line": 0}])["runs"][0]["results"]
     assert r[0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 3
+    assert r[0]["kind"] == "review"
     assert r[1]["locations"][0]["physicalLocation"]["region"]["startLine"] == 1
     print("ok")
 

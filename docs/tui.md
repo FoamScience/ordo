@@ -15,7 +15,7 @@ binary, so they can never describe a different version than the one running.
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
 the change **in comprehension order**: a reading-order list (findings `⚠`,
-noise dimmed, reviewed `✓`) beside a detail pane with tree-sitter
+review comments `✎`, noise dimmed, reviewed `✓`) beside a detail pane with tree-sitter
 syntax-highlighted, Neovim-style diff rendering, over the rationale, notes,
 def→use edges and finding messages. The engine never learns what git is.
 
@@ -285,7 +285,9 @@ Long lines are clipped, not wrapped, so the line-number gutter stays put; a
 shellcheck and `clippy --message-format` emit — and attaches each finding to
 the hunk whose lines contain it, so findings arrive in the reading order rather
 than as a separate list. A finding on a line the change did not touch is
-counted in `:audit`, not shown.
+counted in `:audit`, not shown. A result whose `kind` is `review` is a review
+comment rather than an analyzer's verdict (`scripts/review-bot.py --sarif`
+writes these): its row carries `✎`, which a `⚠` on the same hunk outranks.
 
 `--coverage <file>` reads an lcov tracefile (`cargo llvm-cov --lcov`,
 `coverage.py lcov`, …) and reports, per hunk, how many changed executable lines

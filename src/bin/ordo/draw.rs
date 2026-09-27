@@ -248,8 +248,9 @@ fn signal_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
 fn finding_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
     let mut rows = vec![];
     for f in &it.findings {
-        let (head, color) = match f.level {
-            ordo::model::Level::Note => (f.name.clone(), theme.category),
+        let (head, color) = match (f.source, f.level) {
+            (ordo::model::FindingSource::Review, _) => (format!("✎ {}", f.name), theme.mark),
+            (_, ordo::model::Level::Note) => (f.name.clone(), theme.category),
             _ => (format!("⚠ {}", f.name), theme.warn),
         };
         rows.push(WhyRow {
@@ -1246,7 +1247,9 @@ fn other_waves(app: &App, i: usize) -> Vec<(usize, String)> {
 
 // left — reading order
 fn draw_list(f: &mut Frame, app: &App, rev: &str, list_area: Option<Rect>, body: Rect) {
-    let symbol = "▶ ";
+    // one cell for `▶`, then the row's own sign cell (see `list_row`): marks
+    // sit in a column of their own, so a marked row's path lines up with the rest
+    let symbol = "▶";
     let text_w = (list_area.map_or(body.width, |a| a.width) as usize)
         .saturating_sub(2 + symbol.chars().count());
     let display = display_rows(
@@ -1265,7 +1268,7 @@ fn draw_list(f: &mut Frame, app: &App, rev: &str, list_area: Option<Rect>, body:
                 // focus (tasks-9sj.31). Weight separates it from its rows
                 // without spending the accent.
                 let spans = vec![Span::styled(
-                    reason.to_string(),
+                    format!("  {reason}"),
                     Style::default()
                         .fg(app.theme.fg)
                         .add_modifier(Modifier::BOLD),
@@ -1320,7 +1323,7 @@ fn draw_list(f: &mut Frame, app: &App, rev: &str, list_area: Option<Rect>, body:
 // Path, line number and category are separate spans so each reads at a
 // glance; a noise or reviewed row overrides all three, because *that* is what
 // the row is saying.
-fn list_row(app: &App, i: usize) -> Vec<Span<'static>> {
+pub(super) fn list_row(app: &App, i: usize) -> Vec<Span<'static>> {
     let it = &app.items[i];
     let style = if it.noise {
         Style::default().fg(app.theme.dim)
@@ -1332,10 +1335,11 @@ fn list_row(app: &App, i: usize) -> Vec<Span<'static>> {
     let tinted = it.noise || app.reviewed[i];
     let dim = |c: Color| if tinted { style } else { style.fg(c) };
     vec![
+        // the sign cell: ⚠, ✎ or ·, one cell wide whatever it holds
+        Span::styled(format!("{:1} ", it.mark), dim(app.theme.mark)),
         // two cells of indent put the file under the definition it belongs
         // to; headers sit flush, so the list reads as a tree
         Span::styled("  ".to_string(), style),
-        Span::styled(it.mark.clone(), dim(app.theme.mark)),
         Span::styled(it.path.clone(), style),
         // a line number says *where*, not *look here*: the accent is reserved
         // for focus and selection (tasks-9sj.31)

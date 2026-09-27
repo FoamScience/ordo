@@ -1773,9 +1773,9 @@ fn build_items(out: &Output) -> Vec<Item> {
                     || f.level != ordo::model::Level::Note
             });
             let mark = if flagged {
-                "⚠ "
+                "⚠"
             } else if h.noise {
-                "· "
+                "·"
             } else {
                 ""
             };
