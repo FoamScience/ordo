@@ -22,6 +22,9 @@ pub(super) struct Finding {
     pub(super) path: String,
     /// 1-based, as SARIF writes it and as hunk ranges are kept
     pub(super) line: usize,
+    /// `result.kind == "review"`: a comment for the reviewer to weigh, not an
+    /// analyzer's verdict
+    pub(super) review: bool,
 }
 
 /// Every finding in the `--sarif` files given, in the order the paths were.
@@ -65,6 +68,7 @@ pub(super) fn parse_sarif(text: &str) -> Vec<Finding> {
                 _ => ordo::model::Level::Note,
             };
             let rule = r["ruleId"].as_str().unwrap_or("").to_string();
+            let review = r["kind"].as_str() == Some("review");
             let message = r["message"]["text"].as_str().unwrap_or("").to_string();
             if message.is_empty() {
                 continue;
@@ -88,6 +92,7 @@ pub(super) fn parse_sarif(text: &str) -> Vec<Finding> {
                     // both are normalised to what git reports for a path
                     path: normalise_uri(uri),
                     line: line as usize,
+                    review,
                 });
             }
         }
@@ -124,12 +129,20 @@ pub(super) fn place_findings(items: &mut [Item], findings: &[Finding]) -> usize 
         // the row mark is decided in `build_items`, before findings exist; a
         // warning-level finding earns the same ⚠ a warn rule or an advisory
         // does, or the reviewer has to open the hunk to discover there is
-        // anything to see
-        if f.level != ordo::model::Level::Note {
-            it.mark = "⚠ ".to_string();
+        // anything to see. A review comment gets its own ✎, which a ⚠ outranks
+        if f.review {
+            if it.mark != "⚠" {
+                it.mark = "✎".to_string();
+            }
+        } else if f.level != ordo::model::Level::Note {
+            it.mark = "⚠".to_string();
         }
         it.findings.push(ordo::model::Finding {
-            source: ordo::model::FindingSource::Analyzer,
+            source: if f.review {
+                ordo::model::FindingSource::Review
+            } else {
+                ordo::model::FindingSource::Analyzer
+            },
             name: if f.rule.is_empty() {
                 f.tool.clone()
             } else {

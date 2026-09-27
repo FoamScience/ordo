@@ -521,7 +521,8 @@
                             "enum": [
                               "catalog",
                               "rule",
-                              "analyzer"
+                              "analyzer",
+                              "review"
                             ],
                             "description": "who found it"
                           },

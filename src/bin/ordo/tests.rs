@@ -204,8 +204,50 @@ fn a_finding_lands_on_the_hunk_that_contains_its_line() {
     assert_eq!(items[0].findings.len(), 1, "line 10 is in 1..=20");
     assert_eq!(items[1].findings.len(), 1, "line 50 is in 40..=60");
     assert_eq!(unplaced, 0);
-    assert_eq!(items[0].mark, "⚠ ", "a warn finding marks the row");
+    assert_eq!(items[0].mark, "⚠", "a warn finding marks the row");
     assert_eq!(items[1].mark, "", "a note finding does not");
+}
+
+#[test]
+fn a_review_comment_gets_its_own_mark_which_a_warning_outranks() {
+    let review = r#"{"runs":[{"tool":{"driver":{"name":"review-bot"}},"results":[
+      {"kind":"review","level":"warning","message":{"text":"missed case"},
+       "locations":[{"physicalLocation":{
+          "artifactLocation":{"uri":"src/a.py"},"region":{"startLine":10}}}]}]}]}"#;
+    let mut items = [test_item("src/a.py"), test_item("src/a.py")];
+    items[0].new_range = [1, 20];
+    items[1].new_range = [1, 20];
+    place_findings(&mut items[..1], &parse_sarif(review));
+    assert_eq!(items[0].mark, "✎");
+    assert_eq!(
+        items[0].findings[0].source,
+        ordo::model::FindingSource::Review
+    );
+    place_findings(&mut items[1..], &parse_sarif(SARIF));
+    place_findings(&mut items[1..], &parse_sarif(review));
+    assert_eq!(items[1].mark, "⚠", "a warning outranks a review comment");
+}
+
+#[test]
+fn a_row_mark_sits_in_the_sign_cell_without_shifting_the_path() {
+    let mut app = test_app(0);
+    app.items.push(test_item("a.rs"));
+    app.reviewed.push(false);
+    app.items[0].mark = "⚠".to_string();
+    let text = |i: usize| -> String {
+        list_row(&app, i)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect()
+    };
+    assert!(text(0).starts_with("⚠ "), "{}", text(0));
+    assert_eq!(
+        text(0).chars().position(|c| c == 'a'),
+        text(1).chars().position(|c| c == 'a'),
+        "{} / {}",
+        text(0),
+        text(1)
+    );
 }
 
 #[test]

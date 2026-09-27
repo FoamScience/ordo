@@ -210,6 +210,9 @@ pub enum FindingSource {
     Rule,
     /// an external analyzer, read from its SARIF output by a client
     Analyzer,
+    /// a review comment, a person's or a model's, read by a client from a
+    /// SARIF result whose `kind` is `review`
+    Review,
 }
 
 /// How hard a finding presses.
@@ -232,6 +235,7 @@ impl FindingSource {
             FindingSource::Catalog => "catalog",
             FindingSource::Rule => "rule",
             FindingSource::Analyzer => "analyzer",
+            FindingSource::Review => "review",
         }
     }
 }
