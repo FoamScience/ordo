@@ -883,6 +883,28 @@ fn comment_and_code_together_is_not_comment_wording() {
 }
 
 #[test]
+fn code_with_a_trailing_comment_is_not_a_comment_edit() {
+    // only the code before the comment changed; the comment shares its row
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.c",
+            "old": "int f(void) {\n    return g(1); /* keep */\n}\n",
+            "new": "int f(void) {\n    return h(1); /* keep */\n}\n" } ]
+    }));
+    assert_eq!(rats, vec!["edits f"]);
+}
+
+#[test]
+fn the_line_after_a_rust_doc_comment_is_code() {
+    // a `///` node ends at column 0 of the next row, the `fn` line
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.rs",
+            "old": "struct S;\nimpl S {\n    /// doc\n    fn m(&self) {}\n}\n",
+            "new": "struct S;\nimpl S {\n    /// doc\n    pub(crate) fn m(&self) {}\n}\n" } ]
+    }));
+    assert!(rats.iter().all(|r| !r.contains("comment")), "{rats:?}");
+}
+
+#[test]
 fn python_multiline_docstring_only_change_is_a_comment_change() {
     // interior prose lines of a multi-line docstring match no `#`-style
     // textual prefix — the tree-sitter path (a `string` node that's the

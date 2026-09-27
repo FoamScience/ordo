@@ -2175,7 +2175,8 @@ fn comment_only_hunk(
 // Tree-sitter line coverage for comment-like content: every 1-based line
 // fully inside a grammar comment node (`comment`, `line_comment`,
 // `block_comment`, `doc_comment`, … — every comment kind across the
-// supported grammars contains "comment" in its node kind), plus, for python,
+// supported grammars contains "comment" in its node kind), with nothing but
+// whitespace outside it on that line, so `x = 1; // note` is code; plus, for python,
 // a docstring: an `expression_statement` whose sole child is a `string`, as
 // the first statement of a module/class/function body, or — the Sphinx/attrs
 // "attribute docstring" convention — immediately after the assignment it
@@ -2186,7 +2187,8 @@ fn comment_only_hunk(
 fn ts_comment_lines(spec: &LangSpec, src: &str) -> Option<HashSet<usize>> {
     let tree = lang::parse(spec, src)?;
     let mut out = HashSet::new();
-    collect_comment_lines(tree.root_node(), spec.name, &mut out);
+    let lines: Vec<&str> = src.lines().collect();
+    collect_comment_lines(tree.root_node(), spec.name, &lines, &mut out);
     Some(out)
 }
 
@@ -2198,11 +2200,26 @@ fn is_bare_string_stmt(node: Node) -> bool {
         && node.named_child(0).is_some_and(|n| n.kind() == "string")
 }
 
-fn collect_comment_lines(node: Node, lang_name: &str, out: &mut HashSet<usize>) {
+fn collect_comment_lines(node: Node, lang_name: &str, lines: &[&str], out: &mut HashSet<usize>) {
     let kind = node.kind();
     if kind.contains("comment") {
-        for row in node.start_position().row..=node.end_position().row {
-            out.insert(row + 1);
+        let (start, end) = (node.start_position(), node.end_position());
+        let blank = |row: usize, cols: std::ops::Range<usize>| {
+            lines
+                .get(row)
+                .and_then(|l| l.get(cols.start.min(l.len())..cols.end.min(l.len())))
+                .is_none_or(|t| t.trim().is_empty())
+        };
+        // a comment only owns a row it has to itself: code before it on its
+        // first row (`x = 1; // note`) or after it on its last row keeps the row
+        // code — and a line comment that ends at column 0 of the next row
+        // (rust's `///`) owns none of that row
+        for row in start.row..=end.row {
+            let before = row > start.row || blank(row, 0..start.column);
+            let after = row < end.row || blank(row, end.column..usize::MAX);
+            if before && after && !(row == end.row && row > start.row && end.column == 0) {
+                out.insert(row + 1);
+            }
         }
         return; // no need to recurse inside a comment node
     }
@@ -2218,7 +2235,7 @@ fn collect_comment_lines(node: Node, lang_name: &str, out: &mut HashSet<usize>) 
     }
     let mut c = node.walk();
     for child in node.children(&mut c) {
-        collect_comment_lines(child, lang_name, out);
+        collect_comment_lines(child, lang_name, lines, out);
     }
 }
 
