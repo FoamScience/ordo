@@ -334,8 +334,8 @@ fn a_line_inside_a_top_level_table_belongs_to_the_binding() {
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("ALLOWED"));
     assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Binding));
-    assert_eq!(h.rationale, "edits ALLOWED");
-    // and the detail layer names *which* entry arrived
+    // a pure insertion says which entry arrived, not "edits ALLOWED"
+    assert_eq!(h.rationale, "adds \"typing_extensions\" to ALLOWED");
     assert_eq!(h.details, vec!["adds \"typing_extensions\" to ALLOWED"]);
 }
 

@@ -1704,6 +1704,12 @@ fn scope_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> 
 // the file — a removal, a direction and a size — rather than the bare word
 // "change", which told a reviewer nothing at all
 fn shape_rationale(i: usize, s: &HunkSem, ctx: &RatCtx, my_file: usize) -> String {
+    let replaced = ctx.replaced.get(i).copied().flatten();
+    if pure_insertion(s) {
+        if let Some(d) = member_rationale(s, replaced) {
+            return d;
+        }
+    }
     if let Some(nm) = &s.enclosing {
         // "section" is the word for a prose *definition*; a region already
         // names what it is ("preamble", "front matter", "#ifdef X"), so
@@ -1741,7 +1747,35 @@ fn shape_rationale(i: usize, s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Strin
                 .collect();
             join_frags(&frags)
         });
-    removed.unwrap_or_else(|| size_rationale(s, ctx.replaced.get(i).copied().flatten()))
+    removed
+        .or_else(|| member_rationale(s, replaced))
+        .unwrap_or_else(|| size_rationale(s, replaced))
+}
+
+/// A pure insertion or deletion whose members the detail layer already named
+/// says which: "removes operator= from Foam.GeometricBoundaryField" where the
+/// shape alone read "removes 10 lines". Not for a hunk that adds its whole
+/// container, which `container_phrase` names, nor for lines that came back
+/// next door, which `size_rationale` words as a replacement; a tracked removal
+/// ("removes section Usage") is tried before this and says it shorter.
+fn member_rationale(s: &HunkSem, replaced: Option<&str>) -> Option<String> {
+    let verb = if pure_insertion(s) && !adds_whole(s) {
+        "adds"
+    } else if s.new_empty && replaced.is_none() {
+        "removes"
+    } else {
+        return None;
+    };
+    let mut named = s
+        .details
+        .iter()
+        .filter(|d| d.starts_with(verb) && d.len() <= DETAIL_MAX);
+    let first = named.next()?.clone();
+    // a second detail only when the pair still reads as one line
+    Some(match named.next() {
+        Some(d) if first.len() + 2 + d.len() <= DETAIL_MAX => format!("{first}; {d}"),
+        _ => first,
+    })
 }
 
 /// An import statement that only loses names reads as a removal, and usually
@@ -1847,8 +1881,9 @@ fn size_rationale(s: &HunkSem, replaced: Option<&str>) -> String {
 
 // The detail layer as the rationale, for a hunk with nothing better to say:
 // only at file scope or in a call's arguments, where "edits <container>" has
-// no container worth naming. Inside a definition "edits f" stays — it is true
-// and short, and the details ride alongside it.
+// no container worth naming. Inside a definition "edits f" stays for an edit —
+// it is true and short, and the details ride alongside it; a pure insertion or
+// deletion is worded from its details in `shape_rationale` instead.
 fn detail_rationale(s: &HunkSem) -> Option<String> {
     // A removal is what the hunk did, wherever it sits: "edits Foam.MRFZones"
     // hides a deleted method behind the class that still exists. A hunk with

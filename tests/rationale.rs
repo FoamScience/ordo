@@ -905,6 +905,27 @@ fn the_line_after_a_rust_doc_comment_is_code() {
 }
 
 #[test]
+fn a_deleted_test_is_named_not_counted() {
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.test.js",
+            "old": "import test from 'ava';\n\ntest('keeps', t => {\n  t.pass();\n});\n\ntest('goes', t => {\n  t.pass();\n});\n",
+            "new": "import test from 'ava';\n\ntest('keeps', t => {\n  t.pass();\n});\n" } ]
+    }));
+    assert_eq!(rats, vec!["removes test 'goes'"]);
+}
+
+#[test]
+fn a_removed_field_is_named_not_counted() {
+    // no tracked definition left: the detail layer's member name is the headline
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.rs",
+            "old": "struct S {\n    a: u8,\n    b: u8,\n    c: u8,\n}\n",
+            "new": "struct S {\n    a: u8,\n    c: u8,\n}\n" } ]
+    }));
+    assert_eq!(rats, vec!["removes b from S"]);
+}
+
+#[test]
 fn python_multiline_docstring_only_change_is_a_comment_change() {
     // interior prose lines of a multi-line docstring match no `#`-style
     // textual prefix — the tree-sitter path (a `string` node that's the
