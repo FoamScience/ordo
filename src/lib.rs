@@ -83,6 +83,15 @@ pub fn run(input: Input) -> Output {
     // `old`/`new`, whenever the diff carries enough to rebuild them.
     let mut input = input;
     let mut input_problems = fill_sides(&mut input);
+    lang::learn_shebangs(input.changes.iter().map(|c| {
+        (
+            c.path.as_str(),
+            c.new
+                .as_deref()
+                .filter(|n| !n.is_empty())
+                .or(c.old.as_deref()),
+        )
+    }));
     // Templates are rewritten before anything else looks at them: every later
     // parse (semantics, symbol rows, bodies, advisories) then sees text the
     // underlying grammar can read, at unchanged offsets. What the jinja
