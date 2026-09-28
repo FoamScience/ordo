@@ -1,0 +1,63 @@
+name: ordo-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: ordo-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  review:
+    # the job builds the PR's code before minting the app token; only branches
+    # of this repo, never forks (and never switch this to pull_request_target)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release --bin ordo-engine
+      - run: python3 .github/ordo/pr-review.py --self-test
+      - name: Analyze
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          git diff -U100000 "$BASE...$HEAD" > pr.diff
+          git diff "$BASE...$HEAD" > pr-view.diff
+          ./target/release/ordo-engine review --full-context pr.diff > ordo.json
+          python3 .github/ordo/pr-review.py ordo.json pr-view.diff \
+            --repo "$GITHUB_REPOSITORY" --pr "$PR" --commit "$HEAD" > review.json
+      - uses: actions/create-github-app-token@v3
+        id: app
+        with:
+          client-id: ${{ vars.ORDO_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ORDO_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+      - name: Replace inline reading-order review
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          [ "$(jq '.comments | length' review.json)" -gt 0 ] || exit 0
+          # a review with many comments often answers 504 yet is still created,
+          # so find it by commit rather than trusting the response
+          gh api -X POST "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --input review.json > /dev/null ||
+            echo "::warning::posting the review failed, looking for it anyway"
+          for _ in 1 2 3 4 5 6; do
+            new=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
+              -q ".[] | select((.body | startswith(\"<!-- ordo-review-inline -->\")) and .commit_id == \"$HEAD\") | .id" | tail -1)
+            [ -n "$new" ] && break
+            sleep 10
+          done
+          [ -n "$new" ] || { echo "::error::no ordo review landed for $HEAD"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" --paginate \
+            -q ".[] | select((.body | startswith(\"<!-- ordo-review-inline -->\")) and .pull_request_review_id != $new) | .id" |
+          while read -r id; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/pulls/comments/$id"
+          done
