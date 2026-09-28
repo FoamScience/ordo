@@ -4819,23 +4819,24 @@ fn arg_candidates_e_offers_the_given_rev_pool() {
 
 // ---- `<base>..zz` / `<base>...zz` parsing (relies on the test binary
 // running inside the ordo git checkout, same assumption `resolve`'s own
-// callers make) ----
+// callers make; HEAD, not main, as the base: CI's shallow checkout of a PR
+// has no local main) ----
 
 #[test]
 fn base_dotdot_zz_resolves_to_a_worktree_range_at_base() {
-    let base = git(&["rev-parse", "--verify", "-q", "main^{commit}"]);
+    let base = git(&["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
     let base = base.trim().to_string();
-    match resolve("main..zz") {
+    match resolve("HEAD..zz") {
         Some(Target::WorktreeRange(b)) => assert_eq!(b, base),
-        _ => panic!("expected a WorktreeRange at main"),
+        _ => panic!("expected a WorktreeRange at HEAD"),
     }
 }
 
 #[test]
 fn base_dotdotdot_zz_resolves_to_the_merge_base_with_head() {
-    let merge_base = git(&["merge-base", "main", "HEAD"]);
+    let merge_base = git(&["merge-base", "HEAD", "HEAD"]);
     let merge_base = merge_base.trim().to_string();
-    match resolve("main...zz") {
+    match resolve("HEAD...zz") {
         Some(Target::WorktreeRange(b)) => assert_eq!(b, merge_base),
         _ => panic!("expected a WorktreeRange at the merge base"),
     }
@@ -4856,7 +4857,7 @@ fn plain_zz_is_unchanged() {
 
 #[test]
 fn ordinary_commit_range_is_unchanged() {
-    match resolve("main..HEAD") {
+    match resolve("HEAD..HEAD") {
         Some(Target::Range(_, tip)) => {
             let head = git(&["rev-parse", "--verify", "-q", "HEAD"]);
             assert_eq!(tip, head.trim());
