@@ -222,6 +222,24 @@ fn p12_move_detection() {
 }
 
 #[test]
+fn both_halves_of_an_import_move_name_it() {
+    // two imports swap places: one line leaves, the same line lands elsewhere
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.js",
+            "old": "import {a} from 'x';\nimport {b} from 'y';\n\nconst v = a(b);\n",
+            "new": "import {b} from 'y';\nimport {a} from 'x';\n\nconst v = a(b);\n" }]
+    }));
+    // which of the two the diff calls moved is its choice; both halves must
+    // name the same one
+    assert_eq!(rats.len(), 2, "{rats:?}");
+    assert_eq!(rats[0], rats[1], "{rats:?}");
+    assert!(
+        ["moves import a", "moves import b"].contains(&rats[0].as_str()),
+        "{rats:?}"
+    );
+}
+
+#[test]
 fn p12_noise_formatting_and_generated() {
     // whitespace-only body change → formatting-only noise
     let a = run_json(serde_json::json!({

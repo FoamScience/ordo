@@ -1308,10 +1308,10 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
 //
 // An import hunk is noise too, but it usually has something better to say:
 // which import arrived or changed (`import_rationale`), or which one left
-// (there, or the removal branch in `shape_rationale`). What it has *nothing*
-// better to say about is the empty half of a move — the old line of an import
-// that still exists elsewhere in the file — and for that "formatting only" is
-// exactly right, where "removes 1 line" would claim something left.
+// (there, or the removal branch in `shape_rationale`). The empty half of a
+// move — the old line of an import that still exists elsewhere in the file —
+// names the import it moved, like the half that landed does: "removes 1 line"
+// would claim something left, and "formatting only" hid that it moved at all.
 fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
     let import_speaks = s.category == Category::Import
         && (!s.new_empty
@@ -1324,11 +1324,33 @@ fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> 
     if !s.noise || import_speaks {
         return None;
     }
+    if let Some(moved) = moved_import_phrase(s, ctx, my_file) {
+        return Some(moved);
+    }
     Some(if crate::lang::is_generated_path(&ctx.paths[my_file]) {
         "generated file".to_string()
     } else {
         "formatting only".to_string()
     })
+}
+
+/// The empty half of an import move: the imports on its old rows that the new
+/// side still has.
+fn moved_import_phrase(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
+    if s.category != Category::Import || !s.new_empty {
+        return None;
+    }
+    let fs = ctx.symbols.get(my_file)?;
+    let [o0, o1] = s.old_range;
+    let mut names: Vec<&str> = fs
+        .old_rows
+        .1
+        .iter()
+        .filter(|(n, row)| (o0..=o1).contains(row) && fs.new_imports.contains(n))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    names.dedup();
+    (!names.is_empty()).then(|| format!("moves import {}", name_list(&names)))
 }
 
 // #5 (add side): new import(s) → "adds import"; a touched existing one →
