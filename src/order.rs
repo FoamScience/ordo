@@ -61,7 +61,7 @@ fn join_frags(frags: &[String]) -> String {
         // even one fragment overflows on its own: keep a truncated head, since
         // a clipped name still orients better than no wording at all
         if let Some(f) = frags.first() {
-            out = f.chars().take(budget.saturating_sub(1)).collect::<String>() + "…";
+            out = clip(f, budget);
             dropped -= 1;
         }
     }
@@ -98,11 +98,22 @@ pub(crate) fn short_container(name: &str) -> String {
         Some((_, last)) if quoted(last) => last,
         _ => name,
     };
-    if inner.chars().count() <= CONTAINER_BUDGET {
-        return inner.to_string();
+    clip(inner, CONTAINER_BUDGET)
+}
+
+/// `s` in at most `max` characters, "…" included: cut at the last space when
+/// that keeps over half, so a heading reads "Dynamic completions for…" rather
+/// than "Dynamic com…".
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
     }
-    let head: String = inner.chars().take(CONTAINER_BUDGET - 1).collect();
-    format!("{head}…")
+    let head: String = s.chars().take(max - 1).collect();
+    let cut = match head.rfind(' ') {
+        Some(i) if head[..i].chars().count() > max / 2 => head[..i].trim_end(),
+        _ => head.as_str(),
+    };
+    format!("{cut}…")
 }
 
 /// How much of a rationale one container name may occupy.
@@ -126,7 +137,7 @@ fn clamp_rationale(r: String) -> String {
         Some(i) if head[..i].chars().count() > MAX_RATIONALE / 2 => {
             format!("{}…", &head[..i])
         }
-        _ => format!("{head}…"),
+        _ => clip(&r, MAX_RATIONALE - 1),
     }
 }
 
@@ -2463,6 +2474,12 @@ mod tests {
         );
         assert_eq!(short_container("Project > Install"), "Project > Install");
         assert!(short_container(&"n".repeat(80)).ends_with('…'));
+        // a long heading is cut between words, not inside one
+        let long = "Completions for nouns > Dynamic completions for flags and arguments of the root command";
+        let cut = short_container(long);
+        assert!(cut.chars().count() <= CONTAINER_BUDGET, "{cut}");
+        let kept = cut.trim_end_matches('…');
+        assert!(long[kept.len()..].starts_with(' '), "{cut}");
         assert_eq!(bare_name("Outer::Inner.method"), "method");
     }
 
