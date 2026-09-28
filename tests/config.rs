@@ -260,3 +260,40 @@ fn a_hash_comment_in_yaml_is_a_comment() {
         out.files[0].hunks
     );
 }
+
+#[test]
+fn a_key_repeated_under_another_parent_is_new_here() {
+    // `enable` already exists under `linters`; the one under the new
+    // `formatters` is added, not changed
+    let hs = one(
+        "a.yml",
+        "linters:\n  enable:\n    - vet\nrun:\n  deadline: 5m\n",
+        "linters:\n  enable:\n    - vet\nrun:\n  timeout: 5m\nformatters:\n  enable:\n    - gofmt\n",
+    );
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rats, vec!["adds enable, formatters, timeout"]);
+}
+
+#[test]
+fn keys_sharing_a_line_are_named_only_when_their_own_text_changed() {
+    let hs = one(
+        "libs.toml",
+        "[libraries]\ncg = { module = \"io:cg\", version = \"1.0\" }\n",
+        "[libraries]\ncg = { module = \"io:cg\", version = \"1.1\" }\n",
+    );
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert!(!hs[0].rationale.contains("module"), "{}", hs[0].rationale);
+    assert!(hs[0].rationale.contains("version"), "{}", hs[0].rationale);
+}
+
+#[test]
+fn a_sibling_that_only_gained_a_trailing_comma_is_not_edited() {
+    let hs = one(
+        "en.json",
+        "{\n  \"picker\": {\n    \"a\": \"A\"\n  }\n}\n",
+        "{\n  \"picker\": {\n    \"a\": \"A\",\n    \"b\": \"B\"\n  }\n}\n",
+    );
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(rats.iter().all(|r| !r.contains("edits a")), "{rats:?}");
+    assert!(rats.iter().any(|r| r.contains("adds b")), "{rats:?}");
+}

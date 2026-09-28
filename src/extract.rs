@@ -53,6 +53,9 @@ pub struct HunkSem {
     pub members: Vec<(String, String, Option<String>)>,
     /// what the hunk did to its container's members: adds / removes / changes
     pub details: Vec<String>,
+    /// the member names `details` found added, removed or changed — a member
+    /// merely sharing the hunk's lines is not one of them
+    pub touched: Vec<String>,
     /// structural smells for a def introduced here (P13.1)
     pub notes: Vec<String>,
     /// advanced-construct advisories in this hunk (P14)
@@ -124,6 +127,7 @@ impl HunkSem {
             noise: false,
             members: vec![],
             details: vec![],
+            touched: vec![],
             notes: vec![],
             advisories: vec![],
             symbols: vec![],
@@ -448,6 +452,7 @@ impl Parsed<'_> {
                     .collect(),
             ),
             details: vec![],
+            touched: vec![],
             notes: self.notes(r0, r1),
             advisories: self.advisories(r0, r1),
             symbols: sorted_unique(

@@ -2122,15 +2122,16 @@ fn fill_details(raw: &[RawHunk], sems: &mut [HunkSem], old: Option<&str>, spec: 
     let old_members = old
         .map(|o| extract::member_rows(spec, o))
         .unwrap_or_default();
-    let phrases: Vec<Vec<String>> = raw
+    let phrases: Vec<(Vec<String>, Vec<String>)> = raw
         .iter()
         .zip(sems.iter())
         .map(|(h, sem)| {
             order::detail_phrases(sem, h, &old_members, spec.prose, spec.prose || spec.data)
         })
         .collect();
-    for (sem, d) in sems.iter_mut().zip(phrases) {
+    for (sem, (d, touched)) in sems.iter_mut().zip(phrases) {
         sem.details = d;
+        sem.touched = touched;
     }
 }
 
@@ -2286,6 +2287,9 @@ fn comment_markers(ext: &str) -> &'static [&'static str] {
         // ini accepts both spellings
         "ini" | "cfg" => &["#", ";"],
         "jsonnet" | "libsonnet" => &["//", "/*", "*", "#"],
+        // markdown's only comment is html's; `*` opens emphasis and bullets
+        // (`**Note:** …`), which the C-family default read as comments
+        "md" | "markdown" => &["<!--"],
         _ => &["///", "//", "/*", "*"],
     }
 }
