@@ -2238,6 +2238,16 @@ impl<'a> Walker<'a> {
 
     // falls through: the bound value can still hold defs and uses
     fn visit_locals(&mut self, node: Node) {
+        // lua: inside a function a bare assignment (`t.a = …`, `x = …`) writes
+        // a field or an existing variable; only `local x = …`, reached through
+        // its `variable_declaration`, binds one. At top level it stays: that
+        // is how a module names its exports (`M.defaults = { … }`).
+        if self.spec.name == "lua"
+            && node.kind() == "assignment_statement"
+            && !self.stack.is_empty()
+        {
+            return;
+        }
         for (id, name) in bound_names(node, self.src, self.spec) {
             if self.stack.is_empty() && !lang::splits_declarations(self.spec) {
                 self.c.top_binds.insert(name.clone());
