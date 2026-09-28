@@ -1236,8 +1236,11 @@ impl<'a> RatCtx<'a> {
     fn use_of_phrase(&self, sym: &str, mine: usize, b: usize) -> String {
         // a symbol this change introduces is "added", not "defined": the
         // reader would otherwise take the definition for pre-existing code
+        // and one this change only renamed is "renamed": it existed before
         let verb = if self.symbols[self.group_file[b]].old_defs.contains(sym) {
             "defined"
+        } else if self.renamed_to.values().any(|to| *to == sym) {
+            "renamed"
         } else {
             "added"
         };
@@ -1891,12 +1894,21 @@ fn detail_rationale(s: &HunkSem) -> Option<String> {
     // and a detail longer than a line is one a reviewer reads in the detail
     // layer rather than in place of the container's name.
     if !s.new_empty {
-        let removal = s
-            .details
-            .iter()
-            .find(|d| d.starts_with("removes") && d.len() <= DETAIL_MAX);
+        // a rename too long with its container still says more without it
+        // than the "edits <container>" it would otherwise fall back to
+        let removal = s.details.iter().find_map(|d| {
+            if d.starts_with("removes") && d.len() <= DETAIL_MAX {
+                return Some(d.as_str());
+            }
+            if !d.starts_with("renames") {
+                return None;
+            }
+            (d.len() <= DETAIL_MAX)
+                .then_some(d.as_str())
+                .or_else(|| d.find(" in ").map(|i| &d[..i]))
+        });
         if let Some(d) = removal {
-            return Some(d.clone());
+            return Some(d.to_string());
         }
     }
     let bare = s.enclosing.is_none() || s.enclosing_kind == Some(crate::ContainerKind::Call);
@@ -2144,6 +2156,12 @@ pub(crate) fn detail_phrases(
         .collect()
 }
 
+/// How alike two member names must be (`similar`'s character ratio) for one
+/// leaving and one arriving with the same text to read as a rename: a typo fix
+/// (`step_inedx` → `step_index`) clears it, a different word (`legacy` →
+/// `serve`) does not.
+const RENAME_SIMILARITY: f32 = 0.6;
+
 /// One container's member phrases: "adds a, b to Foo", "removes c from Foo".
 fn container_phrases(
     container: Option<&str>,
@@ -2151,8 +2169,38 @@ fn container_phrases(
     new: &HashMap<&str, &str>,
     prose: bool,
 ) -> Vec<String> {
-    member_diff(container, old, new)
-        .into_iter()
+    let [added, removed, changed] = member_diff(container, old, new);
+    // one member gone and one arrived, the same but for a name spelled nearly
+    // alike: a rename (`'step_inedx': j` → `'step_index': j`), which "adds one,
+    // removes the other" reads as two unrelated changes. A different name with
+    // the same value (`legacy: true` → `serve: true`) stays an add and a
+    // removal, and so does a list entry, whose name is all there is of it
+    // (`"/b"` → `"/c"` replaces a value). Not for prose, whose members are
+    // headings: sentences, not names.
+    if let ([to], [from]) = (added.2.as_slice(), removed.2.as_slice()) {
+        let alike = similar::TextDiff::from_chars(*from, *to).ratio() >= RENAME_SIMILARITY;
+        if !prose && alike && new[to] != *to && new[to].replacen(to, from, 1) == old[from] {
+            let rename = match container {
+                Some(c) => format!("renames {from} → {to} in {c}"),
+                None => format!("renames {from} → {to}"),
+            };
+            let rest = container_phrases_of(
+                [("adds", "to", vec![]), ("removes", "from", vec![]), changed],
+                container,
+                prose,
+            );
+            return std::iter::once(rename).chain(rest).collect();
+        }
+    }
+    container_phrases_of([added, removed, changed], container, prose)
+}
+
+fn container_phrases_of(
+    diff: [(&'static str, &'static str, Vec<&str>); 3],
+    container: Option<&str>,
+    prose: bool,
+) -> Vec<String> {
+    diff.into_iter()
         .filter(|(_, _, names)| !names.is_empty())
         .map(|(verb, prep, names)| {
             let list = name_list(&names);

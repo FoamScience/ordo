@@ -83,7 +83,9 @@ fn go_var_to_const_edits_the_binding() {
 }
 
 /// cobra 88b30ab8 yaml_docs.go: one line of a nine-line import block changed,
-/// and the rationale listed all nine.
+/// and the rationale listed all nine. Both paths bind `yaml` (a major version
+/// is not the package name), so the line changes an import rather than adding
+/// one called `v3`.
 #[test]
 fn go_import_block_names_only_the_line_that_changed() {
     let block = |yaml: &str| {
@@ -95,7 +97,7 @@ fn go_import_block_names_only_the_line_that_changed() {
         &block("go.yaml.in/yaml/v3"),
     );
     assert_eq!(hs.len(), 1, "{hs:?}");
-    assert_eq!(hs[0].rationale, "adds import v3");
+    assert_eq!(hs[0].rationale, "changes import yaml");
 }
 
 /// buildtheworld 0858367a: a symbol this change introduces is "added", so the
