@@ -45,7 +45,7 @@ fn p15_generalizes_across_languages() {
             "a.go",
             "package m\ntype C struct {\n\tA int\n\tLegacy bool\n}\n",
             "package m\ntype C struct {\n\tA int\n\tServe bool\n}\n",
-            &["adds Serve", "removes Legacy"],
+            &["adds Serve to C", "removes Legacy from C"],
         ),
         (
             "b.java",

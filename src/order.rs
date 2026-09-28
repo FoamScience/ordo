@@ -1199,7 +1199,12 @@ impl<'a> RatCtx<'a> {
             .symbols
             .get(file)
             .is_some_and(|f| f.old_defs.contains(bare_name(nm)));
-        existed.then(|| format!("changes signature of {}", short_container(nm)))
+        let what = if s.annotations_only {
+            "annotations"
+        } else {
+            "signature"
+        };
+        existed.then(|| format!("changes {what} of {}", short_container(nm)))
     }
     // a file-scope hunk that touches module-level bindings: "changes STRING"
     // for a constant whose declaration line changed (an annotation, a value),
@@ -1265,7 +1270,10 @@ impl<'a> RatCtx<'a> {
         })
     }
 
-    fn use_of_phrase(&self, sym: &str, mine: usize, b: usize) -> String {
+    /// `row` is the using hunk's own: its group can start far above it (the
+    /// head of the function it sits in), which read a definition above the
+    /// use as "below"
+    fn use_of_phrase(&self, sym: &str, mine: usize, b: usize, row: usize) -> String {
         // a symbol this change introduces is "added", not "defined": the
         // reader would otherwise take the definition for pre-existing code
         // and one this change only renamed is "renamed": it existed before
@@ -1279,7 +1287,7 @@ impl<'a> RatCtx<'a> {
         if self.group_file[b] != self.group_file[mine] {
             format!("uses {sym}, {verb} in {}", self.paths[self.group_file[b]])
         } else {
-            let dir = if self.group_row[b] < self.group_row[mine] {
+            let dir = if self.group_row[b] < row {
                 "above"
             } else {
                 "below"
@@ -1573,7 +1581,12 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
             .is_some_and(|sy| crate::lang::has_signature(&sy.kind))
     });
     if !sig.is_empty() {
-        frags.push(format!("changes signature of {}", name_list(&sig)));
+        let what = if s.annotations_only {
+            "annotations"
+        } else {
+            "signature"
+        };
+        frags.push(format!("changes {what} of {}", name_list(&sig)));
     }
     if !plain.is_empty() {
         frags.push(format!("changes {}", name_list(&plain)));
@@ -1710,7 +1723,7 @@ fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> 
         }
     }
     if let Some((u, b)) = defined_elsewhere(s, mine, ctx, |_| true) {
-        return Some(ctx.use_of_phrase(u, mine, b));
+        return Some(ctx.use_of_phrase(u, mine, b, s.start_row));
     }
     // like a function the hunk adds, a container it adds carries its own
     // locals: listing them again would only repeat what was added
@@ -2006,13 +2019,10 @@ fn comment_rationale(old_range: [usize; 2], new_empty: bool, enclosing: Option<&
 // bindings and counts their uses; the positions themselves ride on
 // `HunkOut::uses_at`, where a consumer can mark them in the code rather than
 // make the reader carry eighteen line numbers across two panes.
-fn used_frag(items: &[(&str, &[usize])], prefix: &str) -> String {
+fn used_frag(items: &[(&str, usize)], prefix: &str) -> String {
     let strs: Vec<String> = items
         .iter()
-        .map(|(name, uses)| {
-            let n = uses.len();
-            format!("{name} ({n} use{})", if n == 1 { "" } else { "s" })
-        })
+        .map(|&(name, n)| format!("{name} ({n} use{})", if n == 1 { "" } else { "s" }))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
     format!("adds {prefix}{}", name_list(&refs))
@@ -2083,8 +2093,8 @@ struct BindingBuckets<'a> {
     /// (scope, names), scope-sorted before wording
     no_uses_scoped: Vec<(&'a str, Vec<&'a str>)>,
     no_uses_file: Vec<&'a str>,
-    used_scoped: Vec<(&'a str, &'a [usize])>,
-    used_file: Vec<(&'a str, &'a [usize])>,
+    used_scoped: Vec<(&'a str, usize)>,
+    used_file: Vec<(&'a str, usize)>,
 }
 
 impl<'a> BindingBuckets<'a> {
@@ -2096,8 +2106,8 @@ impl<'a> BindingBuckets<'a> {
                 None => self.no_uses_scoped.push((scope.as_str(), vec![&b.name])),
             },
             (None, true) => self.no_uses_file.push(&b.name),
-            (Some(_), false) => self.used_scoped.push((&b.name, &b.uses)),
-            (None, false) => self.used_file.push((&b.name, &b.uses)),
+            (Some(_), false) => self.used_scoped.push((&b.name, b.count)),
+            (None, false) => self.used_file.push((&b.name, b.count)),
         }
     }
 

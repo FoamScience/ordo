@@ -1331,3 +1331,88 @@ fn a_file_scope_call_reads_its_details_not_its_identifiers() {
         "{rats:?}"
     );
 }
+
+#[test]
+fn a_use_below_its_definition_says_defined_above() {
+    // the use sits in the same function as the nested def, whose group starts
+    // above both; the direction is from the use's own line
+    let old = "def outer(a):\n    x = 1\n\n\n\n\n\n    def fetch(c):\n        return c\n\n\n\n\n\n    return fetch(a)\n";
+    let new = "def outer(a, b=None):\n    x = 1\n\n\n\n\n\n    def fetch(c, d=None):\n        return c\n\n\n\n\n\n    return fetch(a) or fetch(a)\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": old, "new": new }]
+    }));
+    assert_eq!(
+        rats.last().map(String::as_str),
+        Some("uses fetch, defined above"),
+        "{rats:?}"
+    );
+}
+
+#[test]
+fn two_uses_on_one_line_count_as_two() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.py",
+            "old": "def f(h, c):\n    return h\n",
+            "new": "def f(h, c):\n    m = 'x'\n    return h + m if c else m\n" }]
+    }));
+    assert!(rats.iter().any(|r| r.contains("m (2 uses)")), "{rats:?}");
+}
+
+#[test]
+fn an_annotation_swap_changes_annotations_not_signature() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "T.java",
+            "old": "class T {\n  @Test\n  void runs(int a) {\n  }\n}\n",
+            "new": "class T {\n  @ParameterizedTest\n  @ValueSource(ints = { 1 })\n  void runs(int a) {\n  }\n}\n" }]
+    }));
+    assert_eq!(rats, vec!["changes annotations of runs"]);
+}
+
+#[test]
+fn a_cast_keeps_its_spaces_in_a_name() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.ts",
+            "old": "const w = 1;\n",
+            "new": "const w = 1;\n(window as any).resolve = () => w;\n" }]
+    }));
+    assert!(
+        rats.iter().any(|r| r.contains("(window as any).resolve")),
+        "{rats:?}"
+    );
+}
+
+#[test]
+fn a_go_package_var_is_not_a_local_of_itself() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.go",
+            "old": "package a\n\nfunc f() string {\n\treturn \"\"\n}\n",
+            "new": "package a\n\nvar tmpl = `x\ny\nz`\n\nfunc f() string {\n\treturn tmpl\n}\n" }]
+    }));
+    assert!(
+        rats.iter().all(|r| !r.contains("adds local tmpl")),
+        "{rats:?}"
+    );
+}
+
+#[test]
+fn a_go_type_is_a_definition() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.go",
+            "old": "package a\n",
+            "new": "package a\n\ntype Fn func(a int) int\n\nfunc use(f Fn) {}\n" }]
+    }));
+    assert_eq!(rats, vec!["adds type Fn, use"]);
+}
+
+#[test]
+fn a_multi_line_local_is_scoped_by_its_function_not_itself() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.cpp",
+            "old": "#include <x>\nint f() {\n  return 1;\n}\n",
+            "new": "#include <x>\nint f() {\n  const Foo<int>\n      value = make(1);\n  return 1;\n}\n" }]
+    }));
+    assert_eq!(
+        rats,
+        vec!["adds local value, no uses in f — check nested scopes"]
+    );
+}
