@@ -4550,6 +4550,18 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
                 .find_map(|n| first_string_literal(n, src))?;
             Some(vec![(row, lit)])
         }
+        // java: `import a.b.C;` binds `C`, `import static a.b.C.m;` binds `m`,
+        // `import a.b.*;` the package `b` — not every segment of the path,
+        // which made two imports sharing `java.util` read as one changed
+        ("java", "import_declaration") => {
+            let text = node.utf8_text(src).ok()?.trim();
+            let path = text.strip_prefix("import")?.trim_start();
+            let path = path.strip_prefix("static ").unwrap_or(path);
+            let mut segs = path.trim_end_matches(';').rsplit('.').map(str::trim);
+            let last = segs.next()?;
+            let name = if last == "*" { segs.next()? } else { last };
+            (!name.is_empty()).then(|| vec![(row, name.to_string())])
+        }
         ("go", "import_spec") => Some(go_import_name(node, src).into_iter().collect()),
         ("go", "import_declaration") => Some(go_import_names(node, src)),
         ("python" | "xonsh", "import_statement" | "import_from_statement") => {
@@ -4629,7 +4641,21 @@ fn go_import_name(spec: Node, src: &[u8]) -> Option<(usize, String)> {
         return (a != "_" && a != ".").then(|| (row, a.to_string()));
     }
     let path = spec.child_by_field_name("path")?.utf8_text(src).ok()?;
-    let last = path.trim_matches('"').rsplit('/').next()?;
+    let mut segs = path.trim_matches('"').rsplit('/');
+    let mut last = segs.next()?;
+    // a major version is not the package: `go.yaml.in/yaml/v3` and
+    // `gopkg.in/yaml.v3` both bind `yaml`
+    let is_version = |v: &str| {
+        v.strip_prefix('v')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if is_version(last) {
+        last = segs.next()?;
+    } else if let Some((pkg, v)) = last.rsplit_once('.') {
+        if is_version(v) {
+            last = pkg;
+        }
+    }
     (!last.is_empty()).then(|| (row, last.to_string()))
 }
 

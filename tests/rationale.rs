@@ -74,6 +74,45 @@ fn p7_rename() {
 }
 
 #[test]
+fn a_use_of_a_renamed_definition_says_renamed_not_added() {
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py",
+            "old": "def foo():\n    return 1\n\n\n\n\n\n\ndef main():\n    return foo()\n",
+            "new": "def bar():\n    return 1\n\n\n\n\n\n\ndef main():\n    return bar()\n" } ]
+    }));
+    assert_eq!(
+        rats,
+        vec![
+            "renames foo → bar, used by main below",
+            "uses bar, renamed above"
+        ]
+    );
+}
+
+#[test]
+fn a_misspelt_key_fixed_in_place_is_a_rename() {
+    // one key gone and a near-identical one arrived with the same value
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py",
+            "old": "def f(j):\n    return {\n        'step_inedx': j,\n    }\n",
+            "new": "def f(j):\n    return {\n        'step_index': j,\n    }\n" } ]
+    }));
+    assert_eq!(rats, vec!["renames step_inedx → step_index in f"]);
+}
+
+#[test]
+fn a_java_import_is_named_by_what_it_binds() {
+    // `java`, `util` and `stream` also appear in the imports already there;
+    // matching on path segments read these additions as changes
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "A.java",
+            "old": "package p;\n\nimport java.util.List;\n\nclass A {}\n",
+            "new": "package p;\n\nimport java.util.List;\nimport java.util.stream.Collectors;\nimport static java.util.stream.Collectors.toSet;\n\nclass A {}\n" } ]
+    }));
+    assert_eq!(rats, vec!["adds import Collectors, toSet"]);
+}
+
+#[test]
 fn p5_p7_removals() {
     let rats = rationales(serde_json::json!({
         "changes": [
