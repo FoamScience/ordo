@@ -211,3 +211,23 @@ fn a_declaration_the_parser_choked_on_yields_no_bindings() {
         "a c++ keyword must never be reported as a binding: {joined}"
     );
 }
+
+#[test]
+fn a_lua_field_write_in_a_function_is_not_a_new_local() {
+    // `t.top = …` writes a field of an existing table; only `local` binds
+    let old = "local M = {}\n\nfunction M.rebuild(t)\n  local a = 1\n  return a\nend\n\nreturn M\n";
+    let new = "local M = {}\n\nfunction M.rebuild(t)\n  local a = 1\n  t.top = a\n  return a\nend\n\nreturn M\n";
+    let rats = one("a.lua", old, new);
+    assert!(rats.iter().all(|r| !r.contains("adds local")), "{rats:?}");
+}
+
+#[test]
+fn a_lua_local_in_a_function_still_binds() {
+    let old = "function f()\n  return 1\nend\n";
+    let new = "function f()\n  local n = 2\n  return n\nend\n";
+    let rats = one("a.lua", old, new);
+    assert!(
+        rats.iter().any(|r| r.starts_with("adds local n")),
+        "{rats:?}"
+    );
+}
