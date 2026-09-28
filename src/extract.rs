@@ -26,6 +26,10 @@ pub struct HunkSem {
     /// what it touched is the signature, even though the `def` line itself is
     /// outside the hunk (a multi-line parameter list, a return annotation)
     pub in_header: bool,
+    /// every changed line on both sides is an annotation or decorator
+    /// (`@Test` → `@ParameterizedTest`): what changed is how the definition is
+    /// marked, not its signature
+    pub annotations_only: bool,
     pub defines: Vec<String>,
     /// subset of `defines` that a hunk introduces via *import* nodes — used for
     /// rationale wording so an import+def hunk doesn't call function names
@@ -108,6 +112,9 @@ pub struct BindingUse {
     pub scope: Option<String>,
     /// 1-based line numbers where the name is used elsewhere, sorted
     pub uses: Vec<usize>,
+    /// how many times it is used: two uses on one line are two
+    /// (`x if c else x`), which `uses`, one entry per line, cannot say
+    pub count: usize,
 }
 
 impl HunkSem {
@@ -138,6 +145,7 @@ impl HunkSem {
             old_range: h.old_range,
             new_empty: h.new_r0.is_none(),
             whole_old_file: false,
+            annotations_only: false,
             new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
             def_lines: 0,
             def_params: 0,
@@ -485,6 +493,7 @@ impl Parsed<'_> {
                     && (r0..=r1).all(|r| self.lines.get(r).is_none_or(|l| l.trim().is_empty()))),
             // filled in by `build_change`, which knows the old side's length
             whole_old_file: false,
+            annotations_only: false,
             new_len: r1 - r0 + 1,
             def_lines: shape.lines,
             def_params: shape.params,
@@ -806,6 +815,8 @@ impl Parsed<'_> {
     fn bindings(&self, r0: usize, r1: usize) -> Vec<BindingUse> {
         let c = self.c;
         let mut bindings: Vec<BindingUse> = vec![];
+        // every use node counted once, however many binds of the name share it
+        let mut ids: HashMap<&str, HashSet<usize>> = HashMap::new();
         for (row, name) in c
             .local_binds
             .iter()
@@ -814,31 +825,55 @@ impl Parsed<'_> {
             if name == "_" || self.decl_at_row.contains(&(*row, name.as_str())) {
                 continue;
             }
+            // what scopes a local is a definition, a test block, or another
+            // binding's value (`const App = () => { … }`) — never the
+            // statement declaring it: a go package-level `var x = …` is a
+            // binding container named `x`, and read as x's scope it made x a
+            // local with "no uses in x"; `const [w, setW] = …` is one named `w`.
+            // A call or a namespace around it scopes nothing.
             let scope_def = c
                 .defs
                 .iter()
                 .filter(|d| d.s <= *row && *row <= d.e)
+                .filter(|d| match d.kind {
+                    ContainerKind::Definition | ContainerKind::Test => true,
+                    ContainerKind::Binding => {
+                        // container names are qualified (`f.x`), the local's is not
+                        let own = d.name.strip_suffix(name.as_str()).is_some_and(|head| {
+                            head.is_empty() || head.ends_with(lang::scope_sep(self.spec))
+                        });
+                        d.s < *row && !own
+                    }
+                    _ => false,
+                })
                 .min_by_key(|d| d.e - d.s);
             let (lo, hi) = scope_def.map(|d| (d.s, d.e)).unwrap_or((0, usize::MAX));
-            let uses_here = c
+            let uses_here: Vec<(usize, usize)> = c
                 .all_idents
                 .iter()
                 .filter(|(r, i, id)| {
                     c.uses[*i].1 == *name && *r >= lo && *r <= hi && !c.bind_ids.contains(id)
                 })
-                .map(|(r, _, _)| r + 1);
+                .map(|(r, _, id)| (r + 1, *id))
+                .collect();
+            ids.entry(name.as_str())
+                .or_default()
+                .extend(uses_here.iter().map(|(_, id)| *id));
+            let rows = uses_here.iter().map(|(r, _)| *r);
             match bindings.iter_mut().find(|b| &b.name == name) {
-                Some(b) => b.uses.extend(uses_here),
+                Some(b) => b.uses.extend(rows),
                 None => bindings.push(BindingUse {
                     name: name.clone(),
                     scope: scope_def.map(|d| d.name.clone()),
-                    uses: uses_here.collect(),
+                    uses: rows.collect(),
+                    count: 0,
                 }),
             }
         }
         for b in &mut bindings {
             b.uses.sort();
             b.uses.dedup();
+            b.count = ids.get(b.name.as_str()).map_or(0, HashSet::len);
         }
         bindings
     }
@@ -3637,11 +3672,22 @@ pub fn identifier_rows(spec: &LangSpec, content: &str, name: &str) -> Vec<usize>
 /// newline would otherwise reach `defines`, `symbols`, `enclosing` and the
 /// rationale, which is contractually one line.
 fn tidy_ident(s: &str) -> String {
-    if s.chars().any(char::is_whitespace) {
-        s.split_whitespace().collect()
-    } else {
-        s.to_string()
+    if !s.chars().any(char::is_whitespace) {
+        return s.to_string();
     }
+    // whitespace between punctuation goes (`obj\n  .method` → `obj.method`);
+    // between two words it stays one space, or `(window as any).x` would
+    // read `(windowasany).x`
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let mut out = String::with_capacity(s.len());
+    for piece in s.split_whitespace() {
+        let joins = out.ends_with(word) && piece.starts_with(word);
+        if joins {
+            out.push(' ');
+        }
+        out.push_str(piece);
+    }
+    out
 }
 
 fn node_name(node: Node, src: &[u8]) -> Option<String> {
@@ -3679,6 +3725,24 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
     }
     if let Some(own) = grammar_name(node, src) {
         return own;
+    }
+    // go: `type T struct{…}` is a `type_declaration` with no name of its own;
+    // the name is on its one `type_spec` (`type_alias` for `type A = B`). A
+    // grouped `type ( … )` block holds several and names none of them.
+    if node.kind() == "type_declaration" {
+        let mut cur = node.walk();
+        let specs: Vec<Node> = node
+            .named_children(&mut cur)
+            .filter(|c| matches!(c.kind(), "type_spec" | "type_alias"))
+            .collect();
+        return match specs.as_slice() {
+            [one] => one
+                .child_by_field_name("name")?
+                .utf8_text(src)
+                .ok()
+                .map(str::to_string),
+            _ => None,
+        };
     }
     config_key_name(node, src)
         .or_else(|| bound_name(node, src))

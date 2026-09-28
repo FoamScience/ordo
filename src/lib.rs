@@ -2112,7 +2112,29 @@ fn mark_shape(
         sem.noise = generated || (!degraded && formatting_only(h, old_lines, new_lines));
         let [o0, o1] = h.old_range;
         sem.whole_old_file = !old_lines.is_empty() && o0 == 1 && o1 >= old_lines.len();
+        sem.annotations_only = annotations_only(h, old_lines, new_lines);
     }
+}
+
+/// Every non-blank changed line, on both sides, opens with `@`: a java
+/// annotation, a python or ts decorator. A multi-line one whose later lines do
+/// not start with `@` is left out rather than guessed at.
+fn annotations_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool {
+    let side = |lines: &[&str], [a, b]: [usize; 2]| -> Vec<String> {
+        if a == 0 || a > b || b > lines.len() {
+            return vec![];
+        }
+        lines[a - 1..b]
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    let changed: Vec<String> = side(old_lines, h.old_range)
+        .into_iter()
+        .chain(side(new_lines, h.new_range))
+        .collect();
+    !changed.is_empty() && changed.iter().all(|l| l.starts_with('@'))
 }
 
 /// P15 detail layer: what the hunk did to the members of its container. The
