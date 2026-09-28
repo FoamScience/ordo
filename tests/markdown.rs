@@ -149,3 +149,14 @@ fn a_long_section_is_not_a_large_definition() {
         .collect();
     assert!(notes.is_empty(), "prose measured as code: {notes:?}");
 }
+
+#[test]
+fn bold_prose_is_not_a_comment() {
+    let old = "# Guide\n\n**Note:** run it once.\n";
+    let new = "# Guide\n\n**Note:** run it twice.\n";
+    let hs = one("a.md", old, new);
+    assert!(
+        hs.iter().all(|h| !h.rationale.contains("comment")),
+        "{hs:?}"
+    );
+}

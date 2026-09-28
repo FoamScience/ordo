@@ -1132,15 +1132,36 @@ impl<'a> RatCtx<'a> {
     fn is_prose(&self, file: usize) -> bool {
         crate::lang::for_path(&self.paths[file]).is_some_and(|s| s.prose)
     }
+    fn is_data(&self, file: usize) -> bool {
+        crate::lang::for_path(&self.paths[file]).is_some_and(|s| s.data)
+    }
     // #3/#4: verb for a definition hunk. New symbol → "adds"/"adds type"; a
     // pre-existing symbol whose header changed → "changes signature of"/"changes
     // type" (a def-category hunk means the declaration line itself moved).
-    fn def_verb(&self, file: usize, sym: &str, is_type: bool, inserted: bool) -> &'static str {
-        let existed = !inserted
-            && self
-                .symbols
-                .get(file)
-                .is_some_and(|s| s.old_defs.contains(sym));
+    fn def_verb(
+        &self,
+        file: usize,
+        sym: &str,
+        is_type: bool,
+        old_range: [usize; 2],
+    ) -> &'static str {
+        let [o0, o1] = old_range;
+        // a data file repeats key names under different parents
+        // (`linters.enable`, `formatters.enable`): the old key only counts as
+        // this one when it sat on the rows this hunk replaced
+        let existed = o0 <= o1
+            && self.symbols.get(file).is_some_and(|s| {
+                s.old_defs.contains(sym)
+                    && (!self.is_data(file) || {
+                        // rows come in source order: only the hunk's own are read
+                        let rows = &s.old_rows.0;
+                        let from = rows.partition_point(|(_, r)| *r < o0);
+                        rows[from..]
+                            .iter()
+                            .take_while(|(_, r)| *r <= o1)
+                            .any(|(n, _)| n == sym)
+                    })
+            });
         let body_only = self
             .changed
             .get(file)
@@ -1470,8 +1491,7 @@ fn classify_defs<'a>(
     // Nothing inside inserted lines can be an edit of what was there: a new
     // yaml document repeating its neighbours' keys, a new overload of an
     // existing name, a second `impl` block. The name may be old; this
-    // occurrence of it is not.
-    let inserted = s.old_range[0] > s.old_range[1];
+    // occurrence of it is not (see `def_verb`).
     for &d in real {
         if let Some(src) = changed.and_then(|c| c.moved_in.get(d)) {
             v.moved.push((d, src.as_str()));
@@ -1480,7 +1500,7 @@ fn classify_defs<'a>(
         } else if let Some(src) = changed.and_then(|c| c.relocated.get(d)) {
             v.extracted.push((d, src.as_str()));
         } else {
-            match ctx.def_verb(my_file, d, s.is_type, inserted) {
+            match ctx.def_verb(my_file, d, s.is_type, s.old_range) {
                 "adds" => v.added.push(d),
                 "adds type" => v.added_types.push(d),
                 "edits" => v.edited.push(d),
@@ -1624,16 +1644,20 @@ fn with_binding_clause(mut out: String, s: &HunkSem, old_locals: &HashSet<String
 // carry no navigational signal — drop them from the wording and fall through
 // to the use side and enclosing-edit wording when a hunk defines nothing else.
 fn def_side_rationale(s: &HunkSem, sem: &[&HunkSem], mine: usize, ctx: &RatCtx) -> Option<String> {
+    let my_file = ctx.group_file[mine];
+    // in a data file several keys share a line (`{ module = …, version = … }`);
+    // only those whose own text the detail layer saw change are worth naming
+    let data = ctx.is_data(my_file);
     let real: Vec<&str> = s
         .defines
         .iter()
         .map(String::as_str)
         .filter(|d| *d != "<anonymous>" && *d != "_")
+        .filter(|d| !data || s.touched.is_empty() || s.touched.iter().any(|t| t == d))
         .collect();
     if real.is_empty() {
         return None;
     }
-    let my_file = ctx.group_file[mine];
     let verbs = classify_defs(&real, s, ctx, my_file);
     let frags = def_frags(&verbs, s, ctx.is_prose(my_file));
     let mut out = join_frags(&frags);
@@ -2149,7 +2173,7 @@ pub(crate) fn detail_phrases(
     old_members: &[extract::MemberRow],
     prose: bool,
     nests: bool,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<String>) {
     let [o0, o1] = h.old_range;
     // Anything the hunk introduces wholesale is already named by the rationale
     // ("adds type Fresh") — relisting the members it was born with says nothing
@@ -2160,7 +2184,7 @@ pub(crate) fn detail_phrases(
     // in — but only when it HAS a parent; a wholly new top-level section still
     // stays silent here, same as every other language.
     if o0 > o1 && !s.defines.is_empty() && !(prose && s.enclosing.is_some()) {
-        return vec![];
+        return (vec![], vec![]);
     }
     let (old_by, new_by) = members_by_container(s, h, old_members, nests);
     let mut containers: Vec<Option<String>> = old_by.keys().chain(new_by.keys()).cloned().collect();
@@ -2168,14 +2192,16 @@ pub(crate) fn detail_phrases(
     containers.dedup();
 
     let empty = HashMap::new();
-    containers
-        .iter()
-        .flat_map(|container| {
-            let old = old_by.get(container).unwrap_or(&empty);
-            let new = new_by.get(container).unwrap_or(&empty);
-            container_phrases(container.as_deref(), old, new, prose)
-        })
-        .collect()
+    let (mut phrases, mut touched) = (vec![], vec![]);
+    for container in &containers {
+        let old = old_by.get(container).unwrap_or(&empty);
+        let new = new_by.get(container).unwrap_or(&empty);
+        for (_, _, names) in member_diff(container.as_deref(), old, new) {
+            touched.extend(names.into_iter().map(str::to_string));
+        }
+        phrases.extend(container_phrases(container.as_deref(), old, new, prose));
+    }
+    (phrases, touched)
 }
 
 /// How alike two member names must be (`similar`'s character ratio) for one
