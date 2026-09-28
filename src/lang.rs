@@ -795,16 +795,51 @@ fn template_spec(path: &str) -> Option<&'static LangSpec> {
     template_lang(path).filter(|t| t.template.is_some_and(|t| t.standalone))
 }
 
-/// Resolve a path to a language spec by file extension, or None when
+/// Resolve a path to a language spec by file name or extension, or None when
 /// unsupported (caller then falls back to file order). A template extension
-/// (`.j2` and friends) resolves to the format underneath it.
+/// (`.j2` and friends) resolves to the format underneath it. Inside a `run`, a
+/// path neither resolves also takes the language its `#!` line named (see
+/// `learn_shebangs`).
 pub fn for_path(path: &str) -> Option<&'static LangSpec> {
     // only an extension that *marks* a template is stripped; a Helm template's
     // extension is the host format's own and stays
     if has_template_ext(path) {
         return template_spec(path);
     }
-    for_path_plain(path)
+    for_path_plain(path).or_else(|| SHEBANGS.with(|m| m.borrow().get(path).copied()))
+}
+
+/// The language a script's `#!` line names, for a file whose path names none:
+/// `#!/bin/sh`, `#!/usr/bin/env python3`. The interpreter's basename decides,
+/// with `env` and its flags skipped and a trailing version dropped.
+pub fn for_shebang(content: &str) -> Option<&'static LangSpec> {
+    let line = content.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_whitespace();
+    let mut prog = words.next()?.rsplit('/').next()?;
+    if prog == "env" {
+        prog = words.find(|w| !w.starts_with('-') && !w.contains('='))?;
+    }
+    let name = match prog.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.') {
+        "sh" | "bash" | "dash" | "ksh" | "zsh" => "bash",
+        "python" => "python",
+        "xonsh" => "xonsh",
+        "node" | "nodejs" => "javascript",
+        "lua" | "luajit" => "lua",
+        _ => return None,
+    };
+    SPECS.iter().find(|s| s.name == name)
+}
+
+/// Let `for_path` answer for extension-less scripts in this `run`: each path
+/// no name or extension resolves takes the language its `#!` line names. The
+/// callers ask by path alone, so the answer is kept per path until
+/// `forget_trees`.
+pub(crate) fn learn_shebangs<'a>(files: impl Iterator<Item = (&'a str, Option<&'a str>)>) {
+    let learned: Vec<(String, &'static LangSpec)> = files
+        .filter(|(path, _)| for_path(path).is_none())
+        .filter_map(|(path, content)| Some((path.to_string(), for_shebang(content?)?)))
+        .collect();
+    SHEBANGS.with(|m| m.borrow_mut().extend(learned));
 }
 
 /// Suffixes that mark a file as a *variant* of another: `.dvc/config.local`
@@ -1184,9 +1219,12 @@ thread_local! {
     #[cfg(test)]
     static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TREE_CACHE: RefCell<Vec<CacheEntry>> = const { RefCell::new(Vec::new()) };
+    /// path → the language its `#!` line named, for this `run` (see `learn_shebangs`)
+    static SHEBANGS: RefCell<std::collections::HashMap<String, &'static LangSpec>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
-/// Drop every cached tree.
+/// Drop every cached tree, and the languages `learn_shebangs` recorded.
 ///
 /// The cache exists to serve the passes of one `run`; past that it is just
 /// retained memory, and the `ordo` client calls `run` again on every reload.
@@ -1194,6 +1232,7 @@ thread_local! {
 /// source worth of trees for the life of the process.
 pub(crate) fn forget_trees() {
     TREE_CACHE.with(|c| c.borrow_mut().clear());
+    SHEBANGS.with(|m| m.borrow_mut().clear());
 }
 
 /// Parse `content` with this spec's grammar. `None` when the grammar refuses
@@ -1252,6 +1291,25 @@ pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
     });
 
     Some(tree)
+}
+
+#[cfg(test)]
+mod shebang_tests {
+    use super::for_shebang;
+
+    #[test]
+    fn the_interpreter_names_the_language() {
+        let name = |c: &str| for_shebang(c).map(|s| s.name);
+        assert_eq!(name("#!/bin/sh\n"), Some("bash"));
+        assert_eq!(name("#!/usr/bin/env python3.12\n"), Some("python"));
+        assert_eq!(
+            name("#!/usr/bin/env -S node --harmony\n"),
+            Some("javascript")
+        );
+        assert_eq!(name("#!/usr/bin/env FOO=1 lua\n"), Some("lua"));
+        assert_eq!(name("#!/usr/bin/perl\n"), None);
+        assert_eq!(name("echo hi\n"), None);
+    }
 }
 
 #[cfg(test)]

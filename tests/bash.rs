@@ -65,6 +65,32 @@ fn a_dotenv_file_is_read_as_shell() {
 }
 
 #[test]
+fn an_extension_less_script_is_read_by_its_shebang() {
+    for shebang in [
+        "#!/bin/sh",
+        "#!/usr/bin/env bash",
+        "#!/usr/bin/env -S bash -e",
+    ] {
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": "test/fast/Unit tests/nvm_ls",
+                "old": format!("{shebang}\n\necho hi\n"),
+                "new": format!("{shebang}\n\ngreet() {{\n  echo hi\n}}\n\ngreet\n") }]
+        }));
+        assert!(!out.files[0].unsupported, "{shebang}");
+        let hs = &out.files[0].hunks;
+        assert!(
+            hs.iter().any(|h| h.defines.contains(&"greet".to_string())),
+            "{shebang}: {hs:?}"
+        );
+    }
+    // a file no line names stays unsupported
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "LICENSE", "old": "a\n", "new": "b\n" }]
+    }));
+    assert!(out.files[0].unsupported);
+}
+
+#[test]
 fn a_zsh_script_has_a_grammar() {
     // `zsh` resolved from a markdown fence but not from a path
     let out = run_json(serde_json::json!({
