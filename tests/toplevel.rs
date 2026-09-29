@@ -464,6 +464,11 @@ fn a_generated_file_is_recognised_by_its_name() {
     assert!(ordo::is_generated_path("pkg/mock_generated.go"));
     assert!(!ordo::is_generated_path("src/generator.lua"));
     assert!(!ordo::is_generated_path("src/generated_test_helper.rs"));
+    // a test runner's snapshots
+    assert!(ordo::is_generated_path(
+        "packages/app/__snapshots__/App.test.tsx.snap"
+    ));
+    assert!(!ordo::is_generated_path("src/snapshot.ts"));
 }
 
 #[test]

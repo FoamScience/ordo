@@ -1983,6 +1983,14 @@ fn single_phrase(c: &crate::refine::SingleChange, nm: &str) -> Option<String> {
 // document's first heading.
 fn size_rationale(s: &HunkSem, replaced: Option<&str>) -> String {
     let [o0, o1] = s.old_range;
+    if let Some(d) = &s.directive {
+        if s.new_empty && replaced.is_none() {
+            return format!("removes {d}");
+        }
+        if o1 < o0 {
+            return format!("adds {d}");
+        }
+    }
     let lines = |n: usize| format!("{n} line{}", if n == 1 { "" } else { "s" });
     if s.new_empty && o1 >= o0 {
         let n = lines(o1 - o0 + 1);

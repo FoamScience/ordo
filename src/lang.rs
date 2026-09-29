@@ -338,6 +338,8 @@ static SPECS: &[LangSpec] = &[
             "struct_specifier",
             "enum_specifier",
             "union_specifier",
+            // `typedef struct {…} Name;` names a type the rest uses
+            "type_definition",
             // a macro is a definition: `#define CPOOL_LOCK(...)` names something
             // the rest of the file uses, so a hunk inside its body belongs to it
             // rather than to the file at large. Both kinds carry a `name` field
@@ -363,6 +365,9 @@ static SPECS: &[LangSpec] = &[
             "enum_specifier",
             "namespace_definition",
             "template_declaration",
+            // `typedef … Name;` and `using Name = …;` name a type, like a class
+            "type_definition",
+            "alias_declaration",
             // a macro is a definition: `#define CPOOL_LOCK(...)` names something
             // the rest of the file uses, so a hunk inside its body belongs to it
             // rather than to the file at large. Both kinds carry a `name` field
@@ -1078,6 +1083,9 @@ pub fn is_generated_path(p: &str) -> bool {
         ".map",
         ".pb.go",
         "_pb2.py",
+        // jest/vitest `__snapshots__/*.snap`, rust insta's `snapshots/*.snap`:
+        // written by the test runner, reviewed through the test that made them
+        ".snap",
     ];
     const GENERATED_DIRS: &[&str] = &["/generated/", "/vendor/", "/node_modules/"];
     let name = p.rsplit('/').next().unwrap_or(p);
@@ -1168,6 +1176,8 @@ pub fn is_type_kind(kind: &str) -> bool {
             | "abstract_class_declaration"
             | "interface_declaration"
             | "type_alias_declaration"
+            | "alias_declaration"
+            | "type_definition"
             | "enum_declaration"
             | "struct_item"
             | "enum_item"

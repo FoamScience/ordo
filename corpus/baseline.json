@@ -57,15 +57,15 @@
     "fix_code_first": 15,
     "fix_commits": 23,
     "fix_with_finding": 3,
-    "hunks": 4036,
+    "hunks": 4038,
     "longest_rationale": 178,
     "merged": 0,
     "other_commits": 155,
     "other_with_finding": 16,
     "pairs": 119,
     "unsupported_files": 0,
-    "with_details": 175,
-    "with_symbols": 764
+    "with_details": 174,
+    "with_symbols": 766
   },
   "excalidraw": {
     "anonymous": 0,
@@ -159,7 +159,7 @@
     "fix_code_first": 8,
     "fix_commits": 10,
     "fix_with_finding": 2,
-    "hunks": 13850,
+    "hunks": 13986,
     "longest_rationale": 240,
     "merged": 0,
     "other_commits": 153,
@@ -167,7 +167,7 @@
     "pairs": 115,
     "unsupported_files": 0,
     "with_details": 770,
-    "with_symbols": 2371
+    "with_symbols": 2570
   },
   "ripgrep": {
     "anonymous": 0,
