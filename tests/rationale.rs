@@ -20,7 +20,7 @@ fn p3_adds_new_def_vs_edits_existing_body() {
             { "path": "b.py", "old": "", "new": "def g():\n    return 3\n" }
         ]
     }));
-    assert_eq!(rats, vec!["edits f", "adds g"]);
+    assert_eq!(rats, vec!["changes 1 → 2 in f", "adds g"]);
 }
 
 #[test]
@@ -912,7 +912,7 @@ fn comment_only_gets_comment_wording_code_edit_unaffected() {
             "old": "def f():\n    return 1\n\ndef g():\n    return 2\n",
             "new": "# note about f\ndef f():\n    return 1\n\ndef g():\n    return 3\n" } ]
     }));
-    assert_eq!(rats, vec!["adds comment", "edits g"]);
+    assert_eq!(rats, vec!["adds comment", "changes 2 → 3 in g"]);
 }
 
 #[test]
@@ -947,7 +947,7 @@ fn code_with_a_trailing_comment_is_not_a_comment_edit() {
             "old": "int f(void) {\n    return g(1); /* keep */\n}\n",
             "new": "int f(void) {\n    return h(1); /* keep */\n}\n" } ]
     }));
-    assert_eq!(rats, vec!["edits f"]);
+    assert_eq!(rats, vec!["calls h instead of g in f"]);
 }
 
 #[test]
@@ -1209,7 +1209,10 @@ fn multiline_data_string_assigned_to_a_variable_is_not_a_comment() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    assert_eq!(rats, vec!["edits QUERY"]);
+    assert_eq!(
+        rats,
+        vec!["changes \"WHERE x = 1\" → \"WHERE x = 2\" in QUERY"]
+    );
 }
 
 #[test]
@@ -1415,4 +1418,58 @@ fn a_multi_line_local_is_scoped_by_its_function_not_itself() {
         rats,
         vec!["adds local value, no uses in f — check nested scopes"]
     );
+}
+
+#[test]
+fn a_one_token_edit_says_what_changed() {
+    let body = |line: &str| format!("def f(x):\n    a = 1\n    b = 2\n    {line}\n    return a\n");
+    for (old, new, want) in [
+        ("t = 3", "t = 5", "changes 3 → 5 in f"),
+        (
+            "print(\"hi there\")",
+            "print(\"hi you\")",
+            "changes \"hi there\" → \"hi you\" in f",
+        ),
+        (
+            "load(x)",
+            "safe_load(x)",
+            "calls safe_load instead of load in f",
+        ),
+        (
+            "y.unsafe_load(x)",
+            "y.safe_load(x)",
+            "calls safe_load instead of unsafe_load in f",
+        ),
+        ("y = a", "y = b", "replaces a with b in f"),
+        ("g(a)", "g(a, x)", "adds argument x in f"),
+        ("g(a, x)", "g(a)", "removes argument x in f"),
+        ("g(a)", "g(a, key=x)", "adds argument key=x in f"),
+    ] {
+        let rats = rationales(serde_json::json!({
+            "changes": [{ "path": "a.py", "old": body(old), "new": body(new) }]
+        }));
+        assert_eq!(rats, vec![want], "{old} -> {new}");
+    }
+}
+
+#[test]
+fn a_one_token_edit_it_cannot_name_stays_an_edit() {
+    let body = |line: &str| format!("function f() {{\n  const a = 1;\n  {line}\n}}\n");
+    for (old, new) in [
+        // the receiver of a call is not what it calls
+        ("document.on(\"x\", g);", "doc.on(\"x\", g);"),
+        // an element deep inside an argument is not an argument
+        ("useEffect(g, [a]);", "useEffect(g, [a, b]);"),
+        // an operator is none of the named kinds
+        ("if (a > 1) g();", "if (a >= 1) g();"),
+    ] {
+        let rats = rationales(serde_json::json!({
+            "changes": [{ "path": "a.ts", "old": body(old), "new": body(new) }]
+        }));
+        assert!(
+            rats.iter()
+                .all(|r| !r.starts_with("calls") && !r.starts_with("adds argument")),
+            "{old} -> {new}: {rats:?}"
+        );
+    }
 }

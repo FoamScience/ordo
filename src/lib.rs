@@ -2087,6 +2087,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         .collect();
     if let Some(spec) = lang::for_path(&change.path) {
         fill_details(&raw, &mut sems, old, spec);
+        fill_single_changes(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
     }
     let switched: Vec<Option<SideShift>> = raw
         .iter()
@@ -2135,6 +2136,46 @@ fn annotations_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool
         .chain(side(new_lines, h.new_range))
         .collect();
     !changed.is_empty() && changed.iter().all(|l| l.starts_with('@'))
+}
+
+/// Up to this many lines a side, an edit is small enough to be one change.
+const SINGLE_CHANGE_LINES: usize = 3;
+
+/// For a small in-place edit, the one run of tokens it changed (a string, a
+/// number, a callee, an argument), which the headline can name instead of
+/// "edits f". The file is parsed for it only when such a hunk exists.
+fn fill_single_changes(
+    raw: &[RawHunk],
+    sems: &mut [HunkSem],
+    sources: (&str, &str),
+    spec: &lang::LangSpec,
+) {
+    let small = |h: &RawHunk| {
+        let len = |[a, b]: [usize; 2]| (a >= 1 && b >= a).then(|| b - a + 1);
+        matches!((len(h.old_range), len(h.new_range)), (Some(o), Some(n)) if o == n && o <= SINGLE_CHANGE_LINES)
+    };
+    // the 0-based rows those hunks cover on each side, in order
+    let rows = |side: fn(&RawHunk) -> [usize; 2]| -> Vec<usize> {
+        raw.iter()
+            .filter(|h| small(h))
+            .flat_map(|h| {
+                let [a, b] = side(h);
+                a - 1..b
+            })
+            .collect()
+    };
+    let (old_rows, new_rows) = (rows(|h| h.old_range), rows(|h| h.new_range));
+    if old_rows.is_empty() {
+        return;
+    }
+    let Some(refiner) = refine::Refiner::for_rows(spec, sources, (&old_rows, &new_rows)) else {
+        return;
+    };
+    for (h, sem) in raw.iter().zip(sems) {
+        if small(h) {
+            sem.single = refiner.single_change(h.old_range, h.new_range);
+        }
+    }
 }
 
 /// P15 detail layer: what the hunk did to the members of its container. The

@@ -1919,10 +1919,59 @@ fn container_phrase(s: &HunkSem, nm: &str) -> String {
     if adds_whole(s) {
         return format!("adds {nm}");
     }
+    if let Some(p) = s.single.as_ref().and_then(|c| single_phrase(c, nm)) {
+        return p;
+    }
     if !pure_insertion(s) || s.new_len <= SMALL_INSERTION {
         return format!("edits {nm}");
     }
     format!("adds {} lines to {nm}", s.new_len)
+}
+
+/// Longest text a single-change headline quotes before it says what kind of
+/// thing changed instead.
+const SINGLE_QUOTE_MAX: usize = 30;
+
+/// "changes 3 → 5 in f", "calls b instead of a in f": the one thing a small
+/// edit changed, when it is a literal, a callee, a name or an argument.
+fn single_phrase(c: &crate::refine::SingleChange, nm: &str) -> Option<String> {
+    use crate::refine::Role;
+    let fits =
+        |t: &str| t.chars().any(char::is_alphanumeric) && t.chars().count() <= SINGLE_QUOTE_MAX;
+    let arg = |t: &str| {
+        t.trim_matches(|ch: char| ch == ',' || ch.is_whitespace())
+            .to_string()
+    };
+    let unquote = |t: &str| {
+        t.trim_matches(|ch| matches!(ch, '"' | '\'' | '`'))
+            .to_string()
+    };
+    Some(match c.role {
+        Role::Num if fits(&c.old) && fits(&c.new) => {
+            format!("changes {} → {} in {nm}", c.old, c.new)
+        }
+        Role::Str if fits(&c.old) && fits(&c.new) => {
+            format!(
+                "changes \"{}\" → \"{}\" in {nm}",
+                unquote(&c.old),
+                unquote(&c.new)
+            )
+        }
+        Role::Str if !c.old.is_empty() && !c.new.is_empty() => format!("changes a string in {nm}"),
+        Role::Callee if fits(&c.old) && fits(&c.new) => {
+            format!("calls {} instead of {} in {nm}", c.new, c.old)
+        }
+        Role::Ident if fits(&c.old) && fits(&c.new) => {
+            format!("replaces {} with {} in {nm}", c.old, c.new)
+        }
+        Role::Arg if c.old.is_empty() && fits(&arg(&c.new)) => {
+            format!("adds argument {} in {nm}", arg(&c.new))
+        }
+        Role::Arg if c.new.is_empty() && fits(&arg(&c.old)) => {
+            format!("removes argument {} in {nm}", arg(&c.old))
+        }
+        _ => return None,
+    })
 }
 
 // a direction and a size. A pure deletion of body lines (no tracked

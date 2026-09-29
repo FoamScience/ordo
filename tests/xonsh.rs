@@ -118,7 +118,10 @@ fn a_command_line_at_file_scope_names_itself() {
         "pip install --upgrade pip\npip cache remove '*cp311-linux*' || true\n",
         "pip install --upgrade pip\npip cache remove '*cp312-linux*' || true\n",
     );
-    assert_eq!(rationales(&out), vec!["edits pip cache remove"]);
+    assert_eq!(
+        rationales(&out),
+        vec!["changes \"*cp311-linux*\" → \"*cp312-linux*\" in pip cache remove"]
+    );
 }
 
 #[test]
