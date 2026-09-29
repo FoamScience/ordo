@@ -129,6 +129,13 @@ fn bash() -> Language {
 fn css() -> Language {
     tree_sitter_css::LANGUAGE.into()
 }
+// pre-0.25 bindings, like jinja's below
+fn scss() -> Language {
+    tree_sitter_scss::language()
+}
+fn rst() -> Language {
+    tree_sitter_rst::LANGUAGE.into()
+}
 fn html() -> Language {
     tree_sitter_html::LANGUAGE.into()
 }
@@ -441,6 +448,22 @@ static SPECS: &[LangSpec] = &[
         template: None,
         locals: &[],
     },
+    // reStructuredText: a def is a `section`, as in markdown, but the grammar
+    // keeps sections flat — a `section` is its title and adornment, and the
+    // text under it is a sibling. Its span and its parents are read from the
+    // headings around it instead (see `extract::rst_section`).
+    LangSpec {
+        name: "rst",
+        language: rst,
+        test_blocks: &[],
+        imports: &[],
+        defs: &["section"],
+        members: &["section"],
+        prose: true,
+        data: false,
+        template: None,
+        locals: &[],
+    },
     // The three config formats below share one shape: a key-value pair is
     // both the definition of its key and a member of the key above it, so
     // `edits services.web` can list `adds ports, changes image`. Naming is
@@ -633,6 +656,28 @@ static SPECS: &[LangSpec] = &[
         test_blocks: &[],
         imports: &["import_statement"],
         defs: &["rule_set", "keyframes_statement"],
+        members: &["declaration"],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &[],
+    },
+    // scss: css's shape, plus nesting. A nested rule is named by the selector
+    // it compiles to (see `scope_join`), a mixin and a function by their
+    // at-rule (`@mixin btn`), and a `$variable` is declared and read the way a
+    // `--custom-property` is — every name keeps a sigil, so none can collide
+    // with a code symbol in the cross-file union.
+    LangSpec {
+        name: "scss",
+        language: scss,
+        test_blocks: &[],
+        imports: &["import_statement", "use_statement", "forward_statement"],
+        defs: &[
+            "rule_set",
+            "keyframes_statement",
+            "mixin_statement",
+            "function_statement",
+        ],
         members: &["declaration"],
         prose: false,
         data: false,
@@ -927,6 +972,8 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         "jsonnet" | "libsonnet" => "jsonnet",
         "sh" | "bash" | "zsh" => "bash",
         "css" => "css",
+        "scss" => "scss",
+        "rst" => "rst",
         "html" | "htm" | "vue" => "html",
         "svelte" => "svelte",
         _ => return None,
@@ -1027,6 +1074,62 @@ pub fn scope_sep(spec: &LangSpec) -> &'static str {
     } else {
         "."
     }
+}
+
+/// A qualified enclosing name: the parts joined by `scope_sep`, except in
+/// scss, where a nested rule names the selector it compiles to. `&` stands
+/// for the parent (`.a` then `&:hover` is `.a:hover`), any other selector
+/// descends from it (`.a .b`), and a list is crossed with its parent's list
+/// (`.a, .b` then `&-x` is `.a-x, .b-x`). An at-rule on the stack (`@mixin`,
+/// `@function`, `@keyframes`) is never scoped by a rule around it, so the
+/// innermost one starts the name over: `@mixin btn &:hover`.
+pub fn scope_join(spec: &LangSpec, parts: &[String]) -> String {
+    if spec.name != "scss" {
+        return parts.join(scope_sep(spec));
+    }
+    let from = parts.iter().rposition(|p| p.starts_with('@'));
+    let at = from.map(|i| parts[i].as_str());
+    let selectors = &parts[from.map_or(0, |i| i + 1)..];
+    let selector = selectors.iter().fold(String::new(), |parent, child| {
+        if parent.is_empty() {
+            return child.clone();
+        }
+        let parents = selector_list(&parent);
+        selector_list(child)
+            .iter()
+            .flat_map(|c| {
+                parents.iter().map(move |p| match c.contains('&') {
+                    true => c.replace('&', p),
+                    false => format!("{p} {c}"),
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    at.into_iter()
+        .chain((!selector.is_empty()).then_some(selector.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A selector list split on its top-level commas — not the ones inside
+/// `:is(.a, .b)`.
+fn selector_list(list: &str) -> Vec<&str> {
+    let mut out = vec![];
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, ch) in list.char_indices() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(list[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(list[start..].trim());
+    out
 }
 
 pub fn is_ident(kind: &str) -> bool {

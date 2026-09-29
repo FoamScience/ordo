@@ -3,8 +3,8 @@
 
 <!-- ordo:begin langs -->
 python, xonsh, javascript, rust, typescript, tsx, go, c, cpp, java, lua,
-markdown, json, yaml, toml, ini, cmake, make, nix, jsonnet, bash, jinja,
-css, html, svelte, gotmpl, erb
+markdown, rst, json, yaml, toml, ini, cmake, make, nix, jsonnet, bash,
+jinja, css, scss, html, svelte, gotmpl, erb
 <!-- ordo:end langs -->
 
 Adding one is usually a single registry entry in `src/lang.rs` plus its
@@ -13,6 +13,13 @@ grammar crate — no algorithm changes. Two shapes are exceptions:
 **Markdown** — a heading has no identifier to name a def by, so a def is a
 *section* (heading + content, nested by heading level) instead — `adds section
 Usage`, `edits section Install`.
+
+**reStructuredText** reads the same way, `Project > Install` paths included.
+Its grammar keeps a section flat (the title and its adornment, with the text
+under it a sibling), so a section's extent and its parents come from the
+headings around it: a heading's level is the order its adornment style first
+appears in, as docutils decides it, and a section runs to the next heading at
+its level or above.
 
 **Config formats** (json, yaml, toml) — a def is a key-value pair, named by its
 key and nested through a dotted path, and each key is also a *member* of the key
@@ -170,9 +177,24 @@ Deliberately **not** done: a class name in HTML is not treated as a use of the
 selector that styles it. `class="btn tw-p-2 card"` is one un-tokenized string,
 and names like `card`, `title`, `active` and `root` collide with real code
 symbols — under a utility-class framework the false links would swamp the true
-ones and make the ordering worse, not better. `.scss` and `.less` are not read
-through this grammar either; they parse with errors, which is the same mistake
-as feeding `ssh_config` to the ini grammar.
+ones and make the ordering worse, not better. `.less` is not read through this
+grammar; it parses with errors, which is the same mistake as feeding
+`ssh_config` to the ini grammar.
+
+### scss
+
+scss has its own grammar and reads as css does, plus nesting. A nested rule is
+named by the **selector it compiles to**: `.menu { .item {} }` is `.menu
+.item`, `&:hover` inside `.menu` is `.menu:hover`, and `&-x` inside `.a, .b` is
+`.a-x, .b-x`. A mixin and a function are definitions named by their at-rule
+(`@mixin btn`, `@function half`), so they keep a sigil the way a selector does,
+and `@include btn` and `half($gap)` are their uses. A `$variable` is declared
+and read the way a custom property is. `@use`, `@forward` and `@import` are
+imports.
+
+The grammar (tree-sitter-scss 1.0) does not know `@use "x" as *`, which stays
+an error confined to its own statement, or `@extend %placeholder`, whose error
+can take the declarations after it in the same block along with it.
 
 ### html, and with it vue
 

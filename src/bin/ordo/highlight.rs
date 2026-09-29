@@ -81,10 +81,11 @@ pub(super) fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, Strin
 
 /// Languages the engine reads but nothing here paints. The template grammars
 /// are deliberate — a `.j2` with no host format under it renders plain, which
-/// is roughly what an editor does with one. Anything else appearing in this
-/// list is a gap, and `every_engine_language_is_painted_or_listed` says so.
+/// is roughly what an editor does with one. rst's grammar crate ships no
+/// query. Anything else appearing in this list is a gap, and
+/// `every_engine_language_is_painted_or_listed` says so.
 #[cfg(test)]
-pub(super) const NO_HIGHLIGHT: &[&str] = &["jinja", "erb", "gotmpl"];
+pub(super) const NO_HIGHLIGHT: &[&str] = &["jinja", "erb", "gotmpl", "rst"];
 
 pub(super) fn highlight_for_lang(lang: &str) -> Option<(tree_sitter::Language, String)> {
     let owned = |l: tree_sitter::Language, q: &str| (l, q.to_string());
@@ -176,6 +177,15 @@ pub(super) fn highlight_for_lang(lang: &str) -> Option<(tree_sitter::Language, S
         "css" => owned(
             tree_sitter_css::LANGUAGE.into(),
             tree_sitter_css::HIGHLIGHTS_QUERY,
+        ),
+        // scss's query only covers what it adds to css, so css's is prepended
+        "scss" => (
+            tree_sitter_scss::language(),
+            format!(
+                "{}\n{}",
+                tree_sitter_css::HIGHLIGHTS_QUERY,
+                tree_sitter_scss::HIGHLIGHTS_QUERY
+            ),
         ),
         "nix" => owned(
             tree_sitter_nix::LANGUAGE.into(),
