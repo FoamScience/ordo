@@ -2067,6 +2067,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         (&old_lines, &new_lines),
         generated,
         degraded,
+        lang::for_path(&change.path).is_some_and(|s| matches!(s.name, "c" | "cpp")),
     );
     let ext = change.path.rsplit('.').next().unwrap_or("");
     let spec = lang::for_path(&change.path);
@@ -2108,34 +2109,57 @@ fn mark_shape(
     (old_lines, new_lines): (&[&str], &[&str]),
     generated: bool,
     degraded: bool,
+    c_like: bool,
 ) {
     for (h, sem) in raw.iter().zip(sems) {
         sem.noise = generated || (!degraded && formatting_only(h, old_lines, new_lines));
         let [o0, o1] = h.old_range;
         sem.whole_old_file = !old_lines.is_empty() && o0 == 1 && o1 >= old_lines.len();
-        sem.annotations_only = annotations_only(h, old_lines, new_lines);
+        let changed = changed_lines(h, old_lines, new_lines);
+        sem.annotations_only = annotations_only(&changed);
+        sem.directive = c_like.then(|| conditional_directive(&changed)).flatten();
     }
 }
 
 /// Every non-blank changed line, on both sides, opens with `@`: a java
 /// annotation, a python or ts decorator. A multi-line one whose later lines do
 /// not start with `@` is left out rather than guessed at.
-fn annotations_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool {
-    let side = |lines: &[&str], [a, b]: [usize; 2]| -> Vec<String> {
+fn annotations_only(changed: &[&str]) -> bool {
+    !changed.is_empty() && changed.iter().all(|l| l.starts_with('@'))
+}
+
+/// A hunk's non-blank lines on both sides, trimmed.
+fn changed_lines<'a>(h: &RawHunk, old_lines: &[&'a str], new_lines: &[&'a str]) -> Vec<&'a str> {
+    let side = |lines: &[&'a str], [a, b]: [usize; 2]| -> Vec<&'a str> {
         if a == 0 || a > b || b > lines.len() {
             return vec![];
         }
         lines[a - 1..b]
             .iter()
-            .map(|l| l.trim().to_string())
+            .map(|l| l.trim())
             .filter(|l| !l.is_empty())
             .collect()
     };
-    let changed: Vec<String> = side(old_lines, h.old_range)
-        .into_iter()
-        .chain(side(new_lines, h.new_range))
-        .collect();
-    !changed.is_empty() && changed.iter().all(|l| l.starts_with('@'))
+    let mut out = side(old_lines, h.old_range);
+    out.extend(side(new_lines, h.new_range));
+    out
+}
+
+/// c/c++: every changed line is a conditional directive (`#ifdef X`,
+/// `#endif`), so the hunk adds or drops a guard rather than code; the first
+/// one, spaced as `#ifdef X` and without its trailing comment, names it.
+fn conditional_directive(changed: &[&str]) -> Option<String> {
+    let directive = |l: &str| -> Option<String> {
+        let rest = l.strip_prefix('#')?.trim_start();
+        let word = rest.split_whitespace().next()?;
+        matches!(word, "if" | "ifdef" | "ifndef" | "elif" | "else" | "endif").then(|| {
+            let text = rest.split("/*").next().unwrap_or(rest);
+            let text = text.split("//").next().unwrap_or(text);
+            format!("#{}", text.split_whitespace().collect::<Vec<_>>().join(" "))
+        })
+    };
+    let all: Option<Vec<String>> = changed.iter().map(|l| directive(l)).collect();
+    all?.into_iter().next()
 }
 
 /// Up to this many lines a side, an edit is small enough to be one change.

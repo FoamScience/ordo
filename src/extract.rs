@@ -30,6 +30,9 @@ pub struct HunkSem {
     /// (`@Test` → `@ParameterizedTest`): what changed is how the definition is
     /// marked, not its signature
     pub annotations_only: bool,
+    /// c/c++: the conditional directive a hunk of nothing else adds or removes
+    /// (`#ifdef X`), for its headline
+    pub directive: Option<String>,
     /// the one run of tokens a small edit changed, when that is all it
     /// changed (see `refine::Refiner::single_change`)
     pub single: Option<crate::refine::SingleChange>,
@@ -149,6 +152,7 @@ impl HunkSem {
             new_empty: h.new_r0.is_none(),
             whole_old_file: false,
             annotations_only: false,
+            directive: None,
             single: None,
             new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
             def_lines: 0,
@@ -498,6 +502,7 @@ impl Parsed<'_> {
             // filled in by `build_change`, which knows the old side's length
             whole_old_file: false,
             annotations_only: false,
+            directive: None,
             single: None,
             new_len: r1 - r0 + 1,
             def_lines: shape.lines,
@@ -1479,6 +1484,18 @@ fn is_def_node(node: Node, spec: &LangSpec) -> bool {
         // `int f(struct S *s, int8_t i);` changing is a signature change of
         // `f`, which is what a reviewer reads it as
         "declaration" => is_prototype(node),
+        // a type alias names a type for its scope: one inside a function body
+        // is that function's local, not a definition beside it
+        "type_definition" | "alias_declaration" => {
+            let mut up = node.parent();
+            while let Some(n) = up {
+                if n.kind() == "function_definition" {
+                    return false;
+                }
+                up = n.parent();
+            }
+            true
+        }
         kind => spec.is_def(kind),
     }
 }

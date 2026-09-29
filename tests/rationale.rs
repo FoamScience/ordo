@@ -1473,3 +1473,43 @@ fn a_one_token_edit_it_cannot_name_stays_an_edit() {
         );
     }
 }
+
+#[test]
+fn a_type_alias_or_typedef_is_a_type_definition() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.H",
+            "old": "namespace Foam\n{\nclass A;\n}\n",
+            "new": "namespace Foam\n{\nclass A;\n\ntypedef Field<tensor> tensorField;\n\ntemplate<class Type>\nusing BoundaryField = FieldField<Type>;\n}\n" }]
+    }));
+    assert_eq!(rats, vec!["adds type BoundaryField, tensorField"]);
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.h",
+            "old": "int x;\n",
+            "new": "int x;\n\ntypedef struct { int a; } point_t;\n" }]
+    }));
+    assert_eq!(rats, vec!["adds type point_t"]);
+}
+
+#[test]
+fn a_lone_conditional_directive_is_named() {
+    let old = "int a;\n#ifdef HAVE_X\nint b;\n#endif // HAVE_X\nint c;\n";
+    let new = "int a;\nint b;\nint c;\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.c", "old": old, "new": new }]
+    }));
+    assert_eq!(rats, vec!["removes #ifdef HAVE_X", "removes #endif"]);
+}
+
+#[test]
+fn a_function_local_typedef_stays_the_functions() {
+    let old = "int f(void)\n{\n    typedef int a_t;\n    return 1;\n}\n";
+    let new = "int f(void)\n{\n    typedef long a_t;\n    return 1;\n}\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.c", "old": old, "new": new }]
+    }));
+    assert!(
+        rats.iter().all(|r| r.contains(" f") || r.ends_with("f")),
+        "{rats:?}"
+    );
+    assert!(rats.iter().all(|r| !r.contains("a_t")), "{rats:?}");
+}
