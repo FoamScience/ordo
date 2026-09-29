@@ -35,13 +35,13 @@ never conflated under the enclosing `main`.
 | c / cpp | `field_declaration`, `enumerator` |
 | java | `enum_constant` |
 | lua / jsonnet | `field` |
-| markdown | `section` |
+| markdown / rst | `section` |
 | json | `pair` |
 | yaml | `block_mapping_pair`, `flow_pair` |
 | toml | `table`, `table_array_element`, `pair` |
 | ini | `section`, `setting` |
 | nix | `binding` |
-| css | `declaration` |
+| css / scss | `declaration` |
 <!-- ordo:end members -->
 
 These are node kinds, not concepts: a config format's member is its

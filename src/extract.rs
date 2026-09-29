@@ -1528,9 +1528,14 @@ fn is_forward_declaration(node: Node) -> bool {
 /// A `declaration` whose declarator is (or wraps) a `function_declarator`, at
 /// file or namespace scope: a prototype, not a variable.
 fn is_prototype(node: Node) -> bool {
+    prototype_under(node, node.parent())
+}
+
+/// `is_prototype` for a declaration whose scope starts at `p` — its parent,
+/// or for a templated one the template's.
+fn prototype_under(node: Node, mut p: Option<Node>) -> bool {
     // file scope, seen through the `#ifndef` guard and `#if` blocks a header
     // wraps its prototypes in
-    let mut p = node.parent();
     loop {
         match p.map(|n| n.kind()) {
             Some(
@@ -1700,12 +1705,7 @@ fn markup_region(node: Node, src: &[u8], spec: &LangSpec) -> Option<(String, Con
         }
         // a section with no heading of its own is everything before the first
         // heading: badges, a logo, an intro paragraph
-        "section"
-            if spec.prose
-                && !node
-                    .named_child(0)
-                    .is_some_and(|h| matches!(h.kind(), "atx_heading" | "setext_heading")) =>
-        {
+        "section" if spec.prose && section_heading(node).is_none() => {
             Some(("preamble".to_string(), ContainerKind::Preamble))
         }
         _ => None,
@@ -1726,6 +1726,8 @@ struct Walker<'a> {
     spec: &'a LangSpec,
     stack: Vec<String>,
     c: Collected,
+    /// rst sections of the last parent read, by that parent's id
+    rst: Option<(usize, HashMap<usize, (usize, Vec<String>)>)>,
 }
 
 impl Collected {
@@ -1769,7 +1771,7 @@ fn body_parts(node: Node, src: &[u8], spec: &LangSpec) -> (String, String, Vec<S
         // shipped language moves — cmake's `function_def` has an unlabelled
         // `body` child too.
         .or_else(|| {
-            if spec.name != "css" {
+            if !is_stylesheet(spec) {
                 return None;
             }
             let mut cur = node.walk();
@@ -1797,6 +1799,19 @@ fn trimmed<'s>(node: Node, src: &'s [u8]) -> Option<&'s str> {
         .filter(|t| !t.is_empty())
 }
 
+fn is_stylesheet(spec: &LangSpec) -> bool {
+    matches!(spec.name, "css" | "scss")
+}
+
+/// The at-rule an scss mixin or function is declared with.
+fn scss_at_rule(kind: &str) -> &'static str {
+    if kind == "mixin_statement" {
+        "@mixin"
+    } else {
+        "@function"
+    }
+}
+
 /// See `DefRec::header_e`.
 fn header_end(node: Node) -> Option<usize> {
     node.child_by_field_name("declarator")
@@ -1811,17 +1826,23 @@ fn header_end(node: Node) -> Option<usize> {
 /// constructor arguments. C++'s most vexing parse spells `std::mutex m(a, b);`
 /// exactly like a prototype; its "parameters" are bare type identifiers with
 /// nothing declared after them, where a real prototype either names what it
-/// declares or spells a built-in type.
+/// declares or spells a built-in type. A `const` settles it too, on a
+/// parameter or after the list (a method's): no argument expression has one.
 fn declares_parameters(declarator: Node) -> bool {
     let Some(params) = declarator.child_by_field_name("parameters") else {
         return false;
     };
+    let qualified = |n: Node| child_where(n, |c| c.kind() == "type_qualifier").is_some();
+    if qualified(declarator) {
+        return true;
+    }
     let mut cur = params.walk();
     let declared = params.named_children(&mut cur).all(|p| {
         p.kind() != "parameter_declaration"
             || p.child_by_field_name("declarator").is_some()
             || p.child_by_field_name("type")
                 .is_some_and(|t| t.kind() != "type_identifier")
+            || qualified(p)
     });
     declared
 }
@@ -1867,6 +1888,7 @@ impl<'a> Walker<'a> {
             spec,
             stack: vec![],
             c: Collected::default(),
+            rst: None,
         }
     }
 
@@ -1894,7 +1916,7 @@ impl<'a> Walker<'a> {
 
     /// the enclosing definitions as one qualified name, if there are any
     fn scope(&self) -> Option<String> {
-        (!self.stack.is_empty()).then(|| self.stack.join(lang::scope_sep(self.spec)))
+        (!self.stack.is_empty()).then(|| lang::scope_join(self.spec, &self.stack))
     }
 
     /// a container that declares nothing of its own: a region, a test block,
@@ -2063,7 +2085,7 @@ impl<'a> Walker<'a> {
         let mut rec = self.container(node, label, self.stack.len(), kind);
         if scopes {
             self.stack.push(rec.name.clone());
-            rec.name = self.stack.join(lang::scope_sep(self.spec));
+            rec.name = lang::scope_join(self.spec, &self.stack);
         }
         self.c.defs.push(rec);
         self.walk_children(node);
@@ -2097,7 +2119,7 @@ impl<'a> Walker<'a> {
         self.c.def_rows.insert(sr);
         self.c.decls.push((sr, sr, label.clone()));
         self.stack.push(label);
-        let name = self.stack.join(lang::scope_sep(self.spec));
+        let name = lang::scope_join(self.spec, &self.stack);
         let rec = self.container(node, name, depth, ContainerKind::Test);
         self.c.defs.push(rec);
         self.walk_children(node);
@@ -2131,6 +2153,15 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// See `rst_sections`, read once per parent.
+    fn rst_section(&mut self, node: Node) -> Option<(usize, Vec<String>)> {
+        let parent = node.parent()?;
+        if self.rst.as_ref().is_none_or(|(id, _)| *id != parent.id()) {
+            self.rst = Some((parent.id(), rst_sections(parent, self.src)));
+        }
+        self.rst.as_ref()?.1.get(&node.id()).cloned()
+    }
+
     fn visit_def(&mut self, node: Node) -> bool {
         let (src, spec, kind) = (self.src, self.spec, node.kind());
         if !is_def_node(node, spec) || is_misparsed_call(node, spec) {
@@ -2149,6 +2180,14 @@ impl<'a> Walker<'a> {
         };
         self.bind_params(node);
         let sr = node.start_position().row;
+        // an rst section is flat: its parents stand in for the stack, which
+        // holds nothing at the document level where every section sits
+        let rst = (spec.name == "rst")
+            .then(|| self.rst_section(node))
+            .flatten();
+        let outer = rst
+            .as_ref()
+            .map(|(_, parents)| std::mem::replace(&mut self.stack, parents.clone()));
         // A c++ namespace is a scope, not a declaration: it qualifies the names
         // under it (which is why it is a def at all) but nothing references
         // `particode` the way it references a function, and every added file in
@@ -2179,8 +2218,8 @@ impl<'a> Walker<'a> {
         }
         self.c.defs.push(DefRec {
             s: sr,
-            e: end_row(node, spec),
-            name: self.stack.join(lang::scope_sep(spec)),
+            e: rst.as_ref().map_or_else(|| end_row(node, spec), |(e, _)| *e),
+            name: lang::scope_join(spec, &self.stack),
             depth,
             params: count_params(node),
             kind: if scope_only {
@@ -2194,6 +2233,9 @@ impl<'a> Walker<'a> {
         self.walk_children(node);
         if !dup {
             self.stack.pop();
+        }
+        if let Some(outer) = outer {
+            self.stack = outer;
         }
         true
     }
@@ -2251,7 +2293,7 @@ impl<'a> Walker<'a> {
         let mut scope: Vec<String> = scope_stack.to_vec();
         scope.extend(object_owner(node, self.src));
         scope.extend(qualified_scope(node, self.src));
-        let scope = (!scope.is_empty()).then(|| scope.join(lang::scope_sep(spec)));
+        let scope = (!scope.is_empty()).then(|| lang::scope_join(spec, &scope));
         self.c
             .sym_decls
             .push((sr, own.to_string(), kind.to_string(), scope));
@@ -2401,9 +2443,10 @@ impl<'a> Walker<'a> {
     }
 
     fn visit_css(&mut self, node: Node) -> bool {
-        if self.spec.name != "css" {
+        if !is_stylesheet(self.spec) {
             return false;
         }
+        let scss = self.spec.name == "scss";
         let (src, kind, sr) = (self.src, node.kind(), node.start_position().row);
         // a selector list is a *name*, never a set of references. Its
         // `class_name`/`id_name` wrap a plain `identifier`, which IDENT_KINDS
@@ -2412,6 +2455,26 @@ impl<'a> Walker<'a> {
         // file is ordered against, and starts drawing edges to python functions.
         if kind == "selectors" {
             return true;
+        }
+        // scss spells a mixin, a function and a placeholder with a bare
+        // `identifier`: each is read with its sigil below, or not at all
+        if scss && kind == "identifier" {
+            return true;
+        }
+        // `@include btn` and `half($gap)` use what `@mixin btn` and
+        // `@function half` declare; both fall through to their arguments
+        if scss && matches!(kind, "include_statement" | "call_expression") {
+            let (at, name) = match kind {
+                "include_statement" => ("mixin_statement", child_where(node, |c| c.kind() == "identifier")),
+                _ => ("function_statement", child_where(node, |c| c.kind() == "function_name")),
+            };
+            // the grammar stops `@include mixins.btn` at `mixins`, which is
+            // a module, not a mixin
+            let namespaced = |n: &Node| src.get(n.end_byte()) == Some(&b'.');
+            if let Some(t) = name.filter(|n| !namespaced(n)).and_then(|n| trimmed(n, src)) {
+                let name = format!("{} {t}", scss_at_rule(at));
+                self.c.push_use(sr, name, node.id());
+            }
         }
         // custom properties: `--brand: #0af` declares a name and `var(--brand)`
         // uses it — the one def→use pair a stylesheet has, and so the only
@@ -2424,7 +2487,7 @@ impl<'a> Walker<'a> {
                 .named_children(&mut cur)
                 .find(|c| c.kind() == "property_name")
                 .and_then(|c| trimmed(c, src))
-                .filter(|t| t.starts_with("--"));
+                .filter(|t| t.starts_with("--") || scss && t.starts_with('$'));
             if let Some(name) = prop {
                 let scope = self.scope();
                 self.c.push_decl(sr, name, kind, scope);
@@ -2697,7 +2760,7 @@ fn member_container(node: Node, src: &[u8], stack: &[String], spec: &LangSpec) -
         if is_test_label(last) {
             return last.rsplit(" > ").next().map(str::to_string);
         }
-        (!stack.is_empty()).then(|| stack.join(lang::scope_sep(spec)))
+        (!stack.is_empty()).then(|| lang::scope_join(spec, stack))
     })
 }
 
@@ -3733,6 +3796,11 @@ fn node_name_inner(node: Node, src: &[u8]) -> Option<String> {
     if let Some(h) = section_heading(node) {
         return heading_name(h, src);
     }
+    // an scss mixin's `name` field is the bare name; it is named with its
+    // sigil instead (see `grammar_name`)
+    if matches!(node.kind(), "mixin_statement" | "function_statement") {
+        return grammar_name(node, src).flatten();
+    }
     // own name (function foo, class Foo, local function foo, impl Foo, …).
     // Unquoted: a few grammars name a construct with a string literal rather
     // than an identifier — `{{ define "mychart.labels" }}` — and the quotes
@@ -3791,8 +3859,54 @@ fn section_heading(node: Node) -> Option<Node> {
     if node.kind() != "section" {
         return None;
     }
-    node.named_child(0)
-        .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
+    // an rst section is its title between adornment lines, the overline
+    // first when it has one
+    let mut cur = node.walk();
+    let title = node.named_children(&mut cur).find(|c| c.kind() == "title");
+    title.or_else(|| {
+        node.named_child(0)
+            .filter(|h| matches!(h.kind(), "atx_heading" | "setext_heading"))
+    })
+}
+
+/// Every rst section under `parent`, by node id: its last row and the titles
+/// of the sections it sits in. The grammar leaves every section a sibling of
+/// the text under it, so both come from the headings around it: a heading's
+/// level is the order its adornment style (the underline character, and
+/// whether it has an overline) first appears in, and a section runs until the
+/// next heading at its level or above.
+fn rst_sections(parent: Node, src: &[u8]) -> HashMap<usize, (usize, Vec<String>)> {
+    let mut out = HashMap::new();
+    let mut styles: Vec<(bool, char)> = vec![];
+    // the sections still open: (id, level, title)
+    let mut open: Vec<(usize, usize, String)> = vec![];
+    let mut close = |open: &mut Vec<(usize, usize, String)>, level: usize, end: usize| {
+        while open.last().is_some_and(|(_, l, _)| *l >= level) {
+            let (id, _, _) = open.pop().unwrap();
+            let parents = open.iter().map(|(_, _, t)| t.clone()).collect();
+            out.insert(id, (end, parents));
+        }
+    };
+    let mut cur = parent.walk();
+    for c in parent.named_children(&mut cur).filter(|c| c.kind() == "section") {
+        let mut ac = c.walk();
+        let adornments: Vec<Node> = c.children(&mut ac).filter(|a| a.kind() == "adornment").collect();
+        let ch = adornments
+            .last()
+            .and_then(|a| a.utf8_text(src).ok())
+            .and_then(|t| t.trim().chars().next())
+            .unwrap_or(' ');
+        let style = (adornments.len() > 1, ch);
+        let level = styles.iter().position(|s| *s == style).unwrap_or_else(|| {
+            styles.push(style);
+            styles.len() - 1
+        });
+        close(&mut open, level, c.start_position().row.saturating_sub(1));
+        let title = section_heading(c).and_then(|t| heading_name(t, src)).unwrap_or_default();
+        open.push((c.id(), level, title));
+    }
+    close(&mut open, 0, parent.end_position().row.saturating_sub(1));
+    out
 }
 
 /// A name nested one or more levels down a `declarator` field — java
@@ -3869,6 +3983,11 @@ fn grammar_name(node: Node, src: &[u8]) -> Option<Option<String>> {
             .and_then(text)
             .filter(|t| !t.is_empty())
             .map(|t| format!("@keyframes {t}")),
+        // scss. Named by the at-rule that declares them, so a mixin keeps a
+        // sigil the way a selector does; `@include btn` reads as a use of it.
+        "mixin_statement" | "function_statement" => child("identifier")
+            .and_then(text)
+            .map(|t| format!("{} {t}", scss_at_rule(node.kind()))),
         // make. A rule is named by its first target. A *special* target
         // (`.PHONY`, `.SUFFIXES`) names no recipe anyone navigates to, so it
         // stays anonymous — its prerequisites are still read as uses of the
@@ -4178,14 +4297,14 @@ fn first_ident_text(node: Node, src: &[u8]) -> Option<String> {
     None
 }
 
-/// All local-binding names present anywhere in `content` (whole file) — the
+/// Every local binding in `content` (whole file), with its 1-based row — the
 /// old-side comparison set for P17: a name already locally bound in the old
 /// file isn't "introduced" by a hunk that only edits its value.
-pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
+pub fn local_rows(spec: &LangSpec, content: &str) -> Vec<(String, usize)> {
     let Some(tree) = lang::parse(spec, content) else {
-        return HashSet::new();
+        return vec![];
     };
-    let mut out = HashSet::new();
+    let mut out = vec![];
     collect_local_binds(tree.root_node(), content.as_bytes(), spec, &mut out);
     out
 }
@@ -4197,8 +4316,8 @@ pub fn local_names(spec: &LangSpec, content: &str) -> HashSet<String> {
 /// itself roughly 39% of a run over a large changeset. The rule is
 /// self-contained (`is_local`, minus anything under a failed parse), so it
 /// gets its own descent.
-fn collect_local_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut HashSet<String>) {
-    out.extend(bound_names(node, src, spec).map(|(_, name)| name));
+fn collect_local_binds(node: Node, src: &[u8], spec: &LangSpec, out: &mut Vec<(String, usize)>) {
+    out.extend(bound_names(node, src, spec).map(|(n, name)| (name, n.start_position().row + 1)));
     // a bound value can still hold further declarations
     let mut cur = node.walk();
     for child in node.named_children(&mut cur) {
@@ -4339,6 +4458,43 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
 
 /// Definition and import rows, and every definition's header and body, from one
 /// descent — what `FileSymbols` needs per side.
+/// c/c++ function prototypes, templated ones included: (bare name, 1-based
+/// row). A templated one is not a definition (it is read as a use of the one
+/// it declares, see `is_def_node`), but a hunk turning a prototype into a
+/// definition gives that function its body rather than adding it.
+pub fn prototypes(spec: &LangSpec, content: &str) -> Vec<(String, usize)> {
+    let mut out = vec![];
+    if !lang::splits_declarations(spec) {
+        return out;
+    }
+    let Some(tree) = lang::parse(spec, content) else {
+        return out;
+    };
+    let src = content.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "declaration" => {
+                let proto = match n.parent() {
+                    Some(t) if t.kind() == "template_declaration" => prototype_under(n, t.parent()),
+                    _ => is_prototype(n),
+                };
+                let name = proto.then(|| node_name(n, src)).flatten();
+                if let Some(name) = name {
+                    let bare = name.rsplit([':', '.']).next().unwrap_or(&name);
+                    out.push((bare.to_string(), n.start_position().row + 1));
+                }
+            }
+            "function_definition" => {}
+            _ => {
+                let mut cur = n.walk();
+                stack.extend(n.named_children(&mut cur));
+            }
+        }
+    }
+    out
+}
+
 pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>) {
     let mut o = DefOut::default();
     if let Some(tree) = lang::parse(spec, content) {

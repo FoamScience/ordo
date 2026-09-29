@@ -1452,6 +1452,8 @@ pub(crate) struct FileSymbols {
     pub(crate) old_defs: HashSet<String>,
     pub(crate) old_imports: HashSet<String>,
     pub(crate) old_locals: HashSet<String>,
+    /// the same with 1-based rows, for a hunk that replaced one
+    pub(crate) old_local_rows: Vec<(String, usize)>,
     /// the same for the new side
     new_defs: HashSet<String>,
     pub(crate) new_imports: HashSet<String>,
@@ -1470,6 +1472,9 @@ pub(crate) struct FileSymbols {
     pub(crate) old_binds: Vec<(String, usize)>,
     pub(crate) new_binds: HashSet<String>,
     pub(crate) new_bind_rows: Vec<(String, usize)>,
+    /// c/c++ prototypes per side, (bare name, row) — see `extract::prototypes`
+    pub(crate) old_protos: Vec<(String, usize)>,
+    pub(crate) new_protos: Vec<(String, usize)>,
 }
 
 impl FileSymbols {
@@ -1489,6 +1494,7 @@ impl FileSymbols {
         let new_bind_rows = new.map_or(vec![], |(n, sp)| extract::top_level_bindings(sp, n));
         let (new_defs, new_imports): (HashSet<String>, HashSet<String>) =
             (set(&new_rows.0), set(&new_rows.1));
+        let old_local_rows = old.map_or(vec![], |(o, sp)| extract::local_rows(sp, o));
         FileSymbols {
             imported_from: new.map_or(HashMap::new(), |(n, sp)| {
                 let mut out: HashMap<String, (String, Option<String>)> = HashMap::new();
@@ -1506,7 +1512,8 @@ impl FileSymbols {
             }),
             old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
             old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
-            old_locals: old.map_or(HashSet::new(), |(o, sp)| extract::local_names(sp, o)),
+            old_locals: old_local_rows.iter().map(|(n, _)| n.clone()).collect(),
+            old_local_rows,
             new_defs,
             new_imports,
             old_body,
@@ -1515,6 +1522,8 @@ impl FileSymbols {
             new_binds: new_bind_rows.iter().map(|(nm, _)| nm.clone()).collect(),
             new_bind_rows,
             old_rows,
+            old_protos: old.map_or(vec![], |(o, sp)| extract::prototypes(sp, o)),
+            new_protos: new.map_or(vec![], |(n, sp)| extract::prototypes(sp, n)),
         }
     }
 }
@@ -2377,6 +2386,9 @@ fn comment_markers(ext: &str) -> &'static [&'static str] {
         // markdown's only comment is html's; `*` opens emphasis and bullets
         // (`**Note:** …`), which the C-family default read as comments
         "md" | "markdown" => &["<!--"],
+        // `* item` is a bullet, and a `.. ` line is as often a directive as a
+        // comment: the grammar's `comment` node is the only reliable reader
+        "rst" => &[],
         _ => &["///", "//", "/*", "*"],
     }
 }

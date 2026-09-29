@@ -313,7 +313,7 @@ fn tokens_by_row(
         if !wanted(node.start_position().row, node.end_position().row) {
             continue;
         }
-        if node.child_count() > 0 {
+        if node.child_count() > 0 && !leaves_text_uncovered(node, src) {
             stack.extend(node.children(&mut cursor));
             continue;
         }
@@ -340,6 +340,22 @@ fn tokens_by_row(
         row.sort_by_key(|t| t.start);
     }
     out
+}
+
+/// Does the node hold text none of its children do? css's `1px` is an
+/// `integer_value` whose one child is the `px`: split into its children, the
+/// `1` would be no token at all, and `0` → `1px` would read as `0` → `px`.
+fn leaves_text_uncovered(node: Node, src: &str) -> bool {
+    let mut cursor = node.walk();
+    let mut at = node.start_byte();
+    let gap = |a: usize, b: usize| src.get(a..b).is_some_and(|t| !t.trim().is_empty());
+    for ch in node.children(&mut cursor) {
+        if gap(at, ch.start_byte()) {
+            return true;
+        }
+        at = ch.end_byte();
+    }
+    gap(at, node.end_byte())
 }
 
 /// A leaf's text row by row: (row, the byte columns it covers there, the

@@ -1513,3 +1513,41 @@ fn a_function_local_typedef_stays_the_functions() {
     );
     assert!(rats.iter().all(|r| !r.contains("a_t")), "{rats:?}");
 }
+
+#[test]
+fn a_prototype_turned_into_a_definition_gets_a_body() {
+    let old = "int a;\n\ntemplate<>\nint S::size(const label) const;\n\nint b;\n";
+    let new = "int a;\n\ntemplate<>\ninline int S::size(const label&) const\n{\n    return 1;\n}\n\nint b;\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.H", "old": old, "new": new }]
+    }));
+    assert_eq!(rats, vec!["adds body to size"]);
+}
+
+#[test]
+fn a_prototype_edited_into_another_is_not_given_a_body() {
+    let old = "int a;\n\nint size(const label);\n\nint b;\n";
+    let new = "int a;\n\nint size(const label, int);\n\nint b;\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.h", "old": old, "new": new }]
+    }));
+    assert_eq!(rats, vec!["changes signature of size"]);
+}
+
+#[test]
+fn a_local_replacing_another_names_both() {
+    let old = "int f(void)\n{\n  char *cp2;\n  cp2 = g();\n  return h();\n}\n";
+    let new = "int f(void)\n{\n  struct dynbuf db;\n  cp2 = g();\n  return h(&db);\n}\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.c", "old": old, "new": new }]
+    }));
+    assert_eq!(rats, vec!["replaces local cp2 with db (1 use)", "edits f"]);
+}
+
+#[test]
+fn a_css_value_with_a_unit_changes_as_a_whole() {
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.css", "old": ".btn {\n  top: 0;\n}\n", "new": ".btn {\n  top: 1px;\n}\n" }]
+    }));
+    assert_eq!(rats, vec!["changes 0 → 1px in .btn"]);
+}

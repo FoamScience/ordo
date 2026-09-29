@@ -1155,8 +1155,20 @@ impl<'a> RatCtx<'a> {
         sym: &str,
         is_type: bool,
         old_range: [usize; 2],
+        new_range: [usize; 2],
     ) -> &'static str {
         let [o0, o1] = old_range;
+        // a prototype the hunk replaced by a definition: the function was
+        // already declared, and callers already reached it; now it has a
+        // body. Not a prototype edited into another prototype.
+        let declared = |rows: &[(String, usize)], [a, b]: [usize; 2]| {
+            rows.iter().any(|(n, r)| n == sym && (a..=b).contains(r))
+        };
+        if self.symbols.get(file).is_some_and(|s| {
+            declared(&s.old_protos, old_range) && !declared(&s.new_protos, new_range)
+        }) {
+            return "adds body to";
+        }
         // a data file repeats key names under different parents
         // (`linters.enable`, `formatters.enable`): the old key only counts as
         // this one when it sat on the rows this hunk replaced
@@ -1492,6 +1504,8 @@ struct DefVerbs<'a> {
     extracted: Vec<(&'a str, &'a str)>,
     added: Vec<&'a str>,
     added_types: Vec<&'a str>,
+    /// a prototype turned into a definition
+    bodied: Vec<&'a str>,
     edited: Vec<&'a str>,
     signature_changed: Vec<&'a str>,
     type_changed: Vec<&'a str>,
@@ -1519,8 +1533,10 @@ fn classify_defs<'a>(
         } else if let Some(src) = changed.and_then(|c| c.relocated.get(d)) {
             v.extracted.push((d, src.as_str()));
         } else {
-            match ctx.def_verb(my_file, d, s.is_type, s.old_range) {
+            let new_range = [s.start_row + 1, s.start_row + s.new_len];
+            match ctx.def_verb(my_file, d, s.is_type, s.old_range, new_range) {
                 "adds" => v.added.push(d),
+                "adds body to" => v.bodied.push(d),
                 "adds type" => v.added_types.push(d),
                 "edits" => v.edited.push(d),
                 "changes type" => v.type_changed.push(d),
@@ -1556,6 +1572,7 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
     for (verb, items) in [
         ("adds", &v.added),
         ("adds type", &v.added_types),
+        ("adds body to", &v.bodied),
         ("edits", &v.edited),
     ] {
         if items.is_empty() {
@@ -1641,8 +1658,9 @@ fn provenance<'a>(
 // class/function) can still push the composed line past the one-line bound —
 // degrade the same way name_list itself does (a count instead of the full
 // listing) rather than let the line grow unboundedly.
-fn with_binding_clause(mut out: String, s: &HunkSem, old_locals: &HashSet<String>) -> String {
-    let Some(r) = binding_rationale(s, old_locals) else {
+fn with_binding_clause(mut out: String, s: &HunkSem, syms: &crate::FileSymbols) -> String {
+    let old_locals = &syms.old_locals;
+    let Some(r) = binding_rationale(s, syms) else {
         return out;
     };
     if out.chars().count() + 2 + r.chars().count() <= MAX_RATIONALE {
@@ -1692,11 +1710,7 @@ fn def_side_rationale(s: &HunkSem, sem: &[&HunkSem], mine: usize, ctx: &RatCtx) 
             format!(", {prov}")
         };
     }
-    Some(with_binding_clause(
-        out,
-        s,
-        &ctx.symbols[my_file].old_locals,
-    ))
+    Some(with_binding_clause(out, s, &ctx.symbols[my_file]))
 }
 
 // use side: a symbol used here that some other group defines (this change)
@@ -1767,7 +1781,7 @@ fn defined_elsewhere<'a>(
 // add_argument(...)") where "uses action, add_argument, help" would only list
 // the identifiers
 fn scope_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
-    binding_rationale(s, &ctx.symbols[my_file].old_locals)
+    binding_rationale(s, &ctx.symbols[my_file])
         .or_else(|| ctx.header_edit(my_file, s))
         .or_else(|| ctx.file_bind_phrase(my_file, s))
         .or_else(|| detail_rationale(s))
@@ -2076,13 +2090,13 @@ fn comment_rationale(old_range: [usize; 2], new_empty: bool, enclosing: Option<&
 // bindings and counts their uses; the positions themselves ride on
 // `HunkOut::uses_at`, where a consumer can mark them in the code rather than
 // make the reader carry eighteen line numbers across two panes.
-fn used_frag(items: &[(&str, usize)], prefix: &str) -> String {
+fn used_frag(items: &[(&str, usize)], verb: &str) -> String {
     let strs: Vec<String> = items
         .iter()
         .map(|&(name, n)| format!("{name} ({n} use{})", if n == 1 { "" } else { "s" }))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
-    format!("adds {prefix}{}", name_list(&refs))
+    format!("{verb}{}", name_list(&refs))
 }
 
 // P17: "where is this binding used?" wording for a hunk that introduces one
@@ -2130,23 +2144,46 @@ pub(crate) fn introduced_bindings<'a>(
         .filter(move |b| !old_locals.contains(&b.name) && !born_here(b))
 }
 
-fn binding_rationale(s: &HunkSem, old_locals: &HashSet<String>) -> Option<String> {
-    let mut items: Vec<&BindingUse> = introduced_bindings(s, old_locals).collect();
+fn binding_rationale(s: &HunkSem, syms: &crate::FileSymbols) -> Option<String> {
+    let mut items: Vec<&BindingUse> = introduced_bindings(s, &syms.old_locals).collect();
     if items.is_empty() {
         return None;
     }
     items.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut buckets = BindingBuckets::default();
+    let mut buckets = BindingBuckets {
+        replaced: replaced_locals(s, syms),
+        ..Default::default()
+    };
     for b in &items {
         buckets.push(b);
     }
     Some(join_frags(&buckets.frags()))
 }
 
+/// Locals the hunk's old lines declared and its new lines do not: `char *cp2;`
+/// becoming `struct dynbuf db;` replaced `cp2`, and "adds local db" alone
+/// hides that it is gone. A name the hunk binds or defines again (a js
+/// `const f = () => …` is both) is still there.
+fn replaced_locals<'a>(s: &HunkSem, syms: &'a crate::FileSymbols) -> Vec<&'a str> {
+    let [o0, o1] = s.old_range;
+    let kept = |n: &String| s.bindings.iter().any(|b| &b.name == n) || s.defines.contains(n);
+    let mut out: Vec<&str> = syms
+        .old_local_rows
+        .iter()
+        .filter(|(n, r)| (o0..=o1).contains(r) && !kept(n))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// The introduced bindings by scope and by whether anything uses them, each
 /// bucket worded on its own.
 #[derive(Default)]
 struct BindingBuckets<'a> {
+    /// locals the hunk's new ones replaced (see `replaced_locals`)
+    replaced: Vec<&'a str>,
     /// (scope, names), scope-sorted before wording
     no_uses_scoped: Vec<(&'a str, Vec<&'a str>)>,
     no_uses_file: Vec<&'a str>,
@@ -2171,7 +2208,15 @@ impl<'a> BindingBuckets<'a> {
     fn frags(mut self) -> Vec<String> {
         self.no_uses_scoped.sort_by_key(|(scope, _)| *scope);
         let mut frags: Vec<String> = vec![];
-        frags.extend(unused_scoped_frag(&self.no_uses_scoped));
+        // the replacement is named once, on the first local fragment
+        let mut replaced = std::mem::take(&mut self.replaced);
+        let mut verb = move || match std::mem::take(&mut replaced) {
+            r if r.is_empty() => "adds local ".to_string(),
+            r => format!("replaces local {} with ", name_list(&r)),
+        };
+        if !self.no_uses_scoped.is_empty() {
+            frags.extend(unused_scoped_frag(&self.no_uses_scoped, &verb()));
+        }
         if !self.no_uses_file.is_empty() {
             // scoped fragments above already say "no uses in {scope}" — when
             // both kinds land in the same rationale (P17 composing with
@@ -2191,10 +2236,10 @@ impl<'a> BindingBuckets<'a> {
             ));
         }
         if !self.used_scoped.is_empty() {
-            frags.push(used_frag(&self.used_scoped, "local "));
+            frags.push(used_frag(&self.used_scoped, &verb()));
         }
         if !self.used_file.is_empty() {
-            frags.push(used_frag(&self.used_file, ""));
+            frags.push(used_frag(&self.used_file, "adds "));
         }
         frags
     }
@@ -2203,11 +2248,11 @@ impl<'a> BindingBuckets<'a> {
 // One scope reads naturally; several must still say the phrase once, or the
 // line repeats "no uses in ..." per scope — grouped per scope, but not
 // grouped across them.
-fn unused_scoped_frag(groups: &[(&str, Vec<&str>)]) -> Option<String> {
+fn unused_scoped_frag(groups: &[(&str, Vec<&str>)], verb: &str) -> Option<String> {
     match groups {
         [] => None,
         [(scope, names)] => Some(format!(
-            "adds local {}, no uses in {scope} — check nested scopes",
+            "{verb}{}, no uses in {scope} — check nested scopes",
             name_list(names)
         )),
         _ => {
@@ -2218,7 +2263,7 @@ fn unused_scoped_frag(groups: &[(&str, Vec<&str>)]) -> Option<String> {
             each.sort();
             let refs: Vec<&str> = each.iter().map(String::as_str).collect();
             Some(format!(
-                "adds local {}, no uses in their own scopes — check nested scopes",
+                "{verb}{}, no uses in their own scopes — check nested scopes",
                 name_list(&refs)
             ))
         }
