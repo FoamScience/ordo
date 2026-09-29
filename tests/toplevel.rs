@@ -80,7 +80,7 @@ fn an_export_that_declares_something_is_that_declaration_not_bookkeeping() {
         "export function run() {\n  return 1;\n}\n",
         "export function run() {\n  return 2;\n}\n",
     );
-    assert_eq!(rationales(&out), vec!["edits run"]);
+    assert_eq!(rationales(&out), vec!["changes 1 → 2 in run"]);
     assert!(out.files[0].dropped.is_empty());
 }
 
@@ -170,7 +170,7 @@ fn a_conditional_compilation_block_names_the_region_it_guards() {
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("#ifdef CURL_DISABLE_HTTP"));
     assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Region));
-    assert_eq!(h.rationale, "edits #ifdef CURL_DISABLE_HTTP");
+    assert_eq!(h.rationale, "changes 1 → 2 in #ifdef CURL_DISABLE_HTTP");
 }
 
 #[test]

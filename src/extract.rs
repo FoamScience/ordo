@@ -30,6 +30,9 @@ pub struct HunkSem {
     /// (`@Test` → `@ParameterizedTest`): what changed is how the definition is
     /// marked, not its signature
     pub annotations_only: bool,
+    /// the one run of tokens a small edit changed, when that is all it
+    /// changed (see `refine::Refiner::single_change`)
+    pub single: Option<crate::refine::SingleChange>,
     pub defines: Vec<String>,
     /// subset of `defines` that a hunk introduces via *import* nodes — used for
     /// rationale wording so an import+def hunk doesn't call function names
@@ -146,6 +149,7 @@ impl HunkSem {
             new_empty: h.new_r0.is_none(),
             whole_old_file: false,
             annotations_only: false,
+            single: None,
             new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
             def_lines: 0,
             def_params: 0,
@@ -494,6 +498,7 @@ impl Parsed<'_> {
             // filled in by `build_change`, which knows the old side's length
             whole_old_file: false,
             annotations_only: false,
+            single: None,
             new_len: r1 - r0 + 1,
             def_lines: shape.lines,
             def_params: shape.params,

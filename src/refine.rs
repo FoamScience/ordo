@@ -56,6 +56,33 @@ struct Token {
     start: usize,
     end: usize,
     id: u32,
+    role: Role,
+}
+
+/// What a leaf is part of, as far as a one-line headline can say it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// inside a string literal
+    Str,
+    /// a number literal
+    Num,
+    /// the function a call calls
+    Callee,
+    /// inside a call's argument list
+    Arg,
+    /// a name
+    Ident,
+    Other,
+}
+
+/// The one thing a hunk changed, when that is all it changed: a single run of
+/// leaves on a single line, all of one role. `old`/`new` are the run's text on
+/// each side (empty for a pure insertion or removal).
+#[derive(Debug, PartialEq, Eq)]
+pub struct SingleChange {
+    pub role: Role,
+    pub old: String,
+    pub new: String,
 }
 
 /// A file parsed once, refined per hunk — parsing per hunk would re-walk the
@@ -63,6 +90,8 @@ struct Token {
 pub struct Refiner {
     old_tokens: Vec<Vec<Token>>,
     new_tokens: Vec<Vec<Token>>,
+    old_lines: Vec<String>,
+    new_lines: Vec<String>,
 }
 
 impl Refiner {
@@ -84,24 +113,95 @@ impl Refiner {
         // `lcs` are comparing unrelated numbers.
         let mut interned: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         Some(Refiner {
-            old_tokens: tokens_by_row(&old_tree, &old_src, old, &mut interned),
-            new_tokens: tokens_by_row(&new_tree, &new_src, new, &mut interned),
+            old_tokens: tokens_by_row(&old_tree, &old_src, old, &mut interned, None),
+            new_tokens: tokens_by_row(&new_tree, &new_src, new, &mut interned, None),
+            old_lines: old.to_vec(),
+            new_lines: new.to_vec(),
+        })
+    }
+
+    /// The engine's refiner: both sides parsed through `lang::parse`, whose
+    /// cache already holds them, and only `old_rows`/`new_rows` (0-based,
+    /// sorted) tokenized — a headline needs a few lines, not the whole file.
+    pub(crate) fn for_rows(
+        spec: &lang::LangSpec,
+        (old_src, new_src): (&str, &str),
+        (old_rows, new_rows): (&[usize], &[usize]),
+    ) -> Option<Refiner> {
+        let old_tree = lang::parse(spec, old_src)?;
+        let new_tree = lang::parse(spec, new_src)?;
+        let owned = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+        let (old, new) = (owned(old_src), owned(new_src));
+        let mut interned: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        Some(Refiner {
+            old_tokens: tokens_by_row(&old_tree, old_src, &old, &mut interned, Some(old_rows)),
+            new_tokens: tokens_by_row(&new_tree, new_src, &new, &mut interned, Some(new_rows)),
+            old_lines: old,
+            new_lines: new,
+        })
+    }
+
+    /// The one run of leaves this hunk changed, if that is all it did: every
+    /// line of each side pairs with one on the other, a single pair differs,
+    /// and it differs in one contiguous run of leaves sharing a role.
+    pub fn single_change(
+        &self,
+        old_range: [usize; 2],
+        new_range: [usize; 2],
+    ) -> Option<SingleChange> {
+        let (old, new) = (
+            rows_of(old_range, &self.old_tokens),
+            rows_of(new_range, &self.new_tokens),
+        );
+        if old.is_empty() || old.len() != new.len() || old.len() * new.len() > MAX_PAIRS {
+            return None;
+        }
+        let pairs = pair_lines(&old, &new);
+        if pairs.len() != old.len() {
+            return None;
+        }
+        let mut changed = pairs
+            .iter()
+            .filter(|&&(i, j)| old[i].iter().map(|t| t.id).ne(new[j].iter().map(|t| t.id)));
+        let &(i, j) = changed.next()?;
+        if changed.next().is_some() {
+            return None;
+        }
+        let matched = lcs(&old[i], &new[j]);
+        let rest = |toks: &[Token], kept: Vec<usize>| -> Option<Vec<Token>> {
+            // `kept` comes out of `lcs` in increasing order
+            let gone: Vec<usize> = (0..toks.len())
+                .filter(|k| kept.binary_search(k).is_err())
+                .collect();
+            // one contiguous run, or nothing on this side
+            let contiguous = gone.windows(2).all(|w| w[1] == w[0] + 1);
+            contiguous.then(|| gone.iter().map(|&k| toks[k].clone()).collect())
+        };
+        let o = rest(&old[i], matched.iter().map(|&(a, _)| a).collect())?;
+        let n = rest(&new[j], matched.iter().map(|&(_, b)| b).collect())?;
+        let role =
+            o.iter()
+                .chain(&n)
+                .map(|t| t.role)
+                .reduce(|a, b| if a == b { a } else { Role::Other })?;
+        let text = |toks: &[Token], line: &str| -> String {
+            match (toks.first(), toks.last()) {
+                (Some(f), Some(l)) => line.chars().skip(f.start).take(l.end - f.start).collect(),
+                _ => String::new(),
+            }
+        };
+        Some(SingleChange {
+            role,
+            old: text(&o, &self.old_lines[old_range[0] - 1 + i]),
+            new: text(&n, &self.new_lines[new_range[0] - 1 + j]),
         })
     }
 
     /// `old_range`/`new_range` are the hunk's 1-based inclusive line ranges, as
     /// the engine reports them (an empty side has `end < start`).
     pub fn refine(&self, old_range: [usize; 2], new_range: [usize; 2]) -> Refined {
-        let rows = |r: [usize; 2], all: &Vec<Vec<Token>>| -> Vec<Vec<Token>> {
-            if r[0] < 1 || r[1] < r[0] {
-                return vec![];
-            }
-            (r[0]..=r[1].min(all.len()))
-                .map(|ln| all.get(ln - 1).cloned().unwrap_or_default())
-                .collect()
-        };
-        let old = rows(old_range, &self.old_tokens);
-        let new = rows(new_range, &self.new_tokens);
+        let old = rows_of(old_range, &self.old_tokens);
+        let new = rows_of(new_range, &self.new_tokens);
         let mut out = Refined {
             removed: vec![None; old.len()],
             added: vec![None; new.len()],
@@ -118,6 +218,69 @@ impl Refiner {
     }
 }
 
+/// The token rows of a 1-based inclusive line range; empty when the side is.
+fn rows_of(r: [usize; 2], all: &[Vec<Token>]) -> Vec<Vec<Token>> {
+    if r[0] < 1 || r[1] < r[0] {
+        return vec![];
+    }
+    (r[0]..=r[1].min(all.len()))
+        .map(|ln| all.get(ln - 1).cloned().unwrap_or_default())
+        .collect()
+}
+
+/// What a leaf is part of: the nearest string or number literal, call callee
+/// or argument list above it, else a bare name or anything else.
+fn role_of(leaf: Node) -> Role {
+    let mut at = leaf;
+    for depth in 0..6 {
+        let kind = at.kind();
+        if kind.contains("string")
+            || kind == "template_substitution"
+            || kind.contains("char_literal")
+        {
+            return Role::Str;
+        }
+        if kind.contains("number")
+            || kind.contains("integer")
+            || kind.contains("float")
+            || kind.ends_with("int_literal")
+        {
+            return Role::Num;
+        }
+        let Some(parent) = at.parent() else { break };
+        let is_callee = parent
+            .child_by_field_name("function")
+            .or_else(|| {
+                matches!(parent.kind(), "method_invocation" | "function_call")
+                    .then(|| parent.child_by_field_name("name"))
+                    .flatten()
+            })
+            .is_some_and(|f| f.id() == at.id());
+        // the called name itself: the whole function position, or the name at
+        // the end of `obj.method` / `ns::f` — not the receiver in front of it
+        let names_it = at.id() == leaf.id()
+            || ["property", "field", "attribute", "name"].iter().any(|f| {
+                at.child_by_field_name(f)
+                    .is_some_and(|n| n.id() == leaf.id())
+            });
+        if is_callee && (parent.kind().contains("call") || parent.kind() == "method_invocation") {
+            return if names_it { Role::Callee } else { Role::Ident };
+        }
+        // an argument the call itself holds — `f(a, b)`, not an element deep
+        // inside one (`useEffect(fn, [a, b])` adds to an array, not a call)
+        let whole_arg = depth == 0 || matches!(at.kind(), "keyword_argument" | "named_argument");
+        if whole_arg && matches!(parent.kind(), "arguments" | "argument_list") {
+            return Role::Arg;
+        }
+        at = parent;
+    }
+    if lang::is_ident(leaf.kind()) {
+        Role::Ident
+    } else {
+        Role::Other
+    }
+}
+
 /// Every leaf of the tree, clipped to the row it sits on — a multi-row leaf (a
 /// block comment, a raw string) contributes one token per row it covers, so a
 /// row's tokens always describe that row alone.
@@ -126,8 +289,17 @@ fn tokens_by_row(
     src: &str,
     lines: &[String],
     interned: &mut std::collections::HashMap<String, u32>,
+    // only these rows (0-based, sorted), each leaf with its `Role`; `None` is
+    // every row and no roles, which is all the renderer needs
+    want: Option<&[usize]>,
 ) -> Vec<Vec<Token>> {
     let rows = lines.len();
+    let wanted = |a: usize, b: usize| {
+        want.is_none_or(|w| {
+            w.get(w.partition_point(|&r| r < a))
+                .is_some_and(|&r| r <= b)
+        })
+    };
     let mut out: Vec<Vec<Token>> = vec![vec![]; rows];
     let mut cursor = tree.walk();
     let mut stack = vec![tree.root_node()];
@@ -138,6 +310,9 @@ fn tokens_by_row(
             .map_or(byte, |l| l[..byte.min(l.len())].chars().count())
     };
     while let Some(node) = stack.pop() {
+        if !wanted(node.start_position().row, node.end_position().row) {
+            continue;
+        }
         if node.child_count() > 0 {
             stack.extend(node.children(&mut cursor));
             continue;
@@ -152,6 +327,11 @@ fn tokens_by_row(
                     start: to_char(row, bytes.start),
                     end: to_char(row, bytes.end),
                     id: intern(interned, line),
+                    role: if want.is_some() {
+                        role_of(node)
+                    } else {
+                        Role::Other
+                    },
                 });
             }
         }
