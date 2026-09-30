@@ -340,7 +340,7 @@ fn container_kinds_table() -> String {
             FrontMatter => ("a document's `---` metadata block", "`front matter`"),
             Document => (
                 "one `---` document of a multi-document yaml file",
-                "`document 2`",
+                "`kind=Service`",
             ),
             Binding => (
                 "a file-scope binding whose multi-line value holds the hunk",

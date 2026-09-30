@@ -1668,21 +1668,10 @@ fn code_region(node: Node, src: &[u8], top_level: bool) -> Option<(String, Conta
     }
 }
 
-/// The regions a markup, stylesheet or config format has: a yaml document,
-/// a svelte block, a `<script>`/`<style>` element, an at-rule, front matter,
+/// The regions a markup, stylesheet or config format has: a svelte block, a `<script>`/`<style>` element, an at-rule, front matter,
 /// a document's preamble.
 fn markup_region(node: Node, src: &[u8], spec: &LangSpec) -> Option<(String, ContainerKind)> {
     match node.kind() {
-        // yaml: a stream can hold several `---` documents whose top-level keys
-        // collide — two k8s objects each own a `spec`, and `spec.replicas`
-        // alone does not say which. Name each document by its position, but
-        // only when there is more than one: a single-document file keeps the
-        // paths it has always had. A region, not a definition: an ordinal is
-        // where a thing sits, never a symbol anything can use or define.
-        "document" if node.parent().is_some_and(|p| p.kind() == "stream") => {
-            let n = yaml_document_ordinal(node)?;
-            Some((format!("document {n}"), ContainerKind::Document))
-        }
         // svelte's own block forms, named as written: `{#if n > 1}`,
         // `{#each items as it}`, `{:else}`. Regions, like `#ifdef` — they hold
         // markup but declare nothing. Gated on the language because
@@ -1745,6 +1734,8 @@ struct Walker<'a> {
     c: Collected,
     /// rst sections of the last parent read, by that parent's id
     rst: Option<(usize, HashMap<usize, (usize, Vec<String>)>)>,
+    /// yaml document names of the last stream read, by that stream's id
+    yaml_docs: Option<(usize, HashMap<usize, String>)>,
 }
 
 impl Collected {
@@ -1889,23 +1880,76 @@ fn child_where<'t>(node: Node<'t>, pred: impl Fn(&Node<'t>) -> bool) -> Option<N
     found
 }
 
-/// yaml: a stream can hold several `---` documents whose top-level keys
-/// collide — two k8s objects each own a `spec`, and `spec.replicas` alone
-/// does not say which. Each document is numbered by its position, but only
-/// when there is more than one: a single-document file keeps the paths it
-/// has always had.
-fn yaml_document_ordinal(node: Node) -> Option<usize> {
-    let parent = node.parent()?;
-    let mut cur = parent.walk();
-    let docs: Vec<usize> = parent
+/// Each yaml document's name within its stream, by node id, when the stream
+/// holds more than one: a top-level `key: value` whose value no other document
+/// gives that key (`kind=Service`, `name=setuptools`), so the name follows the
+/// document when documents are inserted or reordered around it. Of several,
+/// the key that tells the most documents apart. A document with no such pair
+/// is named by its position (`document 3`).
+fn yaml_document_names(stream: Node, src: &[u8]) -> HashMap<usize, String> {
+    let mut cur = stream.walk();
+    let docs: Vec<Node> = stream
         .named_children(&mut cur)
         .filter(|c| c.kind() == "document")
-        .map(|c| c.id())
         .collect();
     if docs.len() < 2 {
-        return None;
+        return HashMap::new();
     }
-    docs.iter().position(|id| *id == node.id()).map(|i| i + 1)
+    let pairs: Vec<Vec<(String, String)>> = docs.iter().map(|d| yaml_top_scalars(*d, src)).collect();
+    let mut seen: HashMap<(&str, &str), usize> = HashMap::new();
+    for (k, v) in pairs.iter().flatten() {
+        *seen.entry((k.as_str(), v.as_str())).or_default() += 1;
+    }
+    // a key that tells many documents apart (`name`) names them better than
+    // one that happens to be unique for a few (`function: flit_build`)
+    let mut tells: HashMap<&str, usize> = HashMap::new();
+    for ((k, _), n) in &seen {
+        if *n == 1 {
+            *tells.entry(k).or_default() += 1;
+        }
+    }
+    let name = |at: usize| {
+        let unique = pairs[at]
+            .iter()
+            .filter(|(k, v)| seen[&(k.as_str(), v.as_str())] == 1)
+            .max_by_key(|(k, _)| tells[k.as_str()]);
+        match unique {
+            Some((k, v)) if v.chars().count() > YAML_DOCUMENT_VALUE_MAX => {
+                let short: String = v.chars().take(YAML_DOCUMENT_VALUE_MAX).collect();
+                format!("{k}={short}…")
+            }
+            Some((k, v)) => format!("{k}={v}"),
+            None => format!("document {}", at + 1),
+        }
+    };
+    docs.iter().enumerate().map(|(at, d)| (d.id(), name(at))).collect()
+}
+
+/// How much of a value a document's name quotes.
+const YAML_DOCUMENT_VALUE_MAX: usize = 40;
+
+/// A yaml document's top-level pairs whose value is a one-line scalar, in
+/// document order.
+fn yaml_top_scalars(doc: Node, src: &[u8]) -> Vec<(String, String)> {
+    let Some(map) = doc
+        .named_child(0)
+        .filter(|n| n.kind() == "block_node")
+        .and_then(|n| n.named_child(0))
+        .filter(|n| n.kind() == "block_mapping")
+    else {
+        return vec![];
+    };
+    let mut cur = map.walk();
+    map.named_children(&mut cur)
+        .filter_map(|pair| {
+            let key = trimmed(pair.child_by_field_name("key")?, src)?;
+            let value = pair.child_by_field_name("value")?;
+            let scalar = value.kind() == "flow_node"
+                && value.named_child(0).is_some_and(|c| c.kind().ends_with("_scalar"));
+            let text = trimmed(value, src).filter(|t| scalar && !t.contains('\n'))?;
+            Some((unquote(key).to_string(), unquote(text).to_string()))
+        })
+        .collect()
 }
 
 /// Everything the walker collects over `content`, when it parses.
@@ -1924,6 +1968,7 @@ impl<'a> Walker<'a> {
             stack: vec![],
             c: Collected::default(),
             rst: None,
+            yaml_docs: None,
         }
     }
 
@@ -2107,8 +2152,11 @@ impl<'a> Walker<'a> {
     // still walked for uses, so `#ifdef CURL_DISABLE_HTTP` counts as a use of
     // that macro — which is exactly what it is.
     fn visit_region(&mut self, node: Node) -> bool {
-        let Some((label, kind)) = region_label(node, self.src, self.spec, self.stack.is_empty())
-        else {
+        let label = match self.yaml_document(node) {
+            Some(name) => Some((name, ContainerKind::Document)),
+            None => region_label(node, self.src, self.spec, self.stack.is_empty()),
+        };
+        let Some((label, kind)) = label else {
             return false;
         };
         // A document is a namespace; every other region names only itself. An
@@ -2186,6 +2234,23 @@ impl<'a> Walker<'a> {
         if self.spec.prose && node.kind() == "fenced_code_block" {
             inject_fence(node, self.src, &mut self.c);
         }
+    }
+
+    /// yaml: a stream can hold several `---` documents whose top-level keys
+    /// collide — two k8s objects each own a `spec`, and `spec.replicas` alone
+    /// does not say which. Each document is named (see `yaml_document_names`),
+    /// but only when there is more than one: a single-document file keeps the
+    /// paths it has always had. A region, not a definition: nothing uses or
+    /// defines a document. Read once per stream.
+    fn yaml_document(&mut self, node: Node) -> Option<String> {
+        let stream = node.parent().filter(|p| p.kind() == "stream")?;
+        if node.kind() != "document" {
+            return None;
+        }
+        if self.yaml_docs.as_ref().is_none_or(|(id, _)| *id != stream.id()) {
+            self.yaml_docs = Some((stream.id(), yaml_document_names(stream, self.src)));
+        }
+        self.yaml_docs.as_ref()?.1.get(&node.id()).cloned()
     }
 
     /// See `rst_sections`, read once per parent.

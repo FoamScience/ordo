@@ -85,7 +85,7 @@ Not every hunk sits in a definition, and the ones that don't used to say only
 | `namespace` | a namespace: it qualifies what it holds | `particode` |
 | `preamble` | prose before a document's first heading | `preamble` |
 | `front-matter` | a document's `---` metadata block | `front matter` |
-| `document` | one `---` document of a multi-document yaml file | `document 2` |
+| `document` | one `---` document of a multi-document yaml file | `kind=Service` |
 | `binding` | a file-scope binding whose multi-line value holds the hunk | `ALLOWED_IMPORTS` |
 | `call` | a file-scope call whose multi-line arguments hold it | `execa('unicorns')` |
 <!-- ordo:end container-kinds -->

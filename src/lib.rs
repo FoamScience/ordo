@@ -2222,7 +2222,7 @@ fn fill_details(raw: &[RawHunk], sems: &mut [HunkSem], old: Option<&str>, spec: 
         .iter()
         .zip(sems.iter())
         .map(|(h, sem)| {
-            order::detail_phrases(sem, h, &old_members, spec.prose, spec.prose || spec.data)
+            order::detail_phrases(sem, h, &old_members, spec.prose, spec.prose || spec.data, spec.name == "yaml")
         })
         .collect();
     for (sem, (d, touched)) in sems.iter_mut().zip(phrases) {
