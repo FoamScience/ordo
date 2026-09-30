@@ -2372,6 +2372,9 @@ pub(crate) fn detail_phrases(
     old_members: &[extract::MemberRow],
     prose: bool,
     nests: bool,
+    // containers named by a value (yaml documents, see
+    // `extract::yaml_document_name`) can be renamed by the hunk itself
+    named_by_value: bool,
 ) -> (Vec<String>, Vec<String>) {
     let [o0, o1] = h.old_range;
     // Anything the hunk introduces wholesale is already named by the rationale
@@ -2385,7 +2388,19 @@ pub(crate) fn detail_phrases(
     if o0 > o1 && !s.defines.is_empty() && !(prose && s.enclosing.is_some()) {
         return (vec![], vec![]);
     }
-    let (old_by, new_by) = members_by_container(s, h, old_members, nests);
+    let (mut old_by, new_by) = members_by_container(s, h, old_members, nests);
+    // one container only the old side has and one only the new side has are
+    // the same one renamed — a yaml document named by the value this hunk
+    // edits — and its members read as changed in it, not moved between two.
+    // Not in code: there, the two are as often unrelated.
+    let gone: Vec<&Option<String>> = old_by.keys().filter(|k| !new_by.contains_key(*k)).collect();
+    let came: Vec<&Option<String>> = new_by.keys().filter(|k| !old_by.contains_key(*k)).collect();
+    if let (true, [from], [to]) = (named_by_value, gone.as_slice(), came.as_slice()) {
+        let (from, to) = ((*from).clone(), (*to).clone());
+        if let Some(members) = old_by.remove(&from) {
+            old_by.insert(to, members);
+        }
+    }
     let mut containers: Vec<Option<String>> = old_by.keys().chain(new_by.keys()).cloned().collect();
     containers.sort();
     containers.dedup();

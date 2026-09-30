@@ -62,9 +62,13 @@ database.yml:L11  edits dev
 The merge key itself (`<<: *base`) is not a name anyone navigates by, so that
 pair stays anonymous and only the alias in its value is read.
 
-A multi-document yaml file (`---`) scopes each document by position, so two
-k8s objects' top-level keys stay distinct — `document 1.spec.port` and
-`document 2.spec.replicas` rather than two colliding `spec` paths. `document`
+A multi-document yaml file (`---`) scopes each document, so two k8s objects'
+top-level keys stay distinct — `kind=Service.spec.port` and
+`kind=Deployment.spec.replicas` rather than two colliding `spec` paths. A
+document is named by a top-level `key=value` no other document shares — of
+several, the key that tells the most documents apart — so its name survives
+documents being inserted or reordered around it; one with no such pair is
+named by position (`document 3`). `document`
 is the one container kind that *scopes*; every other region names only itself,
 because `#ifdef X` is a fact about where a definition sits, not part of its
 name. A single-document file is unaffected and keeps its bare key paths.

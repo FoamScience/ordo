@@ -162,8 +162,8 @@ fn multi_document_yaml_scopes_each_document() {
     assert_eq!(
         enc,
         vec![
-            Some("document 1.spec.port"),
-            Some("document 2.spec.replicas")
+            Some("kind=Service.spec.port"),
+            Some("kind=Deployment.spec.replicas")
         ]
     );
 }
@@ -296,4 +296,31 @@ fn a_sibling_that_only_gained_a_trailing_comma_is_not_edited() {
     let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
     assert!(rats.iter().all(|r| !r.contains("edits a")), "{rats:?}");
     assert!(rats.iter().any(|r| r.contains("adds b")), "{rats:?}");
+}
+
+#[test]
+fn a_yaml_document_keeps_its_name_when_another_is_inserted_before_it() {
+    let doc = |name: &str, tag: &str| format!("---\nkind: build\nname: {name}\ntag: {tag}\n");
+    let old = [doc("a", "1"), doc("b", "1")].concat();
+    let new = [doc("new", "1"), doc("a", "1"), doc("b", "2")].concat();
+    let hs = one("order.yaml", &old, &new);
+    let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert!(enc.contains(&Some("name=b.tag")), "{hs:?}");
+    assert!(hs.iter().all(|h| h.details.iter().all(|d| !d.contains("document"))), "{hs:?}");
+}
+
+#[test]
+fn a_yaml_document_whose_naming_value_is_edited_changes_in_place() {
+    let doc = |pkgs: &str| format!("---\nkind: pip\npackages: {pkgs}\n");
+    let old = [doc("a b"), doc("c")].concat();
+    let new = [doc("b"), doc("c")].concat();
+    let hs = one("order.yaml", &old, &new);
+    assert_eq!(hs[0].details, vec!["changes packages in packages=b".to_string()]);
+}
+
+#[test]
+fn a_yaml_document_with_no_unique_pair_is_named_by_position() {
+    let doc = |port: &str| format!("---\nkind: svc\nspec:\n  port: {port}\n");
+    let hs = one("s.yaml", &[doc("1"), doc("1")].concat(), &[doc("1"), doc("2")].concat());
+    assert_eq!(hs[0].enclosing.as_deref(), Some("document 2.spec.port"), "{hs:?}");
 }
