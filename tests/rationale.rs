@@ -1551,3 +1551,50 @@ fn a_css_value_with_a_unit_changes_as_a_whole() {
     }));
     assert_eq!(rats, vec!["changes 0 → 1px in .btn"]);
 }
+
+#[test]
+fn a_def_nested_in_a_function_is_not_used_by_another_files() {
+    let b = |arg: &str| {
+        format!("def test_y(runner):\n    def cli(c):\n        return c\n\n    runner.invoke(cli, [{arg}])\n")
+    };
+    let rats = rationales(serde_json::json!({
+        "options": {"cross_file": true},
+        "changes": [
+            { "path": "tests/test_a.py",
+              "old": "def test_x(runner):\n    runner.invoke(None)\n",
+              "new": "def test_x(runner):\n    def cli(a):\n        return a\n\n    runner.invoke(cli)\n" },
+            { "path": "tests/test_b.py", "old": b(""), "new": b("'x'") },
+        ]
+    }));
+    assert_eq!(rats, vec!["adds cli", "edits test_y"]);
+}
+
+#[test]
+fn a_def_nested_in_a_function_is_still_used_inside_it() {
+    let old = "def outer(a):\n    def fetch(c):\n        return c\n\n\n\n\n\n    return a\n";
+    let new = "def outer(a):\n    def fetch(c, d=None):\n        return c\n\n\n\n\n\n    return fetch(a)\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": old, "new": new }]
+    }));
+    assert!(rats.iter().any(|r| r.contains("used by") || r.contains("defined above")), "{rats:?}");
+}
+
+#[test]
+fn an_object_literal_method_is_not_a_bare_name() {
+    let old = "test('a', () => {\n  const mounted = [];\n  run(mounted);\n});\n\ntest('b', () => {\n  mount(defineComponent({\n    render() {},\n  }));\n});\n";
+    let new = "test('a', () => {\n  const mounted = [1];\n  run(mounted);\n});\n\ntest('b', () => {\n  mount(defineComponent({\n    render() {},\n    mounted() {\n      go();\n    },\n  }));\n});\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.spec.ts", "old": old, "new": new }]
+    }));
+    assert_eq!(rats, vec!["edits test 'a'", "adds mounted"]);
+}
+
+#[test]
+fn a_constructor_is_not_what_a_use_of_its_class_name_means() {
+    let old = "void check(const Box<int>& b)\n{\n    b.size();\n}\n\ntemplate<class T>\nint Box<T>::size() const\n{\n    return 1;\n}\n";
+    let new = "void check(const Box<int>& b, const Box<int>& c)\n{\n    b.size();\n}\n\ntemplate<class T>\nint Box<T>::size() const\n{\n    return 1;\n}\n\ntemplate<class T>\nBox<T>::Box(const Box<T>& b)\n{\n}\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "Box.C", "old": old, "new": new }]
+    }));
+    assert_eq!(rats, vec!["changes signature of check", "adds Box"]);
+}

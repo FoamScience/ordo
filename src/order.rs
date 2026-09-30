@@ -280,6 +280,19 @@ pub fn order_all(
     let users = invert(&guse);
     let definers = invert(&gdef);
     let scoped = scoped_defs(&flat, &group_idx);
+    let local = local_defs(&flat, &groups);
+    let group_rows: Vec<Vec<(usize, usize)>> = groups
+        .iter()
+        .map(|gr| {
+            gr.members
+                .iter()
+                .map(|&i| {
+                    let s = flat.sem[i];
+                    (s.start_row, s.start_row + s.new_len.max(1) - 1)
+                })
+                .collect()
+        })
+        .collect();
     // per-group file + source position: fixed by membership, so computed once
     // rather than re-walking every member hunk on every sort comparison and
     // every rationale below
@@ -300,6 +313,8 @@ pub fn order_all(
     let bind = Binding {
         definers: &definers,
         scoped: &scoped,
+        local: &local,
+        group_rows: &group_rows,
         group_file: &group_file,
         paths,
         symbols,
@@ -354,6 +369,8 @@ pub fn order_all(
         definers: &definers,
         users: &users,
         scoped: &scoped,
+        local: &local,
+        group_rows: &group_rows,
         group_file: &group_file,
         group_row: &group_row,
         paths,
@@ -644,6 +661,42 @@ fn scoped_defs<'a>(flat: &Flat<'a>, group_idx: &[usize]) -> HashSet<(usize, &'a 
         }
     }
     scoped
+}
+
+/// (group, symbol) → the rows that can see the group's definition of it, for
+/// a definition only part of its file sees (see `HunkSem::local_defs`). A
+/// group that also defines the name where the whole file sees it is absent.
+type LocalDefs<'a> = HashMap<(usize, &'a str), Vec<(usize, usize)>>;
+
+fn local_defs<'a>(flat: &Flat<'a>, groups: &[GroupInfo]) -> LocalDefs<'a> {
+    let mut out: LocalDefs = HashMap::new();
+    for (gi, gr) in groups.iter().enumerate() {
+        let mut global: HashSet<&str> = HashSet::new();
+        let mut local: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+        for &i in &gr.members {
+            let s = flat.sem[i];
+            for d in &s.defines {
+                let spans: Vec<(usize, usize)> = s
+                    .local_defs
+                    .iter()
+                    .filter(|(n, _, _)| n == d)
+                    .map(|(_, a, b)| (*a, *b))
+                    .collect();
+                if spans.is_empty() {
+                    global.insert(d);
+                } else {
+                    local.entry(d).or_default().extend(spans);
+                }
+            }
+        }
+        out.extend(
+            local
+                .into_iter()
+                .filter(|(d, _)| !global.contains(d))
+                .map(|(d, spans)| ((gi, d), spans)),
+        );
+    }
+    out
 }
 
 /// The first member hunk `pred` accepts, else the group's first hunk: where an
@@ -956,6 +1009,9 @@ fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
 struct Binding<'a> {
     definers: &'a HashMap<&'a str, Vec<usize>>,
     scoped: &'a HashSet<(usize, &'a str)>,
+    /// see `local_defs`, and each group's rows, for `visible`
+    local: &'a LocalDefs<'a>,
+    group_rows: &'a [Vec<(usize, usize)>],
     group_file: &'a [usize],
     paths: &'a [String],
     symbols: &'a [crate::FileSymbols],
@@ -1016,6 +1072,20 @@ impl Binding<'_> {
             && (cross_file || same_file)
             && (same_file || self.reaches_out(user, s))
             && self.resolves(definer, user, s)
+            && self.visible(definer, user, s)
+    }
+
+    /// Can `user` see `definer`'s `s` at all? A def declared inside a function,
+    /// a test block or a call is seen from inside it alone, and a constructor
+    /// from nowhere (see `HunkSem::local_defs`).
+    fn visible(&self, definer: usize, user: usize, s: &str) -> bool {
+        let Some(spans) = self.local.get(&(definer, s)) else {
+            return true;
+        };
+        self.group_file[definer] == self.group_file[user]
+            && self.group_rows[user]
+                .iter()
+                .any(|&(a, b)| spans.iter().any(|&(s, e)| a <= e && s <= b))
     }
 
     /// May another file answer a use of `s` in `user`? Not for `obj.s`, nor
@@ -1075,6 +1145,8 @@ struct RatCtx<'a> {
     /// see `scoped_defs`; with `definers`, what `Binding` needs so the
     /// rationale layer answers the same question the graph did
     scoped: &'a HashSet<(usize, &'a str)>,
+    local: &'a LocalDefs<'a>,
+    group_rows: &'a [Vec<(usize, usize)>],
     group_file: &'a [usize],
     group_row: &'a [usize],
     paths: &'a [String],
@@ -1101,6 +1173,8 @@ impl<'a> RatCtx<'a> {
         Binding {
             definers: self.definers,
             scoped: self.scoped,
+            local: self.local,
+            group_rows: self.group_rows,
             group_file: self.group_file,
             paths: self.paths,
             symbols: self.symbols,
@@ -1132,11 +1206,13 @@ impl<'a> RatCtx<'a> {
         self.ok(mine, other)
             && self.reads_name(other, mine, sym)
             && self.bind().import_allows(other, mine, sym)
+            && self.bind().visible(mine, other, sym)
     }
     fn ok_for(&self, mine: usize, other: usize, sym: &str) -> bool {
         self.ok(mine, other)
             && self.reads_name(mine, other, sym)
             && self.bind().resolves(other, mine, sym)
+            && self.bind().visible(other, mine, sym)
     }
     // markdown (currently the only prose language): rationale wording says
     // "section" instead of naming a construct kind.

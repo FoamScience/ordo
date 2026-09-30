@@ -73,6 +73,12 @@ pub struct HunkSem {
     /// symbol identity (name + tree-sitter kind + scope) for each def this
     /// hunk introduces — matches `defines`, minus imports
     pub symbols: Vec<Symbol>,
+    /// defs among `symbols` that only part of the file can see: (name, first
+    /// and last 0-based row of that part). One declared inside a function, a
+    /// test block or a call is seen from inside it alone; a constructor, which
+    /// shares its class's name, is seen from nowhere (an empty span), since a
+    /// use of that name means the class.
+    pub local_defs: Vec<(String, usize, usize)>,
     /// the hunk is a pure-import hunk whose statements all existed in the old
     /// file: the import moved rather than arriving or changing
     pub import_moved: bool,
@@ -144,6 +150,7 @@ impl HunkSem {
             notes: vec![],
             advisories: vec![],
             symbols: vec![],
+            local_defs: vec![],
             import_moved: false,
             priority: 0,
             bindings: vec![],
@@ -266,6 +273,9 @@ struct Collected {
     /// (row, name, tree-sitter kind, enclosing scope) for each real definition
     /// — the raw material for `symbols` (name+kind+scope identity)
     sym_decls: Vec<(usize, String, String, Option<String>)>,
+    /// (row, name, first row, last row) for a def only part of the file sees
+    /// (see `HunkSem::local_defs`)
+    local_decls: Vec<(usize, String, usize, usize)>,
     /// (start_row, end_row, name) per import name, spanning its whole
     /// statement: what a hunk anywhere in the statement can still report
     import_decls: Vec<(usize, usize, String)>,
@@ -483,6 +493,13 @@ impl Parsed<'_> {
                     })
                     .collect(),
             ),
+            local_defs: self
+                .c
+                .local_decls
+                .iter()
+                .filter(|(row, _, _, _)| r0 <= *row && *row <= r1)
+                .map(|(_, name, s, e)| (name.clone(), *s, *e))
+                .collect(),
             import_moved: false,
             priority: 0,
             bindings: self.bindings(r0, r1),
@@ -1743,6 +1760,24 @@ impl Collected {
         self.push_use(row, name, id);
     }
 
+    /// The rows a def on `row` is seen from, when that is not the whole file:
+    /// those of the innermost function, test block or call around it. `wrapper`
+    /// is a container that is the def itself under another node (python's
+    /// `decorated_definition`), which does not hide it.
+    fn visibility(&self, row: usize, wrapper: Option<&String>) -> Option<(usize, usize)> {
+        self.defs
+            .iter()
+            .filter(|d| d.s <= row && row <= d.e)
+            .filter(|d| wrapper != Some(&d.name))
+            .filter(|d| match d.kind {
+                ContainerKind::Test | ContainerKind::Call => true,
+                ContainerKind::Definition => d.callable,
+                _ => false,
+            })
+            .min_by_key(|d| d.e - d.s)
+            .map(|d| (d.s, d.e))
+    }
+
     /// a one-row declaration of `name` with symbol identity
     fn push_decl(&mut self, row: usize, name: &str, kind: &str, scope: Option<String>) {
         self.decls.push((row, row, name.to_string()));
@@ -2291,9 +2326,33 @@ impl<'a> Walker<'a> {
             &self.stack[..]
         };
         let mut scope: Vec<String> = scope_stack.to_vec();
-        scope.extend(object_owner(node, self.src));
+        // a method of an object literal the module does not export is a
+        // property: `api.get()` reaches it, a bare `get` never does
+        let owner = object_owner(node, self.src);
+        let property = owner.is_some();
+        scope.extend(owner);
         scope.extend(qualified_scope(node, self.src));
+        let ctor = matches!(spec.name, "cpp" | "java")
+            && scope.last().is_some_and(|s| s.split('<').next() == Some(own));
         let scope = (!scope.is_empty()).then(|| lang::scope_join(spec, &scope));
+        // python's `decorated_definition` is the def under another node: it
+        // does not hide it, and its first row (a decorator's) is the def's too
+        let wrapper = dup.then(|| lang::scope_join(spec, &self.stack));
+        let span = if ctor || property {
+            Some((1, 0))
+        } else {
+            self.c.visibility(sr, wrapper.as_ref())
+        };
+        if let Some((s, e)) = span {
+            let from = wrapper
+                .as_ref()
+                .and_then(|w| self.c.defs.iter().rev().find(|d| &d.name == w))
+                .map_or(sr, |d| d.s);
+            self.c.local_decls.push((sr, own.to_string(), s, e));
+            if from != sr {
+                self.c.local_decls.push((from, own.to_string(), s, e));
+            }
+        }
         self.c
             .sym_decls
             .push((sr, own.to_string(), kind.to_string(), scope));
