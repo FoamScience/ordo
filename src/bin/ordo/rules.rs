@@ -8,7 +8,9 @@ use crate::keys::action_help;
 use crate::keys::chord_setting;
 use crate::keys::keymap;
 use crate::keys::ACTION_NAMES;
+use ordo::model::Level;
 use ratatui::style::Color;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -98,6 +100,8 @@ pub(super) struct RuleSet {
     pub(super) rules: Vec<ordo::model::Rule>,
     pub(super) catalog: bool,
     pub(super) disables: Vec<String>,
+    /// `[levels]`, forwarded to the engine like `disables`
+    pub(super) levels: BTreeMap<String, Level>,
     pub(super) includes: Vec<String>,
     /// other repositories that import this one, resolved; see `consumers`
     pub(super) consumers: Vec<PathBuf>,
@@ -118,6 +122,8 @@ pub(super) struct RulesReport {
     /// the construct catalog too — a catalog entry is a rule, and silencing it
     /// by name is the same gesture
     disables: Vec<String>,
+    /// a level per rule name, a later file's winning
+    levels: BTreeMap<String, Level>,
     consumers: Vec<PathBuf>,
 }
 
@@ -127,6 +133,7 @@ impl RulesReport {
             rules: self.rules.clone(),
             catalog,
             disables: self.disables.clone(),
+            levels: self.levels.clone(),
             includes: self.includes.clone(),
             consumers: self.consumers.clone(),
         }
@@ -151,6 +158,15 @@ impl RulesReport {
             out.push(String::new());
             out.push("disabled:".to_string());
             out.extend(self.disabled.iter().map(|d| format!("  {d}")));
+        }
+        if !self.levels.is_empty() {
+            out.push(String::new());
+            out.push("levels:".to_string());
+            out.extend(
+                self.levels
+                    .iter()
+                    .map(|(n, l)| format!("  {n} → {}", l.as_str())),
+            );
         }
         if !self.problems.is_empty() {
             out.push(String::new());
@@ -184,6 +200,7 @@ struct Layering {
     catalog: Option<bool>,
     /// bundled rulesets pulled in by `include`
     includes: Vec<String>,
+    levels: BTreeMap<String, Level>,
     consumers: Vec<PathBuf>,
 }
 
@@ -208,6 +225,7 @@ fn layer_rules(text: &str, origin: &str, base: &Path, depth: usize, acc: &mut La
         }
     }
     acc.disables.extend(doc.disable);
+    acc.levels.extend(doc.levels);
     // relative to the file that names them, the way an `include` is
     acc.consumers
         .extend(doc.consumers.iter().map(|c| base.join(c)));
@@ -277,6 +295,11 @@ pub(super) fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesRepo
         let base = src.parent().unwrap_or(Path::new(".")).to_path_buf();
         layer_rules(&text, &name, &base, 0, &mut acc);
     }
+    // a level for a rule some file disabled is not a misspelling
+    acc.problems.extend(ordo::level_problems(
+        &acc.levels,
+        acc.layered.iter().map(|(r, _)| r),
+    ));
     // disables win, whoever wrote them
     let mut set = globset::GlobSetBuilder::new();
     for d in &acc.disables {
@@ -314,6 +337,7 @@ pub(super) fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesRepo
         catalog: acc.catalog.unwrap_or(true),
         includes: acc.includes,
         disables: acc.disables,
+        levels: acc.levels,
         consumers: acc.consumers,
     }
 }
@@ -499,6 +523,7 @@ pub(super) struct RulesDoc {
     pub(super) rules: Vec<ordo::model::Rule>,
     include: Vec<String>,
     disable: Vec<String>,
+    levels: BTreeMap<String, Level>,
     /// `catalog = false` in any rules file turns the built-in construct
     /// catalog off for good, the way `--no-catalog` does for one run
     pub(super) catalog: Option<bool>,
@@ -524,6 +549,9 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         include: Vec<String>,
         #[serde(default)]
         disable: Vec<String>,
+        // read as text so one bad level is a problem, not a file that fails
+        #[serde(default)]
+        levels: BTreeMap<String, String>,
         #[serde(default)]
         catalog: Option<bool>,
         #[serde(default)]
@@ -535,6 +563,7 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         rules: vec![],
         include: vec![],
         disable: vec![],
+        levels: BTreeMap::new(),
         catalog: None,
         consumers: vec![],
         problems,
@@ -566,10 +595,22 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
             rules.push(r);
         }
     }
+    let mut levels = BTreeMap::new();
+    for (name, l) in doc.levels {
+        match Level::named(&l) {
+            Some(v) => {
+                levels.insert(name, v);
+            }
+            None => problems.push(format!(
+                "levels: `{name}` = \"{l}\" is not a level (note, warn, verdict)"
+            )),
+        }
+    }
     RulesDoc {
         rules,
         include: doc.include,
         disable: doc.disable,
+        levels,
         catalog: doc.catalog,
         consumers: doc.consumers,
         problems,

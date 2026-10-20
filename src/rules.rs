@@ -249,7 +249,15 @@ impl<'r> Rules<'r> {
                     && c.names_match(f)
                     && c.pattern_matches(f.rows, pattern_rows.get(i))
             })
-            .flat_map(|(_, c)| c.findings())
+            .flat_map(|(i, c)| {
+                let (r0, r1) = f.rows;
+                // the first row this hunk's match landed on; a rule with no
+                // query or kind speaks about the hunk as a whole
+                let row = pattern_rows
+                    .get(&i)
+                    .and_then(|rs| rs.iter().copied().filter(|r| r0 <= *r && *r <= r1).min());
+                c.findings(row)
+            })
             .collect()
     }
 
@@ -485,13 +493,15 @@ impl<'r> Compiled<'r> {
     /// What a matching rule says: one finding per message level it carries.
     /// A rule that only sets `noise` or `priority` still reports itself —
     /// otherwise a hunk sorts oddly with nothing to explain it.
-    fn findings(&self) -> Vec<Finding> {
+    fn findings(&self, row: Option<usize>) -> Vec<Finding> {
         let rule = self.rule;
         let finding = |message: String, level: Level| Finding {
             source: self.source,
             name: rule.name.clone(),
             message,
             level,
+            row,
+            original_level: None,
         };
         let mut out: Vec<Finding> = [
             (&rule.note, Level::Note),

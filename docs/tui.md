@@ -14,14 +14,46 @@ ordo help [<topic>]                         # this page, and the others, offline
 binary, so they can never describe a different version than the one running.
 
 It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
-the change **in comprehension order**: a reading-order list (findings `⚠`,
-review comments `✎`, noise dimmed, reviewed `✓`) beside a detail pane with tree-sitter
-syntax-highlighted, Neovim-style diff rendering, over the rationale, notes,
-def→use edges and finding messages. The engine never learns what git is.
+the change **in comprehension order**: a reading-order list beside a detail
+pane with tree-sitter syntax-highlighted, Neovim-style diff rendering, over a
+why pane of the hunk's facts and findings. The engine never learns what git is.
+Below 96 columns the list and code are too narrow side by side, so the three
+panes stack full width instead: the list on top, the code under it, the why
+pane at the bottom. Zooming fills the frame with the focused pane at any width.
+
+A list row is the group's symbol (on the group's first row only), the hunk's
+rationale, and its new-side line number; each file starts with a band naming it,
+and a file's imports fold into one row (`za` opens it). A row's **background is
+its state**, never a glyph: the highest finding level on the hunk — plum for a
+verdict (deliberately not red, so it never reads as a deleted line), amber for a
+warn, a faint blue for a note — or green with dimmed text once reviewed. A
+reviewed hunk that had findings keeps its level on the line-number cell. Review
+comments read from SARIF are findings like any other and tint by their level.
+The selected row takes the strong shade of its own tint.
+
+The top bar names the revision and its subject, and on the right how far the
+review has got: the hunks reviewed as a bar filled in the reviewed tint, the
+edges whose both ends are reviewed, and a chip per finding level present. The
+footer shows the focused pane's most relevant keys, as the active keymap binds
+them; `?` lists them all.
+
+The why pane has two columns: on the left the facts, each under its label —
+what the hunk does, what it needs and what needs it (each a line `gd`/`Enter`
+jumps along and `K` previews), its history, and the scope that groups it; on
+the right the findings, the hardest-pressing first.
+
+A finding that fired on a line also reads in the code, on a line of its own
+under that one: tinted by its level the full width, its level and name as the
+why pane's chips, then the first line of its message. It is not a source line —
+it has no number, and the cursor, search and comments step over it. A finding
+about the hunk as a whole is only in the why pane.
 
 Where a name the hunk introduces is used, the code gutter carries a `▸` on that
 row (the engine's `hunks[].uses_at`), and `]`/`[` step between them — positions
-belong in the code, not as a list of line numbers in the why pane.
+belong in the code, not as a list of line numbers in the why pane. `]`/`[` also
+open the `]f`/`[f` chords (next/previous hunk with a finding, the most severe
+first), so on its own the key acts once the next key is not `f`, or after half a
+second.
 
 The why pane carries the file's recent churn — how many commits touched it in
 the last six months — counted once at load, because one `git rev-list` per file
@@ -61,7 +93,8 @@ Catalog rules are grouped by the file they are written in, and a section
 carries its rules: turning off `c-cpp` turns off its fourteen constructs, and
 turning one back on brings the section back with it. Changing a rule re-runs
 the review, so the list under the dialog is the answer to the setting you just
-changed.
+changed. The `levels` section cycles each catalog rule through `default`,
+`note`, `warn` and `verdict` (see [rules.md](rules.md#raising-or-lowering-a-level)).
 
 A colour or a key binding is free text: `Space` opens it, you type, `Enter`
 accepts. An empty colour reads `(terminal)` — that role follows the terminal's
@@ -92,7 +125,9 @@ code and the cards stack in one labelled column instead.
 zoom key) fills the frame with the selected card: the hunk takes the whole
 canvas, a side card takes its own half top to bottom with the hunk moved across
 to the other half. Below 96 columns there is no half to take, so only the hunk
-zooms. A card shows the first rows of its hunk; the paging keys (`C-d`/`C-u`,
+zooms. A card's header band carries its hunk's top finding level the way the
+list row does, in the strong shade on the selected card. A card shows the first
+rows of its hunk; the paging keys (`C-d`/`C-u`,
 `C-f`/`C-b`, `PageDown`/`PageUp`) scroll the selected one through the rest of
 its file, and moving to another card starts that one at its hunk again.
 
@@ -162,8 +197,8 @@ leading bang. Matching is order-independent, deliberately unlike `.gitignore`.
 <summary><b>Keybindings (<code>--keys vim|vscode</code>) and command bar</b></summary>
 
 Its three panes — reading order, code, why — take focus one at a time (the
-focused one is bordered in cyan); motion keys act on the focused pane, paging
-always drives the code pane.
+focused one's header chip is inverted in the focus colour); motion keys act on
+the focused pane, paging always drives the code pane.
 
 <!-- ordo:begin keys -->
 | | `vim` (default) | `vscode` |
@@ -215,6 +250,8 @@ always drives the code pane.
 | cycle to the previous match | `N` | `S-F3` |
 | **review** | | |
 | toggle reviewed on the selected hunk | `x` | `Space`, `Enter` |
+| jump to the next hunk with a finding, the most severe first | `]f` | `F8` |
+| jump to the previous hunk with a finding, the most severe first | `[f` | `S-F8` |
 | how often these lines changed before, and who touched them last | `H` |  |
 | select lines from the code cursor, for :comment | `v` |  |
 | comment on the code-pane line or selection | `c` |  |
@@ -246,7 +283,7 @@ command's own arguments:
 | `:config` | every setting, generated from the tables the program reads |
 | `:filter <glob>` | narrow the review to paths matching &lt;glob&gt;; no argument clears it |
 | `:strategy <name>` | re-order the review (comprehension, defs-first, file) |
-| `:group` | toggle group-reason headers in the reading-order list |
+| `:group` | toggle grouping the reading-order list: a group's symbol on its first row only, and folds |
 | `:rule` | draft a rule matching the selected hunk's shape |
 | `:delta` | what changed since this review was last opened |
 | `:note [text]` | anchor a note to the selected hunk's symbol; no text clears it |
@@ -276,7 +313,7 @@ automatically. The file records only opaque hashes, never a path, symbol name
 or source text.
 
 Long lines are clipped, not wrapped, so the line-number gutter stays put; a
-`‹`/`›` in the code pane's title says the file has content past the edge
+`‹`/`›` in the code pane's header says the file has content past the edge
 (`zh`/`zl` scroll to it).
 
 ## Analyzer findings and coverage
@@ -287,7 +324,8 @@ the hunk whose lines contain it, so findings arrive in the reading order rather
 than as a separate list. A finding on a line the change did not touch is
 counted in `:audit`, not shown. A result whose `kind` is `review` is a review
 comment rather than an analyzer's verdict (`scripts/review-bot.py --sarif`
-writes these): its row carries `✎`, which a `⚠` on the same hunk outranks.
+writes these): it is listed under its source `review`, and tints its row by
+its level like any other finding.
 
 `--coverage <file>` reads an lcov tracefile (`cargo llvm-cov --lcov`,
 `coverage.py lcov`, …) and reports, per hunk, how many changed executable lines
@@ -299,15 +337,18 @@ Both are repeatable.
 
 ## Themes
 
-`--theme <name>` (also `$ORDO_TUI_THEME`, default `dark`); `:config` lists
-them and swaps live. `dark` and `light` keep the **terminal's own**
-foreground palette and only tint the diff backgrounds — the default, because
-it matches the rest of your setup for free. Every other theme is truecolor:
+`--theme <name>` (also `$ORDO_TUI_THEME`, default `terminal`); `:config` lists
+them and swaps live. `terminal`, `dark` and `light` keep the **terminal's own**
+foreground palette. `terminal`, the default, also asks the terminal for its
+background and ANSI colours at startup (OSC 10, 11 and 4) and mixes every
+background tint from them, so the diff, the finding levels and the bands sit in
+your palette; a terminal that does not answer gets `dark`'s tints. `dark` and
+`light` use fixed tints for a dark or a light terminal. Every other theme is truecolor:
 every colour is named by the theme, so the reviewer matches your editor
 rather than your shell.
 
 <!-- ordo:begin themes -->
-`dark`, `light`, `catppuccin-mocha`, `catppuccin-macchiato`,
+`terminal`, `dark`, `light`, `catppuccin-mocha`, `catppuccin-macchiato`,
 `catppuccin-frappe`, `catppuccin-latte`, `tokyonight-night`,
 `tokyonight-storm`, `tokyonight-moon`, `tokyonight-day`, `gruvbox-dark`,
 `gruvbox-light`, `nord`, `dracula`, `solarized-dark`, `solarized-light`
@@ -336,10 +377,12 @@ program actually reads back, so `--init-config` prints these same names:
 <!-- ordo:begin theme-roles -->
 `fg`, `dim`, `border`, `border-focus`, `accent`, `category`, `mark`,
 `reviewed`, `warn`, `add-fg`, `del-fg`, `add-bg`, `del-bg`, `add-strong-bg`,
-`del-strong-bg`, `select-bg`, `match-bg`, `match-current-bg`,
-`syntax-comment`, `syntax-keyword`, `syntax-string`, `syntax-number`,
-`syntax-function`, `syntax-type`, `syntax-property`, `syntax-operator`,
-`syntax-variable`, `syntax-builtin`, `syntax-parameter`, `syntax-attribute`
+`del-strong-bg`, `select-bg`, `match-bg`, `match-current-bg`, `band-bg`,
+`verdict-bg`, `verdict-strong-bg`, `warn-bg`, `warn-strong-bg`, `note-bg`,
+`note-strong-bg`, `reviewed-bg`, `syntax-comment`, `syntax-keyword`,
+`syntax-string`, `syntax-number`, `syntax-function`, `syntax-type`,
+`syntax-property`, `syntax-operator`, `syntax-variable`, `syntax-builtin`,
+`syntax-parameter`, `syntax-attribute`
 <!-- ordo:end theme-roles -->
 
 A theme colours twelve *syntax roles* rather than the twenty-six tree-sitter

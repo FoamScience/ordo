@@ -15,7 +15,7 @@ use extract::{analyze, compute_hunks, HunkSem, RawHunk};
 use lang::LangSpec;
 use model::*;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::ops::RangeInclusive;
 use tree_sitter::Node;
@@ -76,6 +76,34 @@ fn catalog_for<'a>(options: &Options, problems: &mut Vec<String>) -> Cow<'a, [Ru
             .cloned()
             .collect(),
     )
+}
+
+/// The `levels` overrides that name nothing able to report: not a catalog
+/// rule, a built-in construct, or one of `rules`. A level for a misspelled
+/// name is a setting that silently never applies.
+pub fn level_problems<'a>(
+    levels: &BTreeMap<String, Level>,
+    rules: impl IntoIterator<Item = &'a Rule>,
+) -> Vec<String> {
+    let known: HashSet<&str> = catalog::rules()
+        .iter()
+        .chain(rules)
+        .map(|r| r.name.as_str())
+        .chain(advisories::NAMES.iter().copied())
+        .collect();
+    levels
+        .keys()
+        .filter(|n| !known.contains(n.as_str()))
+        .map(|n| format!("levels: no rule named `{n}`"))
+        .collect()
+}
+
+/// A finding at the level `levels` names for it, remembering the one it had.
+fn relevel(f: &mut Finding, levels: &BTreeMap<String, Level>) {
+    if let Some(&l) = levels.get(&f.name).filter(|l| **l != f.level) {
+        f.original_level = Some(f.level);
+        f.level = l;
+    }
 }
 
 pub fn run(input: Input) -> Output {
@@ -251,8 +279,15 @@ fn apply_rules(hunks: &mut [PerFileHunks], input: &Input) -> (Vec<Vec<Vec<Findin
         rule_hits.push(cap_repeats(per_file));
     }
     engine.finish();
-    for (fi, per_file) in rule_hits.iter().enumerate() {
-        for (li, hits) in per_file.iter().enumerate() {
+    let levels = &input.options.levels;
+    for (fi, per_file) in rule_hits.iter_mut().enumerate() {
+        for (li, hits) in per_file.iter_mut().enumerate() {
+            for f in hits
+                .iter_mut()
+                .chain(hunks[fi].sem[li].advisories.iter_mut())
+            {
+                relevel(f, levels);
+            }
             if rules::any_noise(hits, &input.options.rules) {
                 hunks[fi].sem[li].noise = true;
             }
@@ -266,6 +301,7 @@ fn apply_rules(hunks: &mut [PerFileHunks], input: &Input) -> (Vec<Vec<Vec<Findin
     problems.extend(catalog::problem().map(str::to_string));
     // and a `disable` glob nobody can parse silences nothing
     problems.extend(catalog_problems);
+    problems.extend(level_problems(levels, &input.options.rules));
     problems.sort();
     problems.dedup();
     (rule_hits, problems)

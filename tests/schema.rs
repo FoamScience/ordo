@@ -63,14 +63,16 @@ fn rich() -> Input {
     .expect("fixture parses")
 }
 
-/// `rich` cannot reach `advisories`: it contains no flagged construct.
+/// `rich` cannot reach `advisories`: it contains no flagged construct. The
+/// level override is what puts `original_level` on it.
 fn advisory() -> Input {
     serde_json::from_value(serde_json::json!({
         "changes": [
             { "path": "d.py",
               "old": "def risky(s):\n    return 1\n",
               "new": "def risky(s):\n    return eval(s)\n" }
-        ]
+        ],
+        "options": { "levels": { "eval/exec": "warn" } }
     }))
     .expect("fixture parses")
 }
@@ -177,10 +179,14 @@ fn the_fixture_reaches_the_optional_output_fields() {
             .iter()
             .any(|f| f["hunks"]
                 .as_array()
-                .is_some_and(|hs| hs.iter().any(|h| h["findings"]
-                    .as_array()
-                    .is_some_and(|fs| fs.iter().any(|f| f["source"] == "catalog"))))),
-        "advisory fixture carries no catalog finding: {adv}"
+                .is_some_and(|hs| hs
+                    .iter()
+                    .any(|h| h["findings"]
+                        .as_array()
+                        .is_some_and(|fs| fs.iter().any(|f| f["source"] == "catalog"
+                            && f.get("row").is_some()
+                            && f.get("original_level").is_some()))))),
+        "advisory fixture carries no re-levelled catalog finding with a row: {adv}"
     );
     let drp = serde_json::to_value(ordo::run(dropped())).expect("serializes");
     assert!(

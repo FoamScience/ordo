@@ -20,6 +20,7 @@ use crate::rules::user_rules_path;
 use crate::rules::PRESETS;
 use crate::App;
 use crate::Popup;
+use ordo::model::Level;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -32,7 +33,9 @@ use ratatui::widgets::BorderType;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -151,6 +154,29 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
         fields: catalog,
     });
 
+    // one row per name: the catalog repeats a name across grammars, and the
+    // level is set by name
+    let mut seen = HashSet::new();
+    out.push(ConfigSection {
+        title: "levels".to_string(),
+        file: rules_file.clone(),
+        fields: ordo::catalog::sections()
+            .iter()
+            .flat_map(|s| &s.rules)
+            .filter(|r| seen.insert(r.as_str()))
+            .map(|r| ConfigField {
+                key: format!("level:{r}"),
+                label: r.clone(),
+                help: "how hard this rule's findings press; default keeps the catalog's"
+                    .to_string(),
+                kind: choice(
+                    app.levels.get(r).map_or("default", |l| l.as_str()),
+                    LEVEL_CHOICES.iter().map(|s| s.to_string()).collect(),
+                ),
+            })
+            .collect(),
+    });
+
     out.push(ConfigSection {
         title: "rulesets".to_string(),
         file: rules_file,
@@ -218,6 +244,8 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
     });
     out
 }
+
+const LEVEL_CHOICES: [&str; 4] = ["default", "note", "warn", "verdict"];
 
 /// `:config`'s open state: the generated schema, plus where the cursor is.
 ///
@@ -395,11 +423,7 @@ pub(super) fn upsert_toml(text: &str, section: Option<&str>, key: &str, value: &
         }
         // a key line, live or commented out, is the one to replace
         let bare = t.trim_start_matches('#').trim();
-        let is_key = !done
-            && here
-            && bare
-                .split_once('=')
-                .is_some_and(|(k, _)| k.trim() == key || k.trim().trim_matches('"') == key);
+        let is_key = !done && here && is_key_line(bare, key);
         if is_key {
             out.push(want.clone());
             done = true;
@@ -425,6 +449,32 @@ pub(super) fn upsert_toml(text: &str, section: Option<&str>, key: &str, value: &
     let mut joined = out.join("\n");
     joined.push('\n');
     joined
+}
+
+/// whether `line` (comment marker already stripped) sets `key`, quoted or not
+fn is_key_line(line: &str, key: &str) -> bool {
+    line.split_once('=')
+        .is_some_and(|(k, _)| k.trim() == key || k.trim().trim_matches('"') == key)
+}
+
+/// Comment out the live line setting `key` under `[section]`: the setting goes
+/// back to its default, and the line keeps its place for `upsert_toml` to
+/// bring back.
+fn comment_out_toml(text: &str, section: &str, key: &str) -> String {
+    let mut here = false;
+    let mut out = String::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(head) = t.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            here = head.trim() == section;
+        }
+        if here && !t.starts_with('#') && is_key_line(t, key) {
+            out.push_str("# ");
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// `--init-config`: write the generated config, refusing to clobber one that
@@ -502,7 +552,10 @@ pub(super) fn config_toggle(app: &mut App) {
         return;
     }
     let rules_changed = c.field(c.sel).is_some_and(|f| {
-        f.key.starts_with("disable:") || f.key.starts_with("section:") || f.key == "catalog"
+        f.key.starts_with("disable:")
+            || f.key.starts_with("section:")
+            || f.key.starts_with("level:")
+            || f.key == "catalog"
     });
     // where docs sort is the engine's decision too, so changing it means
     // asking the engine again — the same re-run a catalog switch needs
@@ -514,6 +567,7 @@ pub(super) fn config_toggle(app: &mut App) {
         _ => None,
     };
     let (catalog, disables) = config_rule_state(c);
+    let levels = config_levels(c, &app.levels);
     let (_, preset) = config_general(c);
     if let Some(v) = docs_last {
         app.docs_last = v;
@@ -521,6 +575,7 @@ pub(super) fn config_toggle(app: &mut App) {
     if rules_changed || docs_last.is_some() {
         app.catalog = catalog;
         app.disables = disables;
+        app.levels = levels;
         let _ = run_strategy(app, app.strategy.clone().as_str());
     }
     config_apply_theme(app);
@@ -585,6 +640,24 @@ fn config_rule_state(c: &ConfigUi) -> (bool, Vec<String>) {
     (catalog, disables)
 }
 
+/// The levels the `level:` rows set, laid over `base` — which keeps the
+/// overrides for names no row shows (a ruleset's own rules).
+fn config_levels(c: &ConfigUi, base: &BTreeMap<String, Level>) -> BTreeMap<String, Level> {
+    let mut out = base.clone();
+    for f in c.sections.iter().flat_map(|s| &s.fields) {
+        let (Some(name), FieldKind::Choice { at, options }) =
+            (f.key.strip_prefix("level:"), &f.kind)
+        else {
+            continue;
+        };
+        match options.get(*at).and_then(|o| Level::named(o)) {
+            Some(l) => out.insert(name.to_string(), l),
+            None => out.remove(name),
+        };
+    }
+    out
+}
+
 pub(super) fn config_write(app: &mut App) {
     let Some(c) = app.config.as_ref() else { return };
     let changed = c.changed();
@@ -637,6 +710,7 @@ fn touches_rules(key: &str) -> bool {
         || key.starts_with("disable:")
         || key.starts_with("section:")
         || key.starts_with("include:")
+        || key.starts_with("level:")
 }
 
 /// The file's current text, or empty for a file that is not there yet. An
@@ -679,7 +753,11 @@ fn write_settings_file(path: &Path, settings: &[&ConfigField]) -> Result<(), Str
 // each key only if something in its category moved: rewriting `include`
 // because a catalog rule changed would put a line in the file that the
 // reviewer never asked for
-fn write_rules_file(path: &Path, c: &ConfigUi, changed: &[&ConfigField]) -> Result<(), String> {
+pub(super) fn write_rules_file(
+    path: &Path,
+    c: &ConfigUi,
+    changed: &[&ConfigField],
+) -> Result<(), String> {
     let mut text = existing_text(path)?;
     let touched = |p: &str| changed.iter().any(|f| f.key.starts_with(p));
     let (catalog, disables) = config_rule_state(c);
@@ -691,6 +769,26 @@ fn write_rules_file(path: &Path, c: &ConfigUi, changed: &[&ConfigField]) -> Resu
     }
     if touched("include:") {
         text = upsert_toml(&text, None, "include", &toml_list(&config_includes(c)));
+    }
+    // one line per changed name, so a hand-written `[levels]` keeps the rest
+    for f in changed {
+        let (Some(name), FieldKind::Choice { at, options }) =
+            (f.key.strip_prefix("level:"), &f.kind)
+        else {
+            continue;
+        };
+        let key = if name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            name.to_string()
+        } else {
+            format!("\"{name}\"")
+        };
+        text = match options.get(*at).filter(|o| Level::named(o).is_some()) {
+            Some(l) => upsert_toml(&text, Some("levels"), &key, &format!("\"{l}\"")),
+            None => comment_out_toml(&text, "levels", &key),
+        };
     }
     write_atomic(path, &text).map_err(|e| e.to_string())
 }

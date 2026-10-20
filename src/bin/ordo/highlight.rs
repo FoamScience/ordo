@@ -65,16 +65,6 @@ pub(super) type Highlights = HashMap<String, Vec<LineSpans>>;
 /// here is the part that really is presentation: which query paints which
 /// language. A language with no query highlights as plain text, which is what
 /// a bare `.j2` did before and still does.
-/// A category as the list row spells it. The same lowercase spelling the wire
-/// format uses, written once rather than derived from `Debug` at each site.
-pub(super) fn cat_name(c: ordo::model::Category) -> &'static str {
-    match c {
-        ordo::model::Category::Import => "import",
-        ordo::model::Category::Definition => "definition",
-        ordo::model::Category::Other => "other",
-    }
-}
-
 pub(super) fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
     highlight_for_lang(ordo::lang_name_for_path(path)?)
 }

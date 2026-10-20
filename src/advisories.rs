@@ -47,6 +47,21 @@ use crate::lang::LangSpec;
 use crate::model::{Finding, FindingSource, Level};
 use tree_sitter::Node;
 
+/// Every name a walker here reports under — what a `levels` override may name
+/// besides the catalog's rules.
+pub(crate) const NAMES: &[&str] = &[
+    "half-context-manager",
+    "lru-cache-on-method",
+    "blocking-in-async",
+    "metaclass",
+    "using-namespace-std",
+    "throw-in-destructor",
+    "operator-logical",
+    "reinterpret_cast",
+    "const-cast",
+    "dynamic-cast",
+];
+
 /// Detect constructs in the parsed *new* tree → (0-based start row, advisory).
 pub fn advise(spec: &LangSpec, root: Node, src: &[u8], path: &str) -> Vec<(usize, Finding)> {
     let mut out = vec![];
@@ -87,6 +102,8 @@ fn push(out: &mut Out, node: Node, construct: &str, message: &str, verdict: bool
             // `verdict` was a bool meaning "a concrete downgrade is suggested";
             // it is the third level now (see `model::Level`)
             level: if verdict { Level::Verdict } else { Level::Note },
+            row: Some(node.start_position().row + 1),
+            original_level: None,
         },
     ));
 }
@@ -256,6 +273,8 @@ fn python_metaclass(class: Node, src: &[u8]) -> Option<Finding> {
             name: "metaclass".into(),
             message,
             level: if verdict { Level::Verdict } else { Level::Note },
+            row: Some(class.start_position().row + 1),
+            original_level: None,
         })
     };
     if defines_meta {
@@ -410,3 +429,25 @@ fn cpp_bad_operator(node: Node, src: &[u8]) -> bool {
 }
 
 // -------------------------------------------------------------------- java
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_walker_name_is_listed() {
+        let src = include_str!("advisories.rs");
+        let re =
+            regex::Regex::new(r#"push\(out, \*?\w+, "([^"]+)"|name: "([^"]+)"\.into\(\)"#).unwrap();
+        let found: Vec<&str> = re
+            .captures_iter(src)
+            .filter_map(|c| c.get(1).or(c.get(2)))
+            .map(|m| m.as_str())
+            .collect();
+        assert!(found.len() >= super::NAMES.len(), "{found:?}");
+        for n in found {
+            assert!(
+                super::NAMES.contains(&n),
+                "`{n}` is reported but not in NAMES"
+            );
+        }
+    }
+}

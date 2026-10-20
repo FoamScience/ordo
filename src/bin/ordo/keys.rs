@@ -74,6 +74,10 @@ pub(super) enum Action {
     Comment,
     CommentNext,
     CommentPrev,
+    /// `]f`/`[f` (vim), `F8`/`S-F8` (vscode) — the next/previous hunk carrying
+    /// a finding, the most severe first
+    FindingNext,
+    FindingPrev,
     /// `r` — read the change again, keeping the place
     Reload,
     /// `H` — how often these lines have changed before, and who last touched
@@ -170,7 +174,6 @@ pub(super) fn norm(code: KeyCode, mods: KeyModifiers) -> Key {
 #[derive(Clone)]
 pub(super) struct Keymap {
     pub(super) name: &'static str,
-    pub(super) hint: &'static str,
     pub(super) binds: Vec<Bind>,
 }
 
@@ -197,7 +200,21 @@ impl Keymap {
         }
         find(None).unwrap_or(Resolve::Miss)
     }
+
+    /// What `key` does on its own, even when it also opens a chord — which
+    /// `resolve` holds as `Pending` instead
+    pub(super) fn bare(&self, key: Key) -> Option<Action> {
+        self.binds
+            .iter()
+            .find(|(p, k, _)| p.is_none() && *k == key)
+            .map(|(_, _, a)| *a)
+    }
 }
+
+/// How long a held prefix that is also a key of its own (`]` before `]f`)
+/// waits for the rest of a chord before doing its own job — vim's
+/// `timeoutlen`, shortened
+pub(super) const CHORD_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Every keymap `keymap` answers to. The list is the authority — a test asserts
 /// it and the function agree, so `:config` can offer presets without a second
@@ -208,7 +225,6 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
     match name {
         "vim" => Some(Keymap {
             name: "vim",
-            hint: "j/k move · h/l/w/b/e/0/$ cursor · zh/zl hscroll · K symbol/dep · / search · */# sym-occ · n/N cycle · gd/Enter jump-dep · C-o back · ge edit · : cmd · ? help · q quit",
             binds: vec![
                 (None, ch('q'), Action::Quit),
                 (None, plain(KeyCode::Esc), Action::Quit),
@@ -250,10 +266,26 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (Some(ctrl('w')), ch('j'), Action::Focus(Pane::Why)),
                 // vim takes arrows wherever it takes hjkl, and a C-w chord is
                 // no exception
-                (Some(ctrl('w')), plain(KeyCode::Left), Action::Focus(Pane::List)),
-                (Some(ctrl('w')), plain(KeyCode::Right), Action::Focus(Pane::Code)),
-                (Some(ctrl('w')), plain(KeyCode::Up), Action::Focus(Pane::Code)),
-                (Some(ctrl('w')), plain(KeyCode::Down), Action::Focus(Pane::Why)),
+                (
+                    Some(ctrl('w')),
+                    plain(KeyCode::Left),
+                    Action::Focus(Pane::List),
+                ),
+                (
+                    Some(ctrl('w')),
+                    plain(KeyCode::Right),
+                    Action::Focus(Pane::Code),
+                ),
+                (
+                    Some(ctrl('w')),
+                    plain(KeyCode::Up),
+                    Action::Focus(Pane::Code),
+                ),
+                (
+                    Some(ctrl('w')),
+                    plain(KeyCode::Down),
+                    Action::Focus(Pane::Why),
+                ),
                 // code-pane cursor motions — `b` (word-back) displaces the old
                 // bare-b page-up shortcut; C-b/PageUp still page.
                 (None, ch('h'), Action::CursorLeft),
@@ -267,6 +299,8 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, ch('}'), Action::ParaNext),
                 (None, ch('['), Action::MarkPrev),
                 (None, ch(']'), Action::MarkNext),
+                (Some(ch(']')), ch('f'), Action::FindingNext),
+                (Some(ch('[')), ch('f'), Action::FindingPrev),
                 (None, ch('H'), Action::Churn),
                 (None, ch('v'), Action::SelectLines),
                 (None, ch('c'), Action::Comment),
@@ -306,7 +340,6 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
         }),
         "vscode" => Some(Keymap {
             name: "vscode",
-            hint: "↑/↓ move · ←/→/C-←/C-→ cursor · S-←/S-→ hscroll · F12 symbol/dep · C-f search · F3 next · C-Enter jump-dep · A-← back · C-o edit · C-Shift-P cmd · F1 help · C-q quit",
             binds: vec![
                 (None, ctrl('q'), Action::Quit),
                 (None, plain(KeyCode::Esc), Action::Quit),
@@ -346,8 +379,16 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 // shift-left/right is otherwise unused here (no text
                 // selection in this reviewer), so it's free for the
                 // horizontal-scroll pair vscode has no dedicated key for
-                (None, (KeyCode::Left, KeyModifiers::SHIFT), Action::ScrollLeft),
-                (None, (KeyCode::Right, KeyModifiers::SHIFT), Action::ScrollRight),
+                (
+                    None,
+                    (KeyCode::Left, KeyModifiers::SHIFT),
+                    Action::ScrollLeft,
+                ),
+                (
+                    None,
+                    (KeyCode::Right, KeyModifiers::SHIFT),
+                    Action::ScrollRight,
+                ),
                 // vscode's own folding chords. `Ctrl+Shift+[` / `]` (its
                 // fold/unfold pair) can't be told apart from Esc by a terminal,
                 // so the `Ctrl+K` chords — which vscode also ships — are used.
@@ -380,11 +421,26 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 // "activate" key); vscode's actual "Go to Definition" (F12)
                 // is likewise already `Hover`, so `C-Enter` (free, and reads
                 // as "Enter, but do more") is the jump-to-dep key instead
-                (None, (KeyCode::Enter, KeyModifiers::CONTROL), Action::JumpToEdge),
+                (
+                    None,
+                    (KeyCode::Enter, KeyModifiers::CONTROL),
+                    Action::JumpToEdge,
+                ),
                 // vscode's own default "Go Back" binding
                 (None, (KeyCode::Left, KeyModifiers::ALT), Action::JumpBack),
-                (None, (KeyCode::PageDown, KeyModifiers::ALT), Action::WaveNext),
+                (
+                    None,
+                    (KeyCode::PageDown, KeyModifiers::ALT),
+                    Action::WaveNext,
+                ),
                 (None, (KeyCode::PageUp, KeyModifiers::ALT), Action::WavePrev),
+                // vscode's own "Go to Next/Previous Problem"
+                (None, plain(KeyCode::F(8)), Action::FindingNext),
+                (
+                    None,
+                    (KeyCode::F(8), KeyModifiers::SHIFT),
+                    Action::FindingPrev,
+                ),
             ],
         }),
         _ => None,
@@ -477,6 +533,14 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
         Action::Comment => (Category::Review, "comment on the code-pane line or selection"),
         Action::CommentNext => (Category::Review, "jump to the next line comment"),
         Action::CommentPrev => (Category::Review, "jump to the previous line comment"),
+        Action::FindingNext => (
+            Category::Review,
+            "jump to the next hunk with a finding, the most severe first",
+        ),
+        Action::FindingPrev => (
+            Category::Review,
+            "jump to the previous hunk with a finding, the most severe first",
+        ),
         Action::Reload => (Category::Review, "read the change again, keeping your place"),
         Action::Churn => (
             Category::Review,
@@ -562,6 +626,8 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("comment", Action::Comment),
     ("comment-next", Action::CommentNext),
     ("comment-prev", Action::CommentPrev),
+    ("finding-next", Action::FindingNext),
+    ("finding-prev", Action::FindingPrev),
     ("reload", Action::Reload),
     ("churn", Action::Churn),
     ("hover", Action::Hover),
