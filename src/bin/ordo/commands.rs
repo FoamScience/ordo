@@ -98,7 +98,7 @@ pub(super) const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "group",
         args: "",
-        help: "toggle group-reason headers in the reading-order list",
+        help: "toggle grouping the reading-order list: a group's symbol on its first row only, and folds",
     },
     Cmd {
         name: "rule",
@@ -632,6 +632,7 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
             catalog: app.catalog,
             docs_last: app.docs_last,
             disable: app.disables.clone(),
+            levels: app.levels.clone(),
             ..Options::default()
         },
         consumers: vec![],
@@ -655,7 +656,12 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
     app.items = items;
     app.reviewed = reviewed;
     app.view = view;
-    app.groups = groups;
+    // the new items arrive keyed for ledger mode; re-key them for the mode
+    // the reviewer is in, against this run's own ledger
+    app.group_reasons = groups;
+    app.symbol_ledger = out.ledger.clone();
+    let led = app.symbol_ledger.clone();
+    set_mode(app, app.mode, &led);
     app.jumps.clear();
     app.popup = None;
     app.search = None;

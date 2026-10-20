@@ -261,6 +261,17 @@
                 "type": "string"
               },
               "description": "rule names not to report, as globs; applied to the catalog as well as to `rules`"
+            },
+            "levels": {
+              "type": "object",
+              "additionalProperties": {
+                "enum": [
+                  "note",
+                  "warn",
+                  "verdict"
+                ]
+              },
+              "description": "a level per rule name, replacing the one a catalog entry or one of `rules` was written with; the finding records the old one in `original_level`, and a name nothing reports under is a problem"
             }
           }
         },
@@ -540,6 +551,19 @@
                               "verdict"
                             ],
                             "description": "`verdict` is v1's `advisories[].verdict: true` \u2014 a concrete downgrade with a signal behind it"
+                          },
+                          "row": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "1-based new-side row the finding is anchored at; omitted when it is about the hunk as a whole"
+                          },
+                          "original_level": {
+                            "enum": [
+                              "note",
+                              "warn",
+                              "verdict"
+                            ],
+                            "description": "the level the finding was written with, present only when `options.levels` moved it to `level`"
                           }
                         }
                       }

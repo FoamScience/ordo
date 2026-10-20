@@ -2,6 +2,7 @@
 use crate::code_view::identifier_at;
 use crate::code_view::node_text;
 use crate::code_view::parse_cached;
+use crate::code_view::view_row;
 use crate::follow_hscroll;
 use crate::follow_scroll;
 use crate::highlight::highlight_spec;
@@ -129,7 +130,11 @@ fn jump_search(app: &mut App, mut search: Search, forward: bool, inclusive: bool
         search.index = idx.unwrap_or(0);
         let (line, col, _) = search.matches[search.index];
         app.cursor = Cursor { line, col };
-        app.scroll = follow_scroll(line, app.scroll, app.code_height);
+        app.scroll = follow_scroll(
+            view_row(&app.items[app.sel], line),
+            app.scroll,
+            app.code_height,
+        );
         app.hscroll = follow_hscroll(col, app.hscroll, app.code_width);
     }
     app.search = Some(search);
@@ -178,7 +183,11 @@ pub(super) fn cycle_search(app: &mut App, dir: isize) {
     search.index = cycle_index(search.index, search.matches.len(), dir);
     let (line, col, _) = search.matches[search.index];
     app.cursor = Cursor { line, col };
-    app.scroll = follow_scroll(line, app.scroll, app.code_height);
+    app.scroll = follow_scroll(
+        view_row(&app.items[app.sel], line),
+        app.scroll,
+        app.code_height,
+    );
     app.hscroll = follow_hscroll(col, app.hscroll, app.code_width);
 }
 
@@ -207,7 +216,11 @@ pub(super) fn accept_search(app: &mut App) {
 pub(super) fn cancel_search(app: &mut App) {
     if let Some(prompt) = app.prompt.take() {
         app.cursor = prompt.anchor;
-        app.scroll = follow_scroll(app.cursor.line, app.scroll, app.code_height);
+        app.scroll = follow_scroll(
+            view_row(&app.items[app.sel], app.cursor.line),
+            app.scroll,
+            app.code_height,
+        );
         app.hscroll = follow_hscroll(app.cursor.col, app.hscroll, app.code_width);
     }
 }

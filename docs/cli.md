@@ -44,6 +44,12 @@ is alphabetical and so usually first. Only prose files move; a data or config
 file (a schema, a lockfile, a `package.json`) often drives the code around it
 and keeps its place. Set it to `false` for a docs-led change.
 
+A finding carries `source`, `name`, `message` and `level`, plus `row` — the
+1-based new-side row it is anchored at, omitted when it is about the hunk as a
+whole — and `original_level` when `options.levels` (a map from rule name to
+`note`/`warn`/`verdict`, see [rules.md](rules.md#raising-or-lowering-a-level))
+moved its level.
+
 `--sarif` (on `ordo-engine order` and `ordo-engine review`) prints the findings
 as SARIF 2.1.0 instead of the engine's own JSON, so ordo's catalog hits, rule
 hits and any analyzer results a client placed reach whatever already reads

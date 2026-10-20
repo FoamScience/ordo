@@ -1,7 +1,6 @@
 // -------------------------------------------------------------------- draw
 use crate::clamp_cursor;
 use crate::code_view::code_view;
-use crate::code_view::slice_range;
 use crate::code_view::LineMarks;
 use crate::code_view::Theme;
 use crate::code_view::GUTTER_W;
@@ -13,11 +12,16 @@ use crate::compute_view;
 use crate::config::draw_config;
 use crate::display_row_of;
 use crate::display_rows;
-use crate::highlight::cat_name;
 use crate::highlight::LineSpans;
 use crate::history::FILE_CHURN_WINDOW;
+use crate::keys::chord_label;
+use crate::keys::Action;
+use crate::keys::Fold;
+use crate::keys::Keymap;
 use crate::keys::Pane;
+use crate::keys::ViewMode;
 use crate::last_line;
+use crate::ledger_label;
 use crate::marks::note_key;
 use crate::marks::Delta;
 use crate::popup_width;
@@ -33,6 +37,7 @@ use crate::DisplayRow;
 use crate::Item;
 use crate::Popup;
 use crate::SearchKind;
+use ordo::model::Level;
 use ratatui::layout::Alignment;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -50,7 +55,6 @@ use ratatui::widgets::List;
 use ratatui::widgets::ListItem;
 use ratatui::widgets::ListState;
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
 use ratatui::Frame;
 use std::collections::HashSet;
 
@@ -65,6 +69,8 @@ pub(super) enum WhyKind {
 }
 
 pub(super) struct WhyRow {
+    /// what the row is, in the label column; empty on a continuation row
+    pub(super) label: &'static str,
     pub(super) text: String,
     style: Style,
     pub(super) kind: WhyKind,
@@ -76,15 +82,16 @@ pub(super) struct WhyRow {
 fn edge_style(target: Option<usize>, theme: &Theme) -> Style {
     if target.is_some() {
         Style::default()
-            .fg(theme.category)
+            .fg(theme.fg)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
         Style::default().fg(theme.dim)
     }
 }
 
-/// The why pane's content, in render order — reason, details, notes, dep
-/// (edge) lines, then advisories. A pure function of `Item` (plus `view`, so
+/// The why pane's facts column, in render order — the reviewer's annotations,
+/// what the hunk does, what it needs and what needs it, then the rest; the
+/// findings sit beside it (`finding_lines`). A pure function of `Item` (plus `view`, so
 /// a dep line whose target is currently filtered out renders — and resolves
 /// — the same as one that was never part of the review) so it doubles as the
 /// source of truth for what `why_sel` is currently sitting on.
@@ -101,6 +108,8 @@ pub(super) struct WhyContext<'a> {
     delta: Option<&'a str>,
     cascade: Option<&'a str>,
     churn: Option<&'a str>,
+    /// what holds this hunk together with its neighbours (see `scope_line`)
+    scope: Option<&'a str>,
     /// dep targets `:only-wave` hides, each with its wave and reviewed state:
     /// still followable, since `gd` switches to their wave
     other_waves: &'a [(usize, String)],
@@ -111,40 +120,56 @@ pub(super) struct WhyContext<'a> {
 pub(super) fn why_rows(it: &Item, view: &[usize], theme: &Theme, ctx: &WhyContext) -> Vec<WhyRow> {
     let mut rows = annotation_rows(ctx, theme);
     rows.extend(rationale_rows(it, theme));
+    for needs in [true, false] {
+        let mut side: Vec<WhyRow> = it
+            .edges
+            .iter()
+            .filter(|e| e.dependency == needs)
+            .map(|e| {
+                let elsewhere = e
+                    .target
+                    .and_then(|t| ctx.other_waves.iter().find(|(i, _)| *i == t));
+                let target = e.target.filter(|t| view.contains(t) || elsewhere.is_some());
+                let text = match elsewhere {
+                    Some((_, wave)) => format!("{} · {wave}", e.label),
+                    None => e.label.clone(),
+                };
+                WhyRow {
+                    label: "",
+                    text,
+                    style: edge_style(target, theme),
+                    kind: WhyKind::Edge(target),
+                }
+            })
+            .collect();
+        if side.is_empty() {
+            side.push(fact("", "nothing in this change".to_string(), theme.dim));
+        }
+        side[0].label = if needs { "needs" } else { "needed by" };
+        rows.extend(side);
+    }
     // Churn sits with coverage: both answer "how much weight does this hunk
     // deserve" rather than "what does it do".
     if let Some(c) = ctx.churn {
-        rows.push(text_row(c.to_string(), theme.mark));
+        rows.push(fact("history", c.to_string(), theme.mark));
+    }
+    rows.extend(signal_rows(it, theme));
+    if let Some(s) = ctx.scope {
+        rows.push(fact("scope", s.to_string(), theme.fg));
     }
     if let Some(w) = it.wave {
         let row = match ctx.wave_asked {
             Some(asked) => format!("wave {w} · asked: {asked}"),
             None => format!("wave {w}"),
         };
-        rows.push(text_row(row, theme.accent));
+        rows.push(fact("wave", row, theme.accent));
     }
-    rows.extend(signal_rows(it, theme));
-    for e in &it.edges {
-        let elsewhere = e
-            .target
-            .and_then(|t| ctx.other_waves.iter().find(|(i, _)| *i == t));
-        let target = e.target.filter(|t| view.contains(t) || elsewhere.is_some());
-        let text = match elsewhere {
-            Some((_, wave)) => format!("dep {} · {wave}", e.label),
-            None => format!("dep {}", e.label),
-        };
-        rows.push(WhyRow {
-            text,
-            style: edge_style(target, theme),
-            kind: WhyKind::Edge(target),
-        });
-    }
-    rows.extend(finding_rows(it, theme));
     rows
 }
 
-fn text_row(text: String, color: Color) -> WhyRow {
+fn fact(label: &'static str, text: String, color: Color) -> WhyRow {
     WhyRow {
+        label,
         text,
         style: Style::default().fg(color),
         kind: WhyKind::Text,
@@ -155,30 +180,35 @@ fn text_row(text: String, color: Color) -> WhyRow {
 // engine derived
 fn annotation_rows(ctx: &WhyContext, theme: &Theme) -> Vec<WhyRow> {
     let mut rows = vec![];
-    if let Some(c) = ctx.cascade {
-        rows.push(text_row(format!("· {c}"), theme.accent));
+    // a review note leads: it is the reviewer's own words about this symbol,
+    // and it outranks anything the engine derived
+    if let Some(n) = ctx.note {
+        rows.push(fact("note", n.to_string(), theme.warn));
     }
-    if let Some(d) = ctx.delta {
-        rows.push(text_row(format!("· {d}"), theme.accent));
+    for (i, c) in ctx.comments.iter().enumerate() {
+        rows.push(fact(
+            if i == 0 { "comment" } else { "" },
+            c.clone(),
+            theme.warn,
+        ));
     }
     // approving a call before its callee is the one review-order mistake the
     // graph can actually prove
     if !ctx.out_of_order.is_empty() {
-        rows.push(text_row(
+        rows.push(fact(
+            "order",
             format!(
-                "⚠ marked reviewed, but depends on unreviewed {}",
+                "marked reviewed, but depends on unreviewed {}",
                 ctx.out_of_order.join(", ")
             ),
             theme.warn,
         ));
     }
-    // a review note leads: it is the reviewer's own words about this symbol,
-    // and it outranks anything the engine derived
-    if let Some(n) = ctx.note {
-        rows.push(text_row(format!("note: {n}"), theme.warn));
+    if let Some(d) = ctx.delta {
+        rows.push(fact("since", d.to_string(), theme.accent));
     }
-    for c in ctx.comments {
-        rows.push(text_row(c.clone(), theme.warn));
+    if let Some(c) = ctx.cascade {
+        rows.push(fact("cascade", c.to_string(), theme.accent));
     }
     rows
 }
@@ -187,30 +217,26 @@ fn annotation_rows(ctx: &WhyContext, theme: &Theme) -> Vec<WhyRow> {
 // right for `hunks[].rationale` in the JSON and wrong here: a busy hunk
 // arrived as one wrapped paragraph ("adds a, b, c, and 5 more; adds CFG (L30,
 // L37, …), HOST (…), READY (…)") that has to be read word by word. One clause
-// per row restores what the join flattened, and the pane is sized to its
-// wrapped height, so the rows are free.
+// per row restores what the join flattened. The detail layer follows, as more
+// of the same answer.
 fn rationale_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
     // The engine's terminal fallback rationale: it found nothing to say about
-    // the hunk, so a "reason: change" line says nothing either — leave it out.
-    if it.rationale == "change" {
-        return vec![];
-    }
-    it.rationale
+    // the hunk, so a "what: change" line says nothing either — leave it out.
+    let clauses = it
+        .rationale
         .split("; ")
-        .enumerate()
-        .map(|(i, frag)| {
-            let text = if i == 0 {
-                format!("reason: {frag}")
-            } else {
-                // aligned under the first clause, not under the label
-                format!("        {frag}")
-            };
-            text_row(text, theme.border_focus)
-        })
-        .collect()
+        .filter(|_| it.rationale != "change");
+    let mut rows: Vec<WhyRow> = clauses
+        .map(|frag| fact("", frag.to_string(), theme.fg))
+        .chain(it.details.iter().map(|d| fact("", d.clone(), theme.accent)))
+        .collect();
+    if let Some(first) = rows.first_mut() {
+        first.label = "what";
+    }
+    rows
 }
 
-// coverage, the detail layer and the engine's notes
+// coverage and the engine's notes
 fn signal_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
     let mut rows = vec![];
     // Coverage leads the derived rows: "nothing here ran" changes how the rest
@@ -222,7 +248,8 @@ fn signal_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
         } else {
             format!("{cold} of {total} executable lines here are executed by no test")
         };
-        rows.push(text_row(
+        rows.push(fact(
+            "coverage",
             text,
             if cold == 0 {
                 theme.reviewed
@@ -231,38 +258,77 @@ fn signal_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
             },
         ));
     }
-    for d in &it.details {
-        rows.push(text_row(format!("- {d}"), theme.accent));
-    }
     if !it.notes.is_empty() {
-        rows.push(text_row(
-            format!("notes: {}", it.notes.join("; ")),
-            theme.mark,
-        ));
+        rows.push(fact("notes", it.notes.join("; "), theme.mark));
     }
     rows
 }
 
-// every finding reads the same way, whoever found it: a named head line,
-// then the message beneath it
-fn finding_rows(it: &Item, theme: &Theme) -> Vec<WhyRow> {
-    let mut rows = vec![];
-    for f in &it.findings {
-        let (head, color) = match (f.source, f.level) {
-            (ordo::model::FindingSource::Review, _) => (format!("✎ {}", f.name), theme.mark),
-            (_, ordo::model::Level::Note) => (f.name.clone(), theme.category),
-            _ => (format!("⚠ {}", f.name), theme.warn),
+/// The why pane's right column: every finding, the hardest-pressing first,
+/// whoever found it — its level and name as chips, where it came from (and
+/// where its level came from, when `rules.toml` moved it), then its message
+/// beneath, wrapped to `width` under its own indent.
+pub(super) fn finding_lines(it: &Item, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    let mut found: Vec<&ordo::model::Finding> = it.findings.iter().collect();
+    found.sort_by_key(|f| std::cmp::Reverse(f.level));
+    let mut lines = vec![];
+    for f in found {
+        let chip = |strong| {
+            Style::default()
+                .fg(theme.fg)
+                .bg(theme.level_bg(f.level, strong))
+                .add_modifier(Modifier::BOLD)
         };
-        rows.push(WhyRow {
-            text: head,
-            style: Style::default().fg(color).add_modifier(Modifier::BOLD),
-            kind: WhyKind::Text,
-        });
+        let origin = match f.original_level {
+            Some(was) if f.level > was => format!(", raised from {} in rules.toml", was.as_str()),
+            Some(was) => format!(", lowered from {} in rules.toml", was.as_str()),
+            None => String::new(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} ", f.level.as_str()), chip(true)),
+            Span::styled(format!(" {} ", f.name), chip(false)),
+            Span::styled(
+                format!("  {}{origin}", f.source.as_str()),
+                Style::default().fg(theme.dim),
+            ),
+        ]));
+        let room = width.saturating_sub(3);
         for ml in f.message.lines() {
-            rows.push(text_row(format!("  {ml}"), theme.fg));
+            lines.extend(hang(ml, room, room).into_iter().map(|l| {
+                Line::from(Span::styled(
+                    format!("   {l}"),
+                    Style::default().fg(theme.fg),
+                ))
+            }));
         }
     }
-    rows
+    lines
+}
+
+/// `text` broken at spaces into lines of at most `first` columns, then `rest`
+/// for every line after it — the caller indents those, which `Wrap` cannot.
+/// A word longer than the room keeps its own line and is clipped by the pane.
+pub(super) fn hang(text: &str, first: usize, rest: usize) -> Vec<String> {
+    let mut lines: Vec<String> = vec![];
+    let mut cur = String::new();
+    for word in text.split(' ') {
+        let room = if lines.is_empty() { first } else { rest };
+        let need = cur.chars().count() + 1 + word.chars().count();
+        if !cur.is_empty() && need > room {
+            lines.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(word);
+    }
+    lines.push(cur);
+    lines
+}
+
+/// The hardest-pressing finding level on a hunk, if anything was found.
+pub(super) fn top_level(it: &Item) -> Option<Level> {
+    it.findings.iter().map(|f| f.level).max_by_key(|l| *l as u8)
 }
 
 // the dep-line target at `app.why_sel`, if the cursor is on one at all
@@ -382,11 +448,15 @@ fn cards_for(app: &App, anchor: usize) -> Vec<Card> {
 /// What to call a card: the symbol it defines, else the definition holding it,
 /// else the file. A card is identified by what a reviewer would say out loud.
 fn card_name(it: &Item) -> String {
+    hunk_symbol(it).unwrap_or_else(|| it.path.clone())
+}
+
+/// The symbol a hunk is about: the one it defines, else the definition holding it.
+fn hunk_symbol(it: &Item) -> Option<String> {
     it.symbols
         .first()
         .map(|s| s.name.clone())
         .or_else(|| it.enclosing.clone())
-        .unwrap_or_else(|| it.path.clone())
 }
 
 /// `gD`: open the canvas on the selected hunk. A hunk with no edges opens
@@ -515,15 +585,56 @@ pub(super) fn jump_back(app: &mut App) {
     app.focus = Pane::Code;
 }
 
-/// The focused pane gets a cyan border.
-/// A pane's frame. Rounded corners and a dim border for context, the theme's
-/// focus colour for the pane that has it — the border is how the reviewer knows
-/// where the keys will land, so it is the one piece of chrome allowed to be loud.
-/// The bottom row: which pane each digit selects, whether the frame is zoomed,
-/// and the movement keys the code pane's title used to carry and truncate.
-/// The focused pane's own digit is emphasised, so focus is legible without
-/// hunting for the highlighted border.
-fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
+/// What the footer offers on each pane: the few actions it is most likely to
+/// want next. Each is labelled by whatever key the active keymap binds to it,
+/// so a preset or a remap is what the footer says.
+type FooterKeys = &'static [(&'static [Action], &'static str)];
+const LIST_KEYS: FooterKeys = &[
+    (&[Action::Next, Action::Prev], "move"),
+    (&[Action::ToggleReviewed], "reviewed"),
+    (&[Action::OpenDeps], "dependencies"),
+    (&[Action::Fold(Fold::Toggle)], "fold"),
+    (&[Action::CommandOpen], "command"),
+    (&[Action::FocusNext], "pane"),
+];
+const CODE_KEYS: FooterKeys = &[
+    (&[Action::Next, Action::Prev], "line"),
+    (&[Action::Hover], "symbol"),
+    (&[Action::SearchOpen], "search"),
+    (&[Action::MarkNext, Action::MarkPrev], "uses"),
+    (&[Action::Comment], "comment"),
+    (&[Action::OpenEditor], "edit"),
+    (&[Action::FocusNext], "pane"),
+];
+const WHY_KEYS: FooterKeys = &[
+    (&[Action::Next, Action::Prev], "move"),
+    (&[Action::JumpToEdge], "go to dep"),
+    (&[Action::Hover], "preview dep"),
+    (&[Action::JumpBack], "back"),
+    (&[Action::FocusNext], "pane"),
+];
+const DEPS_KEYS: FooterKeys = &[
+    (&[Action::Next, Action::Prev], "card"),
+    (&[Action::JumpToEdge], "jump there"),
+    (&[Action::Focus(Pane::Deps)], "zoom card"),
+    (&[Action::Quit], "close"),
+];
+
+/// The first chord the keymap binds to `a`, as the help popup spells it.
+pub(super) fn bound_key(keys: &Keymap, a: Action) -> Option<String> {
+    keys.binds
+        .iter()
+        .find(|(_, _, b)| *b == a)
+        .map(|&(p, k, _)| chord_label(p, k))
+}
+
+fn spans_width(spans: &[Span]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+/// The bottom row: the focused pane's name, then its most relevant keys, as
+/// many as fit, and always the key for all of them.
+pub(super) fn footer_spans(app: &App, width: usize) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out = vec![];
     // the review no longer matching the tree outranks everything else on the
@@ -539,44 +650,52 @@ fn footer_spans(app: &App, zoomed: bool) -> Vec<Span<'static>> {
             Style::default().fg(theme.accent),
         ));
     }
-    let mut panes: Vec<(u8, Pane, &str)> = vec![
-        (1, Pane::List, "list"),
-        (2, Pane::Code, "code"),
-        (3, Pane::Why, "why"),
-    ];
-    if app.canvas.is_some() {
-        // a floating view takes the next free digit while it exists
-        panes.push((4, Pane::Deps, "deps"));
-    }
-    for (n, pane, label) in panes {
-        let on = app.focus == pane;
-        let style = if on {
-            Style::default()
-                .fg(theme.border_focus)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.dim)
-        };
-        out.push(Span::styled(format!(" {n} {label}"), style));
-    }
-    let hint = if zoomed {
-        // say how to get out of it, since the other two panes are not on screen
-        if app.zoom {
-            "  ·  zoomed (same digit restores)"
-        } else {
-            "  ·  narrow: one pane at a time"
-        }
-    } else {
-        "  ·  same digit zooms"
+    let (name, keys) = match app.focus {
+        Pane::List => ("list", LIST_KEYS),
+        Pane::Code => ("code", CODE_KEYS),
+        Pane::Why => ("why", WHY_KEYS),
+        Pane::Deps => ("deps", DEPS_KEYS),
     };
     out.push(Span::styled(
-        hint.to_string(),
-        Style::default().fg(theme.dim),
+        format!(" {name} "),
+        Style::default()
+            .fg(theme.border_focus)
+            .add_modifier(Modifier::REVERSED | Modifier::BOLD),
     ));
-    out.push(Span::styled(
-        format!("  ·  {}  ·  ? help ", app.keys.hint),
-        Style::default().fg(theme.dim),
-    ));
+    out.push(Span::raw(" "));
+    let entry = |label: String, desc: &str| {
+        vec![
+            Span::styled(
+                format!(" {label} "),
+                Style::default()
+                    .fg(theme.fg)
+                    .bg(theme.band_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" {desc}  "), Style::default().fg(theme.dim)),
+        ]
+    };
+    let mut entries = vec![];
+    // say how to get out of a zoom, since the other panes are not on screen
+    if app.zoom {
+        entries.extend(bound_key(&app.keys, Action::Zoom).map(|k| entry(k, "restore")));
+    }
+    for (actions, desc) in keys {
+        let labels: Option<Vec<String>> =
+            actions.iter().map(|&a| bound_key(&app.keys, a)).collect();
+        entries.extend(labels.map(|l| entry(l.join("/"), desc)));
+    }
+    let help = bound_key(&app.keys, Action::Help)
+        .map(|k| entry(k, "all keys"))
+        .unwrap_or_default();
+    let room = width.saturating_sub(spans_width(&help));
+    for e in entries {
+        if spans_width(&out) + spans_width(&e) > room {
+            break;
+        }
+        out.extend(e);
+    }
+    out.extend(help);
     out
 }
 
@@ -588,16 +707,9 @@ pub(super) fn set_geometry(app: &mut App, area: Rect) {
         return;
     }
     let body = body_of(area);
-    if body.width < SPLIT_COLS {
-        // the split is unavailable at this width, so an explicit toggle would
-        // sit invisible and surprise the reviewer when the terminal widens
-        app.zoom = false;
-    }
-    let why_widths: Vec<usize> = why_content(app)
-        .iter()
-        .map(|r| r.text.chars().count())
-        .collect();
-    let panes = pane_rects(body, app.focus, app.zoom, &why_widths);
+    let rows = why_content(app).len();
+    let findings = finding_lines(&app.items[app.sel], &app.theme, usize::MAX).len();
+    let panes = pane_rects(body, app.focus, app.zoom, rows.max(findings));
     record_geometry(app, &panes, body);
 }
 
@@ -607,12 +719,12 @@ pub(super) fn set_geometry(app: &mut App, area: Rect) {
 /// gets when it is zoomed to.
 fn record_geometry(app: &mut App, panes: &Panes, body: Rect) {
     let code = panes.code.unwrap_or(body);
-    app.code_height = code.height.saturating_sub(2);
+    // every pane spends one row on its header strip and nothing on a border
+    app.code_height = code.height.saturating_sub(1);
     app.code_width = (code.width as usize)
-        .saturating_sub(2)
         .saturating_sub(GUTTER_W)
         .min(u16::MAX as usize) as u16;
-    app.why_height = panes.why.unwrap_or(body).height.saturating_sub(2);
+    app.why_height = panes.why.unwrap_or(body).height.saturating_sub(1);
 }
 
 /// The narrowest a card may be, and how far each later card steps outward from
@@ -909,7 +1021,6 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
         l.anchor,
         c.anchor,
         &card_name(anchor_it),
-        true,
         c.sel.is_none(),
     );
 
@@ -950,43 +1061,28 @@ fn draw_canvas(f: &mut Frame, app: &App, body: Rect) {
         if rect.height == 0 || rect.y + rect.height >= l.area.y + l.area.height {
             continue; // hidden by the zoom, or would overrun the frame's own border
         }
-        card_widget(
-            f,
-            app,
-            *rect,
-            card.idx,
-            &card.label,
-            false,
-            c.sel == Some(i),
-        );
+        card_widget(f, app, *rect, card.idx, &card.label, c.sel == Some(i));
     }
 }
 
-/// One framed card: a few rows of the target hunk, rendered by the same
-/// `code_view` the code pane uses, so syntax and diff tint are identical. The
-/// selected card starts `Canvas::scroll` rows further down.
-fn card_widget(
-    f: &mut Frame,
-    app: &App,
-    rect: Rect,
-    idx: usize,
-    label: &str,
-    anchor: bool,
-    selected: bool,
-) {
+/// One card: a header band, then a few rows of the target hunk rendered by the
+/// same `code_view` the code pane uses, so syntax and diff tint are identical.
+/// The band carries the hunk's top finding level the way its list row does,
+/// in the strong shade when selected; the last row is left blank so stacked
+/// cards stay apart. The selected card starts `Canvas::scroll` rows further
+/// down.
+fn card_widget(f: &mut Frame, app: &App, rect: Rect, idx: usize, label: &str, selected: bool) {
     if rect.width < 8 || rect.height < 3 {
         return;
     }
     let theme = &app.theme;
-    let border = if selected {
-        theme.border_focus
-    } else if anchor {
-        theme.accent
-    } else {
-        theme.border
+    let it = &app.items[idx];
+    let bg = match (top_level(it), selected) {
+        (Some(l), s) => theme.level_bg(l, s),
+        (None, true) => theme.select_bg,
+        (None, false) => theme.band_bg,
     };
     let rows = rect.height.saturating_sub(2) as usize;
-    let it = &app.items[idx];
     // start at the hunk, not at the top of its file: `code_view`'s `start` is
     // an offset into the whole file, and passing 0 showed every card the
     // module docstring instead of the code the card is about
@@ -1000,7 +1096,7 @@ fn card_widget(
         it,
         &app.sources,
         &app.highlights,
-        rect.width.saturating_sub(2) as usize,
+        rect.width as usize,
         0,
         None,
         &[],
@@ -1009,38 +1105,43 @@ fn card_widget(
         start,
         rows,
         &LineMarks::default(),
+        // the band already carries the card's level, and a card is sized to
+        // its hunk's source lines
+        &[],
     );
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border))
-        .title(Span::styled(
-            format!(" {label} "),
-            Style::default().fg(if selected {
-                theme.border_focus
-            } else {
-                theme.dim
-            }),
-        ));
-    f.render_widget(Paragraph::new(Text::from(lines)).block(block), rect);
+    let head = Line::from(vec![
+        Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  {}", it.rationale), Style::default().fg(theme.fg)),
+    ]);
+    f.render_widget(
+        Paragraph::new(head).style(Style::default().bg(bg)),
+        Rect { height: 1, ..rect },
+    );
+    f.render_widget(
+        Paragraph::new(Text::from(lines)),
+        Rect {
+            y: rect.y + 1,
+            height: rows as u16,
+            ..rect
+        },
+    );
 }
 
 /// Where each pane sits this frame. Pure in the terminal size, the focus and
 /// the zoom flag, so the event loop can ask the same question the renderer
 /// does instead of reading what the last frame happened to leave behind.
 pub(super) struct Panes {
-    pub(super) zoomed: bool,
     pub(super) list: Option<Rect>,
     pub(super) code: Option<Rect>,
     pub(super) why: Option<Rect>,
 }
 
-/// `why_widths` is each rationale row's character count; the why pane wraps, so
-/// its height is the wrapped row count, not the logical one.
-pub(super) fn pane_rects(body: Rect, focus: Pane, zoom: bool, why_widths: &[usize]) -> Panes {
-    // Below `SPLIT_COLS` three panes each get too little to be read; one good
-    // pane beats three starved ones, so a narrow terminal zooms on its own.
-    let zoomed = zoom || body.width < SPLIT_COLS;
-    if zoomed {
+/// `why_rows` is how many rows the why pane's taller column holds.
+pub(super) fn pane_rects(body: Rect, focus: Pane, zoom: bool, why_rows: usize) -> Panes {
+    if zoom {
         let (list, code, why) = match focus {
             Pane::List => (Some(body), None, None),
             // the canvas floats over whatever is underneath, so while it has
@@ -1048,39 +1149,68 @@ pub(super) fn pane_rects(body: Rect, focus: Pane, zoom: bool, why_widths: &[usiz
             Pane::Code | Pane::Deps => (None, Some(body), None),
             Pane::Why => (None, None, Some(body)),
         };
+        return Panes { list, code, why };
+    }
+    // content height plus its header, floored at a quarter of the column so
+    // the two columns side by side have room to say something, capped so a
+    // long list of findings cannot crowd out the code
+    let floor = (body.height / 4).max(WHY_MIN_H);
+    let why_h = (why_rows.min(u16::MAX as usize) as u16)
+        .saturating_add(1)
+        .clamp(floor, (body.height * 2 / 5).max(floor));
+    // Below `SPLIT_COLS` side by side starves both columns, so the panes stack
+    // full width instead: the list gets a third, enough to see where the
+    // selection sits in the order, and the code what the why pane leaves.
+    if body.width < SPLIT_COLS {
+        let [list, code, why] = Layout::vertical([
+            Constraint::Length((body.height / 3).max(LIST_MIN_H)),
+            Constraint::Min(3),
+            Constraint::Length(why_h),
+        ])
+        .areas(body);
         return Panes {
-            zoomed,
-            list,
-            code,
-            why,
+            list: Some(list),
+            code: Some(code),
+            why: Some(why),
         };
     }
-    let cols =
-        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).split(body);
-    // content height plus borders, floored so an empty pane still reads as a
-    // pane, capped so a long rationale cannot crowd out the code
-    let why_w = (cols[1].width.saturating_sub(2)).max(1) as usize;
-    let wrapped: usize = why_widths.iter().map(|w| w.div_ceil(why_w).max(1)).sum();
-    let why_h = (wrapped as u16)
-        .saturating_add(2)
-        .clamp(3, (body.height * 2 / 5).max(3));
+    // no borders: a one-column gutter is what keeps the list off the code
+    let cols = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .spacing(1)
+        .split(body);
     let rhs = Layout::vertical([Constraint::Min(3), Constraint::Length(why_h)]).split(cols[1]);
     Panes {
-        zoomed,
         list: Some(cols[0]),
         code: Some(rhs[0]),
         why: Some(rhs[1]),
     }
 }
 
-/// The body rect — everything above the footer row.
-fn body_of(area: Rect) -> Rect {
-    Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area)[0]
+/// The why pane's least height: its header and a few rows of facts.
+const WHY_MIN_H: u16 = 5;
+/// The stacked list's least height: its header and a few rows around the
+/// selection.
+const LIST_MIN_H: u16 = 4;
+
+/// The frame's rows: the top bar, a blank row under it, the panes, the footer.
+fn frame_rows(area: Rect) -> [Rect; 4] {
+    Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area)
 }
 
-/// Below this the three panes each get too little width to be read, so the
-/// focused one takes the frame instead. Measured, not guessed: at 80 columns a
-/// 38% list pane is 30 wide and loses the line number off `gate.py:L117`.
+/// The body rect — the panes, between the top bar and the footer.
+fn body_of(area: Rect) -> Rect {
+    frame_rows(area)[2]
+}
+
+/// Below this the three panes side by side each get too little width to be
+/// read, so they stack instead. Measured, not guessed: at 80 columns a 38%
+/// list pane is 30 wide and loses the line number off `gate.py:L117`.
 pub(super) const SPLIT_COLS: u16 = 96;
 
 /// Below this nothing can be laid out honestly, so say so rather than draw a
@@ -1115,34 +1245,148 @@ fn draw_too_small(f: &mut Frame, area: Rect, theme: &Theme) {
     );
 }
 
-/// A pane's frame. Only the focused one is drawn.
+/// A pane's header strip, where a border and its title used to be: the pane's
+/// digit and name as a chip, then what it is showing, on the band tint.
 ///
-/// Measured at 140x42 on the default theme, the border colour was 37% of every
-/// non-space cell painted — the single most-used colour on screen, and drawn
-/// at a contrast against the background low enough to read as texture rather
-/// than structure (tasks-9sj.30). Three full rectangles repeat what the title,
-/// the footer and the pane numbers already say.
-///
-/// So an unfocused pane keeps the frame's *space* and loses its glyphs: the
-/// panes stay separated by the gap the border occupied, the layout does not
-/// shift by a cell when focus moves, and the one box still on screen means
-/// "you are here" instead of "this is a pane".
-fn pane_block(title: String, focused: bool, theme: &Theme) -> Block<'static> {
-    let block = Block::bordered().title(Span::styled(
-        title,
-        Style::default().fg(if focused {
-            theme.border_focus
-        } else {
-            theme.dim
-        }),
-    ));
-    if focused {
-        block
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border_focus))
+/// Borders went because they were the most-painted colour on screen while
+/// saying only "this is a pane"; the band says that in one row.
+/// The focused pane's chip is inverted in the focus colour — the one loud piece
+/// of chrome, because it says where the keys will land.
+fn pane_header(
+    n: u8,
+    name: &str,
+    rest: Vec<Span<'static>>,
+    focused: bool,
+    theme: &Theme,
+) -> Paragraph<'static> {
+    let chip = if focused {
+        Style::default()
+            .fg(theme.border_focus)
+            .add_modifier(Modifier::REVERSED | Modifier::BOLD)
     } else {
-        block.border_set(ratatui::symbols::border::EMPTY)
+        Style::default().fg(theme.dim)
+    };
+    let mut spans = vec![Span::styled(format!(" {n} {name} "), chip)];
+    spans.extend(rest);
+    Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.band_bg))
+}
+
+/// A pane's rect, split into its header row and its content.
+fn split_header(r: Rect) -> (Rect, Rect) {
+    let head = Rect {
+        height: 1.min(r.height),
+        ..r
+    };
+    let body = Rect {
+        y: r.y + head.height,
+        height: r.height - head.height,
+        ..r
+    };
+    (head, body)
+}
+
+/// `s` cut to `n` characters, an ellipsis marking the cut.
+pub(super) fn fit(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
     }
+    if n == 0 {
+        return String::new();
+    }
+    let mut out: String = s.chars().take(n - 1).collect();
+    out.push('…');
+    out
+}
+
+/// `fit`, keeping the end: a path's file name says more than its first folder.
+fn fit_tail(s: &str, n: usize) -> String {
+    let len = s.chars().count();
+    if len <= n {
+        return s.to_string();
+    }
+    if n == 0 {
+        return String::new();
+    }
+    let tail: String = s.chars().skip(len - (n - 1)).collect();
+    format!("…{tail}")
+}
+
+/// The top line: what is being reviewed on the left; on the right how far the
+/// review has got — hunks reviewed as a bar whose filled part is the reviewed
+/// tint, edges when there are any, and a chip per finding level present — and
+/// the key preset.
+pub(super) fn top_bar(app: &App, rev: &str, width: usize) -> Line<'static> {
+    let t = &app.theme;
+    let band = Style::default().fg(t.fg).bg(t.band_bg);
+    let dim = Style::default().fg(t.dim);
+    let mut left = vec![
+        Span::styled(
+            " ordo ",
+            Style::default()
+                .fg(t.fg)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(format!(" {rev} "), band.add_modifier(Modifier::BOLD)),
+    ];
+    let (done, total, edges_done, edges_total) = coverage(app);
+    let mut right = vec![];
+    if let Some(w) = app.only_wave {
+        right.push(Span::styled(format!("wave {w}  "), dim));
+    }
+    if app.view.len() < app.items.len() {
+        right.push(Span::styled("filtered  ", dim));
+    }
+    let progress = format!(" {done}/{total} reviewed ");
+    let fill = (progress.len() * done)
+        .div_ceil(total.max(1))
+        .min(progress.len());
+    right.push(Span::styled(
+        progress[..fill].to_string(),
+        band.bg(t.reviewed_bg),
+    ));
+    right.push(Span::styled(progress[fill..].to_string(), band));
+    // edge coverage is the number that tracks understanding; it is omitted
+    // when the review has no def→use links to cover
+    if edges_total > 0 {
+        right.push(Span::raw("  "));
+        right.push(Span::styled(
+            format!(" {edges_done}/{edges_total} edges "),
+            band,
+        ));
+    }
+    for level in [Level::Verdict, Level::Warn, Level::Note] {
+        let n = app
+            .view
+            .iter()
+            .flat_map(|&i| &app.items[i].findings)
+            .filter(|f| f.level == level)
+            .count();
+        if n > 0 {
+            right.push(Span::raw(" "));
+            right.push(Span::styled(
+                format!(" {n} {} ", level.as_str()),
+                Style::default()
+                    .fg(t.fg)
+                    .bg(t.level_bg(level, true))
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+    right.push(Span::styled(format!("  {} ", app.keys.name), dim));
+    let used = spans_width(&left) + spans_width(&right);
+    if let Some(subject) = &app.subject {
+        // only when a useful part of it fits: a dozen characters of a subject
+        // read as noise
+        let room = width.saturating_sub(used + 4);
+        if room >= 12 {
+            left.push(Span::styled(format!("  {}", fit(subject, room)), dim));
+        }
+    }
+    let pad = width.saturating_sub(spans_width(&left) + spans_width(&right));
+    left.push(Span::raw(" ".repeat(pad)));
+    left.extend(right);
+    Line::from(left)
 }
 
 pub(super) fn draw(f: &mut Frame, app: &mut App, rev: &str) {
@@ -1151,17 +1395,14 @@ pub(super) fn draw(f: &mut Frame, app: &mut App, rev: &str) {
         draw_too_small(f, area, &app.theme);
         return;
     }
-    // one row reserved at the bottom for the key hint, which used to ride in
-    // the code pane's border title and was truncated mid-word there
-    let root = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
-    let (body, footer_area) = (root[0], root[1]);
-    if body.width < SPLIT_COLS {
-        // the split is unavailable at this width, so an explicit toggle would
-        // sit invisible and surprise the reviewer when the terminal widens
-        app.zoom = false;
-    }
-    // the same for a side card's zoom: the canvas is inset by two, so it fans
-    // two columns later than the panes split
+    // the review's state across the top; one row at the bottom for the keys,
+    // which used to ride in the code pane's border title and were truncated
+    // mid-word there
+    let [top, _, body, footer_area] = frame_rows(area);
+    // a side card's zoom takes a half the canvas only has once it fans, so
+    // below that an explicit toggle would sit invisible and surprise the
+    // reviewer when the terminal widens; the canvas is inset by two, so it
+    // fans two columns later than the panes split
     if body.width < SPLIT_COLS + 2 {
         if let Some(c) = app.canvas.as_mut().filter(|c| c.sel.is_some()) {
             c.zoomed = false;
@@ -1170,29 +1411,31 @@ pub(super) fn draw(f: &mut Frame, app: &mut App, rev: &str) {
     // built before the layout, because the why pane is sized to it: it used to
     // take a flat 30% and sat nearly empty on a one-line rationale
     let why_content = why_content(app);
-    let why_widths: Vec<usize> = why_content.iter().map(|r| r.text.chars().count()).collect();
-    let panes = pane_rects(body, app.focus, app.zoom, &why_widths);
+    let findings = finding_lines(&app.items[app.sel], &app.theme, usize::MAX);
+    let why_len = why_content.len().max(findings.len());
+    let panes = pane_rects(body, app.focus, app.zoom, why_len);
     // Record what the panes came out as, rather than deriving it a second
     // time. `set_geometry` answers the same question for the event loop from
     // the same `pane_rects`, but has to rebuild the why rows to do it; here
     // they are already built.
     record_geometry(app, &panes, body);
 
-    draw_list(f, app, rev, panes.list, body);
+    f.render_widget(Paragraph::new(top_bar(app, rev, top.width as usize)), top);
+    draw_list(f, app, panes.list);
     // right — code (top) + why (bottom); either may be absent while zoomed.
     // A hidden pane falls back to `body`, which is not a guess: that is exactly
     // the rect it gets when the next keypress zooms to it.
     draw_code(f, app, panes.code, body);
     // content, not geometry: the why pane's length only exists once its rows
     // are built; the pane size it clamps against was set by `record_geometry`
-    app.why_len = why_content.len();
+    app.why_len = why_len;
     app.why_scroll = app.why_scroll.min(last_line(app.why_len));
     app.why_sel = app.why_sel.min(last_line(app.why_len) as usize);
     if let Some(r) = panes.why {
-        draw_why(f, app, r, &why_content);
+        draw_why(f, app, r, &why_content, !findings.is_empty());
     }
     f.render_widget(
-        Paragraph::new(Line::from(footer_spans(app, panes.zoomed))),
+        Paragraph::new(Line::from(footer_spans(app, footer_area.width as usize))),
         footer_area,
     );
 
@@ -1215,6 +1458,7 @@ pub(super) fn why_content(app: &App) -> Vec<WhyRow> {
             delta: delta_line(app, app.sel),
             cascade: cascade_line(app, app.sel).as_deref(),
             churn: churn_line(app, app.sel).as_deref(),
+            scope: scope_line(app, app.sel).as_deref(),
             other_waves: &other_waves(app, app.sel),
             wave_asked: app.items[app.sel].wave.and_then(|w| app.waves.asked(w)),
         },
@@ -1239,19 +1483,35 @@ fn other_waves(app: &App, i: usize) -> Vec<(usize, String)> {
                 Some(w) => format!("wave {w}"),
                 None => "before the waves".to_string(),
             };
-            let mark = if app.reviewed[t] { " ✓" } else { "" };
+            let mark = if app.reviewed[t] { ", reviewed" } else { "" };
             (t, format!("{wave}{mark}"))
         })
         .collect()
 }
 
+/// How wide the list's symbol column is: room for most names, cut past that.
+const SYMBOL_W: usize = 10;
+
 // left — reading order
-fn draw_list(f: &mut Frame, app: &App, rev: &str, list_area: Option<Rect>, body: Rect) {
-    // one cell for `▶`, then the row's own sign cell (see `list_row`): marks
-    // sit in a column of their own, so a marked row's path lines up with the rest
-    let symbol = "▶";
-    let text_w = (list_area.map_or(body.width, |a| a.width) as usize)
-        .saturating_sub(2 + symbol.chars().count());
+fn draw_list(f: &mut Frame, app: &App, list_area: Option<Rect>) {
+    let Some(area) = list_area else { return };
+    let theme = &app.theme;
+    let (head, rows_area) = split_header(area);
+    let mode = match app.mode {
+        ViewMode::Ledger => " by symbol",
+        ViewMode::Hunks => " by hunk",
+    };
+    f.render_widget(
+        pane_header(
+            1,
+            "list",
+            vec![Span::styled(mode, Style::default().fg(theme.dim))],
+            app.focus == Pane::List,
+            theme,
+        ),
+        head,
+    );
+    let w = rows_area.width as usize;
     let display = display_rows(
         &app.view,
         &app.items,
@@ -1259,98 +1519,124 @@ fn draw_list(f: &mut Frame, app: &App, rev: &str, list_area: Option<Rect>, body:
         app.show_groups,
         &app.collapsed,
     );
+    let sel_row = display_row_of(&display, app.sel);
+    let symbol = |i: usize| {
+        app.groups
+            .get(&app.items[i].bucket)
+            .map_or("", String::as_str)
+    };
     let rows: Vec<ListItem> = display
         .iter()
-        .map(|row| match row {
-            DisplayRow::Header(reason) => {
-                // bold, not blue: a group header is a structural label, and
-                // wearing the focus colour is what stopped that colour meaning
-                // focus (tasks-9sj.31). Weight separates it from its rows
-                // without spending the accent.
-                let spans = vec![Span::styled(
-                    format!("  {reason}"),
-                    Style::default()
-                        .fg(app.theme.fg)
-                        .add_modifier(Modifier::BOLD),
-                )];
-                ListItem::new(Line::from(slice_range(spans, 0, text_w)))
-            }
-            DisplayRow::Item(i) => {
-                ListItem::new(Line::from(slice_range(list_row(app, *i), 0, text_w)))
-            }
+        .enumerate()
+        .map(|(r, row)| {
+            let selected = r == sel_row;
+            ListItem::new(match row {
+                DisplayRow::File(path, n) => file_band(path, *n, w, theme),
+                DisplayRow::Gap => Line::default(),
+                DisplayRow::Item(i, opens) => {
+                    let sym = if *opens { symbol(*i) } else { "" };
+                    hunk_row(
+                        app,
+                        &[*i],
+                        sym,
+                        &app.items[*i].rationale,
+                        false,
+                        selected,
+                        w,
+                    )
+                }
+                DisplayRow::Folded(hidden) => {
+                    let n = hidden.len();
+                    let text = format!("{n} hunk{}, folded", if n == 1 { "" } else { "s" });
+                    hunk_row(app, hidden, symbol(hidden[0]), &text, true, selected, w)
+                }
+            })
         })
         .collect();
-    let (done, total, edges_done, edges_total) = coverage(app);
-    let mut state = ListState::default();
-    let sel_row = display_row_of(
-        &app.view,
-        &app.items,
-        app.show_groups,
-        &app.collapsed,
-        view_pos(&app.view, app.sel),
-    );
-    state.select(Some(sel_row));
-    let filtered = app.view.len() < app.items.len();
-    let list = List::new(rows)
-        .block(pane_block(
-            format!(
-                " 1 {rev}{} — {done}/{total} reviewed{}{} · {} ",
-                match app.only_wave {
-                    Some(w) => format!(" · wave {w}"),
-                    None => String::new(),
-                },
-                // edge coverage is the number that tracks understanding; it is
-                // omitted when the review has no def→use links to cover
-                if edges_total > 0 {
-                    format!(" · {edges_done}/{edges_total} edges")
-                } else {
-                    String::new()
-                },
-                if filtered { " (filtered)" } else { "" },
-                app.keys.name
-            ),
-            app.focus == Pane::List,
-            &app.theme,
-        ))
-        .highlight_style(Style::default().bg(app.theme.select_bg))
-        .highlight_symbol(symbol);
-    if let Some(r) = list_area {
-        f.render_stateful_widget(list, r, &mut state);
+    let mut state = ListState::default().with_selected(Some(sel_row));
+    f.render_stateful_widget(List::new(rows), rows_area, &mut state);
+}
+
+/// A file's band in the list: its path, and how many hunks run under it.
+fn file_band(path: &str, n: usize, w: usize, theme: &Theme) -> Line<'static> {
+    let band = Style::default().bg(theme.band_bg);
+    let count = format!("{n} hunk{} ", if n == 1 { "" } else { "s" });
+    let path = fit_tail(path, w.saturating_sub(count.chars().count() + 2));
+    let pad = w.saturating_sub(path.chars().count() + 1 + count.chars().count());
+    Line::from(vec![
+        Span::styled(
+            format!(" {path}"),
+            band.fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ".repeat(pad), band),
+        Span::styled(count, band.fg(theme.dim)),
+    ])
+}
+
+/// A list row's background: its state, in the strong shade when selected.
+/// Reviewed outranks the findings, which the line-number cell keeps instead;
+/// a state with no shade of its own is selected in the plain selection tint.
+fn row_bg(theme: &Theme, level: Option<Level>, reviewed: bool, selected: bool) -> Color {
+    match (reviewed, level) {
+        (false, Some(l)) => theme.level_bg(l, selected),
+        _ if selected => theme.select_bg,
+        (true, _) => theme.reviewed_bg,
+        (false, None) => Color::Reset,
     }
 }
 
-// one hunk's row: head only — the full rationale lives in the "why" pane.
-// Path, line number and category are separate spans so each reads at a
-// glance; a noise or reviewed row overrides all three, because *that* is what
-// the row is saying.
-pub(super) fn list_row(app: &App, i: usize) -> Vec<Span<'static>> {
-    let it = &app.items[i];
-    let style = if it.noise {
-        Style::default().fg(app.theme.dim)
-    } else if app.reviewed[i] {
-        Style::default().fg(app.theme.reviewed)
-    } else {
-        Style::default().fg(app.theme.fg)
+/// One list row standing for `hunks` — a hunk, or a fold of several: the
+/// group's symbol (on a group's first row only), `text` cut to fit, and the
+/// first hunk's new-side line number at the right edge.
+///
+/// No glyph says what state the row is in; its background does (`row_bg`),
+/// and a reviewed or noise row dims its text. A reviewed row that had findings
+/// keeps its top level on the line-number cell, so a reviewed verdict still
+/// says it was one. `quiet` dims the text whatever the state, for a fold.
+pub(super) fn hunk_row(
+    app: &App,
+    hunks: &[usize],
+    symbol: &str,
+    text: &str,
+    quiet: bool,
+    selected: bool,
+    w: usize,
+) -> Line<'static> {
+    let t = &app.theme;
+    let level = hunks
+        .iter()
+        .filter_map(|&i| top_level(&app.items[i]))
+        .max_by_key(|l| *l as u8);
+    let reviewed = hunks.iter().all(|&i| app.reviewed[i]);
+    let quiet = quiet || reviewed || hunks.iter().all(|&i| app.items[i].noise);
+    let mut base = Style::default().bg(row_bg(t, level, reviewed, selected));
+    if selected {
+        base = base.add_modifier(Modifier::BOLD);
+    }
+    let num = format!(" {:>4} ", app.items[hunks[0]].new_range[0]);
+    let num_style = match level.filter(|_| reviewed) {
+        Some(l) => base.fg(t.fg).bg(t.level_bg(l, true)),
+        None => base.fg(t.dim),
     };
-    let tinted = it.noise || app.reviewed[i];
-    let dim = |c: Color| if tinted { style } else { style.fg(c) };
-    vec![
-        // the sign cell: ⚠, ✎ or ·, one cell wide whatever it holds
-        Span::styled(format!("{:1} ", it.mark), dim(app.theme.mark)),
-        // two cells of indent put the file under the definition it belongs
-        // to; headers sit flush, so the list reads as a tree
-        Span::styled("  ".to_string(), style),
-        Span::styled(it.path.clone(), style),
-        // a line number says *where*, not *look here*: the accent is reserved
-        // for focus and selection (tasks-9sj.31)
-        Span::styled(format!(":L{}", it.new_range[0]), dim(app.theme.dim)),
-        Span::styled(format!(" [{}]", cat_name(it.cat)), dim(app.theme.category)),
-    ]
+    let room = w.saturating_sub(SYMBOL_W + 2 + num.chars().count());
+    let text = fit(text, room);
+    let pad = room.saturating_sub(text.chars().count());
+    Line::from(vec![
+        Span::styled(" ", base),
+        Span::styled(
+            format!("{:<SYMBOL_W$}", fit(symbol, SYMBOL_W)),
+            base.fg(if selected { t.fg } else { t.dim }),
+        ),
+        Span::styled(" ", base),
+        Span::styled(text, base.fg(if quiet { t.dim } else { t.fg })),
+        Span::styled(" ".repeat(pad), base),
+        Span::styled(num, num_style),
+    ])
 }
 
 fn draw_code(f: &mut Frame, app: &mut App, code_area: Option<Rect>, body: Rect) {
     let code_rect = code_area.unwrap_or(body);
-    let code_w = (code_rect.width as usize).saturating_sub(2);
+    let code_w = code_rect.width as usize;
     // clamp to the selected file's longest line so hscroll can't run away
     // past any content it could ever bring into view; cached per path since
     // it only changes on a load/`:e`, not every frame
@@ -1383,24 +1669,36 @@ fn draw_code(f: &mut Frame, app: &mut App, code_area: Option<Rect>, body: Rect) 
         app.scroll as usize,
         app.code_height as usize,
         &line_marks(app),
+        &it.findings,
     );
-    let title = code_title(app, right_clip);
+    let header = code_header(app, right_clip);
     app.code_len = code_total;
     app.scroll = app.scroll.min(last_line(app.code_len));
     // `code` is already the slice starting at `app.scroll`, so the paragraph
     // renders it from the top rather than scrolling within it
     if let Some(r) = code_area {
-        let code_view = Paragraph::new(Text::from(code))
-            .block(pane_block(title, app.focus == Pane::Code, &app.theme))
-            .scroll((0, 0));
-        f.render_widget(code_view, r);
+        let (head, content) = split_header(r);
+        f.render_widget(
+            pane_header(2, "code", header, app.focus == Pane::Code, &app.theme),
+            head,
+        );
+        f.render_widget(Paragraph::new(Text::from(code)), content);
     }
 }
 
-// The `/` prompt and the active-search status both reuse the code pane's
-// border title rather than a separate widget — one line is enough for either,
-// and it keeps the layout unchanged while typing or searching.
-fn code_title(app: &App, right_clip: bool) -> String {
+// The `/` prompt and the active-search status both ride in the code pane's
+// header rather than a separate widget — one line is enough for either, and it
+// keeps the layout unchanged while typing or searching.
+fn code_header(app: &App, right_clip: bool) -> Vec<Span<'static>> {
+    let t = &app.theme;
+    let dim = Style::default().fg(t.dim);
+    if let Some(p) = &app.prompt {
+        return vec![Span::styled(
+            format!(" search: {}▏", p.text),
+            Style::default().fg(t.fg),
+        )];
+    }
+    let it = &app.items[app.sel];
     // `‹`/`›` mark content clipped off the left/right of the horizontal
     // window — truncation must never be silent, so this is always shown
     // rather than only surfaced by scrolling into it.
@@ -1410,51 +1708,111 @@ fn code_title(app: &App, right_clip: bool) -> String {
         (false, true) => " ›",
         (false, false) => "",
     };
-    let path = &app.items[app.sel].path;
-    if let Some(p) = &app.prompt {
-        return format!(" search: {}▏ ", p.text);
-    }
-    let Some(s) = &app.search else {
-        return format!(" 2 {path}{clip} ");
-    };
-    let glyph = match s.kind {
-        SearchKind::Text => '/',
-        SearchKind::Symbol => '*',
-    };
-    let status = if s.matches.is_empty() {
-        format!("no matches for {glyph}{}", s.pattern)
+    let [a, b] = it.new_range;
+    let lines = if b > a {
+        format!("L{a}-{b}")
     } else {
-        format!("[{}/{}] {glyph}{}", s.index + 1, s.matches.len(), s.pattern)
+        format!("L{a}")
     };
-    format!(" 2 {path}{clip}  {status} ")
+    let mut out = vec![
+        Span::styled(
+            format!(" {}", it.path),
+            Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(clip, dim),
+    ];
+    if let Some(sym) = hunk_symbol(it) {
+        out.push(Span::styled(format!("  {sym}"), dim));
+    }
+    out.push(Span::styled(format!("  {lines}"), dim));
+    if let Some(s) = &app.search {
+        let glyph = match s.kind {
+            SearchKind::Text => '/',
+            SearchKind::Symbol => '*',
+        };
+        let status = if s.matches.is_empty() {
+            format!("no matches for {glyph}{}", s.pattern)
+        } else {
+            format!("[{}/{}] {glyph}{}", s.index + 1, s.matches.len(), s.pattern)
+        };
+        out.push(Span::styled(
+            format!("  {status}"),
+            Style::default().fg(t.accent),
+        ));
+    }
+    out
 }
 
-// the current line takes the list's selection tint, not REVERSED: this pane
-// is prose, and swapping fg/bg on a whole wrapped paragraph reads as a block
-// of colour rather than as "you are here". The code pane's cursor stays
-// reversed — one cell, where the swap is exactly right.
-fn draw_why(f: &mut Frame, app: &App, area: Rect, content: &[WhyRow]) {
-    let why: Vec<Line> = content
+// The facts on the left, each under its label, and the findings beside them;
+// with no findings the facts take the width. The current line takes the
+// selection tint, not REVERSED: this pane is prose, and swapping fg/bg on a
+// whole wrapped paragraph reads as a block of colour rather than as "you are
+// here". The code pane's cursor stays reversed — one cell, where the swap is
+// exactly right.
+fn draw_why(f: &mut Frame, app: &App, area: Rect, content: &[WhyRow], has_findings: bool) {
+    let theme = &app.theme;
+    let focused = app.focus == Pane::Why;
+    let (head, body) = split_header(area);
+    let sym = hunk_symbol(&app.items[app.sel])
+        .map(|s| {
+            vec![Span::styled(
+                format!(" {s}"),
+                Style::default().fg(theme.dim),
+            )]
+        })
+        .unwrap_or_default();
+    f.render_widget(pane_header(3, "why", sym, focused, theme), head);
+    let (facts_area, findings_area) = if !has_findings {
+        (body, None)
+    } else {
+        let [l, r] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .spacing(1)
+            .areas(body);
+        (l, Some(r))
+    };
+    let label_w = content
+        .iter()
+        .map(|r| r.label.chars().count())
+        .max()
+        .unwrap_or(0);
+    // a wrapped fact continues under its own text, not under its label
+    let gutter = label_w + 3;
+    let room = (facts_area.width as usize).saturating_sub(gutter);
+    let facts: Vec<Line> = content
         .iter()
         .enumerate()
-        .map(|(i, r)| {
-            let style = if app.focus == Pane::Why && i == app.why_sel {
-                r.style.bg(app.theme.select_bg)
+        .flat_map(|(i, r)| {
+            let (label, text) = if focused && i == app.why_sel {
+                (
+                    Style::default().fg(theme.dim).bg(theme.select_bg),
+                    r.style.bg(theme.select_bg),
+                )
             } else {
-                r.style
+                (Style::default().fg(theme.dim), r.style)
             };
-            Line::from(Span::styled(r.text.clone(), style))
+            hang(&r.text, room, room)
+                .into_iter()
+                .enumerate()
+                .map(move |(n, part)| {
+                    let head = if n == 0 { r.label } else { "" };
+                    Line::from(vec![
+                        Span::styled(format!(" {head:<label_w$}  "), label),
+                        Span::styled(part, text),
+                    ])
+                })
         })
         .collect();
-    let info = Paragraph::new(Text::from(why))
-        .block(pane_block(
-            " 3 why ".to_string(),
-            app.focus == Pane::Why,
-            &app.theme,
-        ))
-        .scroll((app.why_scroll, 0))
-        .wrap(Wrap { trim: false });
-    f.render_widget(info, area);
+    f.render_widget(
+        Paragraph::new(Text::from(facts)).scroll((app.why_scroll, 0)),
+        facts_area,
+    );
+    if let Some(r) = findings_area {
+        let findings = finding_lines(&app.items[app.sel], theme, r.width as usize);
+        f.render_widget(
+            Paragraph::new(Text::from(findings)).scroll((app.why_scroll, 0)),
+            r,
+        );
+    }
 }
 
 fn draw_popup(f: &mut Frame, app: &mut App, body: Rect) {
@@ -1907,7 +2265,7 @@ fn comments_in(app: &App, i: usize) -> Vec<String> {
                 ""
             };
             format!(
-                "● L{}{} {}{stale}",
+                "L{}{} {}{stale}",
                 c.start,
                 if c.end > c.start {
                     format!("-{}", c.end)
@@ -1918,6 +2276,19 @@ fn comments_in(app: &App, i: usize) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// What holds item `i` together with its neighbours: in ledger mode the ledger
+/// entry it belongs to, otherwise (or with no entry) the engine's group reason.
+pub(super) fn scope_line(app: &App, i: usize) -> Option<String> {
+    let it = &app.items[i];
+    let entry = match app.mode {
+        ViewMode::Ledger => it.ledger.and_then(|l| app.symbol_ledger.get(l)),
+        ViewMode::Hunks => None,
+    };
+    entry
+        .map(ledger_label)
+        .or_else(|| app.group_reasons.get(&it.group).cloned())
 }
 
 /// The note anchored to item `i`'s symbol, if any.

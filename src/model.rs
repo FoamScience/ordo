@@ -1,6 +1,6 @@
 //! Serde types for the v1 data contract (see `schema/v1.json`).
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Deserialize)]
 pub struct Input {
@@ -72,6 +72,11 @@ pub struct Options {
     /// by name is the same gesture whoever wrote it.
     #[serde(default)]
     pub disable: Vec<String>,
+    /// A level per rule name, replacing the one the rule was written with —
+    /// a catalog entry or one of `rules`. The finding keeps the level it had
+    /// in `original_level`, so a consumer can say it was moved.
+    #[serde(default)]
+    pub levels: BTreeMap<String, Level>,
 }
 
 fn catalog_default() -> bool {
@@ -92,6 +97,7 @@ impl Default for Options {
             catalog: catalog_default(),
             docs_last: docs_last_default(),
             disable: vec![],
+            levels: BTreeMap::new(),
         }
     }
 }
@@ -221,7 +227,7 @@ pub enum FindingSource {
 /// something to know" but "here is a concrete downgrade, and a signal backs
 /// it". Keeping it as a third level rather than a flag is what let the catalog
 /// and the rules engine become one thing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     Note,
@@ -248,6 +254,13 @@ impl Level {
             Level::Verdict => "verdict",
         }
     }
+
+    /// The level `as_str` spells `s`, if any.
+    pub fn named(s: &str) -> Option<Level> {
+        [Level::Note, Level::Warn, Level::Verdict]
+            .into_iter()
+            .find(|l| l.as_str() == s)
+    }
 }
 
 /// One thing worth knowing about a hunk, whoever found it.
@@ -258,6 +271,13 @@ pub struct Finding {
     pub name: String,
     pub message: String,
     pub level: Level,
+    /// 1-based new-side row the finding is anchored at; absent when it is
+    /// about the hunk as a whole (a rule with only path or name conditions)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row: Option<usize>,
+    /// the level the finding was written with, when `Options.levels` moved it
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_level: Option<Level>,
 }
 
 /// Where a name this hunk introduces is used, as positions rather than prose.

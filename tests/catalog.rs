@@ -9,7 +9,7 @@
 //! rule silently stops flagging code for everyone.
 mod fixture;
 use fixture::run_json;
-use ordo::model::FindingSource;
+use ordo::model::{FindingSource, Level};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -271,4 +271,78 @@ fn a_malformed_disable_glob_is_reported_not_swallowed() {
         .iter()
         .flat_map(|f| f.hunks.iter())
         .any(|h| !h.findings.is_empty()));
+}
+
+/// A finding names the row it is about, not only the hunk: a rule by the row
+/// its pattern matched, a walker by the node it reported.
+#[test]
+fn a_catalog_finding_carries_the_row_it_fired_on() {
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": "", "new":
+            "import contextlib\n\ndef check(x):\n    y = x\n    assert y > 0\n    return y\n\n\nclass Half:\n    def __enter__(self):\n        return self\n" }]
+    }));
+    let row = |name: &str| {
+        out.files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .flat_map(|h| h.findings.iter())
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no `{name}` finding"))
+            .row
+    };
+    assert_eq!(row("assert-validation"), Some(5));
+    assert_eq!(row("half-context-manager"), Some(9));
+}
+
+/// `levels` moves a finding's level by name and the finding keeps the level
+/// it was written with; a name nothing reports under is a problem.
+#[test]
+fn a_level_override_moves_a_catalog_finding_and_records_the_original() {
+    let src = format!("{HARDCODED}\ndef check(x):\n    assert x > 0\n");
+    let levels = |options: serde_json::Value| {
+        let out = run_json(serde_json::json!({
+            "changes": [{ "path": "a.py", "old": "", "new": src }],
+            "options": options,
+        }));
+        let mut got: Vec<(String, Level, Option<Level>)> = out
+            .files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .flat_map(|h| h.findings.iter())
+            .map(|f| (f.name.clone(), f.level, f.original_level))
+            .collect();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        (got, out.problems)
+    };
+    let (default, _) = levels(serde_json::json!({}));
+    assert_eq!(
+        default,
+        vec![
+            ("assert-validation".to_string(), Level::Verdict, None),
+            ("magic-argument".to_string(), Level::Note, None),
+            ("magic-number".to_string(), Level::Note, None),
+        ]
+    );
+    let (moved, problems) = levels(serde_json::json!({
+        "levels": { "assert-validation": "note", "magic-number": "warn", "magic-argument": "note" }
+    }));
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(
+        moved,
+        vec![
+            (
+                "assert-validation".to_string(),
+                Level::Note,
+                Some(Level::Verdict)
+            ),
+            ("magic-argument".to_string(), Level::Note, None),
+            ("magic-number".to_string(), Level::Warn, Some(Level::Note)),
+        ],
+        "lowered and raised, each keeping its original; the same level is no override"
+    );
+    let (_, problems) = levels(serde_json::json!({ "levels": { "magic-numbr": "warn" } }));
+    assert_eq!(
+        problems,
+        vec!["levels: no rule named `magic-numbr`".to_string()]
+    );
 }

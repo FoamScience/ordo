@@ -1,4 +1,5 @@
 // ------------------------------------------------------------------- code view
+use crate::draw::fit;
 use crate::highlight::highlight_spec;
 use crate::highlight::Highlights;
 use crate::highlight::LineSpans;
@@ -11,6 +12,8 @@ use crate::Item;
 use crate::ParsedFile;
 use crate::Popup;
 use crate::Sources;
+use ordo::model::Finding;
+use ordo::model::Level;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -33,13 +36,85 @@ use tree_sitter::Point;
 //
 // No theme paints a window background: leaving it to the terminal keeps
 // transparency and blur setups intact. What a theme's tints *do* assume is a
-// terminal background of roughly matching lightness — hence `--theme` /
-// `$ORDO_TUI_THEME` / `[theme] name` being an explicit choice rather than a
-// detection (OSC 11 background queries aren't reliably supported).
+// terminal background of roughly matching lightness. The default, `terminal`,
+// asks the terminal for its colours (OSC 10/11/4) and mixes every tint from
+// them; a terminal that doesn't answer gets `dark`'s, and any theme named by
+// `--theme` / `$ORDO_TUI_THEME` / `[theme] name` is used as it is.
 
 /// `0x89b4fa` → `Color::Rgb(0x89, 0xb4, 0xfa)`.
 pub(super) const fn hex(v: u32) -> Color {
     Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// What the terminal reported: its background, its foreground, and ANSI
+/// colours 1–6 (red, green, yellow, blue, magenta, cyan).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TermColors {
+    pub(super) bg: u32,
+    pub(super) fg: u32,
+    pub(super) ansi: [u32; 6],
+}
+
+static SENSED: std::sync::OnceLock<Option<TermColors>> = std::sync::OnceLock::new();
+
+/// Ask the terminal for its colours, once. It has to happen before the TUI
+/// starts reading input, which would otherwise swallow the replies, so `main`
+/// calls it at startup rather than `theme` on demand.
+pub(super) fn sense_terminal() {
+    // a test run's stdout may well be a terminal, and must not be queried
+    if !cfg!(test) {
+        SENSED.get_or_init(ask_terminal);
+    }
+}
+
+fn ask_terminal() -> Option<TermColors> {
+    use ratatui::crossterm::terminal;
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    terminal::enable_raw_mode().ok()?;
+    let ask = |q: &str| {
+        xterm_query::query_osc(q, 100u64)
+            .ok()
+            .and_then(|r| osc_rgb(&r))
+    };
+    // a terminal that can't answer the first stops the rest at once
+    let got = (|| {
+        let bg = ask("\x1b]11;?\x07")?;
+        let fg = ask("\x1b]10;?\x07")?;
+        let mut ansi = [0; 6];
+        for (n, c) in ansi.iter_mut().enumerate() {
+            *c = ask(&format!("\x1b]4;{};?\x07", n + 1))?;
+        }
+        Some(TermColors { bg, fg, ansi })
+    })();
+    let _ = terminal::disable_raw_mode();
+    got
+}
+
+/// The colour in an OSC colour reply, `…rgb:RRRR/GGGG/BBBB…` with one to four
+/// hex digits per channel, scaled to eight bits.
+pub(super) fn osc_rgb(reply: &str) -> Option<u32> {
+    let parts: Vec<&str> = reply.split("rgb:").nth(1)?.splitn(3, '/').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    parts.iter().try_fold(0u32, |acc, p| {
+        let digits: String = p.chars().take_while(char::is_ascii_hexdigit).collect();
+        if digits.is_empty() || digits.len() > 4 {
+            return None;
+        }
+        let v = u32::from_str_radix(&digits, 16).ok()?;
+        let max = (1u32 << (4 * digits.len())) - 1;
+        Some((acc << 8) | (v * 255 / max))
+    })
+}
+
+/// Perceived lightness of `0xRRGGBB`, 0 to 1 — which way a tint is mixed.
+fn luminance(c: u32) -> f32 {
+    let ch = |sh: u32| ((c >> sh) & 0xff) as f32 / 255.0;
+    0.299 * ch(16) + 0.587 * ch(8) + 0.114 * ch(0)
 }
 
 /// What a highlight capture *means*. A theme colours these twelve roles rather
@@ -135,6 +210,20 @@ pub(super) struct Theme {
     /// it reads as "here" among however many others are also highlighted
     pub(super) match_bg: Color,
     pub(super) match_cur_bg: Color,
+    // ---- state
+    /// file bands and pane header strips
+    pub(super) band_bg: Color,
+    /// A hunk's state is its row's background, never a glyph: the highest
+    /// finding level on it, or reviewed. A verdict is plum rather than red so
+    /// it cannot read as a deleted line. Each `_strong` shade is the same
+    /// state selected, or as a chip.
+    pub(super) verdict_bg: Color,
+    pub(super) verdict_strong_bg: Color,
+    pub(super) warn_bg: Color,
+    pub(super) warn_strong_bg: Color,
+    pub(super) note_bg: Color,
+    pub(super) note_strong_bg: Color,
+    pub(super) reviewed_bg: Color,
     // ---- code
     pub(super) syn: Syntax,
 }
@@ -178,6 +267,14 @@ impl Theme {
             select_bg: Color::Reset,
             match_bg: Color::Reset,
             match_cur_bg: Color::Reset,
+            band_bg: Color::Reset,
+            verdict_bg: Color::Reset,
+            verdict_strong_bg: Color::Reset,
+            warn_bg: Color::Reset,
+            warn_strong_bg: Color::Reset,
+            note_bg: Color::Reset,
+            note_strong_bg: Color::Reset,
+            reviewed_bg: Color::Reset,
             syn,
         };
         if light {
@@ -188,9 +285,17 @@ impl Theme {
                 del_bg: hex(0xf8d6d6),
                 add_strong_bg: hex(0xa0dcaf),
                 del_strong_bg: hex(0xf5aeae),
-                select_bg: hex(0xdee2ec),
+                select_bg: hex(0xccd0da),
                 match_bg: hex(0xffecaa),
                 match_cur_bg: hex(0xffca44),
+                band_bg: hex(0xdce0e8),
+                verdict_bg: hex(0xecd5f4),
+                verdict_strong_bg: hex(0xd9aeea),
+                warn_bg: hex(0xf6e6bd),
+                warn_strong_bg: hex(0xefd28a),
+                note_bg: hex(0xe4ecf7),
+                note_strong_bg: hex(0xa9c7f0),
+                reviewed_bg: hex(0xd6efd9),
                 ..chrome
             }
         } else {
@@ -199,11 +304,74 @@ impl Theme {
                 del_bg: hex(0x32181c),
                 add_strong_bg: hex(0x22542e),
                 del_strong_bg: hex(0x68282e),
-                select_bg: hex(0x2d323e),
+                select_bg: hex(0x45475a),
                 match_bg: hex(0x463c0a),
                 match_cur_bg: hex(0x8c6e0f),
+                band_bg: hex(0x313244),
+                verdict_bg: hex(0x45244f),
+                verdict_strong_bg: hex(0x66307a),
+                warn_bg: hex(0x4d3b14),
+                warn_strong_bg: hex(0x6b5219),
+                note_bg: hex(0x232b3e),
+                note_strong_bg: hex(0x2b4870),
+                reviewed_bg: hex(0x1d3326),
                 ..chrome
             }
+        }
+    }
+
+    /// `terminal` once the terminal has said what its colours are: text still
+    /// names ANSI colours, and every tint is mixed from the terminal's own hues
+    /// toward its own background, the way a published palette's are.
+    pub(super) fn sensed(c: TermColors) -> Theme {
+        let [red, green, yellow, blue, magenta, cyan] = c.ansi;
+        let light = luminance(c.bg) > 0.5;
+        let tints = Palette {
+            name: "terminal",
+            fg: c.fg,
+            dim: Palette::mix32(c.fg, c.bg, 128),
+            surface: Palette::mix32(c.fg, c.bg, 225),
+            red,
+            green,
+            yellow,
+            blue,
+            magenta,
+            cyan,
+            // no ANSI orange, and yellow is the search match's
+            orange: Palette::mix32(red, yellow, 128),
+            light,
+        }
+        .on(c.bg);
+        Theme {
+            add_bg: tints.add_bg,
+            del_bg: tints.del_bg,
+            add_strong_bg: tints.add_strong_bg,
+            del_strong_bg: tints.del_strong_bg,
+            select_bg: tints.select_bg,
+            match_bg: tints.match_bg,
+            match_cur_bg: tints.match_cur_bg,
+            band_bg: tints.band_bg,
+            verdict_bg: tints.verdict_bg,
+            verdict_strong_bg: tints.verdict_strong_bg,
+            warn_bg: tints.warn_bg,
+            warn_strong_bg: tints.warn_strong_bg,
+            note_bg: tints.note_bg,
+            note_strong_bg: tints.note_strong_bg,
+            reviewed_bg: tints.reviewed_bg,
+            ..Theme::terminal("terminal", light)
+        }
+    }
+
+    /// The tint a finding level paints: quiet for a row, strong for a chip or
+    /// a selected row.
+    pub(super) fn level_bg(&self, level: Level, strong: bool) -> Color {
+        match (level, strong) {
+            (Level::Verdict, false) => self.verdict_bg,
+            (Level::Verdict, true) => self.verdict_strong_bg,
+            (Level::Warn, false) => self.warn_bg,
+            (Level::Warn, true) => self.warn_strong_bg,
+            (Level::Note, false) => self.note_bg,
+            (Level::Note, true) => self.note_strong_bg,
         }
     }
 }
@@ -234,21 +402,38 @@ impl Palette {
     /// Mix `a` toward `b` by `w`/256 — how a diff tint is derived from a
     /// palette colour rather than guessed at per theme.
     const fn mix(a: u32, b: u32, w: u32) -> Color {
-        const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u8 {
+        hex(Palette::mix32(a, b, w))
+    }
+
+    const fn mix32(a: u32, b: u32, w: u32) -> u32 {
+        const fn ch(a: u32, b: u32, w: u32, sh: u32) -> u32 {
             let (x, y) = ((a >> sh) & 0xff, (b >> sh) & 0xff);
-            ((x * (256 - w) + y * w) / 256) as u8
+            ((x * (256 - w) + y * w) / 256) << sh
         }
-        Color::Rgb(ch(a, b, w, 16), ch(a, b, w, 8), ch(a, b, w, 0))
+        ch(a, b, w, 16) | ch(a, b, w, 8) | ch(a, b, w, 0)
     }
 
     fn theme(&self) -> Theme {
         // a tint is the accent mixed into the page: toward black on a dark
         // palette, toward white on a light one
-        let ground = if self.light { 0xffffff } else { 0x000000 };
+        self.on(if self.light { 0xffffff } else { 0x000000 })
+    }
+
+    /// This palette with every tint mixed toward `ground` — black or white for
+    /// a published palette, the terminal's own background for `terminal`.
+    fn on(&self, ground: u32) -> Theme {
         // how far the tint sits from the page: quiet enough to read a whole
         // line over, strong enough that the refined span stands out inside it
         let quiet = if self.light { 200 } else { 210 };
         let strong = 130;
+        // state tints sit apart from the diff and match weights so no two
+        // roles share a colour; a warn is orange because yellow is the search
+        // match's, and a note is fainter than the other two levels
+        let (state, state_strong, faint) = if self.light {
+            (190, 140, 220)
+        } else {
+            (180, 130, 215)
+        };
         Theme {
             name: self.name,
             fg: hex(self.fg),
@@ -266,9 +451,19 @@ impl Palette {
             del_bg: Palette::mix(self.red, ground, quiet),
             add_strong_bg: Palette::mix(self.green, ground, strong),
             del_strong_bg: Palette::mix(self.red, ground, strong),
-            select_bg: hex(self.surface),
+            // the band is the surface itself, so the selection lifts off it
+            // toward the text colour
+            select_bg: Palette::mix(self.surface, self.fg, 40),
             match_bg: Palette::mix(self.yellow, ground, quiet),
             match_cur_bg: Palette::mix(self.yellow, ground, strong),
+            band_bg: hex(self.surface),
+            verdict_bg: Palette::mix(self.magenta, ground, state),
+            verdict_strong_bg: Palette::mix(self.magenta, ground, state_strong),
+            warn_bg: Palette::mix(self.orange, ground, state),
+            warn_strong_bg: Palette::mix(self.orange, ground, state_strong),
+            note_bg: Palette::mix(self.blue, ground, faint),
+            note_strong_bg: Palette::mix(self.blue, ground, state_strong),
+            reviewed_bg: Palette::mix(self.green, ground, faint),
             syn: Syntax {
                 comment: hex(self.dim),
                 keyword: hex(self.magenta),
@@ -490,14 +685,23 @@ const PALETTES: &[Palette] = &[
 /// Every theme name, terminal ones first — the order `--theme` reports, and
 /// the order `:config` cycles in.
 pub(super) fn theme_names() -> Vec<String> {
-    ["dark".to_string(), "light".to_string()]
-        .into_iter()
-        .chain(PALETTES.iter().map(|p| p.name.to_string()))
-        .collect()
+    [
+        "terminal".to_string(),
+        "dark".to_string(),
+        "light".to_string(),
+    ]
+    .into_iter()
+    .chain(PALETTES.iter().map(|p| p.name.to_string()))
+    .collect()
 }
 
 pub(super) fn theme(name: &str) -> Option<Theme> {
     match name {
+        // a terminal that did not answer gets `dark`'s tints under its own name
+        "terminal" => Some(match SENSED.get().copied().flatten() {
+            Some(c) => Theme::sensed(c),
+            None => Theme::terminal("terminal", false),
+        }),
         "dark" => Some(Theme::terminal("dark", false)),
         "light" => Some(Theme::terminal("light", true)),
         n => PALETTES.iter().find(|p| p.name == n).map(Palette::theme),
@@ -630,9 +834,32 @@ impl LineMarks {
     }
 }
 
+/// The view row the code pane puts new-side line `line` (0-based) on: past the
+/// removed block when that is shown above it, and past every finding line
+/// anchored above it — the layout `code_view` builds, for the scroll to follow
+/// the cursor through.
+pub(super) fn view_row(it: &Item, line: usize) -> usize {
+    let ln = line + 1;
+    let [o0, o1] = it.old_range;
+    let n0 = it.new_range[0];
+    let removed = if n0 >= 1 && ln >= n0 && o0 >= 1 && o0 <= o1 {
+        o1 - o0 + 1
+    } else {
+        0
+    };
+    let above = it
+        .findings
+        .iter()
+        .filter(|f| f.row.is_some_and(|r| (1..ln).contains(&r)))
+        .count();
+    line + removed + above
+}
+
 // The whole new file with the changed hunk highlighted in place: removed lines
 // on a red-tinted row (shown at the change point), added lines on a green tint,
-// the rest plain context. Code is syntax-highlighted via tree-sitter.
+// the rest plain context. Code is syntax-highlighted via tree-sitter. Each of
+// `findings` anchored at a row gets a line of its own under that row; it is
+// not a source line, so it has no number and the cursor never lands on it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn code_view(
     it: &Item,
@@ -647,6 +874,7 @@ pub(super) fn code_view(
     start: usize,
     rows: usize,
     marks: &LineMarks,
+    findings: &[Finding],
 ) -> (Vec<Line<'static>>, bool, usize) {
     let mut out = vec![];
     let Some((ol, nl)) = sources.get(&it.path) else {
@@ -668,12 +896,18 @@ pub(super) fn code_view(
         .flat_map(|u| u.rows.iter().copied())
         .collect();
     let avail = width.saturating_sub(GUTTER_W);
+    // the hardest-pressing first where several share a row
+    let mut inline: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.row.is_some_and(|r| (1..=nl.len()).contains(&r)))
+        .collect();
+    inline.sort_by_key(|f| std::cmp::Reverse(f.level));
     // Every row this view would hold, counted rather than built: the pane shows
     // `rows` of them, so building the whole file to throw all but a screenful
     // away costs ~20 allocations per line of a file that can run to thousands.
     // The removed block lands at `n0` (or after the last line when the deletion
     // sits at EOF); `n0 == 0` is a change before line 1, where it is not shown.
-    let total = nl.len() + if n0 >= 1 { removed.len() } else { 0 };
+    let total = nl.len() + if n0 >= 1 { removed.len() } else { 0 } + inline.len();
     let start = start.min(last_line(total) as usize);
     let end = start.saturating_add(rows);
     // Clipping is a property of the whole view, not of the rows on screen: the
@@ -700,6 +934,15 @@ pub(super) fn code_view(
             out.push(painter.removed(r, refined));
         }
     };
+    let emit_findings = |out: &mut Vec<Line<'static>>, row: &mut usize, ln: usize| {
+        for f in inline.iter().filter(|f| f.row == Some(ln)) {
+            let here = *row;
+            *row += 1;
+            if (start..end).contains(&here) {
+                out.push(painter.finding(f));
+            }
+        }
+    };
     let mut row = 0usize;
     for (i, line) in nl.iter().enumerate() {
         let ln = i + 1;
@@ -708,31 +951,31 @@ pub(super) fn code_view(
         }
         let here = row;
         row += 1;
-        if here < start {
-            continue;
-        }
         if here >= end {
             break;
         }
-        let added = n0 <= ln && ln <= n1;
-        out.push(painter.source(&SourceRow {
-            i,
-            ln,
-            line,
-            added,
-            use_row: use_rows.contains(&ln),
-            commented: marks.commented(ln),
-            selected: marks.selected(ln),
-            hl: hl.and_then(|h| h.get(i)),
-            refined: if added {
-                it.refined.added.get(ln - n0).and_then(|s| s.as_ref())
-            } else {
-                None
-            },
-            matches,
-            cur_match,
-            cursor,
-        }));
+        if here >= start {
+            let added = n0 <= ln && ln <= n1;
+            out.push(painter.source(&SourceRow {
+                i,
+                ln,
+                line,
+                added,
+                use_row: use_rows.contains(&ln),
+                commented: marks.commented(ln),
+                selected: marks.selected(ln),
+                hl: hl.and_then(|h| h.get(i)),
+                refined: if added {
+                    it.refined.added.get(ln - n0).and_then(|s| s.as_ref())
+                } else {
+                    None
+                },
+                matches,
+                cur_match,
+                cursor,
+            }));
+        }
+        emit_findings(&mut out, &mut row, ln);
     }
     if n0 > nl.len() {
         emit_removed(&mut out, &mut row); // deletion at/after EOF
@@ -830,6 +1073,36 @@ impl RowPainter<'_> {
         spans.extend(visible);
         self.pad(&mut spans, GUTTER_W + shown, theme.del_bg);
         Line::from(self.emphasize(spans, refined, theme.del_strong_bg))
+    }
+
+    // a finding under the row it fired on: its level and name as the why
+    // pane's chips, then the first line of its message, all on the level's
+    // tint and starting under the code column whatever the horizontal scroll
+    fn finding(&self, f: &Finding) -> Line<'static> {
+        let bg = self.theme.level_bg(f.level, false);
+        let quiet = Style::default().fg(self.theme.fg).bg(bg);
+        let level = format!(" {} ", f.level.as_str());
+        let name = format!(" {} ", f.name);
+        let used = GUTTER_W + level.chars().count() + name.chars().count();
+        let message = f.message.lines().next().unwrap_or("");
+        let mut spans = vec![
+            Span::styled(" ".repeat(GUTTER_W), quiet),
+            Span::styled(
+                level,
+                quiet
+                    .bg(self.theme.level_bg(f.level, true))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(name, quiet.add_modifier(Modifier::BOLD)),
+            Span::styled(
+                fit(&format!(" {message}"), self.width.saturating_sub(used)),
+                quiet,
+            ),
+        ];
+        spans = slice_range(spans, 0, self.width);
+        let shown = spans.iter().map(|s| s.content.chars().count()).sum();
+        self.pad(&mut spans, shown, bg);
+        Line::from(spans)
     }
 
     fn source(&self, r: &SourceRow) -> Line<'static> {
@@ -1288,6 +1561,14 @@ theme_roles! {
     "select-bg" => select_bg,
     "match-bg" => match_bg,
     "match-current-bg" => match_cur_bg,
+    "band-bg" => band_bg,
+    "verdict-bg" => verdict_bg,
+    "verdict-strong-bg" => verdict_strong_bg,
+    "warn-bg" => warn_bg,
+    "warn-strong-bg" => warn_strong_bg,
+    "note-bg" => note_bg,
+    "note-strong-bg" => note_strong_bg,
+    "reviewed-bg" => reviewed_bg,
     "syntax-comment" => syn.comment,
     "syntax-keyword" => syn.keyword,
     "syntax-string" => syn.string,

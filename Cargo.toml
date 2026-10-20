@@ -29,7 +29,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["tui"]
-tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:toml", "dep:base64"]
+tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:toml", "dep:base64", "dep:xterm-query"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -74,6 +74,9 @@ tree-sitter-scss = "1.0"
 tree-sitter-rst = "0.2"
 tree-sitter-html = "0.23"
 tree-sitter-svelte-ng = "1.0"
+# the default theme's tints are mixed from the terminal's own colours, asked for
+# over OSC 10/11/4 (the `ordo` reviewer only)
+xterm-query = { version = "0.6.1", optional = true }
 
 [build-dependencies]
 # builds the in-tree go-template grammar (see grammars/ and build.rs)

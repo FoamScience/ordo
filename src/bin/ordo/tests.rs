@@ -204,50 +204,101 @@ fn a_finding_lands_on_the_hunk_that_contains_its_line() {
     assert_eq!(items[0].findings.len(), 1, "line 10 is in 1..=20");
     assert_eq!(items[1].findings.len(), 1, "line 50 is in 40..=60");
     assert_eq!(unplaced, 0);
-    assert_eq!(items[0].mark, "⚠", "a warn finding marks the row");
-    assert_eq!(items[1].mark, "", "a note finding does not");
+    assert_eq!(top_level(&items[0]), Some(ordo::model::Level::Warn));
+    assert_eq!(top_level(&items[1]), Some(ordo::model::Level::Note));
 }
 
 #[test]
-fn a_review_comment_gets_its_own_mark_which_a_warning_outranks() {
+fn a_review_comment_tints_its_row_by_level_like_any_finding() {
     let review = r#"{"runs":[{"tool":{"driver":{"name":"review-bot"}},"results":[
       {"kind":"review","level":"warning","message":{"text":"missed case"},
        "locations":[{"physicalLocation":{
           "artifactLocation":{"uri":"src/a.py"},"region":{"startLine":10}}}]}]}]}"#;
-    let mut items = [test_item("src/a.py"), test_item("src/a.py")];
+    let mut items = [test_item("src/a.py")];
     items[0].new_range = [1, 20];
-    items[1].new_range = [1, 20];
-    place_findings(&mut items[..1], &parse_sarif(review));
-    assert_eq!(items[0].mark, "✎");
+    place_findings(&mut items, &parse_sarif(review));
     assert_eq!(
         items[0].findings[0].source,
         ordo::model::FindingSource::Review
     );
-    place_findings(&mut items[1..], &parse_sarif(SARIF));
-    place_findings(&mut items[1..], &parse_sarif(review));
-    assert_eq!(items[1].mark, "⚠", "a warning outranks a review comment");
+    assert_eq!(top_level(&items[0]), Some(ordo::model::Level::Warn));
+}
+
+fn finding(level: ordo::model::Level) -> ordo::model::Finding {
+    ordo::model::Finding {
+        source: ordo::model::FindingSource::Catalog,
+        name: "n".to_string(),
+        message: "m".to_string(),
+        level,
+        row: None,
+        original_level: None,
+    }
+}
+
+fn row_text(line: &Line) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
 #[test]
-fn a_row_mark_sits_in_the_sign_cell_without_shifting_the_path() {
+fn a_list_row_is_its_symbol_rationale_and_line_number() {
     let mut app = test_app(0);
-    app.items.push(test_item("a.rs"));
-    app.reviewed.push(false);
-    app.items[0].mark = "⚠".to_string();
-    let text = |i: usize| -> String {
-        list_row(&app, i)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect()
+    app.items[0].new_range = [12, 14];
+    let line = hunk_row(&app, &[0], "run", "adds run", false, false, 40);
+    let text = row_text(&line);
+    assert_eq!(text.chars().count(), 40, "{text:?}");
+    assert!(text.starts_with(" run        adds run"), "{text:?}");
+    assert!(text.ends_with("   12 "), "{text:?}");
+    // a long rationale is cut, never pushed past the line number
+    let long = "x".repeat(80);
+    let text = row_text(&hunk_row(
+        &app,
+        &[0],
+        "a_very_long_name",
+        &long,
+        false,
+        false,
+        40,
+    ));
+    assert_eq!(text.chars().count(), 40, "{text:?}");
+    assert!(text.contains("a_very_lo… "), "{text:?}");
+    assert!(text.ends_with("…   12 "), "{text:?}");
+}
+
+#[test]
+fn a_rows_state_is_its_background() {
+    use ordo::model::Level;
+    let mut app = test_app(0);
+    let t = app.theme;
+    let bg = |app: &App, selected: bool| {
+        hunk_row(app, &[0], "", "x", false, selected, 30).spans[0]
+            .style
+            .bg
     };
-    assert!(text(0).starts_with("⚠ "), "{}", text(0));
+    let num_bg = |app: &App| {
+        hunk_row(app, &[0], "", "x", false, false, 30)
+            .spans
+            .last()
+            .unwrap()
+            .style
+            .bg
+    };
+    assert_eq!(bg(&app, false), Some(Color::Reset), "nothing to say");
+    assert_eq!(bg(&app, true), Some(t.select_bg));
+
+    app.items[0].findings = vec![finding(Level::Note), finding(Level::Verdict)];
+    assert_eq!(bg(&app, false), Some(t.verdict_bg), "the top level wins");
     assert_eq!(
-        text(0).chars().position(|c| c == 'a'),
-        text(1).chars().position(|c| c == 'a'),
-        "{} / {}",
-        text(0),
-        text(1)
+        bg(&app, true),
+        Some(t.verdict_strong_bg),
+        "selected: its own strong shade"
     );
+
+    // reviewed outranks the findings, but the line-number cell keeps the level
+    app.reviewed[0] = true;
+    assert_eq!(bg(&app, false), Some(t.reviewed_bg));
+    assert_eq!(num_bg(&app), Some(t.verdict_strong_bg));
+    app.items[0].findings.clear();
+    assert_eq!(num_bg(&app), Some(t.reviewed_bg), "no level to keep");
 }
 
 #[test]
@@ -441,7 +492,7 @@ fn an_empty_side_still_keeps_its_half() {
 }
 
 /// Below the split threshold each half is too narrow for code, so the
-/// cards stack in one column — the same fallback a zoomed pane gets.
+/// cards stack in one column — the same fallback the panes get.
 #[test]
 fn a_narrow_canvas_stacks_instead_of_fanning() {
     let body = Rect::new(0, 0, SPLIT_COLS - 1, 40);
@@ -456,52 +507,75 @@ fn a_narrow_canvas_stacks_instead_of_fanning() {
 fn a_zoomed_layout_shows_exactly_one_pane() {
     let body = Rect::new(0, 0, 140, 40);
     for focus in [Pane::List, Pane::Code, Pane::Why] {
-        let p = pane_rects(body, focus, true, &[10]);
+        let p = pane_rects(body, focus, true, 1);
         let shown = [p.list, p.code, p.why]
             .iter()
             .filter(|r| r.is_some())
             .count();
         assert_eq!(shown, 1, "{focus:?} zoomed");
-        assert!(p.zoomed);
     }
 }
 
+/// Below the split width the three panes stack full width: the list a third
+/// of the body, the why pane sized as beside the code, the code between them.
 #[test]
-fn a_narrow_terminal_zooms_without_being_asked() {
-    let narrow = Rect::new(0, 0, SPLIT_COLS - 1, 40);
-    let p = pane_rects(narrow, Pane::Code, false, &[10]);
-    assert!(p.zoomed, "below SPLIT_COLS the split is not offered");
-    assert_eq!(p.code, Some(narrow));
-    assert!(p.list.is_none() && p.why.is_none());
-
-    let wide = Rect::new(0, 0, SPLIT_COLS, 40);
-    assert!(!pane_rects(wide, Pane::Code, false, &[10]).zoomed);
+fn a_narrow_terminal_stacks_the_panes() {
+    let narrow = Rect::new(0, 0, 90, 37);
+    let p = pane_rects(narrow, Pane::Code, false, 1);
+    let (list, code, why) = (p.list.unwrap(), p.code.unwrap(), p.why.unwrap());
+    assert!([list, code, why].iter().all(|r| r.width == 90 && r.x == 0));
+    assert_eq!((list.y, list.height), (0, 12));
+    assert_eq!(
+        (why.height, why.bottom()),
+        (37 / 4, 37),
+        "why floored as when wide"
+    );
+    assert_eq!(
+        (code.y, code.bottom()),
+        (12, why.y),
+        "the header bands keep them apart"
+    );
+    // down to the least height ordo draws at, nothing collapses or overlaps
+    for h in [9, 16, 24] {
+        let body = Rect::new(0, 0, SPLIT_COLS - 1, h);
+        let p = pane_rects(body, Pane::List, false, 30);
+        let (list, code, why) = (p.list.unwrap(), p.code.unwrap(), p.why.unwrap());
+        assert!(
+            list.height > 1 && code.height > 1 && why.height > 1,
+            "{h}: {list:?} {code:?} {why:?}"
+        );
+        assert!(list.bottom() <= code.y && code.bottom() <= why.y, "{h}");
+        assert_eq!(why.bottom(), h, "{h}");
+    }
+    // an explicit zoom still fills the frame
+    let z = pane_rects(narrow, Pane::Why, true, 1);
+    assert_eq!((z.list, z.code, z.why), (None, None, Some(narrow)));
 }
 
 #[test]
-fn the_why_pane_is_sized_to_its_wrapped_content() {
-    let body = Rect::new(0, 0, 140, 40);
-    // one short rationale: the floor, not 30% of the frame
-    let small = pane_rects(body, Pane::Code, false, &[20]).why.unwrap();
-    assert_eq!(small.height, 3, "one line plus borders");
+fn a_wide_terminal_keeps_the_list_beside_the_code() {
+    let wide = Rect::new(0, 0, SPLIT_COLS, 40);
+    let p = pane_rects(wide, Pane::Code, false, 1);
+    let (list, code, why) = (p.list.unwrap(), p.code.unwrap(), p.why.unwrap());
+    assert_eq!((list.x, list.y, list.height), (0, 0, 40));
+    assert_eq!((code.x, code.y), (list.right() + 1, 0));
+    assert_eq!((why.x, why.y, why.bottom()), (code.x, code.bottom(), 40));
+}
 
-    // a rationale far wider than the pane wraps to several rows
-    let wide_row = (body.width as usize) * 3;
-    let big = pane_rects(body, Pane::Code, false, &[wide_row])
-        .why
-        .unwrap();
-    assert!(
-        big.height > small.height,
-        "a wrapped rationale needs more rows: {} vs {}",
-        big.height,
-        small.height
-    );
+#[test]
+fn the_why_pane_is_sized_to_its_content_between_a_floor_and_a_cap() {
+    let body = Rect::new(0, 0, 140, 40);
+    // one fact: still a quarter of the column, so its two columns have room
+    let small = pane_rects(body, Pane::Code, false, 1).why.unwrap();
+    assert_eq!(small.height, body.height / 4);
+
+    // more rows than the floor: header plus every row
+    let big = pane_rects(body, Pane::Code, false, 12).why.unwrap();
+    assert_eq!(big.height, 13);
 
     // and it cannot eat the code pane
-    let huge = pane_rects(body, Pane::Code, false, &[wide_row * 40])
-        .why
-        .unwrap();
-    assert!(huge.height <= body.height * 2 / 5, "capped at 40%");
+    let huge = pane_rects(body, Pane::Code, false, 400).why.unwrap();
+    assert_eq!(huge.height, body.height * 2 / 5, "capped at 40%");
 }
 
 /// Every language the engine resolves is either painted here or listed as
@@ -1777,7 +1851,6 @@ fn test_item(path: &str) -> Item {
         path: path.to_string(),
         old_range: [0, 0],
         new_range: [0, 0],
-        mark: String::new(),
         cat: ordo::model::Category::Other,
         rationale: String::new(),
         details: vec![],
@@ -1835,6 +1908,7 @@ fn code_view_marks_only_the_rows_uses_at_names() {
         0,
         usize::MAX,
         &LineMarks::default(),
+        &[],
     );
     // the marker rides the gutter's last column, so the code never shifts
     let marks: Vec<String> = rows
@@ -1882,6 +1956,133 @@ fn mark_move_steps_between_use_sites_and_stops_at_the_ends() {
     assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
 }
 
+fn four_lines() -> Sources {
+    let mut sources: Sources = HashMap::new();
+    sources.insert(
+        "f.rs".to_string(),
+        (
+            vec![],
+            (1..=4).map(|i| format!("line {i}")).collect::<Vec<_>>(),
+        ),
+    );
+    sources
+}
+
+/// A finding anchored at a row reads under it, the hardest-pressing first, on
+/// its level's tint the full width and without a line number; the rows after
+/// it keep their numbers, and the cursor still lands on its source line.
+#[test]
+fn a_finding_with_a_row_draws_a_tinted_line_under_that_row() {
+    use ordo::model::Level;
+    let mut it = test_item("f.rs");
+    it.new_range = [2, 3];
+    let mut warn = finding(Level::Warn);
+    warn.row = Some(2);
+    let mut verdict = finding(Level::Verdict);
+    verdict.row = Some(2);
+    verdict.name = "assert-validation".to_string();
+    verdict.message = "stripped under -O\nsecond line".to_string();
+    it.findings = vec![warn, verdict];
+    let t = theme("dark").unwrap();
+    let (rows, _, total) = code_view(
+        &it,
+        &four_lines(),
+        &HashMap::new(),
+        60,
+        0,
+        Some(Cursor { line: 2, col: 0 }),
+        &[],
+        None,
+        &t,
+        0,
+        usize::MAX,
+        &LineMarks::default(),
+        &it.findings,
+    );
+    assert_eq!(total, 6);
+    let second: Vec<String> = rows
+        .iter()
+        .map(|l| l.spans[1].content.trim().to_string())
+        .collect();
+    assert_eq!(second, ["1", "2", "verdict", "warn", "3", "4"]);
+    assert_eq!(
+        row_text(&rows[2]).trim_end(),
+        format!(
+            "{} verdict  assert-validation  stripped under -O",
+            " ".repeat(GUTTER_W)
+        )
+    );
+    for (r, level) in [(2, Level::Verdict), (3, Level::Warn)] {
+        let width: usize = rows[r]
+            .spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        assert_eq!(width, 60, "row {r} is tinted the full width");
+        assert!(rows[r].spans.iter().all(|s| {
+            s.style.bg == Some(t.level_bg(level, false))
+                || s.style.bg == Some(t.level_bg(level, true))
+        }));
+    }
+    let reversed: Vec<usize> = (0..rows.len())
+        .filter(|&r| {
+            rows[r].spans.iter().any(|s| {
+                s.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::REVERSED)
+            })
+        })
+        .collect();
+    assert_eq!(reversed, [4], "the cursor is on line 3, past the findings");
+    assert_eq!(view_row(&it, 1), 1, "a row's own findings come after it");
+    assert_eq!(view_row(&it, 2), 4);
+}
+
+/// A finding about the hunk as a whole has no row to sit under, so it stays in
+/// the why pane and the code is laid out as if it were not there.
+#[test]
+fn a_finding_without_a_row_draws_nothing_inline() {
+    let mut it = test_item("f.rs");
+    it.findings = vec![finding(ordo::model::Level::Verdict)];
+    let (rows, _, total) = code_view(
+        &it,
+        &four_lines(),
+        &HashMap::new(),
+        60,
+        0,
+        None,
+        &[],
+        None,
+        &theme("dark").unwrap(),
+        0,
+        usize::MAX,
+        &LineMarks::default(),
+        &it.findings,
+    );
+    assert_eq!((rows.len(), total), (4, 4));
+    assert_eq!(view_row(&it, 3), 3);
+}
+
+/// The scroll follows the cursor's view row, not its source line: two finding
+/// lines above the cursor push it two rows further down the pane.
+#[test]
+fn the_code_scroll_follows_the_cursor_past_finding_lines() {
+    let mut app = test_app(0);
+    app.items = vec![test_item("f.rs")];
+    let mut f = finding(ordo::model::Level::Warn);
+    f.row = Some(1);
+    app.items[0].findings = vec![f.clone(), f];
+    app.sources = four_lines();
+    app.focus = Pane::Code;
+    app.code_height = 3;
+    app.cursor = Cursor { line: 0, col: 0 };
+    step(&mut app, 1);
+    step(&mut app, 1);
+    assert_eq!(app.cursor.line, 2);
+    // line 3 is view row 4: the rows 2..=4 are on screen
+    assert_eq!(app.scroll, 2);
+}
+
 #[test]
 fn code_view_horizontal_scroll_keeps_gutter_fixed_and_handles_multibyte() {
     let it = test_item("f.rs");
@@ -1905,6 +2106,7 @@ fn code_view_horizontal_scroll_keeps_gutter_fixed_and_handles_multibyte() {
         0,
         usize::MAX,
         &LineMarks::default(),
+        &[],
     );
     let (scrolled, right_clip_5, _) = code_view(
         &it,
@@ -1919,6 +2121,7 @@ fn code_view_horizontal_scroll_keeps_gutter_fixed_and_handles_multibyte() {
         0,
         usize::MAX,
         &LineMarks::default(),
+        &[],
     );
     assert_eq!(unscrolled.len(), 1);
     assert_eq!(scrolled.len(), 1);
@@ -1977,6 +2180,7 @@ fn code_view_tints_only_the_refined_span_of_a_paired_line() {
         0,
         usize::MAX,
         &LineMarks::default(),
+        &[],
     );
     // the added row is the one carrying the add tint (the removed row
     // comes first, on the del tint)
@@ -2024,6 +2228,7 @@ fn code_view_tints_a_whole_unpaired_line() {
         0,
         usize::MAX,
         &LineMarks::default(),
+        &[],
     );
     let added = rows.last().unwrap();
     assert!(
@@ -2054,6 +2259,7 @@ fn code_view_reports_no_clipping_when_the_line_fits() {
         0,
         usize::MAX,
         &LineMarks::default(),
+        &[],
     );
     assert!(!right_clip);
 }
@@ -2091,6 +2297,7 @@ fn code_view_window_matches_the_same_slice_of_the_whole_view() {
                 start,
                 rows,
                 &LineMarks::default(),
+                &[],
             )
         };
         let (full, clip_full, total) = call(0, usize::MAX);
@@ -2767,7 +2974,14 @@ fn the_config_schema_is_generated_from_the_live_tables() {
     let titles: Vec<&str> = schema.iter().map(|s| s.title.as_str()).collect();
     assert_eq!(
         titles,
-        vec!["general", "catalog", "rulesets", "theme roles", "keys"]
+        vec![
+            "general",
+            "catalog",
+            "levels",
+            "rulesets",
+            "theme roles",
+            "keys"
+        ]
     );
     let by = |t: &str| {
         schema
@@ -2783,6 +2997,12 @@ fn the_config_schema_is_generated_from_the_live_tables() {
     let sections = ordo::catalog::sections();
     let rules: usize = sections.iter().map(|s| s.rules.len()).sum();
     assert_eq!(by("catalog").fields.len(), 1 + sections.len() + rules);
+    let names: HashSet<&String> = sections.iter().flat_map(|s| &s.rules).collect();
+    assert_eq!(
+        by("levels").fields.len(),
+        names.len(),
+        "one level row per name"
+    );
     // and the preset choice offers exactly the presets that resolve
     let general = &by("general").fields[0];
     match &general.kind {
@@ -3090,12 +3310,14 @@ fn test_app(why_len: usize) -> App {
         prompt: None,
         search: None,
         review_sha: None,
+        subject: None,
         uncommitted: false,
         history_cache: HashMap::new(),
         churn_cache: HashMap::new(),
         file_churn: HashMap::new(),
         catalog: true,
         disables: vec![],
+        levels: Default::default(),
         includes: vec![],
         config: None,
         jumps: vec![],
@@ -3147,20 +3369,20 @@ fn the_list_defaults_to_symbols_and_mode_switches_it_back() {
         used_by: vec!["h1".to_string()],
     }];
 
+    app.symbol_ledger = led.clone();
     set_mode(&mut app, ViewMode::Ledger, &led);
     // the symbol with a ledger entry buckets under it; the one without
     // falls into the shared bucket rather than vanishing
     assert_eq!(app.items[0].bucket, "L0");
     assert_eq!(app.items[1].bucket, "L-");
-    // headers *are* the ledger in this mode, so they are forced on
+    // groups *are* the ledger in this mode, so they are forced on
     assert!(app.show_groups);
+    assert_eq!(app.groups.get("L0").map(String::as_str), Some("fetch"));
+    assert_eq!(app.groups.get("L-").map(String::as_str), Some(""));
+    // the entry's sentence moved to the why pane's scope row
     assert_eq!(
-        app.groups.get("L0").map(String::as_str),
+        scope_line(&app, 0).as_deref(),
         Some("fetch — signature, used by 1 hunk")
-    );
-    assert_eq!(
-        app.groups.get("L-").map(String::as_str),
-        Some("no definition changed")
     );
 
     set_mode(&mut app, ViewMode::Hunks, &led);
@@ -3790,7 +4012,7 @@ fn grouped_item(path: &str, group: &str) -> Item {
     it
 }
 
-/// two hunks in `g0` and one in `g1`, with the reasons their headers read
+/// two hunks in `g0` and one in `g1`, with the symbols their groups show
 fn grouped_trio() -> (Vec<Item>, HashMap<String, String>) {
     let items = vec![
         grouped_item("a.rs", "g0"),
@@ -3798,31 +4020,74 @@ fn grouped_trio() -> (Vec<Item>, HashMap<String, String>) {
         grouped_item("b.rs", "g1"),
     ];
     let groups = HashMap::from([
-        ("g0".to_string(), "same definition: run".to_string()),
-        ("g1".to_string(), "same scope: top-level".to_string()),
+        ("g0".to_string(), "run".to_string()),
+        ("g1".to_string(), String::new()),
     ]);
     (items, groups)
 }
 
-#[test]
-fn display_rows_inserts_one_header_per_contiguous_group_run() {
-    let (items, groups) = grouped_trio();
-    let view = vec![0, 1, 2];
-
-    let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
-    let kinds: Vec<&str> = rows
-        .iter()
+/// `display_rows` as words, so a test can say what the list looks like
+fn row_kinds(rows: &[DisplayRow]) -> Vec<String> {
+    rows.iter()
         .map(|r| match r {
-            DisplayRow::Header(_) => "header",
-            DisplayRow::Item(_) => "item",
+            DisplayRow::File(path, n) => format!("file {path} {n}"),
+            DisplayRow::Gap => "gap".to_string(),
+            DisplayRow::Item(i, true) => format!("item {i} opens"),
+            DisplayRow::Item(i, false) => format!("item {i}"),
+            DisplayRow::Folded(hidden) => format!("folded {hidden:?}"),
         })
-        .collect();
-    assert_eq!(kinds, vec!["header", "item", "item", "header", "item"]);
-    let DisplayRow::Header(reason) = &rows[0] else {
-        panic!("expected a header")
-    };
-    // an open header does not count its hunks; a folded one does
-    assert_eq!(reason, "▾ same definition: run");
+        .collect()
+}
+
+#[test]
+fn display_rows_bands_each_file_and_names_a_group_on_its_first_row() {
+    let (items, groups) = grouped_trio();
+    let rows = display_rows(&[0, 1, 2], &items, &groups, true, &HashSet::new());
+    assert_eq!(
+        row_kinds(&rows),
+        [
+            "file a.rs 2",
+            "item 0 opens",
+            "item 1",
+            "file b.rs 1",
+            "item 2 opens"
+        ]
+    );
+}
+
+#[test]
+fn a_gap_parts_top_level_code_only_from_a_named_group_above_it() {
+    let items = vec![
+        grouped_item("a.rs", "top"),
+        grouped_item("a.rs", "run"),
+        grouped_item("a.rs", "run"),
+        grouped_item("a.rs", "top2"),
+        grouped_item("a.rs", "top3"),
+        grouped_item("a.rs", "main"),
+    ];
+    let groups = HashMap::from([
+        ("top".to_string(), String::new()),
+        ("top2".to_string(), String::new()),
+        ("top3".to_string(), String::new()),
+        ("run".to_string(), "run".to_string()),
+        ("main".to_string(), "main".to_string()),
+    ]);
+    let rows = display_rows(&[0, 1, 2, 3, 4, 5], &items, &groups, true, &HashSet::new());
+    // none after the band, none before a named group, none between two
+    // top-level groups: only where top-level code would read as `run`'s
+    assert_eq!(
+        row_kinds(&rows),
+        [
+            "file a.rs 6",
+            "item 0 opens",
+            "item 1 opens",
+            "item 2",
+            "gap",
+            "item 3 opens",
+            "item 4 opens",
+            "item 5 opens",
+        ]
+    );
 }
 
 // ---- reviewing rules: the client half ----
@@ -4061,6 +4326,120 @@ fn disables_apply_after_every_layer_so_an_earlier_file_can_silence_a_later_inclu
 }
 
 #[test]
+fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() {
+    let dir = rules_dir("levels");
+    let user = dir.join("user.toml");
+    let repo = dir.join("repo.toml");
+    std::fs::write(
+        &user,
+        "[levels]\nmagic-number = \"verdict\"\n\"eval/exec\" = \"warn\"\nmagic-numbr = \"note\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &repo,
+        "[levels]\nmagic-number = \"warn\"\nassert-validation = \"loud\"\n",
+    )
+    .unwrap();
+    let r = report_from(
+        vec![],
+        &[
+            user.to_string_lossy().into_owned(),
+            repo.to_string_lossy().into_owned(),
+        ],
+    );
+    let levels = r.rule_set(true).levels;
+    assert_eq!(
+        levels.into_iter().collect::<Vec<_>>(),
+        vec![
+            ("eval/exec".to_string(), ordo::model::Level::Warn),
+            ("magic-number".to_string(), ordo::model::Level::Warn),
+            ("magic-numbr".to_string(), ordo::model::Level::Note),
+        ],
+        "a later file wins, and a bad level is dropped"
+    );
+    assert!(
+        r.problems
+            .iter()
+            .any(|p| p == "levels: no rule named `magic-numbr`"),
+        "{:?}",
+        r.problems
+    );
+    assert!(
+        r.problems
+            .iter()
+            .any(|p| p.contains("`assert-validation` = \"loud\" is not a level")),
+        "{:?}",
+        r.problems
+    );
+    assert!(r.lines().iter().any(|l| l == "  magic-number → warn"));
+
+    // and the engine applies them: the finding moves and keeps where it was
+    let out = ordo::run(ordo::model::Input {
+        changes: vec![ordo::model::Change {
+            path: "a.py".to_string(),
+            old: Some(String::new()),
+            new: Some("def f(x):\n    assert x > 0\n".to_string()),
+            diff: None,
+        }],
+        options: Options {
+            levels: [("assert-validation".to_string(), ordo::model::Level::Note)].into(),
+            ..Options::default()
+        },
+        consumers: vec![],
+    });
+    let f = out.files[0].hunks[0]
+        .findings
+        .iter()
+        .find(|f| f.name == "assert-validation")
+        .expect("assert-validation fired");
+    assert_eq!(f.level, ordo::model::Level::Note);
+    assert_eq!(f.original_level, Some(ordo::model::Level::Verdict));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A level row cycles default → note → warn → verdict, moves the live
+/// session, and `w` writes only the names that changed into `[levels]`.
+#[test]
+fn a_level_row_changes_the_session_and_writes_to_the_levels_table() {
+    let mut app = test_app(0);
+    app.levels = [("magic-number".to_string(), ordo::model::Level::Verdict)].into();
+    app.config = Some(ConfigUi::open(&app));
+    let at = |app: &App, key: &str| {
+        let c = app.config.as_ref().unwrap();
+        c.rows
+            .iter()
+            .position(|&(i, j)| c.sections[i].fields[j].key == key)
+            .unwrap_or_else(|| panic!("no {key}"))
+    };
+    app.config.as_mut().unwrap().sel = at(&app, "level:assert-validation");
+    config_toggle(&mut app);
+    assert_eq!(
+        app.levels.get("assert-validation"),
+        Some(&ordo::model::Level::Note),
+        "default → note"
+    );
+    // verdict wraps round to default: the override goes
+    app.config.as_mut().unwrap().sel = at(&app, "level:magic-number");
+    config_toggle(&mut app);
+    assert!(!app.levels.contains_key("magic-number"), "{:?}", app.levels);
+
+    let dir = rules_dir("level-write");
+    let path = dir.join("rules.toml");
+    let seed = "# mine\ndisable = []\n\n[levels]\nmagic-number = \"verdict\"\nmine = \"warn\"\n";
+    std::fs::write(&path, seed).unwrap();
+    let c = app.config.as_ref().unwrap();
+    write_rules_file(&path, c, &c.changed()).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        text,
+        "# mine\ndisable = []\n\n[levels]\n# magic-number = \"verdict\"\nmine = \"warn\"\nassert-validation = \"note\"\n"
+    );
+    let doc = parse_rules_doc(&text, Path::new("."));
+    assert!(doc.problems.is_empty(), "{:?}", doc.problems);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_missing_include_and_a_duplicate_name_are_problems() {
     let dir = rules_dir("problems");
     let f = dir.join("rules.toml");
@@ -4215,7 +4594,7 @@ fn every_theme_name_resolves_and_truecolor_themes_leave_nothing_to_the_terminal(
     for name in theme_names() {
         let t = theme(&name).expect(&name);
         assert_eq!(t.name, name, "a theme must know its own name");
-        if name == "dark" || name == "light" {
+        if ["terminal", "dark", "light"].contains(&name.as_str()) {
             // the promise of a terminal theme: text follows the terminal
             assert_eq!(t.fg, Color::Reset, "{name}");
             continue;
@@ -4241,6 +4620,14 @@ fn every_theme_name_resolves_and_truecolor_themes_leave_nothing_to_the_terminal(
             ("select_bg", t.select_bg),
             ("match_bg", t.match_bg),
             ("match_cur_bg", t.match_cur_bg),
+            ("band_bg", t.band_bg),
+            ("verdict_bg", t.verdict_bg),
+            ("verdict_strong_bg", t.verdict_strong_bg),
+            ("warn_bg", t.warn_bg),
+            ("warn_strong_bg", t.warn_strong_bg),
+            ("note_bg", t.note_bg),
+            ("note_strong_bg", t.note_strong_bg),
+            ("reviewed_bg", t.reviewed_bg),
             ("syn.comment", t.syn.comment),
             ("syn.keyword", t.syn.keyword),
             ("syn.string", t.syn.string),
@@ -4288,6 +4675,34 @@ fn a_diff_tint_is_distinguishable_from_the_selection_tint() {
 }
 
 #[test]
+fn every_state_tint_is_its_own_colour() {
+    // a row's state is its background and nothing else, so no two states
+    // (nor a state and the selection, the band or a diff tint) may share one
+    for name in theme_names() {
+        let t = theme(&name).unwrap();
+        let tints = [
+            ("verdict", t.verdict_bg),
+            ("verdict-strong", t.verdict_strong_bg),
+            ("warn", t.warn_bg),
+            ("warn-strong", t.warn_strong_bg),
+            ("note", t.note_bg),
+            ("note-strong", t.note_strong_bg),
+            ("reviewed", t.reviewed_bg),
+            ("band", t.band_bg),
+            ("select", t.select_bg),
+            ("add", t.add_bg),
+            ("del", t.del_bg),
+            ("match", t.match_bg),
+        ];
+        for (i, (a, ca)) in tints.iter().enumerate() {
+            for (b, cb) in &tints[i + 1..] {
+                assert!(!colors_eq(*ca, *cb), "{name}: {a}/{b}");
+            }
+        }
+    }
+}
+
+#[test]
 fn parse_hex_takes_the_form_palettes_publish_and_nothing_else() {
     assert_eq!(parse_hex("#89b4fa"), Some(Color::Rgb(0x89, 0xb4, 0xfa)));
     assert_eq!(parse_hex("89b4fa"), Some(Color::Rgb(0x89, 0xb4, 0xfa)));
@@ -4324,6 +4739,14 @@ fn every_documented_theme_role_actually_changes_the_theme() {
             got.select_bg,
             got.match_bg,
             got.match_cur_bg,
+            got.band_bg,
+            got.verdict_bg,
+            got.verdict_strong_bg,
+            got.warn_bg,
+            got.warn_strong_bg,
+            got.note_bg,
+            got.note_strong_bg,
+            got.reviewed_bg,
             got.syn.comment,
             got.syn.keyword,
             got.syn.string,
@@ -4480,13 +4903,20 @@ fn re_running_the_current_strategy_keeps_the_group_reasons() {
             (c.path.clone(), (split(&c.old), split(&c.new)))
         })
         .collect();
-    app.groups = group_reasons(&out);
+    app.group_reasons = group_reasons(&out);
+    app.symbol_ledger = out.ledger.clone();
+    set_mode(&mut app, ViewMode::Ledger, &out.ledger);
     app.strategy = "comprehension".to_string();
-    let before = app.groups.clone();
+    let before = app.group_reasons.clone();
+    let symbols = app.groups.clone();
     assert!(!before.is_empty(), "the fixture has to group something");
 
     run_strategy(&mut app, "comprehension").expect("a no-op re-order");
-    assert_eq!(app.groups, before, "a no-op re-order changed the reasons");
+    assert_eq!(
+        app.group_reasons, before,
+        "a no-op re-order changed the reasons"
+    );
+    assert_eq!(app.groups, symbols, "a no-op re-order renamed the groups");
 }
 
 /// The role rows and the palette are one setting between them: cycling the
@@ -4643,45 +5073,33 @@ fn comments_and_blank_lines_are_ignored() {
 }
 
 #[test]
-fn a_folded_group_shows_its_header_and_hides_its_hunks() {
+fn a_folded_group_is_one_row_holding_its_hunks() {
     let (items, groups) = grouped_trio();
-    let view = vec![0, 1, 2];
     let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
-
-    let rows = display_rows(&view, &items, &groups, true, &collapsed);
-    let kinds: Vec<&str> = rows
-        .iter()
-        .map(|r| match r {
-            DisplayRow::Header(_) => "header",
-            DisplayRow::Item(_) => "item",
-        })
-        .collect();
-    assert_eq!(kinds, vec!["header", "header", "item"]);
-    let DisplayRow::Header(h) = &rows[0] else {
-        panic!("expected a header")
-    };
+    let rows = display_rows(&[0, 1, 2], &items, &groups, true, &collapsed);
     assert_eq!(
-        h, "▸ same definition: run (2)",
-        "a folded header says what it hides"
+        row_kinds(&rows),
+        [
+            "file a.rs 2",
+            "folded [0, 1]",
+            "file b.rs 1",
+            "item 2 opens"
+        ]
     );
 }
 
 #[test]
-fn a_folded_groups_rows_are_skipped_when_placing_the_selection() {
-    let items = vec![
-        grouped_item("a.rs", "g0"),
-        grouped_item("a.rs", "g0"),
-        grouped_item("b.rs", "g1"),
-    ];
-    let view = vec![0, 1, 2];
+fn the_selection_inside_a_fold_lands_on_the_fold_row() {
+    let (items, groups) = grouped_trio();
     let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
-    // rows are: [g0 header][g1 header][item 2] — the third view entry is
-    // the item at row 2
-    assert_eq!(display_row_of(&view, &items, true, &collapsed, 2), 2);
+    let rows = display_rows(&[0, 1, 2], &items, &groups, true, &collapsed);
+    assert_eq!(display_row_of(&rows, 0), 1);
+    assert_eq!(display_row_of(&rows, 1), 1);
+    assert_eq!(display_row_of(&rows, 2), 3);
 }
 
 #[test]
-fn folding_moves_the_selection_out_of_the_group_it_folds() {
+fn folding_keeps_the_selection_on_the_fold() {
     let mut app = test_app(0);
     app.items = vec![
         grouped_item("a.rs", "g0"),
@@ -4695,11 +5113,19 @@ fn folding_moves_the_selection_out_of_the_group_it_folds() {
 
     fold(&mut app, Fold::Close);
     assert!(app.collapsed.contains("g0"));
-    assert_eq!(app.sel, 2, "selection must land on a row that is drawn");
-    assert_eq!(folded_view(&app), vec![2]);
+    assert_eq!(app.sel, 1, "the fold's row carries the selection");
+    // the fold is one stop for j/k, standing on the selection inside it
+    assert_eq!(folded_view(&app), vec![1, 2]);
+    app.sel = 2;
+    assert_eq!(folded_view(&app), vec![0, 2]);
 
-    fold(&mut app, Fold::OpenAll);
+    // the same key, on the fold, opens it again
+    app.sel = 0;
+    fold(&mut app, Fold::Toggle);
     assert!(app.collapsed.is_empty());
+
+    fold(&mut app, Fold::CloseAll);
+    fold(&mut app, Fold::OpenAll);
     assert_eq!(folded_view(&app), vec![0, 1, 2]);
 }
 
@@ -4715,54 +5141,79 @@ fn folding_turns_group_headers_on_because_that_is_what_was_meant() {
 }
 
 #[test]
-fn display_rows_is_flat_view_when_groups_are_off() {
-    let items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
-    let groups = HashMap::new();
-    let view = vec![0, 1];
-    let rows = display_rows(&view, &items, &groups, false, &HashSet::new());
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|r| matches!(r, DisplayRow::Item(_))));
+fn with_groups_off_every_row_names_its_own_symbol_and_nothing_folds() {
+    let items = vec![grouped_item("a.rs", "g0"), grouped_item("a.rs", "g0")];
+    let groups = HashMap::from([("g0".to_string(), "run".to_string())]);
+    let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
+    let rows = display_rows(&[0, 1], &items, &groups, false, &collapsed);
+    assert_eq!(
+        row_kinds(&rows),
+        ["file a.rs 2", "item 0 opens", "item 1 opens"]
+    );
 }
 
 #[test]
-fn display_row_of_skips_headers_so_selection_never_lands_on_one() {
-    let items = vec![
-        grouped_item("a.rs", "g0"),
-        grouped_item("a.rs", "g0"),
-        grouped_item("b.rs", "g1"),
-    ];
-    let groups = HashMap::new(); // reason lookup irrelevant to row placement
+fn display_row_of_never_lands_the_selection_on_structure() {
+    let (items, groups) = grouped_trio();
     let view = vec![0, 1, 2];
-    let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
-
-    for pos in 0..view.len() {
-        let row = display_row_of(&view, &items, true, &HashSet::new(), pos);
-        assert!(
-            matches!(rows[row], DisplayRow::Item(_)),
-            "selection at view pos {pos} landed on row {row}, which is a header"
-        );
+    for show_groups in [true, false] {
+        let rows = display_rows(&view, &items, &groups, show_groups, &HashSet::new());
+        for &i in &view {
+            let row = display_row_of(&rows, i);
+            assert!(
+                matches!(rows[row], DisplayRow::Item(j, _) if j == i),
+                "hunk {i} landed on row {row}"
+            );
+        }
     }
-    // and the header count lines up: 2 groups among 3 items -> 2 headers,
-    // so row indices for view positions [0,1,2] are [1,2,4]
-    assert_eq!(
-        (0..view.len())
-            .map(|p| display_row_of(&view, &items, true, &HashSet::new(), p))
-            .collect::<Vec<_>>(),
-        vec![1, 2, 4]
-    );
+    let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
+    let at: Vec<usize> = view.iter().map(|&i| display_row_of(&rows, i)).collect();
+    assert_eq!(at, vec![1, 2, 4], "one band per file run");
 }
 
 #[test]
-fn display_row_of_is_identity_when_groups_are_off() {
-    let items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
+fn imports_fold_by_default_in_either_mode_and_groups_name_their_symbol() {
+    let mut app = test_app(0);
+    let mut import = grouped_item("a.rs", "gi");
+    import.cat = ordo::model::Category::Import;
+    let mut defined = grouped_item("a.rs", "gd");
+    defined.ledger = Some(0);
+    defined.enclosing = Some("run".to_string());
+    let mut gone = grouped_item("a.rs", "gr");
+    gone.ledger = Some(1);
+    app.items = vec![import, defined, gone, grouped_item("a.rs", "gt")];
+    app.view = vec![0, 1, 2, 3];
+    app.reviewed = vec![false; 4];
+    let entry = |name: &str, change| ordo::model::LedgerEntry {
+        name: name.to_string(),
+        kind: None,
+        scope: None,
+        path: "a.rs".to_string(),
+        at: String::new(),
+        change,
+        from: None,
+        used_by: vec![],
+    };
+    let ledger = vec![
+        entry("run", ordo::model::SymbolChange::Added),
+        entry("old", ordo::model::SymbolChange::Removed),
+    ];
+
+    set_mode(&mut app, ViewMode::Ledger, &ledger);
+    assert_eq!(app.items[0].bucket, "gi", "imports keep the engine's group");
+    assert!(app.collapsed.contains("gi"));
+    assert_eq!(app.groups["gi"], "imports");
+    assert_eq!(app.groups["L0"], "run");
     assert_eq!(
-        display_row_of(&[0, 1], &items, false, &HashSet::new(), 0),
-        0
+        app.groups["L1"], "",
+        "a removed symbol has nothing left to read"
     );
-    assert_eq!(
-        display_row_of(&[0, 1], &items, false, &HashSet::new(), 1),
-        1
-    );
+    assert_eq!(app.groups["L-"], "");
+
+    set_mode(&mut app, ViewMode::Hunks, &ledger);
+    assert!(app.collapsed.contains("gi"));
+    assert_eq!(app.groups["gd"], "run");
+    assert_eq!(app.groups["gt"], "");
 }
 
 // ---- `:e` — reload carry-forward ----
@@ -5077,6 +5528,120 @@ fn comment_next_jumps_across_files_in_order() {
     assert_eq!((app.sel, app.cursor.line), (0, 2));
 }
 
+/// Five hunks: warn, none, verdict, verdict, note — in that view order.
+fn findings_app() -> App {
+    use ordo::model::Level;
+    let mut app = test_app(0);
+    let levels = [
+        Some(Level::Warn),
+        None,
+        Some(Level::Verdict),
+        Some(Level::Verdict),
+        Some(Level::Note),
+    ];
+    app.items = levels
+        .iter()
+        .enumerate()
+        .map(|(n, level)| {
+            let mut it = test_item(&format!("{n}.rs"));
+            it.findings.extend(level.map(|level| ordo::model::Finding {
+                source: ordo::model::FindingSource::Rule,
+                name: "r".to_string(),
+                message: "m".to_string(),
+                level,
+                row: None,
+                original_level: None,
+            }));
+            it
+        })
+        .collect();
+    app.view = (0..5).collect();
+    app.reviewed = vec![false; 5];
+    app
+}
+
+/// `]f` cycles verdicts, then warns, then notes, each in view order, and
+/// wraps; `[f` walks the same cycle backward.
+#[test]
+fn finding_next_visits_the_most_severe_first_and_wraps() {
+    let mut app = findings_app();
+    let mut seen = vec![];
+    for _ in 0..5 {
+        finding_move(&mut app, true);
+        seen.push(app.sel);
+    }
+    assert_eq!(seen, [4, 2, 3, 0, 4]);
+    finding_move(&mut app, false);
+    assert_eq!(app.sel, 0);
+    finding_move(&mut app, false);
+    assert_eq!(app.sel, 3);
+}
+
+/// From a hunk with no finding, the jump lands on the nearest most-severe
+/// hunk that way, wrapping when there is none.
+#[test]
+fn finding_jump_from_outside_the_cycle_starts_at_the_most_severe() {
+    let mut app = findings_app();
+    app.sel = 1;
+    finding_move(&mut app, true);
+    assert_eq!(app.sel, 2);
+    app.sel = 1;
+    finding_move(&mut app, false);
+    assert_eq!(app.sel, 3, "no verdict before it, so the last one");
+}
+
+/// A hunk filtered out of the view is not jumped to.
+#[test]
+fn finding_jump_skips_hunks_outside_the_view() {
+    let mut app = findings_app();
+    app.view = vec![0, 1, 3, 4];
+    finding_move(&mut app, true);
+    assert_eq!(app.sel, 4);
+    finding_move(&mut app, true);
+    assert_eq!(app.sel, 3);
+}
+
+#[test]
+fn finding_jump_with_no_findings_says_so_and_stays() {
+    let mut app = findings_app();
+    for it in &mut app.items {
+        it.findings.clear();
+    }
+    app.sel = 2;
+    finding_move(&mut app, true);
+    assert_eq!(app.sel, 2);
+    assert_eq!(app.notice.as_deref(), Some("no findings in view"));
+}
+
+/// `]` opens the `]f` chord yet still names its own action, which the
+/// key loop runs when no chord follows.
+#[test]
+fn a_bracket_is_both_a_chord_prefix_and_a_key() {
+    let km = keymap("vim").unwrap();
+    assert!(matches!(km.resolve(None, ch(']')), Resolve::Pending));
+    assert!(matches!(
+        km.resolve(Some(ch(']')), ch('f')),
+        Resolve::Act(Action::FindingNext)
+    ));
+    assert!(matches!(
+        km.resolve(Some(ch('[')), ch('f')),
+        Resolve::Act(Action::FindingPrev)
+    ));
+    assert!(matches!(km.resolve(Some(ch(']')), ch('j')), Resolve::Miss));
+    assert_eq!(km.bare(ch(']')), Some(Action::MarkNext));
+    assert_eq!(km.bare(ch('[')), Some(Action::MarkPrev));
+    assert_eq!(km.bare(ch('g')), None);
+    let vs = keymap("vscode").unwrap();
+    assert!(matches!(
+        vs.resolve(None, plain(KeyCode::F(8))),
+        Resolve::Act(Action::FindingNext)
+    ));
+    assert!(matches!(
+        vs.resolve(None, (KeyCode::F(8), KeyModifiers::SHIFT)),
+        Resolve::Act(Action::FindingPrev)
+    ));
+}
+
 /// The paging keys scroll the selected dependency card through its file,
 /// stop at the file's end, and moving to another card starts it at its hunk.
 #[test]
@@ -5333,8 +5898,15 @@ fn a_dep_into_another_wave_is_labelled_and_followed_across() {
     set_filters(&mut app, false, true, None, Some(2)).unwrap();
     assert_eq!(app.view, vec![0]);
     let rows = why_content(&app);
-    let dep = rows.iter().position(|r| r.text.starts_with("dep")).unwrap();
-    assert!(rows[dep].text.ends_with("· wave 1 ✓"), "{}", rows[dep].text);
+    let dep = rows
+        .iter()
+        .position(|r| matches!(r.kind, WhyKind::Edge(_)))
+        .unwrap();
+    assert!(
+        rows[dep].text.ends_with("· wave 1, reviewed"),
+        "{}",
+        rows[dep].text
+    );
     assert!(matches!(rows[dep].kind, WhyKind::Edge(Some(1))));
     app.why_sel = dep;
     jump_to_edge(&mut app);
@@ -5374,4 +5946,102 @@ fn stepping_through_waves_cycles_back_to_all_of_them() {
     step_wave(&mut app, false);
     assert_eq!(app.only_wave, Some(3));
     assert_eq!(app.notice.as_deref(), Some("wave 3 · asked: add retry"));
+}
+
+/// A why-pane fact wraps at spaces and its continuation lines leave room for
+/// the indent the caller puts under its label; a word wider than the room
+/// keeps its own line rather than being split.
+#[test]
+fn a_fact_wraps_at_spaces_under_its_own_indent() {
+    assert_eq!(
+        hang("this file changed 2 times in the last 6 months", 20, 20),
+        ["this file changed 2", "times in the last 6", "months"]
+    );
+    assert_eq!(hang("short", 20, 20), ["short"]);
+    assert_eq!(
+        hang("a averyveryverylongword b", 6, 6),
+        ["a", "averyveryverylongword", "b"]
+    );
+}
+
+/// A finding whose level `rules.toml` moved says so next to its source, in
+/// the direction it was moved.
+#[test]
+fn a_moved_level_names_where_it_came_from() {
+    let theme = theme("dark").unwrap();
+    let mut it = test_item("a.rs");
+    let mut lowered = finding(ordo::model::Level::Note);
+    lowered.original_level = Some(ordo::model::Level::Warn);
+    let mut raised = finding(ordo::model::Level::Verdict);
+    raised.original_level = Some(ordo::model::Level::Warn);
+    it.findings = vec![lowered, raised];
+    let text: Vec<String> = finding_lines(&it, &theme, 80)
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert!(
+        text[0].ends_with("catalog, raised from warn in rules.toml"),
+        "{text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|l| l.ends_with("catalog, lowered from warn in rules.toml")),
+        "{text:?}"
+    );
+}
+
+/// An OSC colour reply scales whatever digit count the terminal used to eight
+/// bits a channel, with either terminator, and a reply that isn't one is
+/// nothing rather than a guess.
+#[test]
+fn an_osc_colour_reply_reads_as_rgb() {
+    assert_eq!(osc_rgb("]11;rgb:1e1e/1e1e/2e2e\x07"), Some(0x1e1e2e));
+    assert_eq!(osc_rgb("]4;1;rgb:ff/00/80\x1b"), Some(0xff0080));
+    assert_eq!(osc_rgb("]10;rgb:f/0/8\x07"), Some(0xff0088));
+    assert_eq!(osc_rgb("]11;rgb:1e1e/1e1e\x07"), None);
+    assert_eq!(osc_rgb("[0n"), None);
+}
+
+/// With no terminal to ask — as in a test — `terminal` is still a theme, with
+/// `dark`'s tints under its own name.
+#[test]
+fn an_unanswered_terminal_theme_falls_back_to_darks_tints() {
+    let t = theme("terminal").unwrap();
+    assert_eq!(t.name, "terminal");
+    assert_eq!(t.verdict_bg, theme("dark").unwrap().verdict_bg);
+    assert_eq!(theme_names()[0], "terminal");
+}
+
+/// A terminal that answered gets tints mixed from its own colours toward its
+/// own background: text still follows the terminal, the tints sit next to its
+/// background rather than `dark`'s, and a light background flips to `light`.
+#[test]
+fn an_answered_terminal_tints_from_its_own_palette() {
+    // gruvbox dark: bg, fg, then ANSI red, green, yellow, blue, magenta, cyan
+    let dark = TermColors {
+        bg: 0x282828,
+        fg: 0xebdbb2,
+        ansi: [0xcc241d, 0x98971a, 0xd79921, 0x458588, 0xb16286, 0x689d6a],
+    };
+    let t = Theme::sensed(dark);
+    assert_eq!(t.name, "terminal");
+    assert_eq!(t.fg, Color::Reset);
+    assert_ne!(t.verdict_bg, theme("dark").unwrap().verdict_bg);
+    let Color::Rgb(r, g, b) = t.verdict_bg else {
+        panic!("a sensed tint is truecolor");
+    };
+    // a quiet tint stays near the background it was mixed toward
+    assert!(
+        [r, g, b].iter().all(|c| (0x18..0x60).contains(c)),
+        "{r:x}{g:x}{b:x}"
+    );
+    let light = Theme::sensed(TermColors {
+        bg: 0xfbf1c7,
+        fg: 0x3c3836,
+        ..dark
+    });
+    let Color::Rgb(r, g, b) = light.note_bg else {
+        panic!("a sensed tint is truecolor");
+    };
+    assert!([r, g, b].iter().all(|c| *c > 0xb0), "{r:x}{g:x}{b:x}");
 }

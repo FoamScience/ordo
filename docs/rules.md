@@ -54,6 +54,34 @@ catalog off leaves your own rules running; they are the reason you would.
 Through the engine directly it is `options.catalog` and `options.disable`, so
 `ordo-engine order --json` behaves the same way.
 
+### Raising or lowering a level
+
+A `[levels]` table sets the level of any catalog entry or rule by name, without
+redefining it:
+
+```toml
+# ~/.config/ordo/rules.toml or <repo>/.ordo/rules.toml
+[levels]
+magic-number = "warn"          # raise a note
+assert-validation = "note"     # lower a verdict
+"eval/exec" = "verdict"        # quote a name TOML cannot write bare
+```
+
+The level is one of `note`, `warn`, `verdict`, and names are exact, not globs.
+Files layer like everything else: a later file's level for a name replaces an
+earlier one. A name nothing reports under, catalog or rule, is a problem, as is
+a level that is not one of the three; `:rules` lists the levels in force.
+
+A moved finding records where it came from: `level` is the new one and
+`original_level` the one it was written with (absent when nothing moved it, or
+when the override names the level it already had). Through the engine it is
+`options.levels`, a map from name to level.
+
+`:config` lists one level row per catalog rule; `default` keeps the catalog's
+own. `w` writes each changed row into the `[levels]` table of your own rules
+file and comments a line out when its row goes back to `default`, so write the
+table form, not an inline `levels = { … }`, in a file `:config` edits.
+
 ## Presets: opting in, overriding, disabling
 
 Nothing else is on by default. The rulesets under `rulesets/` are bundled into

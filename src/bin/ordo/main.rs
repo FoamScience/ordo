@@ -7,7 +7,7 @@
 use crate::code_view::apply_theme_colors;
 use crate::keys::build_help;
 use crate::keys::keymap;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc;
@@ -15,8 +15,10 @@ use std::thread;
 use std::time::Duration;
 
 use crate::code_view::hover;
+use crate::code_view::sense_terminal;
 use crate::code_view::theme;
 use crate::code_view::theme_names;
+use crate::code_view::view_row;
 use crate::code_view::Syntax;
 use crate::code_view::Theme;
 use crate::commands::carry_across_reload;
@@ -74,6 +76,7 @@ use crate::history::Churn;
 use crate::keys::apply_key_config;
 use crate::keys::norm;
 use crate::keys::parse_key_config;
+use crate::keys::plain;
 use crate::keys::Action;
 use crate::keys::Fold;
 use crate::keys::Key;
@@ -82,6 +85,7 @@ use crate::keys::Keymap;
 use crate::keys::Pane;
 use crate::keys::Resolve;
 use crate::keys::ViewMode;
+use crate::keys::CHORD_TIMEOUT;
 use crate::marks::compare_runs;
 use crate::marks::load_marks;
 use crate::marks::load_notes;
@@ -171,7 +175,7 @@ options:
   --all                   keep generated and lock files
   --only-comments         only comment and docstring hunks
   --keys <vim|vscode>     key preset (default vim, or $ORDO_TUI_KEYS)
-  --theme <name>          palette (default dark, or $ORDO_TUI_THEME)
+  --theme <name>          palette (default terminal, or $ORDO_TUI_THEME)
   --init-config [--force] write tui.toml with the current keys and theme
   --json                  print the engine input for <rev> and exit, no TUI
   -V, --version
@@ -652,7 +656,7 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         preset_given: std::env::var("ORDO_TUI_KEYS").is_ok(),
         preset: std::env::var("ORDO_TUI_KEYS").unwrap_or_else(|_| "vim".to_string()),
         theme_given: std::env::var("ORDO_TUI_THEME").is_ok(),
-        theme_name: std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "dark".to_string()),
+        theme_name: std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "terminal".to_string()),
         extra_rules: vec![],
         sarif: vec![],
         coverage: vec![],
@@ -819,6 +823,9 @@ fn resolve_theme(
         (Some(c), false) => c.theme.clone().unwrap_or(theme_name),
         _ => theme_name,
     };
+    if theme_name == "terminal" {
+        sense_terminal();
+    }
     let Some(theme) = theme(&theme_name) else {
         eprintln!(
             "ordo: unknown theme '{theme_name}' (want: {})",
@@ -1079,6 +1086,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     input.options.rules = rules.rules;
     input.options.catalog = rules.catalog;
     input.options.disable = rules.disables;
+    input.options.levels = rules.levels;
     input.options.docs_last = docs_last;
     let changes = input.changes.clone();
     let out = ordo::run(input);
@@ -1330,9 +1338,6 @@ struct Item {
     path: String,
     old_range: [usize; 2],
     new_range: [usize; 2],
-    /// the list row's parts, kept unjoined so line number and category can be
-    /// coloured independently of the path
-    mark: String,
     cat: ordo::model::Category,
     rationale: String,
     details: Vec<String>,
@@ -1577,6 +1582,9 @@ struct App {
     /// the commit the history section is relative to; None when it couldn't
     /// be resolved (history is then reported unavailable rather than guessed)
     review_sha: Option<String>,
+    /// the reviewed commit's subject line, for the top bar; `None` for a
+    /// range or the working tree, which have no one subject
+    subject: Option<String>,
     /// true when reviewing the uncommitted area (`zz`) or a `base..zz` /
     /// `base...zz` worktree range — there the worktree file IS the new
     /// content, so `ge`/C-o's line number is always exact; for a commit or
@@ -1597,6 +1605,8 @@ struct App {
     /// `disable` globs from every rules file, forwarded to the engine so they
     /// silence catalog entries as well as the caller's own rules
     disables: Vec<String>,
+    /// `[levels]` from every rules file, forwarded to the engine
+    levels: BTreeMap<String, ordo::model::Level>,
     /// bundled rulesets named by `include` — what `:config` shows as on
     includes: Vec<String>,
     /// `:config`'s open state; `None` when it is closed
@@ -1623,13 +1633,14 @@ struct App {
     /// `:group` — show a non-selectable group-reason header before each run
     /// of the reading-order list that shares a group id
     show_groups: bool,
-    /// the focused pane fills the frame. A narrow terminal zooms on its own
-    /// (see `SPLIT_COLS`); this is the explicit toggle on top of that.
+    /// the focused pane fills the frame; a narrow terminal stacks the panes
+    /// rather than zooming (see `SPLIT_COLS`)
     zoom: bool,
     /// the dependency canvas, when open (see `Canvas`)
     canvas: Option<Canvas>,
-    /// bucket key -> the header text for it. What the keys *are* depends on
-    /// `mode`: group ids in hunk mode, `L<n>` ledger keys in ledger mode.
+    /// bucket key -> the symbol its group's first row shows, empty for
+    /// top-level code. What the keys *are* depends on `mode`: group ids in
+    /// hunk mode, `L<n>` ledger keys in ledger mode (see `set_mode`).
     groups: HashMap<String, String>,
     /// the engine's `Group::reason` map, kept unchanged so `:mode hunks` can
     /// restore it without re-touching the engine
@@ -1766,19 +1777,6 @@ fn build_items(out: &Output) -> Vec<Item> {
         .iter()
         .filter_map(|o| {
             let (path, h) = by_id.get(o.hunk.as_str())?;
-            // a catalog entry is worth the mark at any level — v1 marked every
-            // advisory — while a rule only earns it at `warn` or above
-            let flagged = h.findings.iter().any(|f| {
-                f.source == ordo::model::FindingSource::Catalog
-                    || f.level != ordo::model::Level::Note
-            });
-            let mark = if flagged {
-                "⚠"
-            } else if h.noise {
-                "·"
-            } else {
-                ""
-            };
             // the entry anchored here, else the one for the definition holding
             // this hunk — only a *definition* container, since a test block or
             // a region names no symbol
@@ -1795,11 +1793,10 @@ fn build_items(out: &Output) -> Vec<Item> {
             });
             Some(Item {
                 path: path.to_string(),
-                bucket: bucket_key(ViewMode::Ledger, ledger, &h.group),
+                bucket: bucket_key(ViewMode::Ledger, ledger, &h.group, h.category),
                 ledger,
                 old_range: h.old_range,
                 new_range: h.new_range,
-                mark: mark.to_string(),
                 cat: h.category,
                 rationale: h.rationale.clone(),
                 details: h.details.clone(),
@@ -1858,10 +1855,19 @@ fn hunk_edges(
     by_id: &HashMap<&str, (&str, &ordo::model::HunkOut)>,
     item_index: &HashMap<&str, usize>,
 ) -> Vec<EdgeRef> {
+    let own = by_id.get(h.id.as_str()).map(|(p, _)| *p);
+    // the why pane's needs / needed-by rows already say the direction, so a
+    // label is the name and where it lives — the path only when it is elsewhere
     let loc = |id: &str| {
         by_id
             .get(id)
-            .map(|(p, h)| format!("{p}:L{}", h.new_range[0]))
+            .map(|(p, h)| {
+                if own == Some(*p) {
+                    format!("L{}", h.new_range[0])
+                } else {
+                    format!("{p}:L{}", h.new_range[0])
+                }
+            })
             .unwrap_or_else(|| id.to_string())
     };
     out.edges
@@ -1869,14 +1875,11 @@ fn hunk_edges(
         .filter(|e| e.from == h.id || e.to == h.id)
         .map(|e| {
             let defines_it = e.from == h.id;
-            let (label, target_id) = if defines_it {
-                (format!("→ {}   {}", loc(&e.to), e.why), e.to.as_str())
-            } else {
-                (format!("← {}   {}", loc(&e.from), e.why), e.from.as_str())
-            };
+            let target_id = if defines_it { &e.to } else { &e.from };
+            let name = e.why.strip_prefix("def→use: ").unwrap_or(&e.why);
             EdgeRef {
-                label,
-                target: item_index.get(target_id).copied(),
+                label: format!("{name}  {}", loc(target_id)),
+                target: item_index.get(target_id.as_str()).copied(),
                 dependency: !defines_it,
             }
         })
@@ -1964,21 +1967,28 @@ fn hidden_breakdown(
 
 // ---------------------------------------------------------- group headers
 
-/// One row of the reading-order list's display, once `:group` is on: a
-/// non-selectable header naming a group's reason, or a hunk (an index into
-/// `App.items`, same as a plain `view` entry).
+/// One row of the reading-order list's display. Only `Item` and `Folded` rows
+/// stand for hunks; the rest are structure the selection never lands on.
 enum DisplayRow {
-    Header(String),
-    Item(usize),
+    /// a run of one file's hunks begins: its path, and how many hunks run
+    File(String, usize),
+    /// a blank row before a top-level group that follows a named one, which
+    /// would otherwise read as that group's continuation
+    Gap,
+    /// a hunk (an index into `App.items`), and whether it opens its group —
+    /// the row that shows the group's symbol
+    Item(usize, bool),
+    /// a folded group: the hunks it hides, in order
+    Folded(Vec<usize>),
 }
 
 /// The reading-order list's rows, in render order. `view` itself never grows
-/// a header entry — it stays exactly the indices `compute_view` produced, so
-/// navigation (`step`/`select`/`first_visible`/`last_visible`, all of which
-/// walk `view`) can never land `sel` on one; this is purely a display-time
-/// overlay, walked in lockstep by `display_row_of` below so a header can
-/// never appear in one function's output but not the other's index math.
-/// With `:group` off, it's `view` unchanged (one `DisplayRow::Item` each).
+/// a structural entry — it stays exactly the indices `compute_view` produced,
+/// so navigation (`step`/`select`/`first_visible`/`last_visible`, all of which
+/// walk `view`) can never land `sel` on one; `display_row_of` finds the
+/// selection's row in this output rather than re-deriving it. `groups` maps a
+/// bucket to the symbol its first row shows. With `:group` off every row shows
+/// its own symbol and nothing folds.
 fn display_rows(
     view: &[usize],
     items: &[Item],
@@ -1986,98 +1996,138 @@ fn display_rows(
     show_groups: bool,
     collapsed: &HashSet<String>,
 ) -> Vec<DisplayRow> {
-    if !show_groups {
-        return view.iter().map(|&i| DisplayRow::Item(i)).collect();
-    }
-    let mut counts: HashMap<&str, usize> = HashMap::new();
-    for &i in view {
-        *counts.entry(items[i].bucket.as_str()).or_insert(0) += 1;
-    }
+    let named = |gid: &str| groups.get(gid).is_some_and(|s| !s.is_empty());
     let mut rows = Vec::with_capacity(view.len());
-    let mut last: Option<&str> = None;
-    for &i in view {
-        let gid = items[i].bucket.as_str();
-        let folded = collapsed.contains(gid);
-        if last != Some(gid) {
-            let reason = groups.get(gid).map(String::as_str).unwrap_or(gid);
-            // only a folded group counts its hunks: the open one shows them
-            let header = if folded {
-                let n = counts.get(gid).copied().unwrap_or(0);
-                format!("▸ {reason} ({n})")
-            } else {
-                format!("▾ {reason}")
-            };
-            rows.push(DisplayRow::Header(header));
-            last = Some(gid);
+    let mut last: Option<(&str, &str)> = None;
+    let mut after_named = false;
+    for (pos, &i) in view.iter().enumerate() {
+        let it = &items[i];
+        let gid = it.bucket.as_str();
+        if last.is_none_or(|(path, _)| path != it.path) {
+            let n = view[pos..]
+                .iter()
+                .take_while(|&&j| items[j].path == it.path)
+                .count();
+            rows.push(DisplayRow::File(it.path.clone(), n));
+            after_named = false;
         }
-        if !folded {
-            rows.push(DisplayRow::Item(i));
+        let opens = last != Some((it.path.as_str(), gid));
+        last = Some((it.path.as_str(), gid));
+        if !show_groups {
+            rows.push(DisplayRow::Item(i, true));
+            continue;
+        }
+        if opens {
+            if after_named && !named(gid) {
+                rows.push(DisplayRow::Gap);
+            }
+            after_named = named(gid);
+        }
+        if !collapsed.contains(gid) {
+            rows.push(DisplayRow::Item(i, opens));
+        } else if opens {
+            rows.push(DisplayRow::Folded(vec![i]));
+        } else if let Some(DisplayRow::Folded(hidden)) = rows.last_mut() {
+            hidden.push(i);
         }
     }
     rows
 }
 
-/// The items a fold state actually shows — `view` minus everything inside a
-/// collapsed group. The selected hunk is always kept: folding the group you are
-/// standing in moves you to its header, it never leaves the selection pointing
-/// at a row that isn't drawn.
+/// The stops `j`/`k` make under a fold state: `view`, with each folded run
+/// standing as one stop — the selection when it is inside, else the run's
+/// first hunk — so the cursor can stand on a fold and open it again. Runs are
+/// cut where `display_rows` cuts them, at a group or a file boundary.
 fn folded_view(app: &App) -> Vec<usize> {
     if !app.show_groups || app.collapsed.is_empty() {
         return app.view.clone();
     }
-    let visible: Vec<usize> = app
-        .view
-        .iter()
-        .copied()
-        .filter(|&i| !app.collapsed.contains(&app.items[i].bucket))
-        .collect();
-    if visible.is_empty() {
-        app.view.clone()
-    } else {
-        visible
+    let mut out = Vec::with_capacity(app.view.len());
+    let mut last: Option<(&str, &str)> = None;
+    for &i in &app.view {
+        let it = &app.items[i];
+        let key = (it.path.as_str(), it.bucket.as_str());
+        let opens = last != Some(key);
+        last = Some(key);
+        if opens || !app.collapsed.contains(&it.bucket) {
+            out.push(i);
+        } else if i == app.sel {
+            *out.last_mut().expect("the run's first hunk was pushed") = i;
+        }
     }
+    out
 }
 
 /// The key a hunk groups under in a given mode. In ledger mode a hunk with no
 /// symbol change anchored to it falls into one shared bucket rather than
-/// vanishing — an import or a formatting hunk is still part of the review.
-fn bucket_key(mode: ViewMode, ledger: Option<usize>, group: &str) -> String {
+/// vanishing — a formatting hunk is still part of the review. Imports keep the
+/// engine's own per-file group in either mode, so they fold as one row.
+fn bucket_key(
+    mode: ViewMode,
+    ledger: Option<usize>,
+    group: &str,
+    cat: ordo::model::Category,
+) -> String {
     match (mode, ledger) {
+        _ if cat == ordo::model::Category::Import => group.to_string(),
         (ViewMode::Hunks, _) => group.to_string(),
         (ViewMode::Ledger, Some(i)) => format!("L{i}"),
         (ViewMode::Ledger, None) => "L-".to_string(),
     }
 }
 
+/// What a group's first row names: the symbol it changes, or nothing for
+/// top-level code. A removed symbol is not named — there is no definition
+/// left to read, and the row's rationale already says what went — so a hunk
+/// anchoring a removal is named by what it defines instead, if anything.
+fn group_symbol(mode: ViewMode, it: &Item, ledger: &[ordo::model::LedgerEntry]) -> String {
+    if it.cat == ordo::model::Category::Import {
+        return "imports".to_string();
+    }
+    match mode {
+        ViewMode::Ledger => it.ledger.and_then(|l| ledger.get(l)).and_then(|e| {
+            if e.change != ordo::model::SymbolChange::Removed {
+                Some(e.name.clone())
+            } else {
+                it.symbols.first().map(|s| s.name.clone())
+            }
+        }),
+        ViewMode::Hunks => it.enclosing.clone(),
+    }
+    .unwrap_or_default()
+}
+
 /// Switch what the list is a list of. Re-keys every item and rebuilds the
-/// header labels; headers are forced on in ledger mode, where they *are* the
-/// ledger. Fold state is dropped because its keys belonged to the old mode.
+/// symbol each group shows; groups are forced on in ledger mode, where they
+/// *are* the ledger. Fold state belonged to the old keys, so it starts over:
+/// imports folded, everything else open.
 fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo::model::LedgerEntry]) {
     app.mode = mode;
+    app.groups.clear();
     for it in &mut app.items {
-        it.bucket = bucket_key(mode, it.ledger, &it.group);
+        it.bucket = bucket_key(mode, it.ledger, &it.group, it.cat);
+        app.groups
+            .insert(it.bucket.clone(), group_symbol(mode, it, ledger));
     }
     if mode == ViewMode::Ledger {
-        let mut labels: HashMap<String, String> = ledger
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (format!("L{i}"), ledger_label(e)))
-            .collect();
-        labels.insert("L-".to_string(), "no definition changed".to_string());
-        app.groups = labels;
         app.show_groups = true;
-    } else {
-        app.groups = app.group_reasons.clone();
     }
-    app.collapsed.clear();
+    app.collapsed = app
+        .items
+        .iter()
+        .filter(|it| it.cat == ordo::model::Category::Import)
+        .map(|it| it.bucket.clone())
+        .collect();
 }
 
 /// Fold state change for the group holding the selected hunk (or every group).
+/// The selection stays where it is: on a fold, the fold's row carries it, and
+/// the same key opens it again.
 fn fold(app: &mut App, how: Fold) {
-    // folding is a statement about groups: turning the headers on is what the
+    // folding is a statement about groups: turning them on is what the
     // reviewer meant, not an error to report
     app.show_groups = true;
-    let gid = app.items[app.sel].group.clone();
+    let gid = app.items[app.sel].bucket.clone();
     match how {
         Fold::Toggle if app.collapsed.contains(&gid) => {
             app.collapsed.remove(&gid);
@@ -2089,72 +2139,27 @@ fn fold(app: &mut App, how: Fold) {
             app.collapsed.remove(&gid);
         }
         Fold::CloseAll => {
-            app.collapsed = app.items.iter().map(|it| it.group.clone()).collect();
+            app.collapsed = app.items.iter().map(|it| it.bucket.clone()).collect();
         }
         Fold::OpenAll => app.collapsed.clear(),
     }
-    // folding one group steps off it, so the selection stays on a hunk rather
-    // than on a header. Folding *everything* leaves nowhere to step to: the
-    // selection then stays put and its header carries the highlight.
-    let all_folded = app
-        .view
-        .iter()
-        .all(|&i| app.collapsed.contains(&app.items[i].group));
-    if !all_folded && app.collapsed.contains(&app.items[app.sel].group) {
-        let visible = folded_view(app);
-        if let Some(&next) = visible.iter().find(|&&i| i >= app.sel).or(visible.last()) {
-            select(app, next);
-        }
-    }
 }
 
-/// The row index `display_rows` would give the hunk at `view[pos]` — how many
-/// header rows precede it, plus its own position — so `ListState::select`
-/// always points at an `Item` row, never a `Header` one. Doesn't need
-/// `groups` (only `display_rows` renders a header's text) — same header
-/// *placement* rule as `display_rows`, is all this needs to agree with it.
-fn display_row_of(
-    view: &[usize],
-    items: &[Item],
-    show_groups: bool,
-    collapsed: &HashSet<String>,
-    pos: usize,
-) -> usize {
-    if !show_groups {
-        return pos;
-    }
-    let mut row: usize = 0;
-    let mut last: Option<&str> = None;
-    for (i, &vi) in view.iter().enumerate() {
-        let gid = items[vi].bucket.as_str();
-        let mut header_row = None;
-        if last != Some(gid) {
-            header_row = Some(row);
-            row += 1;
-            last = Some(gid);
-        }
-        if i == pos {
-            // inside a folded group the hunk itself isn't drawn: the highlight
-            // belongs on its header, the way vim highlights the fold line the
-            // cursor is inside
-            return match collapsed.contains(gid) {
-                true => header_row.unwrap_or(row.saturating_sub(1)),
-                false => row,
-            };
-        }
-        // a folded group draws its header and nothing else
-        if !collapsed.contains(gid) {
-            row += 1;
-        }
-    }
-    row
+/// The row `display_rows` gave the hunk `sel`: its own, or the fold hiding
+/// it, the way vim highlights the fold line the cursor is inside.
+fn display_row_of(rows: &[DisplayRow], sel: usize) -> usize {
+    rows.iter()
+        .position(|r| match r {
+            DisplayRow::Item(i, _) => *i == sel,
+            DisplayRow::Folded(hidden) => hidden.contains(&sel),
+            DisplayRow::File(..) | DisplayRow::Gap => false,
+        })
+        .unwrap_or(0)
 }
 
 // position the code view so the hunk sits a few lines below the top
 fn auto_scroll(it: &Item) -> u16 {
-    let [o0, o1] = it.old_range;
-    let removed = if o0 >= 1 && o0 <= o1 { o1 - o0 + 1 } else { 0 };
-    ((it.new_range[0].saturating_sub(1) + removed).saturating_sub(3)) as u16
+    view_row(it, start_cursor(it).line).saturating_sub(3) as u16
 }
 
 // where a freshly-selected hunk puts the cursor: its first changed new line
@@ -2614,6 +2619,13 @@ impl Session {
             prompt: None,
             search: None,
             review_sha: self.review_sha.clone(),
+            subject: match &self.target {
+                Target::Commit(sha) => {
+                    Some(git(&["log", "-1", "--format=%s", sha]).trim().to_string())
+                        .filter(|s| !s.is_empty())
+                }
+                _ => None,
+            },
             uncommitted: self.uncommitted,
             history_cache: HashMap::new(),
             churn_cache: HashMap::new(),
@@ -2647,6 +2659,7 @@ impl Session {
             rules: self.rules.rules.clone(),
             catalog: self.rules.catalog,
             disables: self.rules.disables.clone(),
+            levels: self.rules.levels.clone(),
             includes: self.rules.includes.clone(),
             config: None,
             strategy: "comprehension".to_string(),
@@ -2738,29 +2751,40 @@ fn review_key(
     terminal: &mut ratatui::DefaultTerminal,
 ) -> bool {
     let key = norm(code, mods);
-    match app.keys.resolve(app.pending, key) {
+    let held = app.pending.take();
+    match app.keys.resolve(held, key) {
         Resolve::Pending => app.pending = Some(key),
-        Resolve::Miss => app.pending = None,
-        // handled here rather than in `apply`: it must leave the alternate
-        // screen for the editor and come back
-        Resolve::Act(Action::OpenEditor) => {
-            app.pending = None;
-            open_editor(app, terminal);
-        }
-        Resolve::Act(a) => {
-            app.pending = None;
-            // Paging and scrolling need the pane heights, which only the
-            // renderer used to know — so a key pressed before the first draw
-            // used the placeholder 10, and every key after a resize used the
-            // previous frame's size. Both are computed here, from the same
-            // function the renderer uses.
-            if let Ok(size) = terminal.size() {
-                set_geometry(app, Rect::new(0, 0, size.width, size.height));
+        Resolve::Act(a) => return run_action(app, a, terminal),
+        // a prefix that is also a key of its own (`]` before `]f`) does its
+        // own job when no chord follows, and the key after it is read afresh —
+        // unless that is Esc, which only drops the chord
+        Resolve::Miss => match held.and_then(|p| app.keys.bare(p)) {
+            Some(a) if key != plain(KeyCode::Esc) => {
+                return run_action(app, a, terminal) || review_key(app, code, mods, terminal);
             }
-            return apply(app, a);
-        }
+            _ => {}
+        },
     }
     false
+}
+
+/// A resolved action against the loaded review. True means quit.
+fn run_action(app: &mut App, a: Action, terminal: &mut ratatui::DefaultTerminal) -> bool {
+    // handled here rather than in `apply`: it must leave the alternate
+    // screen for the editor and come back
+    if a == Action::OpenEditor {
+        open_editor(app, terminal);
+        return false;
+    }
+    // Paging and scrolling need the pane heights, which only the
+    // renderer used to know — so a key pressed before the first draw
+    // used the placeholder 10, and every key after a resize used the
+    // previous frame's size. Both are computed here, from the same
+    // function the renderer uses.
+    if let Ok(size) = terminal.size() {
+        set_geometry(app, Rect::new(0, 0, size.width, size.height));
+    }
+    apply(app, a)
 }
 
 /// Take the screen first, then load off the draw loop: a background thread
@@ -2864,7 +2888,22 @@ fn run(
 
         match event::poll(Duration::from_millis(50)) {
             Ok(true) => {}
-            Ok(false) => continue,
+            Ok(false) => {
+                if let State::Ready(app) = &mut state {
+                    let held = app
+                        .pending
+                        .filter(|_| last_key.elapsed() >= CHORD_TIMEOUT)
+                        .and_then(|p| app.keys.bare(p));
+                    if let Some(a) = held {
+                        app.pending = None;
+                        dirty = true;
+                        if run_action(app, a, &mut terminal) {
+                            break 'outer Ok(());
+                        }
+                    }
+                }
+                continue;
+            }
             Err(e) => break 'outer Err(e),
         }
         // Any event at all — a key, but also a resize the next frame has to
@@ -3170,6 +3209,8 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
         Action::WavePrev => step_wave(app, false),
         Action::CommentNext => comment_move(app, true),
         Action::CommentPrev => comment_move(app, false),
+        Action::FindingNext => finding_move(app, true),
+        Action::FindingPrev => finding_move(app, false),
         Action::CommandGoto => open_command_bar(app, "goto ".to_string()),
         // intercepted in `run` before it reaches here (needs the terminal)
         Action::OpenEditor => {}
@@ -3320,6 +3361,46 @@ fn comment_move(app: &mut App, forward: bool) {
     });
 }
 
+/// `]f` / `[f` — the next or previous hunk on screen carrying a finding, in
+/// one cycle ordered by top level (most severe first), then view order. From
+/// a hunk outside the cycle, the nearest most-severe one in that direction.
+fn finding_move(app: &mut App, forward: bool) {
+    let view = folded_view(app);
+    // `Level` declares its variants least severe first
+    let mut cycle: Vec<(u8, usize)> = view
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, &i)| {
+            let top = app.items[i].findings.iter().map(|f| f.level as u8).max()?;
+            Some((top, pos))
+        })
+        .collect();
+    if cycle.is_empty() {
+        app.notice = Some("no findings in view".to_string());
+        return;
+    }
+    cycle.sort_by_key(|&(top, pos)| (std::cmp::Reverse(top), pos));
+    let n = cycle.len();
+    let here = view_pos(&view, app.sel);
+    let to = match cycle.iter().position(|&(_, pos)| pos == here) {
+        Some(k) if forward => (k + 1) % n,
+        Some(k) => (k + n - 1) % n,
+        None => {
+            let worst = cycle
+                .iter()
+                .take_while(|(top, _)| *top == cycle[0].0)
+                .count();
+            let found = if forward {
+                cycle[..worst].iter().position(|&(_, pos)| pos > here)
+            } else {
+                cycle[..worst].iter().rposition(|&(_, pos)| pos < here)
+            };
+            found.unwrap_or(if forward { 0 } else { worst - 1 })
+        }
+    };
+    select(app, view[cycle[to].1]);
+}
+
 /// Move the code cursor with `f`, clamp it to the file, and scroll to follow.
 /// No-op when the selected item's file content isn't loaded.
 fn cursor_move(app: &mut App, f: impl FnOnce(Cursor, &[String]) -> Cursor) {
@@ -3330,7 +3411,11 @@ fn cursor_move(app: &mut App, f: impl FnOnce(Cursor, &[String]) -> Cursor) {
         return;
     }
     app.cursor = clamp_cursor(f(app.cursor, lines), lines);
-    app.scroll = follow_scroll(app.cursor.line, app.scroll, app.code_height);
+    app.scroll = follow_scroll(
+        view_row(&app.items[app.sel], app.cursor.line),
+        app.scroll,
+        app.code_height,
+    );
     app.hscroll = follow_hscroll(app.cursor.col, app.hscroll, app.code_width);
 }
 
