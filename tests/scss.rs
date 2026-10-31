@@ -10,7 +10,11 @@ fn a_nested_rule_is_named_by_the_selector_it_compiles_to() {
     let new = ".menu {\n  .item {\n    color: blue;\n  }\n  &:hover {\n    color: blue;\n  }\n}\n";
     let hs = one("a.scss", old, new);
     let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
-    assert_eq!(rats, vec!["edits .menu .item", "edits .menu:hover"], "{hs:?}");
+    assert_eq!(
+        rats,
+        vec!["edits .menu .item", "edits .menu:hover"],
+        "{hs:?}"
+    );
 }
 
 #[test]
@@ -26,7 +30,11 @@ fn a_rule_nested_in_a_mixin_is_named_under_it() {
     let old = "@mixin btn {\n  &:hover {\n    top: 0;\n  }\n}\n";
     let new = "@mixin btn {\n  &:hover {\n    top: 1px;\n  }\n}\n";
     let hs = one("a.scss", old, new);
-    assert_eq!(hs[0].enclosing.as_deref(), Some("@mixin btn &:hover"), "{hs:?}");
+    assert_eq!(
+        hs[0].enclosing.as_deref(),
+        Some("@mixin btn &:hover"),
+        "{hs:?}"
+    );
     assert_eq!(hs[0].rationale, "changes 0 → 1px in @mixin btn &:hover");
 }
 
@@ -35,7 +43,11 @@ fn keyframes_nested_in_a_rule_are_not_scoped_by_it() {
     let old = ".a {\n  @keyframes spin {\n    from {\n      top: 0;\n    }\n  }\n}\n";
     let new = ".a {\n  @keyframes spin {\n    from {\n      top: 1px;\n    }\n  }\n}\n";
     let hs = one("a.scss", old, new);
-    assert_eq!(hs[0].enclosing.as_deref(), Some("@keyframes spin"), "{hs:?}");
+    assert_eq!(
+        hs[0].enclosing.as_deref(),
+        Some("@keyframes spin"),
+        "{hs:?}"
+    );
 }
 
 #[test]
@@ -48,7 +60,11 @@ fn an_include_links_to_its_mixin() {
     let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
     assert_eq!(why, vec!["def→use: @mixin btn"]);
     let hs: Vec<_> = out.files[0].hunks.iter().collect();
-    assert!(hs.iter().any(|h| h.defines == vec!["@mixin btn".to_string()]), "{hs:?}");
+    assert!(
+        hs.iter()
+            .any(|h| h.defines == vec!["@mixin btn".to_string()]),
+        "{hs:?}"
+    );
 }
 
 #[test]
@@ -72,7 +88,10 @@ fn a_mixin_name_never_leaks_a_bare_identifier() {
         ]
     }));
     let hs: Vec<_> = out.files.iter().flat_map(|f| f.hunks.iter()).collect();
-    assert!(!hs.iter().any(|h| h.uses.contains(&"card".to_string())), "{hs:?}");
+    assert!(
+        !hs.iter().any(|h| h.uses.contains(&"card".to_string())),
+        "{hs:?}"
+    );
     assert!(out.edges.is_empty(), "{:?}", out.edges);
 }
 
@@ -83,5 +102,8 @@ fn a_namespaced_include_is_not_read_as_its_module() {
         "@use \"m\";\n.a { top: 0; }\n",
         "@use \"m\";\n.a { @include m.btn(1); }\n",
     );
-    assert!(hs.iter().all(|h| !h.uses.contains(&"@mixin m".to_string())), "{hs:?}");
+    assert!(
+        hs.iter().all(|h| !h.uses.contains(&"@mixin m".to_string())),
+        "{hs:?}"
+    );
 }

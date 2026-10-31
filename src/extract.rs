@@ -1895,7 +1895,8 @@ fn yaml_document_names(stream: Node, src: &[u8]) -> HashMap<usize, String> {
     if docs.len() < 2 {
         return HashMap::new();
     }
-    let pairs: Vec<Vec<(String, String)>> = docs.iter().map(|d| yaml_top_scalars(*d, src)).collect();
+    let pairs: Vec<Vec<(String, String)>> =
+        docs.iter().map(|d| yaml_top_scalars(*d, src)).collect();
     let mut seen: HashMap<(&str, &str), usize> = HashMap::new();
     for (k, v) in pairs.iter().flatten() {
         *seen.entry((k.as_str(), v.as_str())).or_default() += 1;
@@ -1922,7 +1923,10 @@ fn yaml_document_names(stream: Node, src: &[u8]) -> HashMap<usize, String> {
             None => format!("document {}", at + 1),
         }
     };
-    docs.iter().enumerate().map(|(at, d)| (d.id(), name(at))).collect()
+    docs.iter()
+        .enumerate()
+        .map(|(at, d)| (d.id(), name(at)))
+        .collect()
 }
 
 /// How much of a value a document's name quotes.
@@ -1945,7 +1949,9 @@ fn yaml_top_scalars(doc: Node, src: &[u8]) -> Vec<(String, String)> {
             let key = trimmed(pair.child_by_field_name("key")?, src)?;
             let value = pair.child_by_field_name("value")?;
             let scalar = value.kind() == "flow_node"
-                && value.named_child(0).is_some_and(|c| c.kind().ends_with("_scalar"));
+                && value
+                    .named_child(0)
+                    .is_some_and(|c| c.kind().ends_with("_scalar"));
             let text = trimmed(value, src).filter(|t| scalar && !t.contains('\n'))?;
             Some((unquote(key).to_string(), unquote(text).to_string()))
         })
@@ -2247,7 +2253,11 @@ impl<'a> Walker<'a> {
         if node.kind() != "document" {
             return None;
         }
-        if self.yaml_docs.as_ref().is_none_or(|(id, _)| *id != stream.id()) {
+        if self
+            .yaml_docs
+            .as_ref()
+            .is_none_or(|(id, _)| *id != stream.id())
+        {
             self.yaml_docs = Some((stream.id(), yaml_document_names(stream, self.src)));
         }
         self.yaml_docs.as_ref()?.1.get(&node.id()).cloned()
@@ -2318,7 +2328,9 @@ impl<'a> Walker<'a> {
         }
         self.c.defs.push(DefRec {
             s: sr,
-            e: rst.as_ref().map_or_else(|| end_row(node, spec), |(e, _)| *e),
+            e: rst
+                .as_ref()
+                .map_or_else(|| end_row(node, spec), |(e, _)| *e),
             name: lang::scope_join(spec, &self.stack),
             depth,
             params: count_params(node),
@@ -2398,7 +2410,9 @@ impl<'a> Walker<'a> {
         scope.extend(owner);
         scope.extend(qualified_scope(node, self.src));
         let ctor = matches!(spec.name, "cpp" | "java")
-            && scope.last().is_some_and(|s| s.split('<').next() == Some(own));
+            && scope
+                .last()
+                .is_some_and(|s| s.split('<').next() == Some(own));
         let scope = (!scope.is_empty()).then(|| lang::scope_join(spec, &scope));
         // python's `decorated_definition` is the def under another node: it
         // does not hide it, and its first row (a decorator's) is the def's too
@@ -2589,13 +2603,22 @@ impl<'a> Walker<'a> {
         // `@function half` declare; both fall through to their arguments
         if scss && matches!(kind, "include_statement" | "call_expression") {
             let (at, name) = match kind {
-                "include_statement" => ("mixin_statement", child_where(node, |c| c.kind() == "identifier")),
-                _ => ("function_statement", child_where(node, |c| c.kind() == "function_name")),
+                "include_statement" => (
+                    "mixin_statement",
+                    child_where(node, |c| c.kind() == "identifier"),
+                ),
+                _ => (
+                    "function_statement",
+                    child_where(node, |c| c.kind() == "function_name"),
+                ),
             };
             // the grammar stops `@include mixins.btn` at `mixins`, which is
             // a module, not a mixin
             let namespaced = |n: &Node| src.get(n.end_byte()) == Some(&b'.');
-            if let Some(t) = name.filter(|n| !namespaced(n)).and_then(|n| trimmed(n, src)) {
+            if let Some(t) = name
+                .filter(|n| !namespaced(n))
+                .and_then(|n| trimmed(n, src))
+            {
                 let name = format!("{} {t}", scss_at_rule(at));
                 self.c.push_use(sr, name, node.id());
             }
@@ -4012,9 +4035,15 @@ fn rst_sections(parent: Node, src: &[u8]) -> HashMap<usize, (usize, Vec<String>)
         }
     };
     let mut cur = parent.walk();
-    for c in parent.named_children(&mut cur).filter(|c| c.kind() == "section") {
+    for c in parent
+        .named_children(&mut cur)
+        .filter(|c| c.kind() == "section")
+    {
         let mut ac = c.walk();
-        let adornments: Vec<Node> = c.children(&mut ac).filter(|a| a.kind() == "adornment").collect();
+        let adornments: Vec<Node> = c
+            .children(&mut ac)
+            .filter(|a| a.kind() == "adornment")
+            .collect();
         let ch = adornments
             .last()
             .and_then(|a| a.utf8_text(src).ok())
@@ -4026,7 +4055,9 @@ fn rst_sections(parent: Node, src: &[u8]) -> HashMap<usize, (usize, Vec<String>)
             styles.len() - 1
         });
         close(&mut open, level, c.start_position().row.saturating_sub(1));
-        let title = section_heading(c).and_then(|t| heading_name(t, src)).unwrap_or_default();
+        let title = section_heading(c)
+            .and_then(|t| heading_name(t, src))
+            .unwrap_or_default();
         open.push((c.id(), level, title));
     }
     close(&mut open, 0, parent.end_position().row.saturating_sub(1));

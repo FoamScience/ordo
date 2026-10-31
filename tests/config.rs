@@ -306,7 +306,11 @@ fn a_yaml_document_keeps_its_name_when_another_is_inserted_before_it() {
     let hs = one("order.yaml", &old, &new);
     let enc: Vec<Option<&str>> = hs.iter().map(|h| h.enclosing.as_deref()).collect();
     assert!(enc.contains(&Some("name=b.tag")), "{hs:?}");
-    assert!(hs.iter().all(|h| h.details.iter().all(|d| !d.contains("document"))), "{hs:?}");
+    assert!(
+        hs.iter()
+            .all(|h| h.details.iter().all(|d| !d.contains("document"))),
+        "{hs:?}"
+    );
 }
 
 #[test]
@@ -315,12 +319,23 @@ fn a_yaml_document_whose_naming_value_is_edited_changes_in_place() {
     let old = [doc("a b"), doc("c")].concat();
     let new = [doc("b"), doc("c")].concat();
     let hs = one("order.yaml", &old, &new);
-    assert_eq!(hs[0].details, vec!["changes packages in packages=b".to_string()]);
+    assert_eq!(
+        hs[0].details,
+        vec!["changes packages in packages=b".to_string()]
+    );
 }
 
 #[test]
 fn a_yaml_document_with_no_unique_pair_is_named_by_position() {
     let doc = |port: &str| format!("---\nkind: svc\nspec:\n  port: {port}\n");
-    let hs = one("s.yaml", &[doc("1"), doc("1")].concat(), &[doc("1"), doc("2")].concat());
-    assert_eq!(hs[0].enclosing.as_deref(), Some("document 2.spec.port"), "{hs:?}");
+    let hs = one(
+        "s.yaml",
+        &[doc("1"), doc("1")].concat(),
+        &[doc("1"), doc("2")].concat(),
+    );
+    assert_eq!(
+        hs[0].enclosing.as_deref(),
+        Some("document 2.spec.port"),
+        "{hs:?}"
+    );
 }
