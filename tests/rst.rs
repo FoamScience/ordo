@@ -32,14 +32,21 @@ fn an_edit_is_read_against_its_section_path() {
     let new = DOC.replace("Clone.", "Clone and build.");
     let hs = one("a.rst", DOC, &new);
     assert_eq!(hs.len(), 1, "{hs:?}");
-    assert_eq!(hs[0].enclosing.as_deref(), Some("Project > Install > From source"));
+    assert_eq!(
+        hs[0].enclosing.as_deref(),
+        Some("Project > Install > From source")
+    );
 }
 
 #[test]
 fn a_section_ends_at_the_next_heading_of_its_level() {
     let new = DOC.replace("Call it.", "Call it twice.");
     let hs = one("a.rst", DOC, &new);
-    assert_eq!(hs[0].enclosing.as_deref(), Some("Project > Usage"), "{hs:?}");
+    assert_eq!(
+        hs[0].enclosing.as_deref(),
+        Some("Project > Usage"),
+        "{hs:?}"
+    );
 }
 
 #[test]

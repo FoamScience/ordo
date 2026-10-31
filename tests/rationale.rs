@@ -1576,7 +1576,11 @@ fn a_def_nested_in_a_function_is_still_used_inside_it() {
     let rats = rationales(serde_json::json!({
         "changes": [{ "path": "a.py", "old": old, "new": new }]
     }));
-    assert!(rats.iter().any(|r| r.contains("used by") || r.contains("defined above")), "{rats:?}");
+    assert!(
+        rats.iter()
+            .any(|r| r.contains("used by") || r.contains("defined above")),
+        "{rats:?}"
+    );
 }
 
 #[test]
