@@ -152,7 +152,7 @@ usage: ordo [<rev>] [<glob>...] [options]
   <rev>   what to review (default HEAD)
             HEAD~2, a sha, a tag         one commit
             main..feat, main...feat      a range (... diffs from the merge base)
-            zz                           uncommitted work
+            zz                           uncommitted work (`@` too, on GitButler repos)
             main...zz                    the branch so far, uncommitted included
             a branch or commit ID        from `but status`, on GitButler repos
             wave/2..wave/3               one agent turn, recorded by `ordo wave`

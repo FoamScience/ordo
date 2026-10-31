@@ -6045,3 +6045,20 @@ fn an_answered_terminal_tints_from_its_own_palette() {
     };
     assert!([r, g, b].iter().all(|c| *c > 0xb0), "{r:x}{g:x}{b:x}");
 }
+
+/// GitButler 0.23 lists linked worktrees beside the stacks; their branch and
+/// commit IDs resolve the same way a stack's do.
+#[test]
+fn a_linked_worktrees_branch_and_commit_ids_resolve() {
+    let ws = serde_json::json!({
+        "stacks": [{"branches": [{"cliId": "at", "name": "feat", "commits": [
+            {"cliId": "twxq", "changeId": "twxqvl", "commitId": "4c35259a"}]}]}],
+        "worktrees": [{"cliId": "wt", "reference": "refs/heads/wtb", "branches": [
+            {"cliId": "wt", "name": "wtb", "commits": [
+                {"cliId": "torx", "changeId": "torxqy", "commitId": "2d221776"}]}]}],
+    });
+    let names: Vec<&str> = branches(&ws).map(|b| field(b, "name")).collect();
+    assert_eq!(names, vec!["feat", "wtb"]);
+    assert!(matches!(commit_target(&ws, "torx"), Some(Target::Commit(c)) if c == "2d221776"));
+    assert!(matches!(commit_target(&ws, "twxq"), Some(Target::Commit(c)) if c == "4c35259a"));
+}

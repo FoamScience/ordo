@@ -215,25 +215,60 @@ pub(super) fn declared_generated(paths: &[String]) -> std::collections::HashSet<
 
 // -------------------------------------------------------------- gitbutler layer
 
+/// This checkout's git dir and the repository's common git dir, both
+/// absolute; they differ only in a linked worktree.
+fn git_dirs() -> Option<(String, String)> {
+    let out = git(&[
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-dir",
+        "--git-common-dir",
+    ]);
+    let mut lines = out.lines();
+    Some((lines.next()?.to_string(), lines.next()?.to_string()))
+}
+
+/// Whether GitButler already manages this repository. `but` runs in any git
+/// repository and sets one up on first contact, so it is only asked once its
+/// `gitbutler` dir exists — ordo never turns a plain repository into one.
+fn managed() -> bool {
+    git_dirs().is_some_and(|(_, common)| std::path::Path::new(&common).join("gitbutler").is_dir())
+}
+
+/// The uncommitted area: `@`, as GitButler names it, on a repository it
+/// manages — elsewhere `@` keeps git's meaning, HEAD. `zz`, its old name,
+/// everywhere.
+fn is_uncommitted(arg: &str) -> bool {
+    arg == "zz" || (arg == "@" && managed())
+}
+
 /// `but --json status` — the whole workspace in one call: the uncommitted
-/// changes, each stack's branches and their commits, and the merge base. None
-/// when `but` is missing or the repo isn't GitButler-managed.
+/// changes, each stack's and linked worktree's branches and their commits, and
+/// the merge base. None when `but` is missing or the repo isn't
+/// GitButler-managed.
 fn workspace() -> Option<serde_json::Value> {
+    if !managed() {
+        return None;
+    }
     serde_json::from_str(&but(&["--json", "status"])).ok()
 }
 
-fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
+fn list<'a>(v: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
+    v.get(key)
+        .and_then(|v| v.as_array())
+        .map(|v| v.as_slice())
+        .unwrap_or_default()
+}
+
+pub(super) fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
     v.get(key).and_then(|v| v.as_str()).unwrap_or_default()
 }
 
-fn branches(ws: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
-    ws.get("stacks")
-        .and_then(|s| s.as_array())
-        .map(|v| v.as_slice())
-        .unwrap_or_default()
+pub(super) fn branches(ws: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+    list(ws, "stacks")
         .iter()
-        .filter_map(|s| s.get("branches")?.as_array())
-        .flatten()
+        .chain(list(ws, "worktrees"))
+        .flat_map(|s| list(s, "branches"))
 }
 
 /// A workspace branch — by the CLI ID `but status` prints, or by its name —
@@ -258,15 +293,12 @@ fn branch_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
 
 /// A workspace commit by its CLI ID, or by a prefix of its change ID or commit
 /// ID — the same identifiers `but status` accepts.
-fn commit_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
-    let c = branches(ws)
-        .filter_map(|b| b.get("commits")?.as_array())
-        .flatten()
-        .find(|c| {
-            field(c, "cliId") == arg
-                || field(c, "changeId").starts_with(arg)
-                || field(c, "commitId").starts_with(arg)
-        })?;
+pub(super) fn commit_target(ws: &serde_json::Value, arg: &str) -> Option<Target> {
+    let c = branches(ws).flat_map(|b| list(b, "commits")).find(|c| {
+        field(c, "cliId") == arg
+            || field(c, "changeId").starts_with(arg)
+            || field(c, "commitId").starts_with(arg)
+    })?;
     Some(Target::Commit(field(c, "commitId").to_string()))
 }
 
@@ -299,7 +331,7 @@ pub(super) fn resolve_range(arg: &str) -> Option<Target> {
     if tip.contains("..") {
         return None;
     }
-    if base == "zz" {
+    if is_uncommitted(base) {
         return None;
     }
     let rev = |s: &str| {
@@ -308,7 +340,7 @@ pub(super) fn resolve_range(arg: &str) -> Option<Target> {
         let sha = sha.trim().to_string();
         (!sha.is_empty()).then_some(sha)
     };
-    if tip == "zz" {
+    if is_uncommitted(tip) {
         let base = rev(base)?;
         if !symmetric {
             return Some(Target::WorktreeRange(base));
@@ -334,7 +366,7 @@ pub(super) fn resolve_range(arg: &str) -> Option<Target> {
 // GitButler steps are skipped entirely on a repo `but` doesn't manage.
 pub(super) fn resolve(arg: &str) -> Option<Target> {
     let arg = &crate::waves::expand(arg);
-    if arg == "zz" {
+    if is_uncommitted(arg) {
         return Some(Target::Uncommitted);
     }
     // `..` is illegal in a refname, so it can only mean a range here
@@ -424,16 +456,12 @@ pub(super) fn gather_range(
     }
 }
 
-// The uncommitted area (`zz`): GitButler owns what counts as uncommitted (it
+// The uncommitted area (`@`/`zz`): GitButler owns what counts as uncommitted (it
 // includes untracked adds git-diff wouldn't show), so take the file list from
 // the workspace status — which lists it per file, unlike `but diff`'s per-hunk
 // entries. Changes assigned to a stack are picked up the same way. Full old/new
 // content — old from HEAD, new from the worktree — so hunks get full semantics
 // rather than degrading to a context-limited patch.
-// Every path GitButler's workspace status lists as changed: `stacks[].assignedChanges`
-// plus `uncommittedChanges`, each entry's `filePath`. Shared by `gather_uncommitted`
-// and `gather_worktree_range`'s untracked-file branch — neither sorts nor dedups
-// here, that's each caller's own business.
 /// The uncommitted area of a repository GitButler does not manage: every
 /// tracked file that differs from `HEAD`, staged or not, and every untracked
 /// file that is not ignored.
@@ -448,31 +476,48 @@ pub(super) fn uncommitted_paths(dir: &str) -> Vec<String> {
         .collect()
 }
 
-fn workspace_change_paths(ws: &serde_json::Value) -> Vec<String> {
-    let assigned = ws
-        .get("stacks")
-        .and_then(|s| s.as_array())
-        .map(|v| v.as_slice())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|s| s.get("assignedChanges")?.as_array())
-        .flatten();
-    ws.get("uncommittedChanges")
-        .and_then(|c| c.as_array())
-        .map(|v| v.as_slice())
-        .unwrap_or_default()
-        .iter()
-        .chain(assigned)
-        .map(|c| field(c, "filePath").to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
+// Run from a linked worktree, the status's top-level lists are still the main
+// workspace's; the worktree's own changes sit under its `worktrees[]` entry,
+// found by the branch it has checked out. None for a worktree GitButler doesn't
+// list (archived, detached) — plain git's view of it then.
+fn workspace_change_paths(ws: &serde_json::Value) -> Option<Vec<String>> {
+    let (dir, common) = git_dirs()?;
+    let changes: Vec<&serde_json::Value> = if dir == common {
+        list(ws, "uncommittedChanges")
+            .iter()
+            .chain(
+                list(ws, "stacks")
+                    .iter()
+                    .flat_map(|s| list(s, "assignedChanges")),
+            )
+            .collect()
+    } else {
+        let head = git(&["symbolic-ref", "-q", "HEAD"]);
+        let wt = list(ws, "worktrees")
+            .iter()
+            .find(|w| field(w, "reference") == head.trim())?;
+        list(wt, "uncommittedChanges").iter().collect()
+    };
+    Some(
+        changes
+            .into_iter()
+            .map(|c| field(c, "filePath").to_string())
+            .filter(|p| !p.is_empty())
+            .collect(),
+    )
+}
+
+// Every path the uncommitted area holds, from GitButler's status where it
+// manages this checkout, else plain git's. Shared by `gather_uncommitted` and
+// `gather_worktree_range`; neither sorting nor dedup happens here.
+fn change_paths() -> Vec<String> {
+    workspace()
+        .and_then(|ws| workspace_change_paths(&ws))
+        .unwrap_or_else(|| uncommitted_paths("."))
 }
 
 pub(super) fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> Input {
-    let mut paths = match workspace() {
-        Some(ws) => workspace_change_paths(&ws),
-        None => uncommitted_paths("."),
-    };
+    let mut paths = change_paths();
     paths.sort();
     paths.dedup();
     let paths = filter.apply(paths);
@@ -504,9 +549,8 @@ pub(super) fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> 
 // yet committed — `base`'s tree versus the worktree. `git diff --name-only
 // <base>` (one revision, no second) already compares a tree to the working
 // directory, but it never lists untracked files, so the changed-file set is
-// that plus untracked paths — from `but --json status`, same source
-// `gather_uncommitted` uses, on a GitButler-managed repo, else `git ls-files
-// --others --exclude-standard`. `old` comes from `base`'s tree (empty when
+// that plus the uncommitted area's paths, same source `gather_uncommitted`
+// uses. `old` comes from `base`'s tree (empty when
 // the path didn't exist there); `new` is read straight off disk. A path
 // absent from the worktree (deleted since `base`) gets an empty `new`, not a
 // read error; a path that exists but can't be read as UTF-8 is dropped
@@ -523,16 +567,7 @@ pub(super) fn gather_worktree_range(
         .filter(|p| !p.is_empty())
         .map(str::to_string)
         .collect();
-    let untracked: Vec<String> = match workspace() {
-        Some(ws) => workspace_change_paths(&ws),
-        None => git(&["ls-files", "--others", "--exclude-standard"])
-            .split('\n')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(str::to_string)
-            .collect(),
-    };
-    paths.extend(untracked);
+    paths.extend(change_paths());
     paths.sort();
     paths.dedup();
     let paths = filter.apply(paths);
