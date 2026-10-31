@@ -163,13 +163,18 @@ rejected.
 
 On a **GitButler**-managed repo `<rev>` also takes the CLI IDs `but status`
 prints — the workspace is read once from `but --json status`, and the repo is
-otherwise driven by plain git:
+otherwise driven by plain git. A repo counts as managed once GitButler has set
+it up (its `.git/gitbutler` exists); ordo never runs `but` anywhere else, since
+that would set it up:
 
 | `<rev>` | reviews |
 | --- | --- |
-| a branch ID (`at`) or name (`feat/multi-session`) | that branch's own commits, as a range |
+| a branch ID (`at`) or name (`feat/multi-session`), in a stack or a linked worktree | that branch's own commits, as a range |
 | a commit ID (`lzm`), or a change-ID / commit-ID prefix | that commit |
-| `zz` | the uncommitted area, including changes assigned to a stack |
+| `@` (or `zz`) | the uncommitted area, including changes assigned to a stack; inside a linked worktree, that worktree's own |
+
+`@` follows GitButler there, `main...@` included; on any other repo it keeps
+git's meaning, `HEAD`.
 
 A branch label wins over git's reading of the same name, where a branch is
 only its tip commit — reviewing a branch means reviewing its commits.
