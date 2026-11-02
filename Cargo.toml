@@ -28,8 +28,10 @@ name = "ordo"
 path = "src/lib.rs"
 
 [features]
-default = ["tui"]
+default = ["tui", "web"]
 tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:toml", "dep:base64", "dep:xterm-query"]
+# `ordo web`: the reviewer in a browser, served from the same binary
+web = ["tui", "dep:tiny_http"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -77,6 +79,8 @@ tree-sitter-svelte-ng = "1.0"
 # the default theme's tints are mixed from the terminal's own colours, asked for
 # over OSC 10/11/4 (the `ordo` reviewer only)
 xterm-query = { version = "0.6.1", optional = true }
+# `ordo web`'s localhost server: synchronous, no async runtime
+tiny_http = { version = "0.12", default-features = false, optional = true }
 
 [build-dependencies]
 # builds the in-tree go-template grammar (see grammars/ and build.rs)

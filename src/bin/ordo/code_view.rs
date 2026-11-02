@@ -136,6 +136,27 @@ pub(super) enum Role {
     Attribute,
 }
 
+impl Role {
+    /// The role as its theme key names it, less the `syntax-` prefix.
+    #[cfg_attr(not(feature = "web"), allow(dead_code))]
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Role::Comment => "comment",
+            Role::Keyword => "keyword",
+            Role::Str => "string",
+            Role::Number => "number",
+            Role::Function => "function",
+            Role::Type => "type",
+            Role::Property => "property",
+            Role::Operator => "operator",
+            Role::Variable => "variable",
+            Role::Builtin => "builtin",
+            Role::Param => "parameter",
+            Role::Attribute => "attribute",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Syntax {
     pub(super) comment: Color,

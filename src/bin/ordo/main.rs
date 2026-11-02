@@ -138,6 +138,8 @@ mod rules;
 mod search;
 mod watch;
 mod waves;
+#[cfg(feature = "web")]
+mod web;
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const PAGE: u16 = 15;
@@ -146,6 +148,7 @@ const USAGE: &str = "\
 ordo — review a change in reading order: definitions before their uses.
 
 usage: ordo [<rev>] [<glob>...] [options]
+       ordo web [<rev>] [<glob>...] [options] [--port <n>] [--no-open]
        ordo wave [-m <message>] | --list | --clear
        ordo help [<topic>]
 
@@ -178,6 +181,8 @@ options:
   --theme <name>          palette (default terminal, or $ORDO_TUI_THEME)
   --init-config [--force] write tui.toml with the current keys and theme
   --json                  print the engine input for <rev> and exit, no TUI
+  --port <n>              `ordo web`: the localhost port (default: any free one)
+  --no-open               `ordo web`: print the URL, do not open a browser
   -V, --version
 
 keys (vim; vscode: F1 lists its own):
@@ -422,6 +427,9 @@ struct ParsedArgs {
     /// `--json`: print the engine input and exit, for scripts that want ordo's
     /// revision and path handling without the TUI
     json: bool,
+    /// `ordo web`: serve the review to a browser instead of the terminal
+    #[cfg(feature = "web")]
+    web: Option<web::WebArgs>,
 }
 
 /// The user-facing documentation, embedded in the binary so `ordo help
@@ -549,7 +557,9 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|t| parse_key_config(&t));
     let (keys, preset) = resolve_keymap(cfg.as_ref(), raw.preset, raw.preset_given)?;
-    let (theme, theme_name) = resolve_theme(cfg.as_ref(), raw.theme_name, raw.theme_given)?;
+    // a browser paints its own colours, so the terminal is not asked for its
+    let (theme, theme_name) =
+        resolve_theme(cfg.as_ref(), raw.theme_name, raw.theme_given, !raw.web)?;
     if raw.want_init {
         // `--init-config` is a whole run of its own: nothing is reviewed, and
         // the exit code is the write's own (`Err(0)` on success, as `--help`
@@ -607,6 +617,15 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
             .and_then(|v| v.parse().ok())
             .map_or(watch::DEBOUNCE, Duration::from_millis),
         json: raw.json,
+        #[cfg(feature = "web")]
+        web: raw.web.then(|| web::WebArgs {
+            port: raw
+                .port
+                .as_deref()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(0),
+            open: !raw.no_open,
+        }),
     })
 }
 
@@ -632,6 +651,9 @@ struct RawArgs {
     /// as written: checked once the flags are all read
     debounce_ms: Option<String>,
     json: bool,
+    web: bool,
+    port: Option<String>,
+    no_open: bool,
 }
 
 /// A flag whose value is the next argument.
@@ -643,6 +665,7 @@ enum Pending {
     Sarif,
     Coverage,
     Debounce,
+    Port,
 }
 
 /// The flag loop: what each argument said, with nothing resolved yet.
@@ -665,6 +688,9 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         watch: None,
         debounce_ms: None,
         json: false,
+        web: false,
+        port: None,
+        no_open: false,
     };
     // `ordo help [<topic>]` short-circuits everything else: it takes an
     // argument the flag loop below would otherwise read as a revision.
@@ -676,8 +702,10 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             return Err(waves::cli(&argv[1..]));
         }
     }
+    let web = argv.first().is_some_and(|a| a == "web");
+    raw.web = web;
     let mut pending: Option<Pending> = None;
-    for a in argv {
+    for a in argv.into_iter().skip(usize::from(web)) {
         if let Some(p) = pending.take() {
             raw.take_value(p, a);
             continue;
@@ -689,6 +717,8 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             "--sarif" => pending = Some(Pending::Sarif),
             "--coverage" => pending = Some(Pending::Coverage),
             "--watch-debounce" => pending = Some(Pending::Debounce),
+            "--port" if raw.web => pending = Some(Pending::Port),
+            "--no-open" if raw.web => raw.no_open = true,
             s if s.starts_with("--watch-debounce=") => raw.take_value(
                 Pending::Debounce,
                 s["--watch-debounce=".len()..].to_string(),
@@ -753,6 +783,18 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             eprintln!("ordo: --watch-debounce needs milliseconds\n\n{USAGE}");
             Err(2)
         }
+        Some(Pending::Port) => {
+            eprintln!("ordo: --port needs a port number\n\n{USAGE}");
+            Err(2)
+        }
+        _ if raw.port.as_ref().is_some_and(|v| v.parse::<u16>().is_err()) => {
+            eprintln!("ordo: --port wants a number from 0 to 65535\n\n{USAGE}");
+            Err(2)
+        }
+        _ if raw.web && !cfg!(feature = "web") => {
+            eprintln!("ordo: this build has no web reviewer (built without the `web` feature)");
+            Err(2)
+        }
         _ if raw
             .debounce_ms
             .as_ref()
@@ -780,6 +822,7 @@ impl RawArgs {
             Pending::Sarif => self.sarif.push(value),
             Pending::Coverage => self.coverage.push(value),
             Pending::Debounce => self.debounce_ms = Some(value),
+            Pending::Port => self.port = Some(value),
         }
     }
 }
@@ -818,12 +861,13 @@ fn resolve_theme(
     cfg: Option<&KeyConfig>,
     theme_name: String,
     theme_given: bool,
+    sense: bool,
 ) -> Result<(Theme, String), i32> {
     let theme_name = match (cfg, theme_given) {
         (Some(c), false) => c.theme.clone().unwrap_or(theme_name),
         _ => theme_name,
     };
-    if theme_name == "terminal" {
+    if theme_name == "terminal" && sense {
         sense_terminal();
     }
     let Some(theme) = theme(&theme_name) else {
@@ -874,6 +918,8 @@ fn main() -> std::io::Result<()> {
         watch,
         debounce,
         json,
+        #[cfg(feature = "web")]
+        web,
     } = match parse_args() {
         Ok(v) => v,
         Err(code) => std::process::exit(code),
@@ -903,23 +949,34 @@ fn main() -> std::io::Result<()> {
     // the catalog is on unless this run turned it off, either way round: the
     // flag for once, `catalog = false` in a rules file for always
     let rules = report.rule_set(!no_catalog && report.catalog);
-    run(
+    let mut session = Session {
         rev,
-        keys,
-        docs_last,
-        target,
-        filter,
-        only_comments,
         review_sha,
         uncommitted,
+        keys: Some(keys),
         theme,
+        docs_last,
+        only_comments,
+        base_filter: filter,
         rules,
         rules_report,
         sarif,
         coverage,
+        target,
+        carry: None,
         watch,
         debounce,
-    )
+        drift: Drift::default(),
+        watcher: None,
+        waves_seen: None,
+        waves_checked: std::time::Instant::now(),
+    };
+    session.count_waves();
+    #[cfg(feature = "web")]
+    if let Some(w) = web {
+        return web::serve(session, w);
+    }
+    run(session)
 }
 
 /// What the worker thread reports back over the channel while `gather`,
@@ -2545,6 +2602,36 @@ impl Session {
         self.spawn_load(target)
     }
 
+    /// The same settings, reviewing another revision — a second tab of the
+    /// web reviewer. `None` when `rev` names nothing reviewable.
+    fn for_rev(&self, rev: &str) -> Option<Session> {
+        let target = resolve(rev)?;
+        let mut s = Session {
+            rev: rev.to_string(),
+            review_sha: review_commit_sha(&target),
+            uncommitted: matches!(target, Target::Uncommitted | Target::WorktreeRange(_)),
+            keys: self.keys.clone(),
+            theme: self.theme,
+            docs_last: self.docs_last,
+            only_comments: self.only_comments,
+            base_filter: self.base_filter.clone(),
+            rules: self.rules.clone(),
+            rules_report: self.rules_report.clone(),
+            sarif: self.sarif.clone(),
+            coverage: self.coverage.clone(),
+            target,
+            carry: None,
+            watch: self.watch,
+            debounce: self.debounce,
+            drift: Drift::default(),
+            watcher: None,
+            waves_seen: None,
+            waves_checked: std::time::Instant::now(),
+        };
+        s.count_waves();
+        Some(s)
+    }
+
     /// A review up to `wave/last` grows with the chain; note how long it is
     /// now, so the next wave can say so.
     fn count_waves(&mut self) {
@@ -2796,23 +2883,7 @@ fn run_action(app: &mut App, a: Action, terminal: &mut ratatui::DefaultTerminal)
 /// What a review session keeps across reloads: the launch-time inputs a
 /// fresh worker needs, and the display preferences that outlive one review.
 #[allow(clippy::too_many_arguments)]
-fn run(
-    rev: String,
-    keys: Keymap,
-    docs_last: bool,
-    target: Target,
-    filter: Filter,
-    only_comments: bool,
-    review_sha: Option<String>,
-    uncommitted: bool,
-    theme: Theme,
-    rules: RuleSet,
-    rules_report: Vec<String>,
-    sarif: Vec<String>,
-    coverage: Vec<String>,
-    watch: WatchMode,
-    debounce: Duration,
-) -> std::io::Result<()> {
+fn run(mut session: Session) -> std::io::Result<()> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         ratatui::restore();
@@ -2820,30 +2891,7 @@ fn run(
     }));
 
     let mut terminal = ratatui::init();
-    let mut session = Session {
-        rev,
-        review_sha,
-        uncommitted,
-        keys: Some(keys),
-        theme,
-        docs_last,
-        only_comments,
-        base_filter: filter,
-        rules,
-        rules_report,
-        sarif,
-        coverage,
-        target: target.clone(),
-        carry: None,
-        watch,
-        debounce,
-        drift: Drift::default(),
-        watcher: None,
-        waves_seen: None,
-        waves_checked: std::time::Instant::now(),
-    };
-    session.count_waves();
-    let mut rx = session.spawn_load(target);
+    let mut rx = session.spawn_load(session.target.clone());
     let mut last_key = std::time::Instant::now();
     let mut state = State::Loading("starting…".to_string());
     let mut timing: Option<String> = None;

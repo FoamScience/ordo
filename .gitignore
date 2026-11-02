@@ -4,6 +4,8 @@ node_modules/
 __pycache__/
 *.egg-info/
 dist/
+# the web reviewer's bundle is committed, so building ordo never needs node
+!web/dist/
 build/
 almanac/
 
