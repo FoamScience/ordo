@@ -78,7 +78,9 @@ terminal key do nothing here:
 `:` opens the command palette with every command the terminal's bar takes,
 except `:quickfix` (the list is already here); `:e <rev>` moves the tab to
 another revision, and `:yank` copies the hand-back prompt to the clipboard.
-`:theme <name>` switches the colour theme for this tab.
+`:theme <name>` switches the colour theme for this tab, and `:size` makes the
+text and rows bigger or smaller (`small`, `normal`, `large`, `larger`, or a
+factor such as `1.2`); both stick in this browser.
 
 Themes are the terminal's, with `tui.toml`'s `[theme]` colours applied. With no
 theme chosen the page follows the browser's light or dark preference.
