@@ -1829,6 +1829,41 @@ function wordMove(lines, at2, kind) {
   while (i + 1 < chars.length && cls(i + 1) === c) i++;
   return caretAt(lines, starts, i);
 }
+function wordAt(text, col) {
+  const cs = [...text];
+  const isWord = (c) => !!c && /\w/.test(c);
+  if (!isWord(cs[col])) return null;
+  let a = col;
+  while (isWord(cs[a - 1])) a--;
+  let b = col;
+  while (isWord(cs[b + 1])) b++;
+  const word = cs.slice(a, b + 1).join("");
+  return /^[A-Za-z_]/.test(word) ? { word, start: a } : null;
+}
+function stripMarks(rows, sel, findings, comments, hits) {
+  const out = [];
+  const last = /* @__PURE__ */ new Map();
+  const add = (kind, k) => {
+    const m = last.get(kind);
+    if (m && m.to === k - 1) m.to = k;
+    else {
+      const next = { kind, from: k, to: k };
+      out.push(next);
+      last.set(kind, next);
+    }
+  };
+  rows.forEach((row, k) => {
+    if (row.kind !== "ctx" && row.hunk !== null) add(row.hunk === sel ? "mine" : "other", k);
+  });
+  rows.forEach((row, k) => {
+    if (row.kind === "del") return;
+    const level = findings.get(row.n);
+    if (level) add(level, k);
+    if (comments.has(row.n)) add("comment", k);
+  });
+  for (const k of hits) add("hit", k);
+  return out;
+}
 
 // node_modules/@dagrejs/dagre/dist/dagre.esm.js
 var Te = Object.defineProperty;
@@ -3873,7 +3908,7 @@ function written(r) {
   const seen = /* @__PURE__ */ new Set();
   for (const i of r.view) {
     const it2 = r.items[i];
-    const key = `${it2.symbol ?? it2.symbols[0] ?? i}\0${it2.note}`;
+    const key = `${it2.symbol || it2.symbols[0] || i}\0${it2.note}`;
     if (!it2.note || seen.has(key)) continue;
     seen.add(key);
     out.push({ at: [fileAt.get(it2.path), it2.new[0]], w: { kind: "note", i, text: it2.note } });
@@ -4035,7 +4070,7 @@ async function refresh() {
   if (same) st2.sel = -1;
   await select(sel, { keepCursor: same });
   if (canvas) renderCanvas();
-  if (depmap) renderMap();
+  if (depmap) renderMap(true);
 }
 function identity(it2) {
   return it2 ? `${it2.path}\0${it2.new[0]}\0${it2.rationale}` : "";
@@ -4321,7 +4356,9 @@ function lineEl(row, k, mine, findings, uses, commented) {
           st2.focus = "code";
           if (row.hunk !== null && row.hunk !== st2.sel) select(row.hunk, { keepCursor: true, focus: "code" });
           else renderCode();
-        }
+        },
+        onmousemove: (e) => row.kind !== "del" && peekLater(e, row.n, row.text),
+        onmouseleave: () => peekLeave()
       },
       h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "\u25B8" : ""),
       h("span", { class: "ln" }, n),
@@ -4456,6 +4493,133 @@ function renderCode() {
   const top = body.scrollTop;
   replace(body, code);
   body.scrollTop = top;
+  renderStrip();
+}
+function renderStrip() {
+  const pane = $("#code");
+  const body = pane.querySelector(".body");
+  let strip = pane.querySelector(".strip");
+  if (!strip) {
+    strip = h("div", { class: "strip", title: "Where this file changed, and what sits on its lines. Click to go there." });
+    const go = (e) => {
+      const rect = strip.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      body.scrollTop = frac * body.scrollHeight - body.clientHeight / 2;
+    };
+    strip.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      go(e);
+      const move = (m) => go(m);
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", () => window.removeEventListener("mousemove", move), { once: true });
+    });
+    body.addEventListener("scroll", stripView);
+    pane.append(strip);
+  }
+  const r = st2.review;
+  if (!r || !st2.file || !st2.rows.length) {
+    strip.hidden = true;
+    return;
+  }
+  strip.hidden = false;
+  strip.style.top = `${body.offsetTop}px`;
+  strip.style.height = `${body.clientHeight}px`;
+  strip.style.right = `${body.offsetWidth - body.clientWidth}px`;
+  const findings = /* @__PURE__ */ new Map();
+  for (const it2 of r.items) {
+    if (it2.path !== st2.file.path) continue;
+    for (const f of it2.findings) {
+      if (f.row == null || f.level === "note" || findings.get(f.row) === "verdict") continue;
+      findings.set(f.row, f.level);
+    }
+  }
+  const comments = new Set(st2.file.comments.flatMap((c) => range(c.start, c.end)));
+  const n = st2.rows.length;
+  replace(
+    strip,
+    stripMarks(st2.rows, st2.sel, findings, comments, st2.search?.hits ?? []).map(
+      (m) => h("i", { class: m.kind, style: `top:${100 * m.from / n}%;height:max(3px, ${100 * (m.to - m.from + 1) / n}%)` })
+    ),
+    h("b", { class: "view" })
+  );
+  stripView();
+}
+function stripView() {
+  const body = $("#code .body");
+  const view = $("#code .strip").querySelector(".view");
+  if (!view || !body.scrollHeight) return;
+  view.style.top = `${100 * body.scrollTop / body.scrollHeight}%`;
+  view.style.height = `${100 * body.clientHeight / body.scrollHeight}%`;
+}
+var PEEK_DELAY = 450;
+var peekTimer = 0;
+var peekSeq = 0;
+var peekKey = "";
+function peekLater(e, line, text) {
+  const col = caretColumn(e, text);
+  const w = col === null ? null : wordAt(text, col);
+  const key = w ? `${line}:${w.start}` : "";
+  if (key === peekKey) return;
+  peekKey = key;
+  clearTimeout(peekTimer);
+  peekSeq++;
+  if (!$("#peek").matches(":hover")) hidePeek();
+  if (!w) return;
+  const at2 = { x: e.clientX, y: e.clientY };
+  peekTimer = window.setTimeout(() => showPeek(line, w.word, w.start, at2), PEEK_DELAY);
+}
+function peekLeave() {
+  clearTimeout(peekTimer);
+  peekSeq++;
+  peekKey = "";
+  setTimeout(() => {
+    if (!$("#peek").matches(":hover")) hidePeek();
+  }, 150);
+}
+function hidePeek() {
+  const p = $("#peek");
+  p.hidden = true;
+  replace(p);
+}
+async function showPeek(line, word, col, at2) {
+  const r = st2.review;
+  if (!r) return;
+  const seq = ++peekSeq;
+  const changed = r.view.filter((i) => i !== st2.sel && (r.items[i].symbols.includes(word) || r.items[i].enclosing === word));
+  let found = [];
+  try {
+    const out = await api.act({ op: "hover", brief: true, sel: st2.sel, generation: r.generation, line: line - 1, col });
+    found = out.popup?.lines ?? [];
+  } catch {
+  }
+  if (seq !== peekSeq) return;
+  if (!found.length && !changed.length) return;
+  const shown = changed.slice(0, 3);
+  const p = $("#peek");
+  replace(
+    p,
+    h("header", null, word),
+    found.length ? h("pre", null, found.join("\n").trim()) : null,
+    changed.length ? h(
+      "div",
+      { class: "changed" },
+      h("h4", null, changed.length === 1 ? "Changed in this review" : `Changed in ${changed.length} hunks of this review`),
+      shown.map(
+        (i) => h(
+          "button",
+          { onclick: () => (hidePeek(), jumpTo(i)) },
+          h("span", { class: "at" }, `${r.items[i].path}:${r.items[i].new[0]}`),
+          h("span", null, sentence(r.items[i].rationale))
+        )
+      ),
+      changed.length > shown.length ? h("p", { class: "more" }, `and ${changed.length - shown.length} more`) : null
+    ) : null
+  );
+  p.hidden = false;
+  const w = p.offsetWidth;
+  const ht2 = p.offsetHeight;
+  p.style.left = `${Math.max(8, Math.min(at2.x + 12, innerWidth - w - 8))}px`;
+  p.style.top = `${at2.y + 18 + ht2 < innerHeight ? at2.y + 18 : Math.max(8, at2.y - ht2 - 12)}px`;
 }
 function caretColumn(e, text) {
   const doc = document;
@@ -4778,7 +4942,9 @@ function renderSummary() {
   const nComments = notes.filter((w) => w.kind === "comment").length;
   const nNotes = notes.length - nComments;
   const unreadFiles = fl.filter((f) => f.read < f.hunks.length).length;
-  const minor = (r.levels.note ?? 0) > 0 ? h("p", { class: "aside" }, `ordo also left ${n(r.levels.note ?? 0, "note")} on hunks; they are in each hunk's margin.`) : null;
+  const count = (l) => serious.filter((x) => x.f.level === l).length;
+  const notesLeft = flagged(r, ["note"]).length;
+  const minor = notesLeft ? h("p", { class: "aside" }, `ordo also left ${n(notesLeft, "note")} on hunks; they are in each hunk's margin.`) : null;
   replace(
     page2,
     h(
@@ -4791,7 +4957,7 @@ function renderSummary() {
         { class: "lede" },
         `You have read ${r.coverage.done} of ${n(r.coverage.total, "hunk")}`,
         unreadFiles ? `, with ${n(unreadFiles, "file")} still to finish` : ", every file",
-        `. You wrote ${n(nComments, "comment")} and ${n(nNotes, "note")}; ordo flagged ${n(r.levels.verdict ?? 0, "verdict")} and ${n(r.levels.warn ?? 0, "warning")}.`
+        `. You wrote ${n(nComments, "comment")} and ${n(nNotes, "note")}; ordo flagged ${n(count("verdict"), "verdict")} and ${n(count("warn"), "warning")}.`
       ),
       h("div", { class: "meter wide" }, h("i", { style: `width:${r.coverage.total ? 100 * r.coverage.done / r.coverage.total : 0}%` })),
       h(
@@ -4809,7 +4975,7 @@ function renderSummary() {
         notes.map((w) => {
           if (w.kind === "note") {
             const it2 = r.items[w.i];
-            return h("li", null, h("div", { class: "where" }, link(w.i, at2(it2.path, it2.new[0])), h("span", null, `note on ${it2.symbol ?? it2.symbols[0] ?? "this hunk"}`)), h("p", { class: "said" }, w.text));
+            return h("li", null, h("div", { class: "where" }, link(w.i, at2(it2.path, it2.new[0])), h("span", null, `note on ${it2.symbol || it2.symbols[0] || "this hunk"}`)), h("p", { class: "said" }, w.text));
           }
           const c = w.comment;
           return h(
@@ -5262,6 +5428,7 @@ function whyStep(by) {
   $("#why tr.cur")?.scrollIntoView({ block: "nearest" });
 }
 function onKey(e) {
+  if (!$("#peek").hidden) hidePeek();
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") && t.id !== "palette-input") return;
   if (t?.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
@@ -5438,10 +5605,16 @@ function openMap() {
   depmap = { root: st2.sel, sel: st2.sel, order: [] };
   renderMap();
 }
-function renderMap() {
+function renderMap(again = false) {
   if (!depmap) return;
   const r = st2.review;
   const root = depmap.root;
+  if (!r.view.includes(root)) {
+    closeSheet();
+    return;
+  }
+  const scrolled = $("#overlay").querySelector(".sheet > .scroll");
+  const keep = again && scrolled ? { top: scrolled.scrollTop, left: scrolled.scrollLeft } : null;
   const ui = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui")) || 1;
   const box = { width: 236 * ui, height: 54 * ui };
   const m = depMap(r.items, r.view, root, box);
@@ -5507,7 +5680,13 @@ function renderMap() {
   $("#overlay").querySelector(".sheet")?.classList.add("wide");
   $("#overlay").dataset.kind = "map";
   paintMap();
-  $("#overlay .node.root")?.scrollIntoView({ block: "center", inline: "center" });
+  const scroll = $("#overlay").querySelector(".sheet > .scroll");
+  if (keep && scroll) {
+    scroll.scrollTop = keep.top;
+    scroll.scrollLeft = keep.left;
+  } else {
+    $("#overlay .node.root")?.scrollIntoView({ block: "center", inline: "center" });
+  }
 }
 function paintMap() {
   if (!depmap) return;
@@ -5542,7 +5721,7 @@ function goMap(i) {
   jumpTo(i);
 }
 function mapKey(action) {
-  if (!depmap) return false;
+  if (!depmap || action === "command" || action === "command-goto") return false;
   const order = depmap.order;
   if (action === "next" || action === "prev") {
     const at2 = order.indexOf(depmap.sel);
@@ -5659,7 +5838,12 @@ function wire() {
   $("#overlay").addEventListener("mousedown", (e) => {
     if (e.target === e.currentTarget) dismissSheet();
   });
-  window.addEventListener("resize", () => st2.review && renderList());
+  window.addEventListener("resize", () => {
+    if (!st2.review) return;
+    renderList();
+    renderStrip();
+  });
+  $("#peek").addEventListener("mouseleave", () => hidePeek());
   wireSplits();
   api.events((event, data) => {
     if (event === "progress" && !st2.review) {

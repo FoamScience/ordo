@@ -330,6 +330,12 @@ fn a_hover_leaves_the_review_as_it_was() {
         serde_json::json!({ "op": "hover", "sel": 0, "col": 4 }),
     );
     assert_eq!(out["version"], version, "a hover made every tab read again");
+    let brief = s.post(
+        "/api/act?rev=HEAD",
+        serde_json::json!({ "op": "hover", "sel": 0, "col": 4, "brief": true }),
+    );
+    assert!(brief.get("error").is_none(), "{brief}");
+    assert_eq!(brief["version"], version);
 }
 
 #[test]

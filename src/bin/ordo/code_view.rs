@@ -1467,8 +1467,10 @@ fn first_identifier_on_line<'a>(
 
 /// `K` / `F12` — resolve the symbol under the cursor via tree-sitter (not by
 /// scanning characters) and show its definition in a popup. Parses lazily,
-/// caching the tree per path so repeated presses are cheap.
-pub(super) fn hover(app: &mut App) {
+/// caching the tree per path so repeated presses are cheap. `brief` is for a
+/// pointer resting on a name: no git history, and no popup at all when there
+/// is no definition to show.
+pub(super) fn hover(app: &mut App, brief: bool) {
     let path = app.items[app.sel].path.clone();
     let Some((_, nl)) = app.sources.get(&path) else {
         return;
@@ -1477,6 +1479,9 @@ pub(super) fn hover(app: &mut App) {
         return;
     }
     let Some((lang, _)) = highlight_spec(&path) else {
+        if brief {
+            return;
+        }
         app.popup = Some(Popup::new(
             "hover",
             vec![prose("no grammar available for this file type")],
@@ -1487,7 +1492,9 @@ pub(super) fn hover(app: &mut App) {
         return;
     };
     let Some(node) = identifier_at(parsed, nl, app.cursor) else {
-        app.popup = Some(Popup::new("hover", vec![prose("no symbol here")]));
+        if !brief {
+            app.popup = Some(Popup::new("hover", vec![prose("no symbol here")]));
+        }
         return;
     };
     let name = node_text(node, &parsed.src);
@@ -1496,7 +1503,9 @@ pub(super) fn hover(app: &mut App) {
     // `def_id` carries owned data (kind, row, the exact source the tree was
     // built from) out of this branch so the `app.trees` borrow behind `parsed`
     // ends here — `history_lines` below needs `&mut app`.
-    let (mut lines, def_id) = if kinds.is_empty() {
+    let (mut lines, def_id) = if brief && kinds.is_empty() {
+        return;
+    } else if kinds.is_empty() {
         (
             vec!["definition lookup not supported for this file type".to_string()],
             None,
@@ -1518,12 +1527,14 @@ pub(super) fn hover(app: &mut App) {
         // a parameter has no definition to find, and saying so as "not defined
         // in this file" points the reviewer at other files for no reason
         (vec![format!("parameter of {owner}")], None)
+    } else if brief {
+        return;
     } else {
         (vec!["not defined in this file".to_string()], None)
     };
     // history only makes sense for a symbol whose definition resolved in the
     // current file — an unresolved lookup has nothing to look up history for
-    if let Some((kind, row, content)) = def_id {
+    if let Some((kind, row, content)) = def_id.filter(|_| !brief) {
         lines.push(String::new());
         lines.extend(history_lines(app, &path, &name, &kind, row, &content));
     }

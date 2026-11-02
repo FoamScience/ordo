@@ -5,7 +5,7 @@
 import { Api } from "./api.ts";
 import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
-import { centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove, type CodeRow } from "./layout.ts";
+import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
 import { files as fileLines, flagged, written } from "./summary.ts";
@@ -463,6 +463,8 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
           if (row.hunk !== null && row.hunk !== st.sel) select(row.hunk, { keepCursor: true, focus: "code" });
           else renderCode();
         },
+        onmousemove: (e: MouseEvent) => row.kind !== "del" && peekLater(e, row.n, row.text),
+        onmouseleave: () => peekLeave(),
       },
       h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "▸" : ""),
       h("span", { class: "ln" }, n),
@@ -610,6 +612,150 @@ function renderCode(): void {
   const top = body.scrollTop;
   replace(body, code);
   body.scrollTop = top;
+  renderStrip();
+}
+
+// ------------------------------------------------------------------ strip beside the code
+
+function renderStrip(): void {
+  const pane = $("#code");
+  const body = pane.querySelector<HTMLElement>(".body")!;
+  let strip = pane.querySelector<HTMLElement>(".strip");
+  if (!strip) {
+    strip = h("div", { class: "strip", title: "Where this file changed, and what sits on its lines. Click to go there." });
+    const go = (e: MouseEvent) => {
+      const rect = strip!.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      body.scrollTop = frac * body.scrollHeight - body.clientHeight / 2;
+    };
+    strip.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      go(e);
+      const move = (m: MouseEvent) => go(m);
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", () => window.removeEventListener("mousemove", move), { once: true });
+    });
+    body.addEventListener("scroll", stripView);
+    pane.append(strip);
+  }
+  const r = st.review;
+  if (!r || !st.file || !st.rows.length) {
+    strip.hidden = true;
+    return;
+  }
+  strip.hidden = false;
+  strip.style.top = `${body.offsetTop}px`;
+  strip.style.height = `${body.clientHeight}px`;
+  strip.style.right = `${body.offsetWidth - body.clientWidth}px`;
+  const findings = new Map<number, "verdict" | "warn">();
+  for (const it of r.items) {
+    if (it.path !== st.file.path) continue;
+    for (const f of it.findings) {
+      if (f.row == null || f.level === "note" || findings.get(f.row) === "verdict") continue;
+      findings.set(f.row, f.level);
+    }
+  }
+  const comments = new Set(st.file.comments.flatMap((c) => range(c.start, c.end)));
+  const n = st.rows.length;
+  replace(
+    strip,
+    stripMarks(st.rows, st.sel, findings, comments, st.search?.hits ?? []).map((m) =>
+      h("i", { class: m.kind, style: `top:${(100 * m.from) / n}%;height:max(3px, ${(100 * (m.to - m.from + 1)) / n}%)` }),
+    ),
+    h("b", { class: "view" }),
+  );
+  stripView();
+}
+
+/** Moves the strip's box to the part of the file in view. */
+function stripView(): void {
+  const body = $("#code .body");
+  const view = $("#code .strip").querySelector<HTMLElement>(".view");
+  if (!view || !body.scrollHeight) return;
+  view.style.top = `${(100 * body.scrollTop) / body.scrollHeight}%`;
+  view.style.height = `${(100 * body.clientHeight) / body.scrollHeight}%`;
+}
+
+// ------------------------------------------------------------------ peek at a name
+
+const PEEK_DELAY = 450;
+let peekTimer = 0;
+let peekSeq = 0;
+let peekKey = "";
+
+/** After the pointer rests on a name, shows what it is. */
+function peekLater(e: MouseEvent, line: number, text: string): void {
+  const col = caretColumn(e, text);
+  const w = col === null ? null : wordAt(text, col);
+  const key = w ? `${line}:${w.start}` : "";
+  if (key === peekKey) return;
+  peekKey = key;
+  clearTimeout(peekTimer);
+  peekSeq++;
+  if (!$("#peek").matches(":hover")) hidePeek();
+  if (!w) return;
+  const at = { x: e.clientX, y: e.clientY };
+  peekTimer = window.setTimeout(() => showPeek(line, w.word, w.start, at), PEEK_DELAY);
+}
+
+function peekLeave(): void {
+  clearTimeout(peekTimer);
+  peekSeq++;
+  peekKey = "";
+  setTimeout(() => {
+    if (!$("#peek").matches(":hover")) hidePeek();
+  }, 150);
+}
+
+function hidePeek(): void {
+  const p = $("#peek");
+  p.hidden = true;
+  replace(p);
+}
+
+async function showPeek(line: number, word: string, col: number, at: { x: number; y: number }): Promise<void> {
+  const r = st.review;
+  if (!r) return;
+  const seq = ++peekSeq;
+  // hunks that declare the name or change its body, other than the one being read
+  const changed = r.view.filter((i) => i !== st.sel && (r.items[i].symbols.includes(word) || r.items[i].enclosing === word));
+  let found: string[] = [];
+  try {
+    const out = await api.act({ op: "hover", brief: true, sel: st.sel, generation: r.generation, line: line - 1, col });
+    found = out.popup?.lines ?? [];
+  } catch {
+    // the review moved on underneath; the hunks it changes still say enough
+  }
+  if (seq !== peekSeq) return;
+  if (!found.length && !changed.length) return;
+  const shown = changed.slice(0, 3);
+  const p = $("#peek");
+  replace(
+    p,
+    h("header", null, word),
+    found.length ? h("pre", null, found.join("\n").trim()) : null,
+    changed.length
+      ? h(
+          "div",
+          { class: "changed" },
+          h("h4", null, changed.length === 1 ? "Changed in this review" : `Changed in ${changed.length} hunks of this review`),
+          shown.map((i) =>
+            h(
+              "button",
+              { onclick: () => (hidePeek(), jumpTo(i)) },
+              h("span", { class: "at" }, `${r.items[i].path}:${r.items[i].new[0]}`),
+              h("span", null, sentence(r.items[i].rationale)),
+            ),
+          ),
+          changed.length > shown.length ? h("p", { class: "more" }, `and ${changed.length - shown.length} more`) : null,
+        )
+      : null,
+  );
+  p.hidden = false;
+  const w = p.offsetWidth;
+  const ht = p.offsetHeight;
+  p.style.left = `${Math.max(8, Math.min(at.x + 12, innerWidth - w - 8))}px`;
+  p.style.top = `${at.y + 18 + ht < innerHeight ? at.y + 18 : Math.max(8, at.y - ht - 12)}px`;
 }
 
 /** The character the pointer is over in a code line, for `K` on a name. */
@@ -1508,6 +1654,7 @@ function whyStep(by: number): void {
 }
 
 function onKey(e: KeyboardEvent): void {
+  if (!$("#peek").hidden) hidePeek();
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") && t.id !== "palette-input") return;
   // a focused button takes Enter and Space as a click, not as a motion
@@ -1956,7 +2103,12 @@ function wire(): void {
   $("#overlay").addEventListener("mousedown", (e) => {
     if (e.target === e.currentTarget) dismissSheet();
   });
-  window.addEventListener("resize", () => st.review && renderList());
+  window.addEventListener("resize", () => {
+    if (!st.review) return;
+    renderList();
+    renderStrip();
+  });
+  $("#peek").addEventListener("mouseleave", () => hidePeek());
   wireSplits();
   api.events((event, data) => {
     if (event === "progress" && !st.review) {

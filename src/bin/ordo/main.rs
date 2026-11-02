@@ -3219,7 +3219,7 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
         // preview are the same "show me more about what's under the cursor"
         // gesture, just aimed at a different cursor.
         Action::Hover => match app.focus {
-            Pane::Code => hover(app),
+            Pane::Code => hover(app, false),
             Pane::Why | Pane::Deps => preview_edge(app),
             Pane::List => {}
         },
