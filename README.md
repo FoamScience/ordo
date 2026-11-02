@@ -85,6 +85,7 @@ build.
 ```sh
 ordo HEAD                                   # review the last commit, in the terminal
 ordo main...feature 'src/*'                 # a branch, Rust sources only
+ordo web main...feature                     # the same review, in a browser tab
 git diff | ordo-engine review               # the JSON contract, from a patch
 ordo-engine pack --json < input.json        # compact LLM-ready review context
 ```
@@ -102,6 +103,7 @@ other consumer speaks to. Neither is required by the other.
 | --- | --- |
 | [`docs/cli.md`](docs/cli.md) | `ordo-engine`, schema v2, the `enclosing_kind` table, the library API |
 | [`docs/tui.md`](docs/tui.md) | the reviewer: revisions, filters, keybindings, command bar, themes |
+| [`docs/web.md`](docs/web.md) | the browser reviewer: `ordo web`, the status band, safety, building the client |
 | [`docs/reviewing.md`](docs/reviewing.md) | the detail layer, rationale patterns, advisories, the change ledger |
 | [`docs/rules.md`](docs/rules.md) | conventions as data — conditions, limits, queries, shipped rulesets |
 | [`docs/languages.md`](docs/languages.md) | every supported language and the shape it is read in |
