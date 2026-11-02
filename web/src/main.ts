@@ -24,6 +24,8 @@ const rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
 const token =
   new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStorage.getItem("ordo.token") ?? "";
 sessionStorage.setItem("ordo.token", token);
+// the token stays in this tab's storage, not in its history or bookmarks
+if (location.hash) history.replaceState(null, "", location.pathname + location.search);
 const api = new Api(token, rev);
 
 interface Search {
@@ -51,6 +53,8 @@ const st = {
   pendingTimer: 0,
   search: null as Search | null,
   sinceOnly: false,
+  empty: false,
+  col: null as number | null,
   whyLinks: [] as number[],
   whyCur: -1,
   notice: "",
@@ -58,31 +62,67 @@ const st = {
 
 // ------------------------------------------------------------------ data
 
+// requests that overlap answer in any order: only the latest one lands
+let refreshSeq = 0;
+let selectSeq = 0;
+let filesGen = 0;
+
 async function refresh(): Promise<void> {
+  const seq = ++refreshSeq;
   let slot;
   try {
     slot = await api.review();
   } catch (e) {
+    if (seq !== refreshSeq) return;
     st.status = String((e as Error).message);
     return renderAll();
   }
+  if (seq !== refreshSeq) return;
   if (slot.state !== "ready") {
     st.status = slot.status;
+    st.empty = slot.state === "empty";
     st.review = null;
     return renderAll();
   }
+  st.empty = false;
+  if (slot.version < st.version && slot.generation === st.review?.generation) return;
   const prev = st.review;
-  const keep = prev && st.sel >= 0 ? identity(prev.items[st.sel]) : null;
   st.review = slot;
   st.version = slot.version;
   st.keymap = new Keymap(slot.keys);
-  // a reload renumbers the hunks: find the one being read by what it is
-  let sel = keep ? slot.items.findIndex((it) => identity(it) === keep) : -1;
-  if (sel < 0) sel = prev ? clampToView(st.sel) : slot.sel;
-  if (prev?.items.length !== slot.items.length || prev?.version !== slot.version) {
-    st.files.clear();
+  // a reload renumbers the hunks: find each one held on to by what it is
+  const moved = !!prev && prev.generation !== slot.generation;
+  const remap = (i: number): number => {
+    if (!prev || !moved) return i;
+    const id = identity(prev.items[i]);
+    return id ? slot.items.findIndex((it) => identity(it) === id) : -1;
+  };
+  let sel = st.sel >= 0 ? remap(st.sel) : -1;
+  if (sel < 0) sel = prev ? clampToView(Math.min(st.sel, slot.items.length - 1)) : slot.sel;
+  if (moved) {
+    st.jumps = st.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
+    if (canvas) {
+      const c = canvas;
+      c.anchor = remap(c.anchor);
+      c.cards = c.cards.map((k) => ({ ...k, i: remap(k.i) })).filter((k) => k.i >= 0);
+      if (c.anchor < 0 || !c.cards.length) {
+        canvas = null;
+        closeSheet();
+      } else {
+        c.sel = Math.min(c.sel, c.cards.length - 1);
+      }
+    }
   }
-  await select(sel, { keepCursor: sel === st.sel && !!st.file });
+  if (slot.delta.new + slot.delta.changed + slot.delta.moved === 0) st.sinceOnly = false;
+  if (prev?.version !== slot.version) {
+    st.files.clear();
+    filesGen++;
+    st.facts = null;
+  }
+  const same = sel === st.sel && !!st.file;
+  if (same) st.sel = -1;
+  await select(sel, { keepCursor: same });
+  if (canvas) renderCanvas();
 }
 
 function identity(it: Item | undefined): string {
@@ -97,17 +137,19 @@ function clampToView(i: number): number {
 async function fileOf(path: string): Promise<FileData> {
   const hit = st.files.get(path);
   if (hit) return hit;
+  const gen = filesGen;
   const f = await api.file(path);
-  st.files.set(path, f);
+  if (gen === filesGen) st.files.set(path, f);
   return f;
 }
 
 let factsFor = -1;
 async function loadFacts(i: number): Promise<void> {
   factsFor = i;
+  const version = st.version;
   try {
     const f = await api.item(i);
-    if (factsFor === i) {
+    if (factsFor === i && version === st.version) {
       st.facts = f;
       renderWhy();
       renderBand();
@@ -117,16 +159,31 @@ async function loadFacts(i: number): Promise<void> {
   }
 }
 
+/**
+ * Makes hunk `i` the one being read. `keepCursor` is for a cursor already
+ * standing in `i`'s file — a line move or a click that crossed into it.
+ */
 async function select(i: number, opts: { keepCursor?: boolean; focus?: Pane } = {}): Promise<void> {
   const r = st.review;
   if (!r || i < 0 || i >= r.items.length) return renderAll();
+  const seq = ++selectSeq;
+  const it = r.items[i];
+  let f: FileData;
+  try {
+    f = await fileOf(it.path);
+  } catch (e) {
+    if (seq === selectSeq) toast((e as Error).message, true);
+    return;
+  }
+  if (seq !== selectSeq || st.review !== r) return;
   const changed = i !== st.sel;
+  if (changed && st.file?.path !== it.path) st.search = null;
   st.sel = i;
   if (opts.focus) st.focus = opts.focus;
-  const it = r.items[i];
-  st.file = await fileOf(it.path);
-  st.rows = codeRows(st.file);
-  if (!opts.keepCursor || changed) {
+  st.file = f.missing ? null : f;
+  st.rows = st.file ? codeRows(st.file) : [];
+  if (!opts.keepCursor) {
+    st.col = null;
     st.cursor = firstRowOf(st.rows, i);
     st.from = null;
   }
@@ -142,7 +199,13 @@ async function select(i: number, opts: { keepCursor?: boolean; focus?: Pane } = 
 
 async function act(body: Record<string, unknown>): Promise<ActResult | null> {
   try {
-    const out = await api.act({ sel: st.sel, line: lineOfCursor(), from: fromLine(), ...body });
+    const out = await api.act({
+      sel: st.sel,
+      generation: st.review?.generation,
+      line: lineOfCursor(),
+      from: fromLine(),
+      ...body,
+    });
     if (out.error) toast(out.error, true);
     if (out.notice) toast(out.notice);
     if (out.popup) showSheet(out.popup.title, out.popup.lines.join("\n"));
@@ -156,10 +219,15 @@ async function act(body: Record<string, unknown>): Promise<ActResult | null> {
       const q = new URLSearchParams({ rev: out.navigate });
       location.href = `/?${q}#t=${token}`;
     }
-    if (out.version !== st.version) await refresh();
+    if (out.version > st.version) await refresh();
+    // a command can move the selection (`:goto`, `]f`, a filter that hid it)
+    if (out.sel !== undefined && out.sel !== st.sel) await select(out.sel);
+    renderConfig();
     return out;
   } catch (e) {
     toast((e as Error).message, true);
+    // a 409 is a review read again underneath: catch up with it
+    refresh();
     return null;
   }
 }
@@ -281,10 +349,12 @@ function rowHeight(): number {
   return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 22;
 }
 
+/** Puts `row` three rows below the top of the code pane. */
 function scrollCodeTo(row: number, force: boolean): void {
+  if (!force) return;
   const body = $("#code .body");
-  const y = Math.max(0, row - 3) * rowHeight();
-  if (force) body.scrollTop = y;
+  const el = body.querySelector<HTMLElement>(`.l[data-k="${Math.max(0, row - 3)}"]`);
+  body.scrollTop = el ? el.offsetTop : 0;
 }
 
 function followCursor(): void {
@@ -318,8 +388,10 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
       "div",
       {
         class: cls,
-        onclick: () => {
+        dataset: { k: String(k) },
+        onclick: (e: MouseEvent) => {
           st.cursor = k;
+          st.col = caretColumn(e, row.text);
           st.focus = "code";
           if (row.hunk !== null && row.hunk !== st.sel) select(row.hunk, { keepCursor: true, focus: "code" });
           else renderCode();
@@ -372,7 +444,7 @@ function renderCode(): void {
   if (!st.file || !it) return replace(body);
   const findings = new Map<number, Item["findings"]>();
   for (const f of it.findings) {
-    if (f.row === null) continue;
+    if (f.row == null) continue;
     findings.set(f.row, [...(findings.get(f.row) ?? []), f]);
   }
   const uses = new Set(it.uses_at.flatMap((u) => u.rows));
@@ -391,12 +463,51 @@ function renderCode(): void {
   body.scrollTop = top;
 }
 
+/** The character the pointer is over in a code line, for `K` on a name. */
+function caretColumn(e: MouseEvent, text: string): number | null {
+  const doc = document as Document & { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null };
+  const pos = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+  const line = (e.currentTarget as HTMLElement).lastElementChild;
+  if (!pos || !line || !line.contains(pos.offsetNode)) return null;
+  const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+  let at = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n === pos.offsetNode) return Math.min(at + [...(n.textContent ?? "").slice(0, pos.offset)].length, [...text].length);
+    at += [...(n.textContent ?? "")].length;
+  }
+  return null;
+}
+
+function firstWordCol(text: string): number {
+  const m = /[A-Za-z_]/.exec(text);
+  return m ? [...text.slice(0, m.index)].length : 0;
+}
+
+function openEditor(): void {
+  const r = st.review!;
+  const it = r.items[st.sel];
+  if (!it) return;
+  const row = st.rows[st.cursor];
+  const line = row && row.kind !== "del" ? row.n : it.new[0];
+  if (r.editor === "server") {
+    act({ op: "open-editor" });
+    return;
+  }
+  const segments = (p: string) => p.split("/").map(encodeURIComponent).join("/");
+  const url = (r.editor || "vscode://file/{root}/{path}:{line}")
+    .replaceAll("{root}", segments(r.root).replace(/^\//, ""))
+    .replaceAll("{path}", segments(it.path))
+    .replaceAll("{line}", String(line));
+  window.open(url, "_self");
+}
+
 function range(a: number, b: number): number[] {
   return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
 }
 
 function moveCursor(by: number): void {
   st.cursor = Math.max(0, Math.min(st.rows.length - 1, st.cursor + by));
+  st.col = null;
   const hunk = st.rows[st.cursor]?.hunk;
   if (hunk !== null && hunk !== undefined && hunk !== st.sel) {
     select(hunk, { keepCursor: true }).then(followCursor);
@@ -449,13 +560,8 @@ function basename(p: string): string {
   return p.slice(p.lastIndexOf("/") + 1);
 }
 
-/** How many table rows a maximised why pane can afford per table. */
-function fitRows(): number {
-  return Math.max(3, Math.floor(window.innerHeight / 26 / 3));
-}
-
 function table(title: string, hint: string, targets: { target: number | null; label: string }[], empty: string): (HTMLElement | false)[] {
-  const limit = tableLimit(targets.length, st.zoom && st.focus === "why", fitRows());
+  const limit = tableLimit(targets.length, st.zoom && st.focus === "why");
   const more = targets.length - limit;
   return [
     h("h3", null, title, hint && h("small", null, hint)),
@@ -558,7 +664,7 @@ function renderWhy(): void {
                 h("span", { class: `chip ${f.level}` }, f.level),
                 h("b", null, f.name),
                 h("span", { class: "src" }, f.source + (f.original_level ? `, ${f.original_level} in its rule, moved by rules.toml` : "")),
-                f.row !== null && h("button", { class: "at", onclick: () => cursorToLine(f.row!) }, `L${f.row}`),
+                f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row!) }, `L${f.row}`),
               ),
               h("p", null, f.message),
             ),
@@ -599,7 +705,13 @@ function renderBand(): void {
   const band = $("#band");
   const r = st.review;
   if (!r) {
-    return replace(band, h("span", { class: "mark" }, "ordo"), h("span", { class: "rev" }, rev), h("span", { class: "subject" }, st.status));
+    return replace(
+      band,
+      h("span", { class: "mark" }, "ordo"),
+      h("span", { class: "rev" }, rev),
+      h("span", { class: "subject" }, st.status),
+      st.empty && h("button", { class: "sig", onclick: () => act({ op: "reload" }) }, "read again"),
+    );
   }
   const it = r.items[st.sel];
   const since = it?.delta ? SINCE[it.delta] : null;
@@ -613,6 +725,12 @@ function renderBand(): void {
     h("span", { class: "rev" }, r.rev),
     h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "uncommitted work" : "")),
     r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }) }, r.stale),
+    r.watch !== "off" &&
+      h(
+        "span",
+        { class: "sig", title: r.watch === "auto" ? "--watch=auto: read again once the working tree settles and you pause" : "--watch=hint: says when the working tree has moved on" },
+        r.watch === "auto" ? "watching, reloads" : "watching",
+      ),
     since && h("span", { class: "sig", title: since[1] }, h("span", { class: "glyph" }, since[0]), since[1].split(",")[0]),
     !r.delta.first_run &&
       sinceCount > 0 &&
@@ -696,10 +814,21 @@ function showSheet(title: string, text: string | Node): void {
   );
 }
 
+/** Closes whatever sheet is open; settings are the server's to close. */
+function dismissSheet(): boolean {
+  if ($("#overlay").dataset.kind === "config") {
+    act({ op: "config", do: "close" });
+    return true;
+  }
+  return closeSheet();
+}
+
 function closeSheet(): boolean {
   const ov = $("#overlay");
   if (ov.hidden) return false;
   ov.hidden = true;
+  delete ov.dataset.kind;
+  canvas = null;
   replace(ov);
   return true;
 }
@@ -751,6 +880,8 @@ function renderAll(): void {
 type PaletteMode = "command" | "search";
 let paletteMode: PaletteMode = "command";
 let paletteCur = 0;
+/** whether the arrows picked a candidate, which Enter then runs */
+let palettePicked = false;
 
 function openPalette(mode: PaletteMode, text = ""): void {
   paletteMode = mode;
@@ -760,6 +891,7 @@ function openPalette(mode: PaletteMode, text = ""): void {
   const input = $<HTMLInputElement>("#palette-input");
   input.value = text;
   paletteCur = 0;
+  palettePicked = false;
   renderPalette();
   input.focus();
 }
@@ -816,7 +948,8 @@ function renderPalette(): void {
 }
 
 async function runPalette(): Promise<void> {
-  const value = $<HTMLInputElement>("#palette-input").value;
+  const picked = palettePicked && candidates()[paletteCur];
+  const value = picked || $<HTMLInputElement>("#palette-input").value;
   closePalette();
   if (paletteMode === "search") return runSearch(value);
   const { name, arg } = parseCommand(value);
@@ -826,17 +959,26 @@ async function runPalette(): Promise<void> {
     localStorage.setItem("ordo.theme", arg || "auto");
     return;
   }
-  await act({ op: "command", line_text: value });
+  const out = await act({ op: "command", line_text: value });
+  if (out && !out.error && name === "comment" && st.from !== null) {
+    st.from = null;
+    renderCode();
+  }
 }
 
-function runSearch(query: string): void {
+/** The first hit from the cursor on, or with `forward` off the last one before it. */
+function runSearch(query: string, forward = true): void {
   if (!query) {
     st.search = null;
     return renderCode();
   }
   const q = query.toLowerCase();
   const hits = st.rows.flatMap((row, k) => (row.text.toLowerCase().includes(q) ? [k] : []));
-  const k = Math.max(0, hits.findIndex((x) => x >= st.cursor));
+  const after = hits.findIndex((x) => x > st.cursor);
+  const at = hits.indexOf(st.cursor);
+  const k = forward
+    ? Math.max(0, at >= 0 ? at : after)
+    : Math.max(0, (after < 0 ? hits.length : after) - (at >= 0 ? 2 : 1));
   st.search = { query, hits, k };
   if (hits.length) st.cursor = hits[k];
   st.focus = "code";
@@ -856,7 +998,7 @@ function searchStep(by: number): void {
 // ------------------------------------------------------------------ keys
 
 function page(by: number): void {
-  const body = $("#code .body");
+  const body = $(`#${st.focus} .body`);
   body.scrollTop += by * body.clientHeight;
 }
 
@@ -867,7 +1009,7 @@ function run(action: string): void {
   const focus = st.focus;
   switch (action) {
     case "quit":
-      if (closeSheet()) return;
+      if (dismissSheet()) return;
       if (st.search) st.search = null;
       else if (st.from !== null) st.from = null;
       else if (st.zoom) st.zoom = false;
@@ -887,8 +1029,10 @@ function run(action: string): void {
     case "symbol-next":
     case "symbol-prev": {
       const it = r.items[st.sel];
-      const name = it.symbols[0] ?? it.enclosing;
-      if (name) runSearch(name);
+      const name = it?.symbols[0] ?? it?.enclosing;
+      const by = action === "symbol-next" ? 1 : -1;
+      if (name && st.search?.query === name) return searchStep(by);
+      if (name) runSearch(name, by > 0);
       return;
     }
     case "next":
@@ -899,12 +1043,12 @@ function run(action: string): void {
       return whyStep(by);
     }
     case "first":
-      if (focus === "list") return void select(stops()[0]);
+      if (focus === "list") return void (stops().length && select(stops()[0]));
       if (focus === "code") return moveCursor(-st.rows.length);
       $("#why .body").scrollTop = 0;
       return;
     case "last":
-      if (focus === "list") return void select(stops().at(-1)!);
+      if (focus === "list") return void (stops().length && select(stops().at(-1)!));
       if (focus === "code") return moveCursor(st.rows.length);
       $("#why .body").scrollTop = 1e9;
       return;
@@ -950,7 +1094,7 @@ function run(action: string): void {
     case "fold-close-all":
     case "wave-next":
     case "wave-prev":
-      act({ op: "action", action }).then(() => select(st.review!.sel));
+      act({ op: "action", action });
       return;
     case "jump-to-edge":
       if (focus === "why" && st.whyLinks[st.whyCur] !== undefined) jumpTo(st.whyLinks[st.whyCur]);
@@ -979,6 +1123,15 @@ function run(action: string): void {
     case "reload":
       act({ op: "reload" });
       return;
+    case "hover":
+      if (focus === "why" && st.whyLinks[st.whyCur] !== undefined) return void previewHunk(st.whyLinks[st.whyCur]);
+      act({ op: "hover", col: st.col ?? firstWordCol(st.rows[st.cursor]?.text ?? "") });
+      return;
+    case "open-editor":
+      return openEditor();
+    case "open-deps":
+    case "focus-deps":
+      return void openCanvas();
   }
 }
 
@@ -994,11 +1147,23 @@ function whyStep(by: number): void {
 }
 
 function onKey(e: KeyboardEvent): void {
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") && t.id !== "palette-input") return;
+  // a focused button takes Enter and Space as a click, not as a motion
+  if (t?.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
   const paletteOpen = !$<HTMLFormElement>("#palette").hidden;
   if (paletteOpen) return paletteKey(e);
   const key = keyLabel(e);
   if (!key) return;
   // Enter on a why link goes there whatever the preset calls it
+  if (key === "Enter" && canvas) {
+    e.preventDefault();
+    return void canvasKey("jump-to-edge");
+  }
+  if (key === "Esc" && $("#overlay").dataset.kind === "config") {
+    e.preventDefault();
+    return void dismissSheet();
+  }
   if (key === "Enter" && st.focus === "why" && st.whyCur >= 0) {
     e.preventDefault();
     return run("jump-to-edge");
@@ -1017,6 +1182,7 @@ function onKey(e: KeyboardEvent): void {
   }
   if ("act" in res) {
     e.preventDefault();
+    if (canvasKey(res.act)) return;
     return run(res.act);
   }
   if (pending) {
@@ -1040,16 +1206,173 @@ function paletteKey(e: KeyboardEvent): void {
       paletteCur = 0;
     } else {
       paletteCur = (paletteCur + (e.key === "ArrowDown" ? 1 : c.length - 1)) % c.length;
+      palettePicked = true;
     }
     return renderPalette();
   }
+}
+
+// ------------------------------------------------------------------ canvas, previews, config
+
+/** A hunk's own rows, with a little of the file around them, read-only. */
+function excerpt(f: FileData, hunk: number, context: number, max: number): HTMLElement {
+  if (f.missing) return h("p", { class: "muted" }, "no text to show for this file");
+  const rows = codeRows(f);
+  const ks = rows.flatMap((r, k) => (r.hunk === hunk ? [k] : []));
+  const from = Math.max(0, (ks[0] ?? 0) - context);
+  const to = Math.min(rows.length, Math.min((ks.at(-1) ?? 0) + context + 1, from + max));
+  return h(
+    "div",
+    { class: "code" },
+    rows.slice(from, to).map((row) =>
+      h(
+        "div",
+        { class: `l ${row.kind}${row.hunk !== null && row.hunk !== hunk ? " other" : ""}` },
+        h("span", { class: "g" }),
+        h("span", { class: "ln" }, row.kind === "del" ? "" : row.n),
+        h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+        h("span", null, runs(row.text, row.spans, row.marks).map((run) => h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text))),
+      ),
+    ),
+  );
+}
+
+function hunkTitle(i: number): string {
+  const t = st.review!.items[i];
+  return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} · ${basename(t.path)}:${t.new[0]}`;
+}
+
+async function previewHunk(i: number): Promise<void> {
+  const t = st.review!.items[i];
+  const f = await fileOf(t.path);
+  showSheet(hunkTitle(i), h("div", null, h("p", { class: "muted" }, t.rationale), h("div", { class: "src" }, excerpt(f, i, 2, 40))));
+}
+
+interface Canvas {
+  anchor: number;
+  cards: { i: number; needs: boolean }[];
+  sel: number;
+}
+let canvas: Canvas | null = null;
+
+async function openCanvas(): Promise<void> {
+  const r = st.review!;
+  const it = r.items[st.sel];
+  const cards = it.edges.filter((e) => e.target !== null && r.items[e.target]).map((e) => ({ i: e.target!, needs: e.needs }));
+  if (!cards.length) return toast("nothing in this change needs this hunk, and it needs nothing");
+  canvas = { anchor: st.sel, cards, sel: 0 };
+  await renderCanvas();
+}
+
+async function renderCanvas(): Promise<void> {
+  if (!canvas) return;
+  const c = canvas;
+  const files = await Promise.all([c.anchor, ...c.cards.map((k) => k.i)].map((i) => fileOf(st.review!.items[i].path)));
+  if (canvas !== c) return;
+  const card = (k: number) => {
+    const { i } = c.cards[k];
+    return h(
+      "div",
+      { class: `card${k === c.sel ? " cur" : ""}`, onclick: () => goCanvas(k) },
+      h("header", null, hunkTitle(i), h("span", { class: "muted" }, st.review!.items[i].rationale)),
+      excerpt(files[k + 1], i, 1, 14),
+    );
+  };
+  const side = (needs: boolean) =>
+    h(
+      "div",
+      { class: "side" },
+      h("h3", null, needs ? "needs — what this hunk uses" : "needed by — what uses this hunk"),
+      c.cards.map((x, k) => (x.needs === needs ? card(k) : null)),
+    );
+  showSheet(
+    `dependencies of ${hunkTitle(c.anchor)}`,
+    h(
+      "div",
+      { class: "canvas src" },
+      h("div", { class: "anchor" }, excerpt(files[0], c.anchor, 1, 16)),
+      h("div", { class: "sides" }, side(true), side(false)),
+    ),
+  );
+  $("#overlay").querySelector(".sheet")?.classList.add("wide");
+  $("#overlay .card.cur")?.scrollIntoView({ block: "nearest" });
+}
+
+function goCanvas(k: number): void {
+  if (!canvas) return;
+  const target = canvas.cards[k].i;
+  canvas = null;
+  closeSheet();
+  jumpTo(target);
+}
+
+function canvasKey(action: string): boolean {
+  if (!canvas) return false;
+  const n = canvas.cards.length;
+  if (action === "next" || action === "prev") {
+    canvas.sel = (canvas.sel + (action === "next" ? 1 : n - 1)) % n;
+    renderCanvas();
+  } else if (action === "jump-to-edge") {
+    goCanvas(canvas.sel);
+  } else if (action === "quit" || action === "open-deps" || action === "focus-deps") {
+    canvas = null;
+    closeSheet();
+  }
+  return true;
+}
+
+/** `:config`, as the server's `ConfigUi` holds it. */
+function renderConfig(): void {
+  const cfg = st.review?.config;
+  const ov = $("#overlay");
+  if (!cfg) {
+    if (ov.dataset.kind === "config") closeSheet();
+    return;
+  }
+  const step = (body: Record<string, unknown>) => act({ op: "config", ...body });
+  const field = (f: NonNullable<typeof cfg>["sections"][number]["fields"][number]) => {
+    let control: HTMLElement;
+    if (f.kind === "flag") {
+      control = h("input", { type: "checkbox", checked: f.value === true, onchange: () => step({ do: "toggle", row: f.row }) });
+    } else if (f.kind === "choice") {
+      control = h(
+        "button",
+        { class: "choice", title: (f.options ?? []).join(" · "), onclick: () => step({ do: "toggle", row: f.row }) },
+        String(f.value ?? ""),
+      );
+    } else {
+      control = h("input", {
+        value: String(f.value ?? ""),
+        placeholder: "(terminal)",
+        onchange: (e: Event) => step({ do: "edit", row: f.row, text: (e.target as HTMLInputElement).value }),
+      });
+    }
+    return h("tr", null, h("td", null, f.label), h("td", null, control), h("td", { class: "muted" }, f.help));
+  };
+  const body = h(
+    "div",
+    { class: "why config" },
+    cfg.sections.map((s) => [h("h3", null, s.title, h("small", null, s.file)), h("table", null, h("tbody", null, s.fields.map(field)))]),
+  );
+  const top = ov.querySelector(".scroll")?.scrollTop ?? 0;
+  showSheet(cfg.dirty ? "settings — changed, not written" : "settings", body);
+  ov.dataset.kind = "config";
+  const header = ov.querySelector(".sheet > header")!;
+  header.insertBefore(h("button", { class: "write", disabled: !cfg.dirty, onclick: () => step({ do: "write" }) }, "Write to files"), header.lastChild);
+  header.lastElementChild!.addEventListener("click", () => step({ do: "close" }));
+  ov.querySelector(".scroll")!.scrollTop = top;
 }
 
 // ------------------------------------------------------------------ wiring
 
 function wireSplits(): void {
   const panes = $("#panes");
-  const saved = JSON.parse(localStorage.getItem("ordo.splits") ?? "null") as [string, string] | null;
+  let saved: [string, string] | null = null;
+  try {
+    saved = JSON.parse(localStorage.getItem("ordo.splits") ?? "null");
+  } catch {
+    localStorage.removeItem("ordo.splits");
+  }
   if (saved) {
     panes.style.setProperty("--c0", saved[0]);
     panes.style.setProperty("--c2", saved[1]);
@@ -1069,7 +1392,7 @@ function wireSplits(): void {
         split.classList.remove("drag");
         split.removeEventListener("pointermove", move);
         localStorage.setItem("ordo.splits", JSON.stringify([panes.style.getPropertyValue("--c0") || "27%", panes.style.getPropertyValue("--c2") || "30%"]));
-        renderList();
+        if (st.review) renderList();
       };
       split.addEventListener("pointermove", move);
       split.addEventListener("pointerup", up, { once: true });
@@ -1095,11 +1418,12 @@ function wire(): void {
   });
   $("#palette-input").addEventListener("input", () => {
     paletteCur = 0;
+    palettePicked = false;
     renderPalette();
   });
   $("#palette-input").addEventListener("blur", () => setTimeout(() => (form.hidden = true), 100));
   $("#overlay").addEventListener("mousedown", (e) => {
-    if (e.target === e.currentTarget) closeSheet();
+    if (e.target === e.currentTarget) dismissSheet();
   });
   window.addEventListener("resize", () => st.review && renderList());
   wireSplits();

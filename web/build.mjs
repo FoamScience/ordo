@@ -1,8 +1,7 @@
 // Bundles src/ into dist/ and stamps dist/source.hash, which a cargo test
 // recomputes: a stale bundle fails the Rust build's tests, not a reviewer.
 import { build } from "esbuild";
-import { readFileSync, readdirSync, writeFileSync, copyFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, copyFileSync } from "node:fs";
 import { sourceHash } from "./hash.mjs";
 
 await build({

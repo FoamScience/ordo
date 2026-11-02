@@ -11,7 +11,7 @@ export function cssVar(role: string): string | null {
   if (role.startsWith("syntax-")) return `--syn-${role.slice(7)}`;
   const own: Record<string, string> = { border: "--line", "border-focus": "--focus" };
   if (own[role]) return own[role];
-  return ["fg", "dim", "accent", "reviewed", "warn", "mark", "category"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
+  return ["fg", "dim", "accent", "reviewed"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
 }
 
 /** Light or dark, from how bright the theme's text is. */

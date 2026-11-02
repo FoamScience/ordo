@@ -70,7 +70,7 @@ pub(super) fn build_command(
 /// since — cheap to check by comparing that revision's blob for the path
 /// against the file on disk; a mismatch is reported as approximate rather
 /// than silently sending the user to an unrelated line.
-fn edit_target(app: &App) -> (String, usize, bool) {
+pub(super) fn edit_target(app: &App) -> (String, usize, bool) {
     let it = &app.items[app.sel];
     let line = it.new_range[0].max(1);
     if app.uncommitted {

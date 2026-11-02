@@ -14,10 +14,9 @@ export function centerScroll(rowTop: number, rowHeight: number, viewHeight: numb
   return Math.round(Math.min(max, Math.max(0, want)));
 }
 
-/** A why-pane table shows three rows, or as many as fit once maximised. */
-export function tableLimit(total: number, maximised: boolean, fitRows: number): number {
-  const room = maximised ? Math.max(3, fitRows) : 3;
-  return Math.min(total, room);
+/** A why-pane table shows three rows, and every row once the pane is maximised. */
+export function tableLimit(total: number, maximised: boolean): number {
+  return maximised ? total : Math.min(total, 3);
 }
 
 export type CodeRow =
@@ -32,10 +31,8 @@ export type CodeRow =
 export function codeRows(f: FileData): CodeRow[] {
   const hunks = [...f.hunks].sort((a, b) => a.new[0] - b.new[0] || a.old[0] - b.old[0]);
   const rows: CodeRow[] = [];
-  const at = new Map<number, number>();
-  hunks.forEach((h, k) => {
-    if (!at.has(h.new[0])) at.set(h.new[0], k);
-  });
+  const startingAt = new Map<number, typeof hunks>();
+  for (const h of hunks) startingAt.set(h.new[0], [...(startingAt.get(h.new[0]) ?? []), h]);
   const added = new Map<number, { hunk: number; marks: [number, number][] | null }>();
   for (const h of hunks) {
     for (let n = h.new[0]; n <= h.new[1]; n++) {
@@ -43,7 +40,7 @@ export function codeRows(f: FileData): CodeRow[] {
     }
   }
   const removedBefore = (n: number) => {
-    for (const h of hunks.filter((h) => h.new[0] === n)) {
+    for (const h of startingAt.get(n) ?? []) {
       for (let o = h.old[0]; o <= h.old[1]; o++) {
         rows.push({
           kind: "del",

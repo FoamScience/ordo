@@ -21,9 +21,7 @@ export class Api {
 
   private async get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
     const res = await fetch(this.url(path, params), { headers: { "X-Ordo-Token": this.token } });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error ?? res.statusText);
-    return body as T;
+    return answer<T>(res);
   }
 
   review(): Promise<Slot> {
@@ -48,9 +46,7 @@ export class Api {
       headers: { "X-Ordo-Token": this.token, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const out = await res.json();
-    if (!res.ok) throw new Error(out.error ?? res.statusText);
-    return out as ActResult;
+    return answer<ActResult>(res);
   }
 
   events(on: (event: string, data: unknown) => void): EventSource {
@@ -60,4 +56,18 @@ export class Api {
     }
     return es;
   }
+}
+
+/** The body as JSON, or the server's error as one — whatever shape it came in. */
+async function answer<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  let body: { error?: string } | null = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // a proxy's or the browser's own error page
+  }
+  if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+  if (body === null) throw new Error("the server sent something that is not JSON");
+  return body as T;
 }

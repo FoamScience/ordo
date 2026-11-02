@@ -4,9 +4,7 @@
 use super::{Phase, Slot};
 use crate::code_view::{apply_theme_colors, theme, theme_names, theme_role_color, THEME_ROLES};
 use crate::commands::COMMANDS;
-use crate::draw::{
-    cascade, churn_line, coverage, note_for, scope_line, top_level, unreviewed_deps,
-};
+use crate::draw::{cascade, coverage, note_for, scope_line, top_level, unreviewed_deps};
 use crate::highlight::{highlight_roles, RoleSpans};
 use crate::keys::{key_label, ACTION_NAMES};
 use crate::*;
@@ -27,6 +25,7 @@ pub(super) fn slot(slot: &Slot) -> Value {
             let mut v = review(app);
             v["state"] = "ready".into();
             v["version"] = slot.version.into();
+            v["generation"] = slot.generation.into();
             v
         }
     }
@@ -153,6 +152,9 @@ pub(super) fn review(app: &App) -> Value {
         },
         "file_churn": app.file_churn,
         "sel": app.sel,
+        "root": root(),
+        "editor": std::env::var("ORDO_WEB_EDITOR").ok(),
+        "config": app.config.as_ref().map(config_view),
         "keys": app.keys.binds.iter().filter_map(|(pre, key, action)| {
             let name = ACTION_NAMES.iter().find(|(_, a)| a == action)?.0;
             Some(json!({ "prefix": pre.map(key_label), "key": key_label(*key), "action": name }))
@@ -161,6 +163,13 @@ pub(super) fn review(app: &App) -> Value {
             "name": c.name, "args": c.args, "help": c.help,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// The repository's top level, for `ge`'s URL. It does not move while the
+/// server runs, and the review is built on every request.
+fn root() -> &'static str {
+    static ROOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| git(&["rev-parse", "--show-toplevel"]).trim().to_string())
 }
 
 /// The why pane's costlier half for hunk `i`.
@@ -187,7 +196,6 @@ pub(super) fn item(app: &App, i: usize) -> Value {
         "i": i,
         "cascade": cascade(app, i),
         "out_of_order": if app.reviewed[i] { unreviewed_deps(app, i) } else { vec![] },
-        "churn": churn_line(app, i),
         "line_churn": line_churn,
         "comments": comments,
     })
@@ -281,4 +289,35 @@ pub(super) fn themes() -> Value {
         out.insert(name, Value::Object(roles));
     }
     json!({ "themes": out, "chosen": chosen })
+}
+
+fn config_view(c: &crate::config::ConfigUi) -> Value {
+    use crate::config::FieldKind;
+    let mut row = 0;
+    let sections: Vec<Value> = c
+        .sections
+        .iter()
+        .map(|s| {
+            let fields: Vec<Value> = s
+                .fields
+                .iter()
+                .map(|f| {
+                    let (kind, value, options) = match &f.kind {
+                        FieldKind::Flag(on) => ("flag", json!(on), json!(null)),
+                        FieldKind::Choice { at, options } => {
+                            ("choice", json!(options.get(*at)), json!(options))
+                        }
+                        FieldKind::Text(t) => ("text", json!(t), json!(null)),
+                    };
+                    row += 1;
+                    json!({
+                        "row": row - 1, "key": f.key, "label": f.label, "help": f.help,
+                        "kind": kind, "value": value, "options": options,
+                    })
+                })
+                .collect();
+            json!({ "title": s.title, "file": s.file, "fields": fields })
+        })
+        .collect();
+    json!({ "sections": sections, "dirty": c.dirty })
 }

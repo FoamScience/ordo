@@ -1,4 +1,4 @@
-/* ordo web — tokens first; a theme from ordo overrides them as --t-* */
+/* ordo web — tokens first; a theme from ordo overrides them on :root (theme.ts) */
 
 :root {
   color-scheme: dark;
@@ -240,7 +240,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 
 /* ---- code ---------------------------------------------------------- */
 
-#code .body { font-family: var(--mono); font-size: 12.5px; }
+#code .body { position: relative; font-family: var(--mono); font-size: 12.5px; }
 .code { min-width: max-content; padding-bottom: 40vh; }
 .l { display: grid; grid-template-columns: 2ch 6ch 2ch auto; height: var(--row); line-height: var(--row); white-space: pre; }
 .l .g { color: var(--accent); text-align: center; }
@@ -359,3 +359,25 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ---- canvas and settings ------------------------------------------- */
+
+.sheet.wide { width: min(1500px, calc(100vw - 32px)); height: calc(100vh - 80px); }
+.canvas { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; height: 100%; }
+.canvas .code, .sheet .code { padding-bottom: 0; min-width: 0; }
+.canvas .anchor { border: 1px solid var(--focus); border-radius: 4px; overflow: auto; max-height: 34vh; }
+.canvas .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+.canvas .side { overflow: auto; min-height: 0; }
+.canvas .side h3 { margin: 0 0 6px; font-size: 12px; color: var(--dim); font-weight: 600; }
+.card { border: 1px solid var(--line); border-radius: 4px; margin-bottom: 10px; overflow: hidden; cursor: pointer; }
+.card.cur { border-color: var(--focus); }
+.card header { display: flex; flex-direction: column; padding: 6px 10px; background: var(--band-bg); font-family: var(--mono); font-size: 12px; }
+.card header .muted { font-family: var(--sans); color: var(--dim); }
+.card .code { overflow: auto; }
+.sheet .src { font-family: var(--mono); font-size: 12.5px; }
+.config td { border-top: 1px solid var(--line); }
+.config td:first-child { font-family: var(--mono); }
+.config input:not([type]) { font: 12px var(--mono); background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; width: 16ch; }
+.config button.choice { font: 12px var(--mono); background: var(--raise); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; cursor: pointer; }
+.sheet > header button.write { border: 1px solid var(--focus); color: var(--fg); border-radius: 3px; padding: 2px 10px; margin-left: auto; margin-right: 10px; }
+.sheet > header button.write[disabled] { opacity: 0.4; border-color: var(--line); }
