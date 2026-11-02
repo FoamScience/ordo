@@ -1,0 +1,16 @@
+{
+  "name": "ordo-web",
+  "private": true,
+  "type": "module",
+  "description": "The browser client of `ordo web`; its bundle in dist/ is committed and embedded in the ordo binary",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

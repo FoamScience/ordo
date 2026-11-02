@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ordo</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header id="band" aria-label="review status"></header>
+<main id="panes">
+  <section class="pane" id="list" data-pane="list" aria-label="reading order">
+    <div class="head"></div><div class="body" tabindex="-1"></div>
+  </section>
+  <div class="split" data-split="0" role="separator" aria-orientation="vertical"></div>
+  <section class="pane" id="code" data-pane="code" aria-label="code">
+    <div class="head"></div><div class="body" tabindex="-1"></div>
+  </section>
+  <div class="split" data-split="1" role="separator" aria-orientation="vertical"></div>
+  <section class="pane" id="why" data-pane="why" aria-label="why this hunk">
+    <div class="head"></div><div class="body" tabindex="-1"></div>
+  </section>
+</main>
+<footer id="hints"></footer>
+<div id="overlay" hidden></div>
+<form id="palette" hidden autocomplete="off"><label for="palette-input">:</label><input id="palette-input" spellcheck="false"><ul id="palette-list"></ul></form>
+<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
