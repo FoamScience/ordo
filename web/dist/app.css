@@ -1773,12 +1773,12 @@ body.summary #panes {
   margin: 0;
   padding: 0;
 }
-#summary ol li {
+#summary ol > li {
   padding: var(--space-sm) 0;
   border-bottom: var(--rule-hair) solid var(--line-2);
   break-inside: avoid;
 }
-#summary ol li:last-child {
+#summary ol > li:last-child {
   border-bottom: 0;
 }
 #summary .where {
@@ -1858,7 +1858,7 @@ body.summary #panes {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
   gap: var(--space-sm);
 }
-#summary ol.flagged li {
+#summary ol.flagged > li {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
@@ -1867,21 +1867,40 @@ body.summary #panes {
   border-top: var(--rule-heavy) solid var(--line);
   background: var(--surface);
 }
-#summary ol.flagged li:last-child {
+#summary ol.flagged > li:last-child {
   border-bottom: var(--rule-hair) solid var(--line);
 }
-#summary ol.flagged li[data-level=verdict] {
+#summary ol.flagged > li[data-level=verdict] {
   border-top-color: var(--verdict);
 }
-#summary ol.flagged li[data-level=warn] {
+#summary ol.flagged > li[data-level=warn] {
   border-top-color: var(--warn);
 }
 #summary ol.flagged .said {
-  flex: 1;
   margin: 0;
 }
-#summary ol.flagged .at {
-  align-self: flex-start;
+#summary ol.flagged .count {
+  margin-left: auto;
+  font-size: var(--fs-tiny);
+  color: var(--faint);
+}
+#summary ol.flagged .places {
+  list-style: none;
+  margin: auto 0 0;
+  padding: var(--space-xs) 0 0;
+  border-top: var(--rule-hair) solid var(--line-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-md);
+}
+#summary ol.flagged .places li {
+  padding: 0;
+  border: 0;
+  background: none;
+  display: block;
+}
+#summary ol.flagged + .aside {
+  margin-top: var(--space-md);
 }
 .strip {
   position: absolute;

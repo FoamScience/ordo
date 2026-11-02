@@ -74,3 +74,17 @@ export function flagged(r: Review, levels: Level[]): { i: number; f: Finding }[]
   const out = r.view.flatMap((i) => r.items[i].findings.filter((f) => levels.includes(f.level)).map((f) => ({ i, f })));
   return out.sort((a, b) => levels.indexOf(a.f.level) - levels.indexOf(b.f.level));
 }
+
+/** Flagged findings, one group per rule in the order `flagged` first meets
+ * it, each with every place it fired and its distinct first lines. */
+export function byRule(found: { i: number; f: Finding }[]): { name: string; level: Level; said: string[]; at: { i: number; f: Finding }[] }[] {
+  const groups = new Map<string, { name: string; level: Level; said: string[]; at: { i: number; f: Finding }[] }>();
+  for (const x of found) {
+    const g = groups.get(x.f.name) ?? { name: x.f.name, level: x.f.level, said: [], at: [] };
+    const line = x.f.message.split("\n")[0];
+    if (!g.said.includes(line)) g.said.push(line);
+    g.at.push(x);
+    groups.set(x.f.name, g);
+  }
+  return [...groups.values()];
+}

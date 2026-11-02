@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { files, flagged, hunkAt, written } from "../src/summary.ts";
+import { byRule, files, flagged, hunkAt, written } from "../src/summary.ts";
 import type { Finding, Item, Review } from "../src/types.ts";
 
 const item = (path: string, from: number, to: number, over: Partial<Item> = {}): Item =>
@@ -67,4 +67,17 @@ test("flagged findings come most serious first, at the asked levels only", () =>
 test("notes on hunks with no group name are not merged because their text matches", () => {
   const r = review([item("a.py", 1, 2, { symbol: "", note: "check this" }), item("a.py", 9, 10, { symbol: "", note: "check this" })]);
   assert.equal(written(r).length, 2);
+});
+
+test("flagged findings group by rule, keeping each place and each distinct message", () => {
+  const twice = { ...finding("warn", "w"), message: "other" };
+  const r = review([
+    item("a.py", 1, 2, { findings: [finding("warn", "w")] }),
+    item("a.py", 5, 6, { findings: [finding("verdict", "v"), finding("warn", "w")] }),
+    item("b.py", 1, 2, { findings: [twice] }),
+  ]);
+  assert.deepEqual(
+    byRule(flagged(r, ["verdict", "warn"])).map((g) => `${g.name}:${g.at.map((x) => x.i).join(",")}:${g.said.join("|")}`),
+    ["v:1:v", "w:0,1,2:w|other"],
+  );
 });
