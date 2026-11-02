@@ -796,9 +796,10 @@ fn p14_derived_python_cpp() {
         assert!(has(&py, c.0, c.1), "python {}: {py:?}", c.0);
     }
     // negatives
-    let pyn = advs("b.py", "class C:\n    def __enter__(self): return self\n    def __exit__(self, *a): pass\ncur.execute('select 1', p)\nyaml.load(d, Loader=SafeLoader)\nx = asyncio.create_task(bg())\n");
+    let pyn = advs("b.py", "class C:\n    def __enter__(self): return self\n    def __exit__(self, *a): pass\n    @cached_property\n    def p(self): return 1\n    @functools.cached_property\n    def q(self): return 1\ncur.execute('select 1', p)\nyaml.load(d, Loader=SafeLoader)\nx = asyncio.create_task(bg())\n");
     assert!(
         !pyn.iter().any(|(c, _)| c == "half-context-manager"
+            || c == "lru-cache-on-method"
             || c == "sql-injection"
             || c == "yaml-load"
             || c == "fire-and-forget-task"),

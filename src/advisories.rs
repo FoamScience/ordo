@@ -204,7 +204,8 @@ fn py_lru_method(dec: Node, src: &[u8], out: &mut Out) {
     }
     let cached = decs.iter().any(|d| {
         let d = d.trim_start_matches('@').trim_start_matches("functools.");
-        d.starts_with("lru_cache") || d.starts_with("cache")
+        let name = d.split('(').next().unwrap_or(d).trim();
+        name == "lru_cache" || name == "cache"
     });
     let on_method = func
         .child_by_field_name("parameters")
