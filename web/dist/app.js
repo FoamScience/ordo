@@ -5047,7 +5047,6 @@ function renderSummary() {
         { class: "actions" },
         h("button", { class: "primary", title: "Your notes and comments as one markdown message (:yank)", onclick: () => act({ op: "command", line_text: "yank" }) }, "Copy for the author"),
         h("button", { title: "The same, with ordo's own notes and findings (:yank all)", onclick: () => act({ op: "command", line_text: "yank all" }) }, "Copy with ordo's findings"),
-        h("button", { onclick: () => window.print() }, "Print"),
         h("button", { onclick: () => toggleSummary() }, "Back to reading")
       ),
       h("h2", null, "What you wrote"),
@@ -5075,9 +5074,10 @@ function renderSummary() {
         serious.map(
           ({ i, f }) => h(
             "li",
-            null,
-            h("div", { class: "where" }, h("span", { class: `lv lv-${f.level}` }, f.level === "warn" ? "warning" : f.level), h("b", null, f.name), link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0]))),
-            h("p", { class: "said" }, prose(f.message.split("\n")[0]))
+            { "data-level": f.level },
+            h("div", { class: "where" }, h("span", { class: `lv lv-${f.level}` }, f.level === "warn" ? "warning" : f.level), h("b", null, f.name)),
+            h("p", { class: "said" }, prose(f.message.split("\n")[0])),
+            link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0]))
           )
         )
       ) : h("p", { class: "aside" }, "No verdicts or warnings."),

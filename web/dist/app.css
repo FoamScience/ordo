@@ -1715,9 +1715,10 @@ body.summary #panes {
   display: none;
 }
 #summary article {
-  max-width: 60rem;
-  margin: 0 auto;
   padding: var(--space-xl) var(--space-lg) var(--space-3xl);
+}
+#summary .lede {
+  max-width: 72ch;
 }
 #summary .headline {
   font-size: var(--text-2xl);
@@ -1852,31 +1853,35 @@ body.summary #panes {
 #summary .files .lv {
   margin-right: var(--space-sm);
 }
-@media print {
-  html,
-  body {
-    height: auto;
-  }
-  body {
-    display: block;
-    overflow-y: visible;
-  }
-  #band,
-  #panes,
-  #overlay,
-  #peek,
-  #palette,
-  #toast,
-  #summary .actions {
-    display: none !important;
-  }
-  #summary {
-    overflow: visible;
-  }
-  #summary article {
-    max-width: none;
-    padding: 0;
-  }
+#summary ol.flagged {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--space-sm);
+}
+#summary ol.flagged li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border: var(--rule-hair) solid var(--line);
+  border-top: var(--rule-heavy) solid var(--line);
+  background: var(--surface);
+}
+#summary ol.flagged li:last-child {
+  border-bottom: var(--rule-hair) solid var(--line);
+}
+#summary ol.flagged li[data-level=verdict] {
+  border-top-color: var(--verdict);
+}
+#summary ol.flagged li[data-level=warn] {
+  border-top-color: var(--warn);
+}
+#summary ol.flagged .said {
+  flex: 1;
+  margin: 0;
+}
+#summary ol.flagged .at {
+  align-self: flex-start;
 }
 .strip {
   position: absolute;

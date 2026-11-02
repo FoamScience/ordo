@@ -486,7 +486,8 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 body.summary #panes { display: none; }
 #summary { overflow: auto; min-height: 0; outline: none; }
 #summary[hidden] { display: none; }
-#summary article { max-width: 60rem; margin: 0 auto; padding: var(--space-xl) var(--space-lg) var(--space-3xl); }
+#summary article { padding: var(--space-xl) var(--space-lg) var(--space-3xl); }
+#summary .lede { max-width: 72ch; }
 #summary .headline { font-size: var(--text-2xl); }
 #summary .meter.wide { max-width: 40rem; margin: var(--space-md) 0 0; }
 #summary .actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin: var(--space-lg) 0 var(--space-xs); }
@@ -525,13 +526,18 @@ body.summary #panes { display: none; }
 #summary .files tr.done .at { color: var(--reviewed); }
 #summary .files .lv { margin-right: var(--space-sm); }
 
-@media print {
-  html, body { height: auto; }
-  body { display: block; overflow-y: visible; }
-  #band, #panes, #overlay, #peek, #palette, #toast, #summary .actions { display: none !important; }
-  #summary { overflow: visible; }
-  #summary article { max-width: none; padding: 0; }
+/* what ordo flagged: one card per finding, as many across as the page holds */
+#summary ol.flagged { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr)); gap: var(--space-sm); }
+#summary ol.flagged li {
+  display: flex; flex-direction: column; gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md); border: var(--rule-hair) solid var(--line);
+  border-top: var(--rule-heavy) solid var(--line); background: var(--surface);
 }
+#summary ol.flagged li:last-child { border-bottom: var(--rule-hair) solid var(--line); }
+#summary ol.flagged li[data-level="verdict"] { border-top-color: var(--verdict); }
+#summary ol.flagged li[data-level="warn"] { border-top-color: var(--warn); }
+#summary ol.flagged .said { flex: 1; margin: 0; }
+#summary ol.flagged .at { align-self: flex-start; }
 
 /* ---- the strip beside the code, and a peek at a name ----------------- */
 
