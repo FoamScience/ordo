@@ -23,24 +23,12 @@ const APP_CSS: &str = include_str!("../../../../web/dist/app.css");
 /// The faces the page is set in, so it looks the same offline.
 const FONTS: &[(&str, &[u8])] = &[
     (
-        "literata-latin-wght-normal.woff2",
-        include_bytes!("../../../../web/dist/fonts/literata-latin-wght-normal.woff2"),
+        "geist-mono-latin-wght-normal.woff2",
+        include_bytes!("../../../../web/dist/fonts/geist-mono-latin-wght-normal.woff2"),
     ),
     (
-        "literata-latin-wght-italic.woff2",
-        include_bytes!("../../../../web/dist/fonts/literata-latin-wght-italic.woff2"),
-    ),
-    (
-        "ibm-plex-mono-latin-400-normal.woff2",
-        include_bytes!("../../../../web/dist/fonts/ibm-plex-mono-latin-400-normal.woff2"),
-    ),
-    (
-        "ibm-plex-mono-latin-600-normal.woff2",
-        include_bytes!("../../../../web/dist/fonts/ibm-plex-mono-latin-600-normal.woff2"),
-    ),
-    (
-        "ibm-plex-mono-latin-400-italic.woff2",
-        include_bytes!("../../../../web/dist/fonts/ibm-plex-mono-latin-400-italic.woff2"),
+        "geist-mono-latin-wght-italic.woff2",
+        include_bytes!("../../../../web/dist/fonts/geist-mono-latin-wght-italic.woff2"),
     ),
 ];
 

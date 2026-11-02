@@ -40,7 +40,7 @@ open a second tab from the URL the server printed, not from the address bar.
 │                 │ [Mark as read x]  Next …             │ History           │
 └─────────────────┴──────────────────────────────────────┴───────────────────┘
 ```
-
+The page is set in Geist Mono, compiled into the binary,
 The page is set in Literata and IBM Plex Mono, both compiled into the binary,
 so it reads the same offline. It follows the system's light or dark setting.
 
