@@ -329,18 +329,12 @@ pub(super) fn load_notes(path: &Path) -> HashMap<u64, String> {
         .collect()
 }
 
-pub(super) fn save_notes(path: &Path, notes: &HashMap<u64, String>) {
-    let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
+pub(super) fn save_notes(path: &Path, notes: &HashMap<u64, String>) -> std::io::Result<()> {
     let body: HashMap<String, String> = notes
         .iter()
         .map(|(k, v)| (format!("{k:016x}"), v.clone()))
         .collect();
-    if let Ok(text) = serde_json::to_string(&body) {
-        let _ = write_atomic(path, &text);
-    }
+    write_atomic(path, &serde_json::to_string(&body)?)
 }
 
 /// Reads the mark file: hex key -> unix-seconds written. Any failure at all —
@@ -376,13 +370,10 @@ pub(super) fn prune_marks(marks: &mut HashMap<u64, u64>, now: u64) {
 /// The files are tiny, so this runs on every toggle rather than only at quit,
 /// and a panic or killed terminal never loses the session's marks — which is
 /// only true because the write is atomic (see `write_atomic`).
-pub(super) fn save_marks(path: &Path, marks: &HashMap<u64, u64>) {
+pub(super) fn save_marks(path: &Path, marks: &HashMap<u64, u64>) -> std::io::Result<()> {
     let body: HashMap<String, u64> = marks
         .iter()
         .map(|(k, v)| (format!("{k:016x}"), *v))
         .collect();
-    if let Ok(text) = serde_json::to_string(&body) {
-        // best-effort: a mark that cannot be persisted still works this session
-        let _ = write_atomic(path, &text);
-    }
+    write_atomic(path, &serde_json::to_string(&body)?)
 }

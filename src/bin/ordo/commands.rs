@@ -1079,7 +1079,8 @@ fn set_note(app: &mut App, text: &str) -> Result<(), String> {
         app.notes.insert(key, text.to_string());
     }
     if let Some(p) = app.notes_path.as_deref() {
-        save_notes(p, &app.notes);
+        save_notes(p, &app.notes)
+            .map_err(|e| format!("the note holds for this session, but was not written: {e}"))?;
     }
     Ok(())
 }
@@ -1133,7 +1134,8 @@ fn set_comment(app: &mut App, text: &str) -> Result<(), String> {
     }
     app.selection = None;
     if let Some(p) = app.comments_path.as_deref() {
-        save_comments(p, &app.comments);
+        save_comments(p, &app.comments)
+            .map_err(|e| format!("the comment holds for this session, but was not written: {e}"))?;
     }
     Ok(())
 }

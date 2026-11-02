@@ -492,8 +492,7 @@ impl Hub {
             "mark" => {
                 let i = app.sel;
                 app.reviewed[i] = !app.reviewed[i];
-                persist_mark(app, i);
-                Ok(())
+                persist_mark(app, i)
             }
             "fold" => {
                 let bucket = app.items[app.sel].bucket.clone();
