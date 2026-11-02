@@ -2,6 +2,7 @@
 // tested: where the list scrolls, how many table rows show, what the code
 // pane's rows are.
 
+import DiffMatchPatch from "diff-match-patch";
 import type { FileData, Spans } from "./types.ts";
 
 /**
@@ -20,15 +21,25 @@ export function tableLimit(total: number, maximised: boolean): number {
 }
 
 export type CodeRow =
-  | { kind: "ctx" | "add" | "edit"; n: number; text: string; spans: Spans | null; hunk: number | null; marks: [number, number][] | null }
+  | {
+      kind: "ctx" | "add" | "edit";
+      n: number;
+      text: string;
+      spans: Spans | null;
+      hunk: number | null;
+      marks: [number, number][] | null;
+      /** on an `edit`, the text the old line had that this one lost, by the column it stood before */
+      gone?: [number, string][];
+    }
   | { kind: "del"; o: number; text: string; spans: Spans | null; hunk: number; marks: [number, number][] | null };
 
 /**
  * The file as the code pane reads it: the new side top to bottom, each hunk's
  * removed lines standing just above where its new lines begin. A pure
- * deletion's lines stand above the line that followed them. A line that only
- * gained text is one `edit` row — the new line, its insertions marked — not a
- * removed line and an added one that say the same thing twice.
+ * deletion's lines stand above the line that followed them. A line edited in
+ * place is one `edit` row — the new line, what it gained marked and what it
+ * lost struck through where it stood — not a removed line and an added one
+ * that say most of the same thing twice.
  */
 export function codeRows(f: FileData): CodeRow[] {
   const hunks = [...f.hunks].sort((a, b) => a.new[0] - b.new[0] || a.old[0] - b.old[0]);
@@ -41,7 +52,7 @@ export function codeRows(f: FileData): CodeRow[] {
       added.set(n, { hunk: h.i, marks: h.added[n - h.new[0]] ?? null });
     }
   }
-  const { folded, edited } = insertionsOnly(f, hunks);
+  const { folded, edited } = editsInPlace(f, hunks);
   const removedBefore = (n: number) => {
     for (const h of startingAt.get(n) ?? []) {
       for (let o = h.old[0]; o <= h.old[1]; o++) {
@@ -60,41 +71,48 @@ export function codeRows(f: FileData): CodeRow[] {
   for (let n = 1; n <= f.new.length; n++) {
     removedBefore(n);
     const a = added.get(n);
+    const e = edited.get(n);
     rows.push({
-      kind: a ? (edited.has(n) ? "edit" : "add") : "ctx",
+      kind: a ? (e ? "edit" : "add") : "ctx",
       n,
       text: f.new[n - 1],
       spans: f.new_spans?.[n - 1] ?? null,
       hunk: a?.hunk ?? null,
-      marks: a?.marks ?? null,
+      marks: e ? e.marks : (a?.marks ?? null),
+      ...(e && e.gone.length ? { gone: e.gone } : {}),
     });
   }
   removedBefore(f.new.length + 1);
   return rows;
 }
 
+interface Edit {
+  marks: [number, number][];
+  gone: [number, string][];
+}
+
 /**
- * The removed lines that read again, unchanged, inside an added line — only
- * text was inserted — paired in order with that added line.
+ * Removed lines that are an added line edited in place, paired in order. The
+ * refiner's pairing and spans come first; a pair it left whole (a docstring
+ * is one leaf, so its lines never pair) is diffed by character, and kept as
+ * an edit only when most of the line survived.
  */
-function insertionsOnly(f: FileData, hunks: FileData["hunks"]): { folded: Set<number>; edited: Set<number> } {
+export function editsInPlace(f: FileData, hunks: FileData["hunks"]): { folded: Set<number>; edited: Map<number, Edit> } {
   const folded = new Set<number>();
-  const edited = new Set<number>();
-  const without = (text: string, spans: [number, number][]) => {
-    const cs = [...text];
-    return cs.filter((_, k) => !spans.some(([a, b]) => k >= a && k < b)).join("");
-  };
+  const edited = new Map<number, Edit>();
   for (const h of hunks) {
     let next = h.new[0];
     for (let o = h.old[0]; o <= h.old[1]; o++) {
       const rm = h.removed[o - h.old[0]];
-      if (!rm) continue;
+      const oldText = f.old[o - 1] ?? "";
       for (let n = next; n <= h.new[1]; n++) {
+        if (edited.has(n)) continue;
         const add = h.added[n - h.new[0]];
-        if (!add) continue;
-        if (rm.length === 0 && add.length > 0 && without(f.new[n - 1] ?? "", add) === (f.old[o - 1] ?? "")) {
+        const newText = f.new[n - 1] ?? "";
+        const e = rm && add ? fromSpans(oldText, newText, rm, add) : !rm && !add ? byChars(oldText, newText) : null;
+        if (e) {
           folded.add(o);
-          edited.add(n);
+          edited.set(n, e);
           next = n + 1;
         }
         break;
@@ -102,6 +120,60 @@ function insertionsOnly(f: FileData, hunks: FileData["hunks"]): { folded: Set<nu
     }
   }
   return { folded, edited };
+}
+
+/** The refiner's spans as an edit, when what neither side marked reads the same. */
+function fromSpans(oldText: string, newText: string, rm: [number, number][], add: [number, number][]): Edit | null {
+  const o = [...oldText];
+  const n = [...newText];
+  const inside = (spans: [number, number][], k: number) => spans.some(([a, b]) => k >= a && k < b);
+  const gone: [number, string][] = [];
+  let i = 0;
+  let j = 0;
+  while (i < o.length || j < n.length) {
+    if (i < o.length && inside(rm, i)) {
+      const from = i;
+      while (i < o.length && inside(rm, i)) i++;
+      gone.push([j, o.slice(from, i).join("")]);
+    } else if (j < n.length && inside(add, j)) {
+      j++;
+    } else if (i < o.length && j < n.length && o[i] === n[j]) {
+      i++;
+      j++;
+    } else {
+      return null;
+    }
+  }
+  return { marks: add, gone };
+}
+
+const dmp = new DiffMatchPatch();
+
+/** How much of a line must survive for an unpaired pair to read as one line edited. */
+const KEPT = 0.6;
+
+/** A character diff of two lines as an edit, or null when they share too little. */
+export function byChars(oldText: string, newText: string): Edit | null {
+  if (!oldText.trim() || !newText.trim()) return null;
+  const diffs = dmp.diff_main(oldText, newText);
+  dmp.diff_cleanupSemantic(diffs);
+  const marks: [number, number][] = [];
+  const gone: [number, string][] = [];
+  let col = 0;
+  let kept = 0;
+  for (const [op, text] of diffs) {
+    const len = [...text].length;
+    if (op === DiffMatchPatch.DIFF_EQUAL) {
+      kept += len;
+      col += len;
+    } else if (op === DiffMatchPatch.DIFF_INSERT) {
+      marks.push([col, col + len]);
+      col += len;
+    } else {
+      gone.push([col, text]);
+    }
+  }
+  return kept >= KEPT * Math.max([...oldText].length, [...newText].length) ? { marks, gone } : null;
 }
 
 /** The row a hunk's reading starts on: its first removed line, else its first new one. */
@@ -114,7 +186,12 @@ export function firstRowOf(rows: CodeRow[], hunk: number): number {
  * A line's text cut into runs, each with its syntax role and whether it is
  * part of the refined (actually changed) span.
  */
-export function runs(text: string, spans: Spans | null, marks: [number, number][] | null): { text: string; role: string | null; changed: boolean }[] {
+export function runs(
+  text: string,
+  spans: Spans | null,
+  marks: [number, number][] | null,
+  gone: [number, string][] = [],
+): { text: string; role: string | null; changed: boolean; gone?: true }[] {
   const chars = [...text];
   const role: (string | null)[] = new Array(chars.length).fill(null);
   if (spans) {
@@ -125,12 +202,17 @@ export function runs(text: string, spans: Spans | null, marks: [number, number][
   }
   const changed: boolean[] = new Array(chars.length).fill(false);
   for (const [a, b] of marks ?? []) for (let k = a; k < b && k < chars.length; k++) changed[k] = true;
-  const out: { text: string; role: string | null; changed: boolean }[] = [];
+  const out: { text: string; role: string | null; changed: boolean; gone?: true }[] = [];
+  const lost = (k: number) => {
+    for (const [at, t] of gone) if (at === k) out.push({ text: t, role: null, changed: false, gone: true });
+  };
   for (let k = 0; k < chars.length; k++) {
+    lost(k);
     const last = out[out.length - 1];
-    if (last && last.role === role[k] && last.changed === changed[k]) last.text += chars[k];
+    if (last && !last.gone && last.role === role[k] && last.changed === changed[k]) last.text += chars[k];
     else out.push({ text: chars[k], role: role[k], changed: changed[k] });
   }
+  lost(chars.length);
   return out;
 }
 

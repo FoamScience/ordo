@@ -415,7 +415,9 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
   const search = st.search;
   const caret = k === st.cursor ? caretCol(row.text) : -1;
   let at = 0;
-  const parts = runs(row.text, row.spans, row.marks).flatMap((run) => {
+  const parts = runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).flatMap((run) => {
+    // what the old line had here: shown, but no column of this one
+    if (run.gone) return [h("del", { class: "gone", title: "removed" }, run.text)];
     const piece = (text: string, extra?: string) =>
       h(run.changed ? "mark" : "span", { class: [run.role && `s-${run.role}`, extra].filter(Boolean).join(" ") || null }, text);
     const cs = [...run.text];
@@ -609,6 +611,11 @@ function caretColumn(e: MouseEvent, text: string): number | null {
   const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
   let at = 0;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.parentElement?.closest(".gone")) {
+      // a click on removed text lands where it stood
+      if (n === pos.offsetNode) return Math.min(at, [...text].length);
+      continue;
+    }
     if (n === pos.offsetNode) return Math.min(at + [...(n.textContent ?? "").slice(0, pos.offset)].length, [...text].length);
     at += [...(n.textContent ?? "")].length;
   }
@@ -1432,7 +1439,13 @@ function excerpt(f: FileData, hunk: number, context: number, max: number): HTMLE
         h("span", { class: "g" }),
         h("span", { class: "ln" }, row.kind === "del" ? "" : row.n),
         h("span", { class: "op" }, OP[row.kind]),
-        h("span", null, runs(row.text, row.spans, row.marks).map((run) => h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text))),
+        h(
+          "span",
+          null,
+          runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).map((run) =>
+            run.gone ? h("del", { class: "gone" }, run.text) : h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text),
+          ),
+        ),
       ),
     ),
   );
