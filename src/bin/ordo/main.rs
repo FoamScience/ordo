@@ -3230,7 +3230,13 @@ fn persist_mark(app: &mut App, i: usize) {
     let Some(key) = mark_key(&app.rev, &app.items[i], &app.sources) else {
         return;
     };
-    if app.reviewed[i] {
+    // another reviewer of this repository — a browser tab, a second terminal —
+    // may have written since this one loaded: merge into what is on disk
+    // rather than writing this session's copy over it
+    let want = app.reviewed[i];
+    sync_marks(app);
+    app.reviewed[i] = want;
+    if want {
         app.marks.insert(key, now_unix());
     } else {
         app.marks.remove(&key);
@@ -3240,6 +3246,23 @@ fn persist_mark(app: &mut App, i: usize) {
     };
     prune_marks(&mut app.marks, now_unix());
     save_marks(&path, &app.marks);
+}
+
+/// Read the marks file again and mark every hunk it has a key for as it
+/// says; a hunk with no key keeps this session's checkmark, and a file that
+/// cannot be read changes nothing. True when a hunk's state changed.
+fn sync_marks(app: &mut App) -> bool {
+    let Some(marks) = app.marks_path.as_deref().and_then(crate::marks::read_marks) else {
+        return false;
+    };
+    app.marks = marks;
+    let before = app.reviewed.clone();
+    for (i, it) in app.items.iter().enumerate() {
+        if let Some(k) = mark_key(&app.rev, it, &app.sources) {
+            app.reviewed[i] = app.marks.contains_key(&k);
+        }
+    }
+    app.reviewed != before
 }
 
 /// Popup body line with no styling — most popups are prose.
