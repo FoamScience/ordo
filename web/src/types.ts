@@ -91,6 +91,8 @@ export interface Review {
   delta: { first_run: boolean; new: number; changed: number; moved: number; gone: number };
   rules: { catalog: boolean; own: number; includes: string[]; disabled: string[]; report: string[] };
   file_churn: Record<string, number>;
+  /** every line comment on a file in the review */
+  comments: (LineComment & { path: string })[];
   sel: number;
   keys: Bind[];
   commands: Command[];

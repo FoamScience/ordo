@@ -356,3 +356,21 @@ fn a_command_answers_with_what_the_terminal_would_have_shown() {
     assert!(out.get("error").is_none(), "{out}");
     assert_eq!(s.get("/api/review?rev=HEAD")["mode"], "hunks");
 }
+
+#[test]
+fn the_review_carries_every_line_comment_for_its_summary() {
+    let s = serve("comments");
+    let review = s.ready();
+    assert_eq!(review["comments"], serde_json::json!([]));
+    let it = &review["items"][0];
+    let line = it["new"][0].as_u64().unwrap();
+    let out = s.post(
+        "/api/act?rev=HEAD",
+        serde_json::json!({ "op": "command", "sel": 0, "line": line - 1, "line_text": "comment name it better" }),
+    );
+    assert!(out.get("error").is_none(), "{out}");
+    let comments = &s.get("/api/review?rev=HEAD")["comments"];
+    assert_eq!(comments[0]["path"], it["path"], "{comments}");
+    assert_eq!(comments[0]["start"], line);
+    assert_eq!(comments[0]["text"], "name it better");
+}
