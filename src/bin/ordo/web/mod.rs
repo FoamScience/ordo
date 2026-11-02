@@ -384,7 +384,7 @@ impl Hub {
                             .flatten()
                     });
                 if !token.is_some_and(|t| same_secret(&t, &self.token)) {
-                    return fail(req, 401, "missing or wrong session token");
+                    return fail(req, 401, "missing or wrong session token: open the URL `ordo web` printed when it started");
                 }
                 self.api(req, &path, &q);
             }

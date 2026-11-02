@@ -3979,6 +3979,13 @@ var rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
 var token = new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStorage.getItem("ordo.token") ?? "";
 sessionStorage.setItem("ordo.token", token);
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+window.addEventListener("hashchange", () => {
+  const fresh = new URLSearchParams(location.hash.slice(1)).get("t");
+  if (!fresh) return;
+  sessionStorage.setItem("ordo.token", fresh);
+  history.replaceState(null, "", location.pathname + location.search);
+  location.reload();
+});
 var api = new Api(token, rev);
 var st2 = {
   review: null,
