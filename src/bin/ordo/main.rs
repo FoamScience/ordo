@@ -454,6 +454,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         include_str!("../../../docs/tui.md"),
     ),
     (
+        "web",
+        "the browser reviewer: ordo web, the band, safety, the client build",
+        include_str!("../../../docs/web.md"),
+    ),
+    (
         "reviewing",
         "the detail layer, rationale patterns, advisories, the ledger",
         include_str!("../../../docs/reviewing.md"),
