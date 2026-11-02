@@ -1,0 +1,208 @@
+/* Graphite: neutral sheets, ink and rules in grey, blue only for the place you are
+   and what you act on. Values sit under the names `:theme` writes (theme.ts),
+   and Hallmark's roles point at them. */
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono-latin-wght-italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --bg: oklch(97.6% 0.002 90);
+  --surface: oklch(97.6% 0.002 90);
+  --raise: oklch(94.5% 0.003 250);
+  --well: oklch(96% 0.002 250);
+  --band-bg: oklch(93% 0.003 250);
+  --line: oklch(83% 0.004 250);
+  --line-2: oklch(90.5% 0.003 250);
+  --fg: oklch(24% 0.006 250);
+  --dim: oklch(40% 0.006 250);
+  --faint: oklch(50% 0.006 250);
+  --accent: oklch(48% 0.13 258);
+  --accent-2: oklch(41% 0.13 258);
+  --accent-ink: oklch(98% 0.002 250);
+  --focus: oklch(48% 0.13 258);
+  --select-bg: oklch(93% 0.03 255);
+  --reviewed: oklch(24% 0.006 250);
+  --reviewed-bg: oklch(94.5% 0.003 250);
+  --match-bg: oklch(91% 0.09 95);
+  --scrim: oklch(20% 0.005 250 / 0.35);
+  --verdict: oklch(47% 0.17 28);
+  --verdict-bg: oklch(95% 0.025 28);
+  --verdict-strong-bg: oklch(88% 0.06 28);
+  --warn: oklch(48% 0.1 70);
+  --warn-bg: oklch(95.5% 0.03 80);
+  --warn-strong-bg: oklch(88% 0.07 80);
+  --note-bg: oklch(94% 0.02 255);
+  --note-strong-bg: oklch(88% 0.04 255);
+  --add-bg: oklch(95% 0.03 160);
+  --add-strong-bg: oklch(87% 0.065 160);
+  --del-bg: oklch(95.5% 0.025 25);
+  --del-strong-bg: oklch(88% 0.055 25);
+  --syn-keyword: oklch(24% 0.006 250);
+  --syn-string: oklch(40% 0.006 250);
+  --syn-number: oklch(40% 0.006 250);
+  --syn-function: oklch(24% 0.006 250);
+  --syn-type: oklch(24% 0.006 250);
+  --syn-comment: oklch(50% 0.006 250);
+  --syn-property: oklch(24% 0.006 250);
+  --syn-operator: oklch(50% 0.006 250);
+  --syn-variable: oklch(24% 0.006 250);
+  --syn-builtin: oklch(24% 0.006 250);
+  --syn-parameter: oklch(40% 0.006 250);
+  --syn-attribute: oklch(40% 0.006 250);
+
+  /* Hallmark's roles, read from the names above */
+  --color-paper: var(--bg);
+  --color-paper-2: var(--well);
+  --color-paper-3: var(--band-bg);
+  --color-ink: var(--fg);
+  --color-ink-2: var(--dim);
+  --color-muted: var(--faint);
+  --color-rule: var(--line);
+  --color-rule-2: var(--line-2);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-focus: var(--focus);
+  --color-error: var(--verdict);
+  --color-success: var(--reviewed);
+
+  --font-body: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-display: var(--font-body);
+  --font-outlier: var(--font-body);
+  --text: var(--font-body);
+  --mono: var(--font-body);
+
+  --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px;
+  --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px; --space-4xl: 144px;
+  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.2rem; --text-xl: 1.44rem; --text-2xl: 1.728rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms;
+  --z-base: 1; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200; --z-sticky-nav: 300; --z-modal: 400; --z-toast: 500; --z-tooltip: 600;
+  --radius-card: 0; --rule-hair: 1px; --rule-heavy: 2px; --tick: 10px; --shadow-card: none;
+  --tracking-display: -0.012em;
+
+  /* one knob for every size: `:size` sets --ui (1 is the default) */
+  --ui: 1;
+  --fs-head: calc(var(--text-xl) * var(--ui));
+  --fs-title: calc(var(--text-lg) * var(--ui));
+  --fs-body: calc(var(--text-md) * var(--ui));
+  --fs-note: calc(var(--text-sm) * var(--ui));
+  --fs-code: calc(var(--text-sm) * var(--ui));
+  --fs-small: calc(var(--text-sm) * var(--ui));
+  --fs-tiny: calc(var(--text-xs) * var(--ui));
+  --row: calc(24px * var(--ui));
+  --spine-row: calc(32px * var(--ui));
+  --control: calc(32px * var(--ui));
+  --bar: calc(48px * var(--ui));
+  --pane-head: calc(40px * var(--ui));
+}
+
+/* night: charcoal; paper always takes the day sheet */
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-base="light"]) {
+    color-scheme: dark;
+    --bg: oklch(19.5% 0.004 250);
+    --surface: oklch(19.5% 0.004 250);
+    --raise: oklch(25% 0.005 250);
+    --well: oklch(17% 0.004 250);
+    --band-bg: oklch(15.5% 0.004 250);
+    --line: oklch(37% 0.006 250);
+    --line-2: oklch(28% 0.005 250);
+    --fg: oklch(92% 0.003 250);
+    --dim: oklch(80% 0.005 250);
+    --faint: oklch(68% 0.006 250);
+    --accent: oklch(75% 0.11 258);
+    --accent-2: oklch(82% 0.09 258);
+    --accent-ink: oklch(18% 0.004 250);
+    --focus: oklch(75% 0.11 258);
+    --select-bg: oklch(30% 0.045 258);
+    --reviewed: oklch(92% 0.003 250);
+    --reviewed-bg: oklch(25% 0.005 250);
+    --match-bg: oklch(40% 0.07 95);
+    --scrim: oklch(8% 0.004 250 / 0.6);
+    --verdict: oklch(75% 0.13 25);
+    --verdict-bg: oklch(27% 0.05 25);
+    --verdict-strong-bg: oklch(35% 0.08 25);
+    --warn: oklch(82% 0.11 80);
+    --warn-bg: oklch(28% 0.04 80);
+    --warn-strong-bg: oklch(37% 0.06 80);
+    --note-bg: oklch(27% 0.03 258);
+    --note-strong-bg: oklch(35% 0.05 258);
+    --add-bg: oklch(26% 0.045 160);
+    --add-strong-bg: oklch(35% 0.07 160);
+    --del-bg: oklch(26% 0.045 20);
+    --del-strong-bg: oklch(35% 0.075 20);
+    --syn-keyword: oklch(92% 0.003 250);
+    --syn-string: oklch(80% 0.005 250);
+    --syn-number: oklch(80% 0.005 250);
+    --syn-function: oklch(92% 0.003 250);
+    --syn-type: oklch(92% 0.003 250);
+    --syn-comment: oklch(68% 0.006 250);
+    --syn-property: oklch(92% 0.003 250);
+    --syn-operator: oklch(68% 0.006 250);
+    --syn-variable: oklch(92% 0.003 250);
+    --syn-builtin: oklch(92% 0.003 250);
+    --syn-parameter: oklch(80% 0.005 250);
+    --syn-attribute: oklch(80% 0.005 250);
+  }
+}
+@media screen {
+  :root[data-base="dark"] {
+    color-scheme: dark;
+    --bg: oklch(19.5% 0.004 250);
+    --surface: oklch(19.5% 0.004 250);
+    --raise: oklch(25% 0.005 250);
+    --well: oklch(17% 0.004 250);
+    --band-bg: oklch(15.5% 0.004 250);
+    --line: oklch(37% 0.006 250);
+    --line-2: oklch(28% 0.005 250);
+    --fg: oklch(92% 0.003 250);
+    --dim: oklch(80% 0.005 250);
+    --faint: oklch(68% 0.006 250);
+    --accent: oklch(75% 0.11 258);
+    --accent-2: oklch(82% 0.09 258);
+    --accent-ink: oklch(18% 0.004 250);
+    --focus: oklch(75% 0.11 258);
+    --select-bg: oklch(30% 0.045 258);
+    --reviewed: oklch(92% 0.003 250);
+    --reviewed-bg: oklch(25% 0.005 250);
+    --match-bg: oklch(40% 0.07 95);
+    --scrim: oklch(8% 0.004 250 / 0.6);
+    --verdict: oklch(75% 0.13 25);
+    --verdict-bg: oklch(27% 0.05 25);
+    --verdict-strong-bg: oklch(35% 0.08 25);
+    --warn: oklch(82% 0.11 80);
+    --warn-bg: oklch(28% 0.04 80);
+    --warn-strong-bg: oklch(37% 0.06 80);
+    --note-bg: oklch(27% 0.03 258);
+    --note-strong-bg: oklch(35% 0.05 258);
+    --add-bg: oklch(26% 0.045 160);
+    --add-strong-bg: oklch(35% 0.07 160);
+    --del-bg: oklch(26% 0.045 20);
+    --del-strong-bg: oklch(35% 0.075 20);
+    --syn-keyword: oklch(92% 0.003 250);
+    --syn-string: oklch(80% 0.005 250);
+    --syn-number: oklch(80% 0.005 250);
+    --syn-function: oklch(92% 0.003 250);
+    --syn-type: oklch(92% 0.003 250);
+    --syn-comment: oklch(68% 0.006 250);
+    --syn-property: oklch(92% 0.003 250);
+    --syn-operator: oklch(68% 0.006 250);
+    --syn-variable: oklch(92% 0.003 250);
+    --syn-builtin: oklch(92% 0.003 250);
+    --syn-parameter: oklch(80% 0.005 250);
+    --syn-attribute: oklch(80% 0.005 250);
+  }
+}
