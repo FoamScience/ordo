@@ -118,10 +118,10 @@ own. `:size` makes the text and rows bigger or smaller (`small`, `normal`,
 `:summary`, or the *n of m read* button in the header, puts the review on one
 page in place of the columns: how much is read, everything you wrote (notes
 and line comments, file by file in reading order), the verdicts and warnings
-ordo raised, and a table of files with their progress. Each location reads
-that hunk; a file name reads its first unread hunk. *Copy for the author* is
-`:yank`, *Copy with ordo's findings* is `:yank all`, and *Print* prints just
-the summary. `q` or the same button goes back.
+ordo raised as a grid of cards, and a table of files with their progress. Each
+location reads that hunk; a file name reads its first unread hunk. *Copy for
+the author* is `:yank` and *Copy with ordo's findings* is `:yank all`. `q` or
+the same button goes back.
 
 `ge` opens the hunk at the cursor line in an editor, chosen by
 `ORDO_WEB_EDITOR`:
