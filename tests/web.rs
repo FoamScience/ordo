@@ -214,6 +214,17 @@ fn the_api_wants_the_session_token_and_this_server_as_host() {
         rebound.status, 403,
         "a page on another name reached the API"
     );
+    let forwarded = s.raw(
+        "GET",
+        "/api/review?rev=HEAD",
+        "localhost:19050",
+        Some(&s.token),
+        "",
+    );
+    assert_ne!(
+        forwarded.status, 403,
+        "a forwarded port on a local name was refused"
+    );
     // the page itself carries no review, so it is served without a token
     let page = s.raw("GET", "/", &host, None, "");
     assert_eq!(page.status, 200);
