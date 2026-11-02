@@ -348,15 +348,23 @@ pub(super) fn save_notes(path: &Path, notes: &HashMap<u64, String>) {
 /// than a crash or a blocked UI; the cache is a convenience, the review is
 /// the product.
 pub(super) fn load_marks(path: &Path) -> HashMap<u64, u64> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return HashMap::new();
+    read_marks(path).unwrap_or_default()
+}
+
+/// The mark file as `load_marks` reads it, but `None` when it is there and
+/// cannot be read — which a merge must not take for "nobody marked anything".
+pub(super) fn read_marks(path: &Path) -> Option<HashMap<u64, u64>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(HashMap::new()),
+        Err(_) => return None,
     };
-    let Ok(raw) = serde_json::from_str::<HashMap<String, u64>>(&text) else {
-        return HashMap::new();
-    };
-    raw.into_iter()
-        .filter_map(|(k, v)| u64::from_str_radix(&k, 16).ok().map(|k| (k, v)))
-        .collect()
+    let raw = serde_json::from_str::<HashMap<String, u64>>(&text).ok()?;
+    Some(
+        raw.into_iter()
+            .filter_map(|(k, v)| u64::from_str_radix(&k, 16).ok().map(|k| (k, v)))
+            .collect(),
+    )
 }
 
 /// Drops anything older than `MARK_TTL_SECS` so the file doesn't grow
