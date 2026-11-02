@@ -4015,9 +4015,9 @@ function applyTheme(name) {
 var PANES = ["list", "code", "why"];
 var LEVELS = ["verdict", "warn", "note"];
 var SINCE = {
-  new: ["\u2726", "new since you last looked"],
-  changed: ["\u25D0", "changed since you last looked"],
-  moved: ["\u21C5", "unchanged, but it reads in a different place now \u2014 its dependencies moved"]
+  new: ["new", "new since you last looked"],
+  changed: ["changed", "changed since you last looked"],
+  moved: ["moved", "unchanged, but it reads in a different place now: its dependencies moved"]
 };
 var CHORD_TIMEOUT = 500;
 var OP = { ctx: " ", add: "+", del: "-", edit: "~" };
@@ -4305,7 +4305,15 @@ function renderList() {
         )
       );
     } else if (row.kind === "file") {
-      rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, row.n)));
+      const cut = row.path.lastIndexOf("/") + 1;
+      rows.append(
+        h(
+          "div",
+          { class: "fileband", title: row.path },
+          h("span", { class: "path" }, h("span", { class: "dir" }, row.path.slice(0, cut)), h("span", { class: "base" }, row.path.slice(cut))),
+          h("span", null, row.n)
+        )
+      );
     } else if (row.kind === "gap") {
       rows.append(h("div", { class: "gap" }));
     } else {
@@ -4337,7 +4345,7 @@ function renderList() {
           "span",
           { class: "meta" },
           first.delta && h("span", { class: "since", title: SINCE[first.delta][1] }, SINCE[first.delta][0]),
-          level && h("span", { class: `dot ${level}`, title: `${level} finding` })
+          level && h("span", { class: `lv lv-${level}`, title: `${level} finding` }, level === "warn" ? "warning" : level)
         )
       );
       for (const i of items) dots.set(i, el);
@@ -4438,7 +4446,7 @@ function lineEl(row, k, mine, findings, uses, commented) {
         onmousemove: (e) => row.kind !== "del" && peekLater(e, row.n, row.text),
         onmouseleave: () => peekLeave()
       },
-      h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "\u25B8" : ""),
+      h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "\u203A" : ""),
       h("span", { class: "ln" }, n),
       h("span", { class: "op" }, OP[row.kind]),
       h("span", null, content)
@@ -4498,7 +4506,7 @@ function renderReading(it2) {
       "div",
       { class: "pills" },
       it2.reviewed && h("span", { class: "pill done" }, "Read"),
-      it2.delta && h("span", { class: "pill accent" }, SINCE[it2.delta][0], sentence(SINCE[it2.delta][1].split(" \u2014")[0])),
+      it2.delta && h("span", { class: "pill accent" }, sentence(SINCE[it2.delta][1].split(":")[0])),
       it2.noise && !/formatting/.test(it2.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
       it2.wave !== null && h("span", { class: "pill" }, `Wave ${it2.wave}`)
     ),
@@ -4521,12 +4529,8 @@ function renderReading(it2) {
       it2.reviewed ? "Marked as read" : "Mark as read",
       key && h("kbd", null, key)
     ),
-    next && h(
-      "button",
-      { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` },
-      h("b", { "aria-hidden": "true" }, "\u27F6"),
-      h("span", { class: "said" }, prose(sentence(next.rationale)))
-    )
+    next && h("button", { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` }, "Next"),
+    next && h("span", { class: "said" }, prose(sentence(next.rationale)))
   );
 }
 function sentence(s) {
@@ -4564,7 +4568,7 @@ function renderCode() {
     for (const el of lineEl(row, k, row.hunk === st2.sel, findings, uses, commented)) code.append(el);
     if (row.kind !== "del") {
       for (const c of st2.file.comments.filter((c2) => c2.end === row.n)) {
-        code.append(h("div", { class: "cmt" }, `\u270E ${c.text}${c.stale ? " (lines changed since)" : ""}`));
+        code.append(h("div", { class: "cmt" }, `${c.text}${c.stale ? " (lines changed since)" : ""}`));
       }
     }
   });
@@ -4844,7 +4848,7 @@ function renderWhy() {
       it2.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it2.note)],
       !!facts?.comments.length && [
         h("h3", null, "Your comments"),
-        facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `\u2013${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`))
+        facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `-${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`))
       ],
       !!facts?.out_of_order.length && [
         h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
@@ -4866,7 +4870,7 @@ function renderWhy() {
           h(
             "div",
             { class: "h" },
-            h("span", { class: `lv ${f.level}` }, sentence(f.level)),
+            h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
             h("span", { class: "name" }, f.name),
             f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`)
           ),
@@ -4965,8 +4969,7 @@ function renderBand() {
     LEVELS.filter((l) => r.levels[l]).map(
       (l) => h(
         "button",
-        { class: "sig", title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
-        h("span", { class: `dot ${l}` }),
+        { class: `sig lv-${l}`, title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
         h("b", null, r.levels[l]),
         plural[l][r.levels[l] === 1 ? 0 : 1]
       )
@@ -4974,14 +4977,13 @@ function renderBand() {
     h(
       "button",
       {
-        class: "sig",
+        class: "sig progress",
         "aria-pressed": st2.summary ? "true" : "false",
         title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read. The review on one page (:summary).`,
         onclick: () => toggleSummary()
       },
-      h("span", { class: "meter" }, h("i", { style: `width:${r.coverage.total ? 100 * r.coverage.done / r.coverage.total : 0}%` })),
-      h("b", null, r.coverage.done),
-      `of ${r.coverage.total} read`
+      h("span", { class: "said" }, h("b", null, r.coverage.done), ` of ${r.coverage.total} read`),
+      h("span", { class: "dimstr", "aria-hidden": "true" }, h("i", { style: `--p:${r.coverage.total ? r.coverage.done / r.coverage.total : 0}` }))
     ),
     help
   );
@@ -5017,7 +5019,7 @@ function renderSummary() {
   const notes = written(r);
   const serious = flagged(r, ["verdict", "warn"]);
   const n = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
-  const at2 = (path, line, end) => `${path}:${line}${end && end > line ? `\u2013${end}` : ""}`;
+  const at2 = (path, line, end) => `${path}:${line}${end && end > line ? `-${end}` : ""}`;
   const link = (i, label) => i === null ? h("span", { class: "at" }, label) : h("button", { class: "at", title: "Read this hunk", onclick: () => readFromSummary(i) }, label);
   const nComments = notes.filter((w) => w.kind === "comment").length;
   const nNotes = notes.length - nComments;
@@ -5074,7 +5076,7 @@ function renderSummary() {
           ({ i, f }) => h(
             "li",
             null,
-            h("div", { class: "where" }, h("span", { class: `dot ${f.level}` }), h("b", null, f.name), link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0]))),
+            h("div", { class: "where" }, h("span", { class: `lv lv-${f.level}` }, f.level === "warn" ? "warning" : f.level), h("b", null, f.name), link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0]))),
             h("p", { class: "said" }, prose(f.message.split("\n")[0]))
           )
         )
@@ -5096,7 +5098,7 @@ function renderSummary() {
               h("td", null, link(next, f.path)),
               h("td", null, h("span", { class: "meter" }, h("i", { style: `width:${100 * f.read / f.hunks.length}%` })), ` ${f.read} of ${f.hunks.length}`),
               h("td", null, f.comments || ""),
-              h("td", null, LEVELS.filter((l) => l !== "note" && f.levels[l]).map((l) => h("span", { class: "lv" }, h("span", { class: `dot ${l}` }), f.levels[l])))
+              h("td", null, LEVELS.filter((l) => l !== "note" && f.levels[l]).map((l) => h("span", { class: `lv lv-${l}` }, `${f.levels[l]} ${l === "warn" ? "warning" : l}${f.levels[l] === 1 ? "" : "s"}`)))
             );
           })
         )
@@ -5122,7 +5124,7 @@ function zoomButton(p) {
   return h(
     "button",
     {
-      class: "zoomer",
+      class: on2 ? "zoomer on" : "zoomer",
       title: on2 ? "Show all three columns" : "Give this column the whole page",
       "aria-label": on2 ? "restore the columns" : "maximise this column",
       onclick: () => {
@@ -5131,7 +5133,7 @@ function zoomButton(p) {
         renderAll();
       }
     },
-    on2 ? "\u2921" : "\u2922"
+    h("i", { "aria-hidden": "true" })
   );
 }
 function showSheet(title, text) {
@@ -5142,7 +5144,7 @@ function showSheet(title, text) {
     h(
       "div",
       { class: "sheet", role: "dialog", "aria-label": title },
-      h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "\u2715")),
+      h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "\xD7")),
       typeof text === "string" ? h("pre", null, text) : h("div", { class: "scroll" }, text)
     )
   );
@@ -5602,7 +5604,7 @@ function excerpt(f, hunk, context, max) {
 }
 function hunkTitle(i) {
   const t = st2.review.items[i];
-  return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} \xB7 ${basename(t.path)}:${t.new[0]}`;
+  return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} in ${basename(t.path)}:${t.new[0]}`;
 }
 async function previewHunk(i) {
   const t = st2.review.items[i];
@@ -5635,7 +5637,7 @@ async function renderCanvas() {
   const side = (needs) => h(
     "div",
     { class: "side" },
-    h("h3", null, needs ? "needs \u2014 what this hunk uses" : "needed by \u2014 what uses this hunk"),
+    h("h3", null, needs ? "Needs: what this hunk uses" : "Needed by: what uses this hunk"),
     c.cards.map((x, k) => x.needs === needs ? card(k) : null)
   );
   showSheet(
@@ -5719,9 +5721,10 @@ function renderMap(again = false) {
         onfocus: () => pick(i),
         onclick: () => goMap(i)
       },
-      h("span", { class: "name" }, it2.reviewed ? `\u2713 ${name}` : name),
+      h("span", { class: "name" }, name),
+      it2.reviewed && h("span", { class: "done" }, "read"),
       h("span", { class: "at" }, `${basename(it2.path)}:${it2.new[0]}`),
-      it2.level && h("span", { class: `dot ${it2.level}`, title: `${it2.level} finding` })
+      it2.level && h("span", { class: `lv lv-${it2.level}` }, it2.level === "warn" ? "warning" : it2.level)
     );
   };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -5834,7 +5837,7 @@ function renderConfig() {
     } else if (f.kind === "choice") {
       control = h(
         "button",
-        { class: "choice", title: (f.options ?? []).join(" \xB7 "), onclick: () => step2({ do: "toggle", row: f.row }) },
+        { class: "choice", title: (f.options ?? []).join(", "), onclick: () => step2({ do: "toggle", row: f.row }) },
         String(f.value ?? "")
       );
     } else {
@@ -5852,7 +5855,7 @@ function renderConfig() {
     cfg.sections.map((s) => [h("h3", null, s.title, h("small", null, s.file)), h("table", null, h("tbody", null, s.fields.map(field)))])
   );
   const top = ov.querySelector(".scroll")?.scrollTop ?? 0;
-  showSheet(cfg.dirty ? "settings \u2014 changed, not written" : "settings", body);
+  showSheet(cfg.dirty ? "Settings, changed and not written" : "Settings", body);
   ov.dataset.kind = "config";
   const header = ov.querySelector(".sheet > header");
   header.insertBefore(h("button", { class: "write", disabled: !cfg.dirty, onclick: () => step2({ do: "write" }) }, "Write to files"), header.lastChild);

@@ -12,7 +12,14 @@ await build({
   outfile: "dist/app.js",
   legalComments: "none",
 });
-copyFileSync("src/app.css", "dist/app.css");
+// the stylesheet's @imports inlined; the fonts stay files beside it
+await build({
+  entryPoints: ["src/app.css"],
+  bundle: true,
+  outfile: "dist/app.css",
+  external: ["fonts/*"],
+  legalComments: "none",
+});
 // the faces the page is set in, served from this binary rather than a CDN
 mkdirSync("dist/fonts", { recursive: true });
 const FONTS = {

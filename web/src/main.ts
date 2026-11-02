@@ -17,9 +17,9 @@ type Pane = "list" | "code" | "why";
 const PANES: Pane[] = ["list", "code", "why"];
 const LEVELS: Level[] = ["verdict", "warn", "note"];
 const SINCE: Record<string, [string, string]> = {
-  new: ["✦", "new since you last looked"],
-  changed: ["◐", "changed since you last looked"],
-  moved: ["⇅", "unchanged, but it reads in a different place now — its dependencies moved"],
+  new: ["new", "new since you last looked"],
+  changed: ["changed", "changed since you last looked"],
+  moved: ["moved", "unchanged, but it reads in a different place now: its dependencies moved"],
 };
 const CHORD_TIMEOUT = 500;
 /** The gutter mark for each kind of code row; `~` is a line that only gained text. */
@@ -350,7 +350,15 @@ function renderList(): void {
         ),
       );
     } else if (row.kind === "file") {
-      rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, row.n)));
+      const cut = row.path.lastIndexOf("/") + 1;
+      rows.append(
+        h(
+          "div",
+          { class: "fileband", title: row.path },
+          h("span", { class: "path" }, h("span", { class: "dir" }, row.path.slice(0, cut)), h("span", { class: "base" }, row.path.slice(cut))),
+          h("span", null, row.n),
+        ),
+      );
     } else if (row.kind === "gap") {
       rows.append(h("div", { class: "gap" }));
     } else {
@@ -386,7 +394,7 @@ function renderList(): void {
           "span",
           { class: "meta" },
           first.delta && h("span", { class: "since", title: SINCE[first.delta][1] }, SINCE[first.delta][0]),
-          level && h("span", { class: `dot ${level}`, title: `${level} finding` }),
+          level && h("span", { class: `lv lv-${level}`, title: `${level} finding` }, level === "warn" ? "warning" : level),
         ),
       );
       for (const i of items) dots.set(i, el);
@@ -504,7 +512,7 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
         onmousemove: (e: MouseEvent) => row.kind !== "del" && peekLater(e, row.n, row.text),
         onmouseleave: () => peekLeave(),
       },
-      h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "▸" : ""),
+      h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "›" : ""),
       h("span", { class: "ln" }, n),
       h("span", { class: "op" }, OP[row.kind]),
       h("span", null, content),
@@ -568,7 +576,7 @@ function renderReading(it: Item | undefined): void {
       "div",
       { class: "pills" },
       it.reviewed && h("span", { class: "pill done" }, "Read"),
-      it.delta && h("span", { class: "pill accent" }, SINCE[it.delta][0], sentence(SINCE[it.delta][1].split(" —")[0])),
+      it.delta && h("span", { class: "pill accent" }, sentence(SINCE[it.delta][1].split(":")[0])),
       it.noise && !/formatting/.test(it.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
       it.wave !== null && h("span", { class: "pill" }, `Wave ${it.wave}`),
     ),
@@ -592,13 +600,8 @@ function renderReading(it: Item | undefined): void {
       it.reviewed ? "Marked as read" : "Mark as read",
       key && h("kbd", null, key),
     ),
-    next &&
-      h(
-        "button",
-        { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` },
-        h("b", { "aria-hidden": "true" }, "⟶"),
-        h("span", { class: "said" }, prose(sentence(next.rationale))),
-      ),
+    next && h("button", { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` }, "Next"),
+    next && h("span", { class: "said" }, prose(sentence(next.rationale))),
   );
 }
 
@@ -643,7 +646,7 @@ function renderCode(): void {
     for (const el of lineEl(row, k, row.hunk === st.sel, findings, uses, commented)) code.append(el);
     if (row.kind !== "del") {
       for (const c of st.file!.comments.filter((c) => c.end === row.n)) {
-        code.append(h("div", { class: "cmt" }, `✎ ${c.text}${c.stale ? " (lines changed since)" : ""}`));
+        code.append(h("div", { class: "cmt" }, `${c.text}${c.stale ? " (lines changed since)" : ""}`));
       }
     }
   });
@@ -963,7 +966,7 @@ function renderWhy(): void {
       it.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it.note)],
       !!facts?.comments.length && [
         h("h3", null, "Your comments"),
-        facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `–${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`)),
+        facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `-${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`)),
       ],
       !!facts?.out_of_order.length && [
         h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
@@ -987,7 +990,7 @@ function renderWhy(): void {
               h(
                 "div",
                 { class: "h" },
-                h("span", { class: `lv ${f.level}` }, sentence(f.level)),
+                h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
                 h("span", { class: "name" }, f.name),
                 f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row!), title: "Put the cursor on this line" }, `line ${f.row}`),
               ),
@@ -1099,8 +1102,7 @@ function renderBand(): void {
     LEVELS.filter((l) => r.levels[l]).map((l) =>
       h(
         "button",
-        { class: "sig", title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
-        h("span", { class: `dot ${l}` }),
+        { class: `sig lv-${l}`, title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
         h("b", null, r.levels[l]),
         plural[l][r.levels[l] === 1 ? 0 : 1],
       ),
@@ -1108,14 +1110,13 @@ function renderBand(): void {
     h(
       "button",
       {
-        class: "sig",
+        class: "sig progress",
         "aria-pressed": st.summary ? "true" : "false",
         title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read. The review on one page (:summary).`,
         onclick: () => toggleSummary(),
       },
-      h("span", { class: "meter" }, h("i", { style: `width:${r.coverage.total ? (100 * r.coverage.done) / r.coverage.total : 0}%` })),
-      h("b", null, r.coverage.done),
-      `of ${r.coverage.total} read`,
+      h("span", { class: "said" }, h("b", null, r.coverage.done), ` of ${r.coverage.total} read`),
+      h("span", { class: "dimstr", "aria-hidden": "true" }, h("i", { style: `--p:${r.coverage.total ? r.coverage.done / r.coverage.total : 0}` })),
     ),
     help,
   );
@@ -1158,7 +1159,7 @@ function renderSummary(): void {
   const notes = written(r);
   const serious = flagged(r, ["verdict", "warn"]);
   const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
-  const at = (path: string, line: number, end?: number) => `${path}:${line}${end && end > line ? `–${end}` : ""}`;
+  const at = (path: string, line: number, end?: number) => `${path}:${line}${end && end > line ? `-${end}` : ""}`;
   const link = (i: number | null, label: string) =>
     i === null ? h("span", { class: "at" }, label) : h("button", { class: "at", title: "Read this hunk", onclick: () => readFromSummary(i) }, label);
   const nComments = notes.filter((w) => w.kind === "comment").length;
@@ -1219,7 +1220,7 @@ function renderSummary(): void {
               h(
                 "li",
                 null,
-                h("div", { class: "where" }, h("span", { class: `dot ${f.level}` }), h("b", null, f.name), link(i, at(r.items[i].path, f.row ?? r.items[i].new[0]))),
+                h("div", { class: "where" }, h("span", { class: `lv lv-${f.level}` }, f.level === "warn" ? "warning" : f.level), h("b", null, f.name), link(i, at(r.items[i].path, f.row ?? r.items[i].new[0]))),
                 h("p", { class: "said" }, prose(f.message.split("\n")[0])),
               ),
             ),
@@ -1242,7 +1243,7 @@ function renderSummary(): void {
               h("td", null, link(next, f.path)),
               h("td", null, h("span", { class: "meter" }, h("i", { style: `width:${(100 * f.read) / f.hunks.length}%` })), ` ${f.read} of ${f.hunks.length}`),
               h("td", null, f.comments || ""),
-              h("td", null, LEVELS.filter((l) => l !== "note" && f.levels[l]).map((l) => h("span", { class: "lv" }, h("span", { class: `dot ${l}` }), f.levels[l]))),
+              h("td", null, LEVELS.filter((l) => l !== "note" && f.levels[l]).map((l) => h("span", { class: `lv lv-${l}` }, `${f.levels[l]} ${l === "warn" ? "warning" : l}${f.levels[l] === 1 ? "" : "s"}`))),
             );
           }),
         ),
@@ -1273,7 +1274,7 @@ function zoomButton(p: Pane): HTMLElement {
   return h(
     "button",
     {
-      class: "zoomer",
+      class: on ? "zoomer on" : "zoomer",
       title: on ? "Show all three columns" : "Give this column the whole page",
       "aria-label": on ? "restore the columns" : "maximise this column",
       onclick: () => {
@@ -1282,7 +1283,7 @@ function zoomButton(p: Pane): HTMLElement {
         renderAll();
       },
     },
-    on ? "⤡" : "⤢",
+    h("i", { "aria-hidden": "true" }),
   );
 }
 
@@ -1294,7 +1295,7 @@ function showSheet(title: string, text: string | Node): void {
     h(
       "div",
       { class: "sheet", role: "dialog", "aria-label": title },
-      h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "✕")),
+      h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "×")),
       typeof text === "string" ? h("pre", null, text) : h("div", { class: "scroll" }, text),
     ),
   );
@@ -1797,7 +1798,7 @@ function excerpt(f: FileData, hunk: number, context: number, max: number): HTMLE
 
 function hunkTitle(i: number): string {
   const t = st.review!.items[i];
-  return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} · ${basename(t.path)}:${t.new[0]}`;
+  return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} in ${basename(t.path)}:${t.new[0]}`;
 }
 
 async function previewHunk(i: number): Promise<void> {
@@ -1840,7 +1841,7 @@ async function renderCanvas(): Promise<void> {
     h(
       "div",
       { class: "side" },
-      h("h3", null, needs ? "needs — what this hunk uses" : "needed by — what uses this hunk"),
+      h("h3", null, needs ? "Needs: what this hunk uses" : "Needed by: what uses this hunk"),
       c.cards.map((x, k) => (x.needs === needs ? card(k) : null)),
     );
   showSheet(
@@ -1932,9 +1933,10 @@ function renderMap(again = false): void {
         onfocus: () => pick(i),
         onclick: () => goMap(i),
       },
-      h("span", { class: "name" }, it.reviewed ? `✓ ${name}` : name),
+      h("span", { class: "name" }, name),
+      it.reviewed && h("span", { class: "done" }, "read"),
       h("span", { class: "at" }, `${basename(it.path)}:${it.new[0]}`),
-      it.level && h("span", { class: `dot ${it.level}`, title: `${it.level} finding` }),
+      it.level && h("span", { class: `lv lv-${it.level}` }, it.level === "warn" ? "warning" : it.level),
     );
   };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -2055,7 +2057,7 @@ function renderConfig(): void {
     } else if (f.kind === "choice") {
       control = h(
         "button",
-        { class: "choice", title: (f.options ?? []).join(" · "), onclick: () => step({ do: "toggle", row: f.row }) },
+        { class: "choice", title: (f.options ?? []).join(", "), onclick: () => step({ do: "toggle", row: f.row }) },
         String(f.value ?? ""),
       );
     } else {
@@ -2073,7 +2075,7 @@ function renderConfig(): void {
     cfg.sections.map((s) => [h("h3", null, s.title, h("small", null, s.file)), h("table", null, h("tbody", null, s.fields.map(field)))]),
   );
   const top = ov.querySelector(".scroll")?.scrollTop ?? 0;
-  showSheet(cfg.dirty ? "settings — changed, not written" : "settings", body);
+  showSheet(cfg.dirty ? "Settings, changed and not written" : "Settings", body);
   ov.dataset.kind = "config";
   const header = ov.querySelector(".sheet > header")!;
   header.insertBefore(h("button", { class: "write", disabled: !cfg.dirty, onclick: () => step({ do: "write" }) }, "Write to files"), header.lastChild);

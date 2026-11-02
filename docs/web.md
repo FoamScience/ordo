@@ -42,11 +42,11 @@ open a second tab from the URL the server printed, not from the address bar.
 └─────────────────┴──────────────────────────────────────┴───────────────────┘
 ```
 The page is set in Geist Mono, compiled into the binary,
-The page is set in Literata and IBM Plex Mono, both compiled into the binary,
-so it reads the same offline. It follows the system's light or dark setting.
+so it reads the same offline. It follows the system's light or dark setting:
+blue line on a white sheet by day, white line on a blue sheet by night.
 
 The **reading order** on the left is every hunk on one thread, grouped by file:
-a hollow dot is unread, a filled one read, a red or amber ring a finding. The
+a hollow square is unread, a filled one read, a red or amber outline a finding. The
 selected hunk stays centred unless the thread runs out above or below it, and
 its dependencies are drawn as arcs off the thread — solid to what it needs,
 dashed to what needs it.
@@ -66,9 +66,9 @@ The header carries the review's state:
 
 | Mark | Meaning |
 | --- | --- |
-| ✦ | new since you last looked |
-| ◐ | changed since you last looked |
-| ⇅ | unchanged, but it reads in a different place now — its dependencies moved |
+| new | new since you last looked |
+| changed | changed since you last looked |
+| moved | unchanged, but it reads in a different place now — its dependencies moved |
 
 The *n changed since your last look* button narrows the reading order to those
 hunks; a first review compares against nothing, so it shows no count. The
@@ -77,7 +77,7 @@ since the review was read. A review with nothing in it offers to read again
 rather than quitting.
 
 A thin strip down the right of the code maps the whole file: the hunk being
-read in blue, other hunks in grey, and beside them verdicts, warnings, line
+read in full ink, other hunks fainter, and beside them verdicts, warnings, line
 comments and search hits. The outlined box is the part in view; click or
 drag on the strip to go elsewhere.
 
