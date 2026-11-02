@@ -77,7 +77,14 @@ rather than quitting.
 
 Columns resize by dragging the rules between them. Below 1100px wide they
 stack, the reading column first. `gD` opens the dependency canvas as an
-overlay.
+overlay: the hunk, what it needs and what needs it, one step each way.
+
+`gD` again, or `:map`, draws the hunk's whole chain: everything it stands on
+to its left, and everything rejecting it would strand to its right, each
+hunk right of what it needs. Pointing at a hunk shades what rejecting *that*
+one strands and outlines what it needs; a dashed edge is a hunk marked
+reviewed before what it needs. A click or `Enter` reads the hunk, and `gD`
+on another hunk redraws the chain around it.
 
 ## Keys and commands
 

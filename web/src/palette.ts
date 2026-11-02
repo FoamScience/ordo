@@ -11,6 +11,7 @@ export function parseCommand(line: string): { name: string; arg: string } {
 /** Commands the browser answers itself, beside the server's own. */
 export const CLIENT_COMMANDS: Command[] = [
   { name: "theme", args: "<name>", help: "switch the colour theme (auto follows the system)" },
+  { name: "map", args: "", help: "the hunk's whole chain: what it stands on to its left, what rejecting it strands to its right" },
   { name: "size", args: "<small|normal|large|larger|factor>", help: "make the text and rows bigger or smaller, for this browser" },
 ];
 
