@@ -2110,9 +2110,10 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         &raw,
         &mut sems,
         (&old_lines, &new_lines),
+        (old.unwrap_or(""), &new),
+        lang::for_path(&change.path),
         generated,
         degraded,
-        lang::for_path(&change.path).is_some_and(|s| matches!(s.name, "c" | "cpp")),
     );
     let ext = change.path.rsplit('.').next().unwrap_or("");
     let spec = lang::for_path(&change.path);
@@ -2152,12 +2153,37 @@ fn mark_shape(
     raw: &[RawHunk],
     sems: &mut [HunkSem],
     (old_lines, new_lines): (&[&str], &[&str]),
+    (old_src, new_src): (&str, &str),
+    spec: Option<&LangSpec>,
     generated: bool,
     degraded: bool,
-    c_like: bool,
 ) {
+    let c_like = spec.is_some_and(|s| matches!(s.name, "c" | "cpp"));
+    // parsed only once some hunk could be formatting, and cached by `parse`
+    // for the readers that follow
+    let mut trees: Option<Option<(tree_sitter::Tree, tree_sitter::Tree)>> = None;
     for (h, sem) in raw.iter().zip(sems) {
-        sem.noise = generated || (!degraded && formatting_only(h, old_lines, new_lines));
+        let formatting = !degraded
+            && match formatting_shape(h, old_lines, new_lines) {
+                Shape::Blank => true,
+                Shape::Different => false,
+                Shape::SameText => match spec {
+                    None => same_words(h, old_lines, new_lines),
+                    Some(spec) if spec.prose => same_words(h, old_lines, new_lines),
+                    Some(spec) => trees
+                        .get_or_insert_with(|| {
+                            Some((lang::parse(spec, old_src)?, lang::parse(spec, new_src)?))
+                        })
+                        .as_ref()
+                        .is_some_and(|(o, n)| {
+                            same_tokens(
+                                (o.root_node(), old_src, h.old_range),
+                                (n.root_node(), new_src, h.new_range),
+                            )
+                        }),
+                },
+            };
+        sem.noise = generated || formatting;
         let [o0, o1] = h.old_range;
         sem.whole_old_file = !old_lines.is_empty() && o0 == 1 && o1 >= old_lines.len();
         let changed = changed_lines(h, old_lines, new_lines);
@@ -2531,29 +2557,135 @@ fn strip_comment_marker<'a>(line: &'a str, ext: &str) -> &'a str {
         .trim()
 }
 
-// A hunk that changes only whitespace/layout: both sides present and equal once
-// whitespace is normalized away.
-fn formatting_only(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool {
-    let slice = |lines: &[&str], r: [usize; 2]| -> Option<String> {
-        if r[0] == 0 || r[0] > r[1] || r[1] > lines.len() {
-            return None; // empty side (pure insert/delete) or out of range
-        }
-        Some(
-            lines[r[0] - 1..r[1]]
-                .join("\n")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
+enum Shape {
+    /// nothing but whitespace on either side — blank lines added or removed
+    Blank,
+    /// the same characters once whitespace, commas and comment markers are
+    /// gone: a candidate for formatting, which the tokens then confirm or
+    /// refuse
+    SameText,
+    Different,
+}
+
+fn hunk_text(lines: &[&str], r: [usize; 2]) -> Option<String> {
+    if r[0] == 0 || r[0] > r[1] || r[1] > lines.len() {
+        return None; // empty side (pure insert/delete) or out of range
+    }
+    Some(lines[r[0] - 1..r[1]].join("\n"))
+}
+
+// `None` is an empty side (a pure insert or delete), which is itself "no
+// text", so a blank-line-only hunk reads as formatting rather than as a change
+// with nothing to say about it.
+fn formatting_shape(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> Shape {
+    let squeeze = |t: Option<String>| -> String {
+        t.unwrap_or_default()
+            .chars()
+            .filter(|c| !c.is_whitespace() && !COMMENT_MARKS.contains(c) && *c != ',')
+            .collect()
     };
-    let (o, n) = (slice(old_lines, h.old_range), slice(new_lines, h.new_range));
-    match (&o, &n) {
-        // same text once whitespace is normalised: a reindent or a rewrap
-        (Some(o), Some(n)) if !o.is_empty() && o == n => true,
-        // nothing but whitespace on either side — blank lines added or removed.
-        // `None` is an empty side (a pure insert or delete), which is itself
-        // "no text", so a blank-line-only hunk lands here rather than reading
-        // as a change with nothing to say about it.
-        _ => o.unwrap_or_default().is_empty() && n.unwrap_or_default().is_empty(),
+    let o = hunk_text(old_lines, h.old_range);
+    let n = hunk_text(new_lines, h.new_range);
+    let blank = |t: &Option<String>| t.as_deref().is_none_or(|t| t.trim().is_empty());
+    if blank(&o) && blank(&n) {
+        return Shape::Blank;
+    }
+    if o.is_none() || n.is_none() || squeeze(o) != squeeze(n) {
+        return Shape::Different;
+    }
+    Shape::SameText
+}
+
+// Without a grammar: the same words in the same order — a reindent or a rewrap
+// that never moved a word against its neighbour.
+fn same_words(h: &RawHunk, old_lines: &[&str], new_lines: &[&str]) -> bool {
+    let words = |lines: &[&str], r| {
+        hunk_text(lines, r).map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    words(old_lines, h.old_range) == words(new_lines, h.new_range)
+}
+
+/// Both sides read as the same tokens, each under the same chain of syntax
+/// nodes, once whitespace and a trailing comma before a closing bracket are
+/// set aside. A signature exploded over several lines or a comprehension
+/// joined onto one is formatting; a python line reindented into or out of a
+/// block is not, because its ancestry changed, and neither is `(a)` becoming
+/// the tuple `(a,)`. Whitespace inside a string is the string's value and
+/// counts; a run of comment lines compares by its words, so a rewrapped
+/// comment is formatting too.
+fn same_tokens(old: (Node, &str, [usize; 2]), new: (Node, &str, [usize; 2])) -> bool {
+    let tokens = |(root, src, r): (Node, &str, [usize; 2])| {
+        let mut leaves = vec![];
+        rows_leaves(root, r[0] - 1..=r[1] - 1, &mut leaves);
+        let texts: Vec<&str> = leaves
+            .iter()
+            .map(|n| n.utf8_text(src.as_bytes()).unwrap_or(""))
+            .collect();
+        let mut out: Vec<(u16, String, Vec<u16>)> = vec![];
+        let mut in_comment = false;
+        for (i, (n, t)) in leaves.iter().zip(&texts).enumerate() {
+            let trailing_comma = *t == ","
+                && texts[i + 1..]
+                    .iter()
+                    .find(|t| !t.trim().is_empty())
+                    .is_some_and(|next| matches!(*next, ")" | "]" | "}"));
+            if t.trim().is_empty() || trailing_comma {
+                continue;
+            }
+            let mut path = vec![];
+            let mut in_string = n.kind().contains("string");
+            let mut up = n.parent();
+            while let Some(p) = up {
+                path.push(p.kind_id());
+                in_string |= p.kind().contains("string");
+                up = p.parent();
+            }
+            let comment = n.kind().contains("comment");
+            let text = if in_string {
+                t.to_string()
+            } else {
+                t.split_whitespace()
+                    .map(|w| if comment { comment_word(w) } else { w })
+                    .filter(|w| !w.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            match out.last_mut() {
+                Some(last) if comment && in_comment && last.2 == path => {
+                    if !text.is_empty() {
+                        last.1.push(' ');
+                        last.1.push_str(&text);
+                    }
+                }
+                _ => out.push((n.kind_id(), text, path)),
+            }
+            in_comment = comment;
+        }
+        out
+    };
+    let o = tokens(old);
+    !o.is_empty() && o == tokens(new)
+}
+
+const COMMENT_MARKS: [char; 7] = ['#', '/', '*', '-', ';', '!', '%'];
+
+// a comment's word without the marker that opens or closes its line
+fn comment_word(w: &str) -> &str {
+    w.trim_start_matches(COMMENT_MARKS).trim_end_matches("*/")
+}
+
+// every leaf that touches one of `rows` (0-based), in document order — a
+// string that opens above the hunk and closes in it is part of it
+fn rows_leaves<'t>(node: Node<'t>, rows: RangeInclusive<usize>, out: &mut Vec<Node<'t>>) {
+    if node.end_position().row < *rows.start() || node.start_position().row > *rows.end() {
+        return;
+    }
+    if node.child_count() == 0 {
+        out.push(node);
+        return;
+    }
+    let mut cur = node.walk();
+    for child in node.children(&mut cur) {
+        rows_leaves(child, rows.clone(), out);
     }
 }

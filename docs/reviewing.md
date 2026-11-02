@@ -67,12 +67,23 @@ markdown's `section` makes a subsection a member of its parent heading.
 | container | `edits it "parses flags"` · `edits #ifdef CURL_DISABLE_HTTP` · `edits ALLOWED_IMPORTS` |
 | switched off | `comments out code in run` · `uncomments code in run` |
 | import | `adds import degrade` · `changes import c, d, e` · `moves import pg` · `removes import logger` |
+| formatting | `formatting only` — the same tokens under the same syntax, re-wrapped, re-spaced or given a trailing comma |
 
 An import hunk is **noise, not nothing**: it never leads the reading order and
 never seeds an edge, but it stays visible (dimmed) where the diff put it, and
 says which import arrived, changed or moved. Dropping it outright made a new
 dependency invisible, and made a *moved* import read as a deletion with no
 counterpart.
+
+A hunk is **formatting only** when both sides are the same grammar tokens,
+each under the same chain of syntax nodes, once whitespace and a trailing
+comma before a closing bracket are set aside. A signature exploded over
+several lines or a comprehension joined onto one is formatting. A python line
+reindented into a block is not, because its ancestry changed, and neither is
+`(a)` becoming the tuple `(a,)`. Whitespace inside a string is part of its
+value, so re-indenting a multi-line string is a change; a run of comment lines
+compares by its words, so a rewrapped comment is formatting. Prose (markdown)
+and a file with no grammar fall back to the same words in the same order.
 
 Cross-file lines only appear when the changeset is sent as one call with
 `cross_file: true`.
