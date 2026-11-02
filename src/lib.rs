@@ -2133,7 +2133,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         })
         .collect();
     if let Some(spec) = lang::for_path(&change.path) {
-        fill_details(&raw, &mut sems, old, spec);
+        fill_details(&raw, &mut sems, (old, &new), spec);
         fill_single_changes(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
     }
     let switched: Vec<Option<SideShift>> = raw
@@ -2276,18 +2276,89 @@ fn fill_single_changes(
 /// P15 detail layer: what the hunk did to the members of its container. The
 /// container name is already on the hunk as `enclosing`; only the old side's
 /// members need a second parse.
-fn fill_details(raw: &[RawHunk], sems: &mut [HunkSem], old: Option<&str>, spec: &lang::LangSpec) {
+fn fill_details(
+    raw: &[RawHunk],
+    sems: &mut [HunkSem],
+    (old, new): (Option<&str>, &str),
+    spec: &lang::LangSpec,
+) {
     let old_members = old
         .map(|o| extract::member_rows(spec, o))
         .unwrap_or_default();
+    let old_defs = old.map(|o| extract::def_spans(spec, o)).unwrap_or_default();
+    // read lazily: only a hunk that adds a definition beside other lines needs
+    // to know which of its members sit inside it
+    let mut new_facts: Option<(Vec<extract::MemberRow>, Vec<extract::DefSpan>)> = None;
     let phrases: Vec<(Vec<String>, Vec<String>)> = raw
         .iter()
         .zip(sems.iter())
         .map(|(h, sem)| {
+            // A definition this hunk adds or deletes whole is named by the
+            // rationale ("removes _shroud_outer"); what is inside it came or
+            // went with it, and "removes axis from np.linalg.norm" under it
+            // reads as a second, unrelated change.
+            let within = |defs: &[(String, usize, usize)], [r0, r1]: [usize; 2]| {
+                defs.iter()
+                    .filter(move |(_, d0, d1)| r0 <= *d0 && *d1 <= r1)
+                    .map(|(n, d0, d1)| (n.clone(), *d0, *d1))
+                    .collect::<Vec<_>>()
+            };
+            let old_here = within(&old_defs, h.old_range);
+            let gone: Vec<extract::DefSpan> = old_here
+                .iter()
+                .filter(|(name, ..)| !sem.defines.contains(name))
+                .cloned()
+                .collect();
+            // a key in a data file is a definition and also its parent's
+            // member: the row that declares it stays, only what it holds goes
+            let inside = |spans: &[(String, usize, usize)], (row, member): (usize, &str)| {
+                spans.iter().any(|(name, d0, d1)| {
+                    (*d0..=*d1).contains(&(row + 1)) && !(row + 1 == *d0 && member == name)
+                })
+            };
+            let members: Cow<[extract::MemberRow]> = if gone.is_empty() {
+                Cow::Borrowed(&old_members)
+            } else {
+                old_members
+                    .iter()
+                    .filter(|(row, n, ..)| !inside(&gone, (*row, n)))
+                    .cloned()
+                    .collect()
+            };
+            let mut arrived: Cow<[(String, String, Option<String>)]> = Cow::Borrowed(&sem.members);
+            if h.old_range[0] <= h.old_range[1] && !sem.members.is_empty() {
+                let (new_members, new_defs) = new_facts.get_or_insert_with(|| {
+                    (
+                        extract::member_rows(spec, new),
+                        extract::def_spans(spec, new),
+                    )
+                });
+                let came: Vec<extract::DefSpan> = within(new_defs, h.new_range)
+                    .into_iter()
+                    .filter(|(name, ..)| !old_here.iter().any(|(o, ..)| o == name))
+                    .collect();
+                if !came.is_empty() {
+                    let born: Vec<&extract::MemberRow> = new_members
+                        .iter()
+                        .filter(|(row, n, ..)| inside(&came, (*row, n)))
+                        .collect();
+                    arrived = sem
+                        .members
+                        .iter()
+                        .filter(|(n, t, c)| {
+                            !born
+                                .iter()
+                                .any(|(_, bn, bt, bc)| bn == n && bt == t && bc == c)
+                        })
+                        .cloned()
+                        .collect();
+                }
+            }
             order::detail_phrases(
                 sem,
+                &arrived,
                 h,
-                &old_members,
+                &members,
                 spec.prose,
                 spec.prose || spec.data,
                 spec.name == "yaml",

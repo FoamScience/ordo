@@ -2368,6 +2368,8 @@ fn group_name(g: &GroupInfo, sem: &[&HunkSem]) -> Option<String> {
 /// touched by one hunk) are never compared against each other.
 pub(crate) fn detail_phrases(
     s: &HunkSem,
+    // the new side's members, less any inside a definition the hunk adds whole
+    arrived: &[(String, String, Option<String>)],
     h: &RawHunk,
     old_members: &[extract::MemberRow],
     prose: bool,
@@ -2388,7 +2390,7 @@ pub(crate) fn detail_phrases(
     if o0 > o1 && !s.defines.is_empty() && !(prose && s.enclosing.is_some()) {
         return (vec![], vec![]);
     }
-    let (mut old_by, new_by) = members_by_container(s, h, old_members, nests);
+    let (mut old_by, new_by) = members_by_container(s, arrived, h, old_members, nests);
     // one container only the old side has and one only the new side has are
     // the same one renamed — a yaml document named by the value this hunk
     // edits — and its members read as changed in it, not moved between two.
@@ -2487,6 +2489,7 @@ type MemberTable<'a> = HashMap<Option<String>, HashMap<&'a str, &'a str>>;
 /// `analyze` attributed them.
 fn members_by_container<'a>(
     s: &'a HunkSem,
+    arrived: &'a [(String, String, Option<String>)],
     h: &RawHunk,
     old_members: &'a [extract::MemberRow],
     nests: bool,
@@ -2517,7 +2520,7 @@ fn members_by_container<'a>(
             .insert(n.as_str(), t.as_str());
     }
     let mut new_by: MemberTable = HashMap::new();
-    for (n, t, ctr) in &s.members {
+    for (n, t, ctr) in arrived {
         new_by
             .entry(resolve(ctr))
             .or_default()

@@ -10,7 +10,10 @@ object property.
 Members on both sides are compared by their own text, not just their name, so
 a member that merely shares a line with the real change is not reported as
 changed. A container the hunk introduces wholesale stays silent — the
-rationale already says `adds type Fresh`. Lists cap at three names plus a
+rationale already says `adds type Fresh`. So does everything inside a
+definition the hunk adds or deletes whole, even when the hunk also edits
+something else: `removes _shroud_outer` is not followed by `removes axis from
+np.linalg.norm` for a call that left with it. Lists cap at three names plus a
 count.
 
 ```

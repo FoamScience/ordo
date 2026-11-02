@@ -528,6 +528,30 @@ fn a_rewrap_in_a_file_without_a_grammar_is_formatting() {
 }
 
 #[test]
+fn a_removed_definition_swallows_what_was_inside_it() {
+    let out = one(
+        "g.py",
+        "def keep():\n    return 1\n\ndef gone(x):\n    return np.asarray(x, dtype=float)\n",
+        "def keep():\n    return 1\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.rationale, "removes gone");
+    assert!(h.details.is_empty(), "{:?}", h.details);
+}
+
+#[test]
+fn an_added_definition_swallows_what_is_inside_it() {
+    let out = one(
+        "a.py",
+        "def a():\n    f(1)\n",
+        "def a():\n    f(1, k=2)\n\ndef b():\n    h(y=2)\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.rationale, "adds b");
+    assert_eq!(h.details, vec!["adds k to f(1)"]);
+}
+
+#[test]
 fn a_rust_test_macro_names_its_test() {
     let out = one(
         "r.rs",
