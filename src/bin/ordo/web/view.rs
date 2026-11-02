@@ -213,12 +213,19 @@ fn spans(lines: Option<Vec<RoleSpans>>) -> Value {
     })
 }
 
-/// One file as the code pane draws it: both sides, highlighted by role, and
-/// every hunk of the review that falls in it.
-pub(super) fn file(app: &App, path: &str) -> Value {
-    let Some((old, new)) = app.sources.get(path) else {
-        return json!({ "path": path, "missing": true });
-    };
+/// One file as the code pane draws it, before highlighting: copied out of the
+/// review, so the costly half runs without holding it.
+pub(super) struct FileText {
+    path: String,
+    old: Vec<String>,
+    new: Vec<String>,
+    hunks: Vec<Value>,
+    comments: Vec<Value>,
+}
+
+/// `None` when the review has no text for `path`.
+pub(super) fn file_text(app: &App, path: &str) -> Option<FileText> {
+    let (old, new) = app.sources.get(path)?;
     let hunks: Vec<Value> = app
         .items
         .iter()
@@ -240,14 +247,29 @@ pub(super) fn file(app: &App, path: &str) -> Value {
         .filter(|c| c.path == path)
         .map(|c| json!({ "start": c.start, "end": c.end, "text": c.text, "stale": c.stale }))
         .collect();
+    Some(FileText {
+        path: path.to_string(),
+        old: old.clone(),
+        new: new.clone(),
+        hunks,
+        comments,
+    })
+}
+
+/// Both sides highlighted by role, and every hunk of the review that falls in
+/// the file.
+pub(super) fn file(path: &str, text: Option<FileText>) -> Value {
+    let Some(f) = text else {
+        return json!({ "path": path, "missing": true });
+    };
     json!({
-        "path": path,
-        "old": old,
-        "new": new,
-        "old_spans": spans(highlight_roles(path, &old.join("\n"))),
-        "new_spans": spans(highlight_roles(path, &new.join("\n"))),
-        "hunks": hunks,
-        "comments": comments,
+        "path": f.path,
+        "old_spans": spans(highlight_roles(&f.path, &f.old.join("\n"))),
+        "new_spans": spans(highlight_roles(&f.path, &f.new.join("\n"))),
+        "old": f.old,
+        "new": f.new,
+        "hunks": f.hunks,
+        "comments": f.comments,
     })
 }
 
