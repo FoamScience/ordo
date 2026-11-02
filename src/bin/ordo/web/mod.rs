@@ -23,6 +23,13 @@ const APP_CSS: &str = include_str!("../../../../web/dist/app.css");
 /// How often loads, the watcher and the marks file are looked at.
 const TICK: Duration = Duration::from_millis(100);
 
+/// A review no tab has followed or asked about for this long is let go; the
+/// next tab to ask for it reads it again.
+const SLOT_IDLE: Duration = Duration::from_secs(30 * 60);
+
+/// How often closed tabs and idle reviews are looked for.
+const SWEEP: Duration = Duration::from_secs(60);
+
 /// A page asset: the bundle built into this binary, or, while working on the
 /// client, the one `$ORDO_WEB_DIST` names, read on every request.
 fn asset(name: &str, built: &str) -> String {
@@ -65,6 +72,7 @@ struct Hub {
     subs: Mutex<Vec<(String, mpsc::Sender<String>)>>,
     token: String,
     port: u16,
+    swept: Mutex<Instant>,
 }
 
 pub(super) fn serve(seed: Session, args: WebArgs) -> std::io::Result<()> {
@@ -81,6 +89,7 @@ pub(super) fn serve(seed: Session, args: WebArgs) -> std::io::Result<()> {
         subs: Mutex::new(vec![]),
         token: session_token(),
         port,
+        swept: Mutex::new(Instant::now()),
     });
     hub.slot_for(&rev);
     let url = format!(
@@ -282,6 +291,30 @@ impl Hub {
         for (rev, event, data) in events {
             self.broadcast(&rev, event, data);
         }
+        let mut swept = lock(&self.swept);
+        if swept.elapsed() >= SWEEP {
+            *swept = Instant::now();
+            drop(swept);
+            self.sweep();
+        }
+    }
+
+    /// Drops the streams of closed tabs, then every review that no open tab
+    /// follows and nobody has used for `SLOT_IDLE` — with it its `App` and,
+    /// under `--watch`, its watcher thread.
+    fn sweep(&self) {
+        let followed: HashSet<String> = {
+            let mut subs = lock(&self.subs);
+            // an empty message writes nothing to a live stream, and fails on
+            // one whose tab has gone
+            subs.retain(|(_, tx)| tx.send(String::new()).is_ok());
+            subs.iter().map(|(rev, _)| rev.clone()).collect()
+        };
+        lock(&self.slots).retain(|rev, slot| {
+            followed.contains(rev)
+                || matches!(slot.phase, Phase::Loading(_))
+                || slot.touched.elapsed() < SLOT_IDLE
+        });
     }
 
     fn handle(&self, req: Request) {
@@ -384,12 +417,13 @@ impl Hub {
                     let slot = slots.get_mut(&rev).expect("slot");
                     slot.touched = Instant::now();
                     match &slot.phase {
-                        Phase::Ready(app) => Some(view::file(app, &p)),
+                        Phase::Ready(app) => Some(view::file_text(app, &p)),
                         _ => None,
                     }
                 };
+                // highlighting a large file takes a while: not under the lock
                 match out {
-                    Some(v) => json(req, v),
+                    Some(text) => json(req, view::file(&p, text)),
                     None => fail(req, 409, "the review is still loading"),
                 }
             }
