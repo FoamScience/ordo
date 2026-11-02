@@ -22,8 +22,9 @@ each other. `Ctrl-C` stops the server.
 
 The server listens on `127.0.0.1` only. The URL it prints carries a session
 token after `#t=`; every `/api` request must present it, and a request whose
-`Host` is not this server's own address is refused, so another site resolving
-to localhost cannot read the review. The token lives for one run. The page
+`Host` is not a local name (`localhost`, `127.0.0.1`, `[::1]`, on any port,
+so a forwarded port works) is refused, so another site resolving to localhost
+cannot read the review. The token lives for one run. The page
 moves it out of the address bar into the tab's own storage once loaded, so
 open a second tab from the URL the server printed, not from the address bar.
 

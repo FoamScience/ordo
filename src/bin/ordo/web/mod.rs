@@ -83,7 +83,6 @@ struct Hub {
     /// open event streams, by the revision each one follows
     subs: Mutex<Vec<(String, mpsc::Sender<String>)>>,
     token: String,
-    port: u16,
     swept: Mutex<Instant>,
 }
 
@@ -100,7 +99,6 @@ pub(super) fn serve(seed: Session, args: WebArgs) -> std::io::Result<()> {
         slots: Mutex::new(HashMap::new()),
         subs: Mutex::new(vec![]),
         token: session_token(),
-        port,
         swept: Mutex::new(Instant::now()),
     });
     hub.slot_for(&rev);
@@ -394,19 +392,25 @@ impl Hub {
         }
     }
 
-    /// A page from this server, asked for by the name it was served under
-    /// (a browser leaves out port 80):
-    /// anything else is another site resolving to localhost (DNS rebinding).
+    /// A page asked for by a local name, on any port, so a forwarded port
+    /// works; any other name is another site resolving to localhost (DNS
+    /// rebinding).
     fn host_ok(&self, req: &Request) -> bool {
         let host = req
             .headers()
             .iter()
             .find(|h| h.field.equiv("Host"))
             .map(|h| h.value.as_str().to_string());
-        let port = self.port;
         host.is_some_and(|h| {
-            let (name, at) = h.rsplit_once(':').unwrap_or((h.as_str(), "80"));
-            matches!(name, "127.0.0.1" | "localhost") && at == port.to_string()
+            let name = match h.rsplit_once(':') {
+                Some((name, port))
+                    if !name.ends_with(':') && port.bytes().all(|b| b.is_ascii_digit()) =>
+                {
+                    name
+                }
+                _ => h.as_str(),
+            };
+            matches!(name, "127.0.0.1" | "localhost" | "[::1]")
         })
     }
 
