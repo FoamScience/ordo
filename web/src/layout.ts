@@ -98,3 +98,62 @@ export function runs(text: string, spans: Spans | null, marks: [number, number][
   }
   return out;
 }
+
+export interface Caret {
+  row: number;
+  col: number;
+}
+
+// `w`, `b` and `e` as the terminal moves them: over the rows joined by "\n",
+// so a word that ends a row and one that starts the next are two words, the
+// same as across a space. Columns count characters, not UTF-16 units.
+function wordClass(c: string): number {
+  if (/\s/u.test(c)) return 0;
+  return /[\p{L}\p{N}_]/u.test(c) ? 1 : 2;
+}
+
+function flatten(lines: string[]): { chars: string[]; starts: number[] } {
+  const chars: string[] = [];
+  const starts: number[] = [];
+  lines.forEach((l, k) => {
+    starts.push(chars.length);
+    chars.push(...l);
+    if (k + 1 < lines.length) chars.push("\n");
+  });
+  return { chars, starts };
+}
+
+function caretAt(lines: string[], starts: number[], i: number): Caret {
+  let row = 0;
+  while (row + 1 < starts.length && starts[row + 1] <= i) row++;
+  return { row, col: Math.min(i - starts[row], [...lines[row]].length) };
+}
+
+/** Where `w` (`next`), `b` (`prev`) or `e` (`end`) takes the caret. */
+export function wordMove(lines: string[], at: Caret, kind: "next" | "prev" | "end"): Caret {
+  const { chars, starts } = flatten(lines);
+  if (!chars.length) return { row: 0, col: 0 };
+  let i = Math.min((starts[at.row] ?? 0) + at.col, chars.length - 1);
+  const cls = (k: number) => wordClass(chars[k]);
+  if (kind === "next") {
+    const c = cls(i);
+    if (c !== 0) while (i + 1 < chars.length && cls(i + 1) === c) i++;
+    while (i + 1 < chars.length && cls(i + 1) === 0) i++;
+    return caretAt(lines, starts, Math.min(i + 1, chars.length - 1));
+  }
+  if (kind === "prev") {
+    if (i === 0) return { row: 0, col: 0 };
+    i--;
+    while (i > 0 && cls(i) === 0) i--;
+    const c = cls(i);
+    while (i > 0 && cls(i - 1) === c) i--;
+    return caretAt(lines, starts, i);
+  }
+  if (i + 1 >= chars.length) return caretAt(lines, starts, i);
+  i++;
+  while (i < chars.length && cls(i) === 0) i++;
+  if (i >= chars.length) return caretAt(lines, starts, chars.length - 1);
+  const c = cls(i);
+  while (i + 1 < chars.length && cls(i + 1) === c) i++;
+  return caretAt(lines, starts, i);
+}

@@ -66,15 +66,15 @@ opens the dependency canvas as an overlay.
 ## Keys and commands
 
 The keymap is the terminal's — the `vim` preset, with `tui.toml`'s `[binds]`
-on top; `ordo help tui` has the table. The mouse selects hunks and code lines;
-a click on a name sets the column `K` looks up. Three kinds of terminal key do
-nothing here:
+on top; `ordo help tui` has the table. The mouse selects hunks and code lines.
+The column motions (`h` `l` `w` `b` `e` `0` `$`), or a click on a name, put a
+caret in the code line, and `K` looks up the name under it. Two kinds of
+terminal key do nothing here:
 
 - the `Ctrl-w` chords, which a browser keeps for closing the tab — `1` `2` `3`
   focus a pane and, pressed again, maximise it;
-- the column motions (`h` `l` `w` `b` `e` `0` `$`) and horizontal scrolling,
-  since the page draws no column cursor and wraps nothing;
-- the churn popup, whose numbers are already in the band.
+- horizontal scrolling and the churn popup — the browser scrolls the line, and
+  the churn numbers are already in the band.
 `:` opens the command palette with every command the terminal's bar takes,
 except `:quickfix` (the list is already here); `:e <rev>` moves the tab to
 another revision, and `:yank` copies the hand-back prompt to the clipboard.
