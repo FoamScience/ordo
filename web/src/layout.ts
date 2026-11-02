@@ -20,13 +20,15 @@ export function tableLimit(total: number, maximised: boolean): number {
 }
 
 export type CodeRow =
-  | { kind: "ctx" | "add"; n: number; text: string; spans: Spans | null; hunk: number | null; marks: [number, number][] | null }
+  | { kind: "ctx" | "add" | "edit"; n: number; text: string; spans: Spans | null; hunk: number | null; marks: [number, number][] | null }
   | { kind: "del"; o: number; text: string; spans: Spans | null; hunk: number; marks: [number, number][] | null };
 
 /**
  * The file as the code pane reads it: the new side top to bottom, each hunk's
  * removed lines standing just above where its new lines begin. A pure
- * deletion's lines stand above the line that followed them.
+ * deletion's lines stand above the line that followed them. A line that only
+ * gained text is one `edit` row — the new line, its insertions marked — not a
+ * removed line and an added one that say the same thing twice.
  */
 export function codeRows(f: FileData): CodeRow[] {
   const hunks = [...f.hunks].sort((a, b) => a.new[0] - b.new[0] || a.old[0] - b.old[0]);
@@ -39,9 +41,11 @@ export function codeRows(f: FileData): CodeRow[] {
       added.set(n, { hunk: h.i, marks: h.added[n - h.new[0]] ?? null });
     }
   }
+  const { folded, edited } = insertionsOnly(f, hunks);
   const removedBefore = (n: number) => {
     for (const h of startingAt.get(n) ?? []) {
       for (let o = h.old[0]; o <= h.old[1]; o++) {
+        if (folded.has(o)) continue;
         rows.push({
           kind: "del",
           o,
@@ -57,7 +61,7 @@ export function codeRows(f: FileData): CodeRow[] {
     removedBefore(n);
     const a = added.get(n);
     rows.push({
-      kind: a ? "add" : "ctx",
+      kind: a ? (edited.has(n) ? "edit" : "add") : "ctx",
       n,
       text: f.new[n - 1],
       spans: f.new_spans?.[n - 1] ?? null,
@@ -67,6 +71,37 @@ export function codeRows(f: FileData): CodeRow[] {
   }
   removedBefore(f.new.length + 1);
   return rows;
+}
+
+/**
+ * The removed lines that read again, unchanged, inside an added line — only
+ * text was inserted — paired in order with that added line.
+ */
+function insertionsOnly(f: FileData, hunks: FileData["hunks"]): { folded: Set<number>; edited: Set<number> } {
+  const folded = new Set<number>();
+  const edited = new Set<number>();
+  const without = (text: string, spans: [number, number][]) => {
+    const cs = [...text];
+    return cs.filter((_, k) => !spans.some(([a, b]) => k >= a && k < b)).join("");
+  };
+  for (const h of hunks) {
+    let next = h.new[0];
+    for (let o = h.old[0]; o <= h.old[1]; o++) {
+      const rm = h.removed[o - h.old[0]];
+      if (!rm) continue;
+      for (let n = next; n <= h.new[1]; n++) {
+        const add = h.added[n - h.new[0]];
+        if (!add) continue;
+        if (rm.length === 0 && add.length > 0 && without(f.new[n - 1] ?? "", add) === (f.old[o - 1] ?? "")) {
+          folded.add(o);
+          edited.add(n);
+          next = n + 1;
+        }
+        break;
+      }
+    }
+  }
+  return { folded, edited };
 }
 
 /** The row a hunk's reading starts on: its first removed line, else its first new one. */

@@ -88,3 +88,33 @@ test("a caret counts characters, not UTF-16 units", () => {
   assert.deepEqual(wordMove(["é😀 x"], { row: 0, col: 0 }, "next"), { row: 0, col: 1 });
   assert.deepEqual(wordMove(["😀😀 x"], { row: 0, col: 0 }, "end"), { row: 0, col: 1 });
 });
+
+test("a line that only gained text reads once, its insertion marked", () => {
+  const rows = codeRows(
+    file({
+      old: ["def side_room(rows):", "    pass"],
+      new: ["def side_room(rows, wall=None):", "    return 1"],
+      hunks: [{ i: 0, old: [1, 2], new: [1, 2], removed: [[], null], added: [[[18, 29]], null] }],
+    }),
+  );
+  assert.deepEqual(
+    rows.map((r) => [r.kind, r.text]),
+    [
+      ["del", "    pass"],
+      ["edit", "def side_room(rows, wall=None):"],
+      ["add", "    return 1"],
+    ],
+  );
+  assert.deepEqual(rows[1].marks, [[18, 29]]);
+});
+
+test("a line that also lost text stays a removed and an added line", () => {
+  const rows = codeRows(
+    file({
+      old: ["x = f(a)"],
+      new: ["x = g(a, b)"],
+      hunks: [{ i: 0, old: [1, 1], new: [1, 1], removed: [[[4, 5]]], added: [[[4, 5], [6, 9]]] }],
+    }),
+  );
+  assert.deepEqual(rows.map((r) => r.kind), ["del", "add"]);
+});
