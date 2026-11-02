@@ -6,6 +6,7 @@ import { Api } from "./api.ts";
 import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove, type CodeRow } from "./layout.ts";
+import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
 import type { ActResult, FileData, Item, ItemFacts, Level, Review, Row } from "./types.ts";
@@ -103,6 +104,11 @@ async function refresh(): Promise<void> {
   if (sel < 0) sel = prev ? clampToView(Math.min(st.sel, slot.items.length - 1)) : slot.sel;
   if (moved) {
     st.jumps = st.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
+    if (depmap) {
+      depmap.root = remap(depmap.root);
+      depmap.sel = remap(depmap.sel);
+      if (depmap.root < 0) closeSheet();
+    }
     if (canvas) {
       const c = canvas;
       c.anchor = remap(c.anchor);
@@ -125,6 +131,7 @@ async function refresh(): Promise<void> {
   if (same) st.sel = -1;
   await select(sel, { keepCursor: same });
   if (canvas) renderCanvas();
+  if (depmap) renderMap(true);
 }
 
 function identity(it: Item | undefined): string {
@@ -983,6 +990,7 @@ function closeSheet(): boolean {
   ov.hidden = true;
   delete ov.dataset.kind;
   canvas = null;
+  depmap = null;
   replace(ov);
   return true;
 }
@@ -1133,6 +1141,7 @@ async function runPalette(): Promise<void> {
     localStorage.setItem("ordo.look", arg || "auto");
     return;
   }
+  if (name === "map") return openMap();
   if (name === "size") {
     const ui = sizeOf(arg);
     if (ui === null) return toast(`:size takes ${Object.keys(SIZES).join(", ")} or a factor like 1.2`, true);
@@ -1368,6 +1377,10 @@ function onKey(e: KeyboardEvent): void {
     e.preventDefault();
     return void canvasKey("jump-to-edge");
   }
+  if (key === "Enter" && depmap) {
+    e.preventDefault();
+    return void mapKey("jump-to-edge");
+  }
   if (key === "Esc" && $("#overlay").dataset.kind === "config") {
     e.preventDefault();
     return void dismissSheet();
@@ -1390,7 +1403,7 @@ function onKey(e: KeyboardEvent): void {
   }
   if ("act" in res) {
     e.preventDefault();
-    if (canvasKey(res.act)) return;
+    if (canvasKey(res.act) || mapKey(res.act)) return;
     return run(res.act);
   }
   if (pending) {
@@ -1528,8 +1541,168 @@ function canvasKey(action: string): boolean {
     renderCanvas();
   } else if (action === "jump-to-edge") {
     goCanvas(canvas.sel);
-  } else if (action === "quit" || action === "open-deps" || action === "focus-deps") {
+  } else if (action === "open-deps" || action === "focus-deps") {
+    // the next step out from one hop is the whole chain
+    const root = canvas.anchor;
     canvas = null;
+    depmap = { root, sel: root, order: [] };
+    renderMap();
+  } else if (action === "quit") {
+    canvas = null;
+    closeSheet();
+  }
+  return true;
+}
+
+/** One hunk's dependency chain; `sel` is the hunk picked on it. */
+let depmap: { root: number; sel: number; order: number[] } | null = null;
+
+function openMap(): void {
+  const r = st.review!;
+  if (!needPairs(r.items, r.view).some((p) => p.includes(st.sel))) {
+    return toast("nothing in this change needs this hunk, and it needs nothing");
+  }
+  depmap = { root: st.sel, sel: st.sel, order: [] };
+  renderMap();
+}
+
+/** Draws the map; `again` is a redraw of one already open, which keeps its scroll. */
+function renderMap(again = false): void {
+  if (!depmap) return;
+  const r = st.review!;
+  const root = depmap.root;
+  if (!r.view.includes(root)) {
+    closeSheet();
+    return;
+  }
+  const scrolled = $("#overlay").querySelector(".sheet > .scroll");
+  const keep = again && scrolled ? { top: scrolled.scrollTop, left: scrolled.scrollLeft } : null;
+  const ui = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui")) || 1;
+  const box = { width: 236 * ui, height: 54 * ui };
+  const m = depMap(r.items, r.view, root, box);
+  depmap.order = r.view.filter((i) => m.nodes.has(i));
+  if (!m.nodes.has(depmap.sel)) depmap.sel = root;
+  const pick = (i: number) => {
+    if (!depmap || depmap.sel === i) return;
+    depmap.sel = i;
+    paintMap();
+  };
+  const node = (i: number, at: { x: number; y: number }) => {
+    const it = r.items[i];
+    const name = it.symbols[0] ?? it.enclosing ?? it.symbol ?? basename(it.path);
+    return h(
+      "button",
+      {
+        class: `node${i === root ? " root" : ""}`,
+        dataset: { i: String(i) },
+        style: `left:${at.x - box.width / 2}px;top:${at.y - box.height / 2}px;width:${box.width}px;height:${box.height}px`,
+        title: it.rationale,
+        onmouseenter: () => pick(i),
+        onfocus: () => pick(i),
+        onclick: () => goMap(i),
+      },
+      h("span", { class: "name" }, it.reviewed ? `✓ ${name}` : name),
+      h("span", { class: "at" }, `${basename(it.path)}:${it.new[0]}`),
+      it.level && h("span", { class: `dot ${it.level}`, title: `${it.level} finding` }),
+    );
+  };
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", String(m.width));
+  svg.setAttribute("height", String(m.height));
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML =
+    '<defs><marker id="map-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+    '<path d="M0 0 L8 4 L0 8 z" fill="context-stroke"/></marker></defs>';
+  for (const e of m.edges) {
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", smoothPath(e.points));
+    p.setAttribute("marker-end", "url(#map-head)");
+    p.dataset.from = String(e.from);
+    p.dataset.to = String(e.to);
+    if (e.outOfOrder) p.classList.add("early");
+    svg.append(p);
+  }
+  const ground = groundOf(r.items, r.view, root).size;
+  const strands = cascadeOf(r.items, r.view, root).size;
+  const hunks = (n: number) => `${n} hunk${n === 1 ? "" : "s"}`;
+  const early = m.edges.filter((e) => e.outOfOrder).length;
+  showSheet(
+    `Dependencies of ${hunkTitle(root)}`,
+    h(
+      "div",
+      { class: "mapview" },
+      h(
+        "p",
+        { class: "lede" },
+        `It stands on ${hunks(ground)}, drawn to its left, and ${hunks(strands)} ${strands === 1 ? "stands" : "stand"} on it, drawn to its right.`,
+        early ? h("span", { class: "early" }, ` ${hunks(early)} marked reviewed before what ${early === 1 ? "it needs" : "they need"}, dashed.`) : null,
+      ),
+      h("p", { class: "said", "aria-live": "polite" }),
+      h("div", { class: "depmap", style: `width:${m.width}px;height:${m.height}px` }, svg, [...m.nodes].map(([i, at]) => node(i, at))),
+    ),
+  );
+  $("#overlay").querySelector(".sheet")?.classList.add("wide");
+  $("#overlay").dataset.kind = "map";
+  paintMap();
+  const scroll = $("#overlay").querySelector(".sheet > .scroll");
+  if (keep && scroll) {
+    scroll.scrollTop = keep.top;
+    scroll.scrollLeft = keep.left;
+  } else {
+    $("#overlay .node.root")?.scrollIntoView({ block: "center", inline: "center" });
+  }
+}
+
+/** Marks the picked hunk, what it needs, and what rejecting it would strand. */
+function paintMap(): void {
+  if (!depmap) return;
+  const r = st.review!;
+  const i = depmap.sel;
+  const strands = cascadeOf(r.items, r.view, i);
+  const needs = new Set(needPairs(r.items, r.view).flatMap(([from, to]) => (to === i ? [from] : [])));
+  for (const el of $("#overlay").querySelectorAll<HTMLElement>(".node")) {
+    const k = Number(el.dataset.i);
+    el.classList.toggle("picked", k === i);
+    el.classList.toggle("strands", strands.has(k));
+    el.classList.toggle("needed", needs.has(k));
+    el.classList.toggle("reviewed", r.items[k].reviewed);
+  }
+  for (const p of $("#overlay").querySelectorAll<SVGPathElement>(".depmap path[data-from]")) {
+    const from = Number(p.dataset.from);
+    const to = Number(p.dataset.to);
+    p.classList.toggle("strands", (from === i || strands.has(from)) && strands.has(to));
+    p.classList.toggle("needed", to === i);
+  }
+  const said = $("#overlay").querySelector(".mapview .said");
+  if (said && r.items[i]) {
+    const name = hunkTitle(i);
+    const stranded = strands.size ? `rejecting it strands ${strands.size} hunk${strands.size === 1 ? "" : "s"}, shaded red` : "nothing here needs it";
+    const needed = needs.size ? `; it needs ${needs.size}, outlined` : "";
+    said.textContent = `${i === depmap.root ? "This hunk" : name}: ${stranded}${needed}. Click a hunk to read it; gD on it draws its own chain.`;
+  }
+}
+
+function goMap(i: number): void {
+  depmap = null;
+  closeSheet();
+  jumpTo(i);
+}
+
+function mapKey(action: string): boolean {
+  if (!depmap || action === "command" || action === "command-goto") return false;
+  const order = depmap.order;
+  if (action === "next" || action === "prev") {
+    const at = order.indexOf(depmap.sel);
+    depmap.sel = order[Math.max(0, Math.min(order.length - 1, at + (action === "next" ? 1 : -1)))];
+    paintMap();
+    $("#overlay .node.picked")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  } else if (action === "jump-to-edge") {
+    goMap(depmap.sel);
+  } else if ((action === "open-deps" || action === "focus-deps") && depmap.sel !== depmap.root) {
+    depmap.root = depmap.sel;
+    renderMap();
+  } else if (action === "quit" || action === "open-deps" || action === "focus-deps") {
+    depmap = null;
     closeSheet();
   }
   return true;

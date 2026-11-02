@@ -541,6 +541,31 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .card header .muted { font: var(--fs-small) var(--serif); color: var(--dim); }
 .card .code { overflow: auto; }
 .sheet .src { font: var(--fs-code) var(--mono); }
+
+.mapview .lede { margin: 4px 0 2px; font-size: var(--fs-note); color: var(--dim); max-width: 72ch; }
+.mapview .lede .early { color: var(--warn); }
+.mapview .said { margin: 0 0 14px; font-size: var(--fs-note); font-style: italic; min-height: 1.5em; }
+.depmap { position: relative; margin: 0 auto; }
+.depmap svg { position: absolute; inset: 0; overflow: visible; }
+.depmap path { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.depmap path.needed { stroke: var(--accent); stroke-width: 2; }
+.depmap path.strands { stroke: var(--verdict); stroke-width: 2; }
+.depmap path.early { stroke: var(--warn); stroke-dasharray: 5 4; }
+.node {
+  display: flex; flex-direction: column; justify-content: center; gap: 2px; text-align: left;
+  padding: 4px 26px 4px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--fg); cursor: pointer; min-width: 0;
+}
+.depmap .node { position: absolute; }
+.node .name, .node .at { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .name { font: 600 var(--fs-tiny) var(--mono); }
+.node .at { font: var(--fs-tiny) var(--serif); color: var(--dim); }
+.node .dot { position: absolute; top: 9px; right: 10px; }
+.node.reviewed { color: var(--reviewed); background: var(--bg); border-style: dashed; }
+.node.needed { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.node.strands { background: var(--verdict-bg); border-color: var(--verdict); }
+.node.root::before { content: ""; position: absolute; left: -1px; top: 8px; bottom: 8px; width: 4px; border-radius: 2px; background: var(--accent); }
+.node.picked { outline: 3px solid var(--focus); outline-offset: 2px; }
 .config td:first-child { font-family: var(--serif); font-size: var(--fs-small); white-space: normal; }
 .config input:not([type]) {
   font: var(--fs-tiny) var(--mono); background: var(--bg); color: var(--fg);

@@ -1493,9 +1493,9 @@ var Api = class {
     this.rev = rev2;
   }
   url(path, params = {}) {
-    const q = new URLSearchParams({ rev: this.rev });
-    for (const [k, v] of Object.entries(params)) q.set(k, String(v));
-    return `${path}?${q}`;
+    const q2 = new URLSearchParams({ rev: this.rev });
+    for (const [k, v] of Object.entries(params)) q2.set(k, String(v));
+    return `${path}?${q2}`;
   }
   async get(path, params = {}) {
     const res = await fetch(this.url(path, params), { headers: { "X-Ordo-Token": this.token } });
@@ -1521,10 +1521,10 @@ var Api = class {
     });
     return answer(res);
   }
-  events(on) {
+  events(on2) {
     const es = new EventSource(this.url("/api/events", { t: this.token }));
     for (const name of ["progress", "changed"]) {
-      es.addEventListener(name, (e) => on(name, JSON.parse(e.data)));
+      es.addEventListener(name, (e) => on2(name, JSON.parse(e.data)));
     }
     return es;
   }
@@ -1772,7 +1772,7 @@ function runs(text, spans, marks, gone = []) {
   for (const [a, b] of marks ?? []) for (let k = a; k < b && k < chars.length; k++) changed[k] = true;
   const out = [];
   const lost = (k) => {
-    for (const [at, t] of gone) if (at === k) out.push({ text: t, role: null, changed: false, gone: true });
+    for (const [at2, t] of gone) if (at2 === k) out.push({ text: t, role: null, changed: false, gone: true });
   };
   for (let k = 0; k < chars.length; k++) {
     lost(k);
@@ -1802,10 +1802,10 @@ function caretAt(lines, starts, i) {
   while (row + 1 < starts.length && starts[row + 1] <= i) row++;
   return { row, col: Math.min(i - starts[row], [...lines[row]].length) };
 }
-function wordMove(lines, at, kind) {
+function wordMove(lines, at2, kind) {
   const { chars, starts } = flatten(lines);
   if (!chars.length) return { row: 0, col: 0 };
-  let i = Math.min((starts[at.row] ?? 0) + at.col, chars.length - 1);
+  let i = Math.min((starts[at2.row] ?? 0) + at2.col, chars.length - 1);
   const cls = (k) => wordClass(chars[k]);
   if (kind === "next") {
     const c2 = cls(i);
@@ -1830,6 +1830,1991 @@ function wordMove(lines, at, kind) {
   return caretAt(lines, starts, i);
 }
 
+// node_modules/@dagrejs/dagre/dist/dagre.esm.js
+var Te = Object.defineProperty;
+var Sn = (e, n, t) => n in e ? Te(e, n, { enumerable: true, configurable: true, writable: true, value: t }) : e[n] = t;
+var Mn = (e, n) => {
+  for (var t in n) Te(e, t, { get: n[t], enumerable: true });
+};
+var je = (e, n, t) => Sn(e, typeof n != "symbol" ? n + "" : n, t);
+var ie = {};
+Mn(ie, { Graph: () => T, alg: () => H });
+var Pn = Object.defineProperty;
+var Se = (e, n) => {
+  for (var t in n) Pn(e, t, { get: n[t], enumerable: true });
+};
+var Q = class {
+  constructor(e) {
+    this._isDirected = true, this._isMultigraph = false, this._isCompound = false, this._nodes = {}, this._in = {}, this._preds = {}, this._out = {}, this._sucs = {}, this._edgeObjs = {}, this._edgeLabels = {}, this._nodeCount = 0, this._edgeCount = 0, this._defaultNodeLabelFn = () => {
+    }, this._defaultEdgeLabelFn = () => {
+    }, e && (this._isDirected = "directed" in e ? e.directed : true, this._isMultigraph = "multigraph" in e ? e.multigraph : false, this._isCompound = "compound" in e ? e.compound : false), this._isCompound && (this._parent = {}, this._children = {}, this._children["\0"] = {});
+  }
+  isDirected() {
+    return this._isDirected;
+  }
+  isMultigraph() {
+    return this._isMultigraph;
+  }
+  isCompound() {
+    return this._isCompound;
+  }
+  setGraph(e) {
+    return this._label = e, this;
+  }
+  graph() {
+    return this._label;
+  }
+  setDefaultNodeLabel(e) {
+    return typeof e != "function" ? this._defaultNodeLabelFn = () => e : this._defaultNodeLabelFn = e, this;
+  }
+  nodeCount() {
+    return this._nodeCount;
+  }
+  nodes() {
+    return Object.keys(this._nodes);
+  }
+  sources() {
+    return this.nodes().filter((e) => Object.keys(this._in[e]).length === 0);
+  }
+  sinks() {
+    return this.nodes().filter((e) => Object.keys(this._out[e]).length === 0);
+  }
+  setNodes(e, n) {
+    return e.forEach((t) => {
+      n !== void 0 ? this.setNode(t, n) : this.setNode(t);
+    }), this;
+  }
+  setNode(e, n) {
+    return e in this._nodes ? (arguments.length > 1 && (this._nodes[e] = n), this) : (this._nodes[e] = arguments.length > 1 ? n : this._defaultNodeLabelFn(e), this._isCompound && (this._parent[e] = "\0", this._children[e] = {}, this._children["\0"][e] = true), this._in[e] = {}, this._preds[e] = {}, this._out[e] = {}, this._sucs[e] = {}, ++this._nodeCount, this);
+  }
+  node(e) {
+    return this._nodes[e];
+  }
+  hasNode(e) {
+    return e in this._nodes;
+  }
+  removeNode(e) {
+    if (e in this._nodes) {
+      let n = (t) => this.removeEdge(this._edgeObjs[t]);
+      delete this._nodes[e], this._isCompound && (this._removeFromParentsChildList(e), delete this._parent[e], this.children(e).forEach((t) => {
+        this.setParent(t);
+      }), delete this._children[e]), Object.keys(this._in[e]).forEach(n), delete this._in[e], delete this._preds[e], Object.keys(this._out[e]).forEach(n), delete this._out[e], delete this._sucs[e], --this._nodeCount;
+    }
+    return this;
+  }
+  setParent(e, n) {
+    if (!this._isCompound) throw new Error("Cannot set parent in a non-compound graph");
+    if (n === void 0) n = "\0";
+    else {
+      n += "";
+      for (let t = n; t !== void 0; t = this.parent(t)) if (t === e) throw new Error("Setting " + n + " as parent of " + e + " would create a cycle");
+      this.setNode(n);
+    }
+    return this.setNode(e), this._removeFromParentsChildList(e), this._parent[e] = n, this._children[n][e] = true, this;
+  }
+  parent(e) {
+    if (this._isCompound) {
+      let n = this._parent[e];
+      if (n !== "\0") return n;
+    }
+  }
+  children(e = "\0") {
+    if (this._isCompound) {
+      let n = this._children[e];
+      if (n) return Object.keys(n);
+    } else {
+      if (e === "\0") return this.nodes();
+      if (this.hasNode(e)) return [];
+    }
+    return [];
+  }
+  predecessors(e) {
+    let n = this._preds[e];
+    if (n) return Object.keys(n);
+  }
+  successors(e) {
+    let n = this._sucs[e];
+    if (n) return Object.keys(n);
+  }
+  neighbors(e) {
+    let n = this.predecessors(e);
+    if (n) {
+      let t = new Set(n), r = this.successors(e);
+      if (r) for (let o of r) t.add(o);
+      return Array.from(t.values());
+    }
+  }
+  isLeaf(e) {
+    var n;
+    let t;
+    return this.isDirected() ? t = this.successors(e) : t = this.neighbors(e), ((n = t == null ? void 0 : t.length) != null ? n : 0) === 0;
+  }
+  filterNodes(e) {
+    let n = new this.constructor({ directed: this._isDirected, multigraph: this._isMultigraph, compound: this._isCompound });
+    n.setGraph(this.graph()), Object.entries(this._nodes).forEach(([o, i]) => {
+      e(o) && n.setNode(o, i);
+    }), Object.values(this._edgeObjs).forEach((o) => {
+      n.hasNode(o.v) && n.hasNode(o.w) && n.setEdge(o, this.edge(o));
+    });
+    let t = {}, r = (o) => {
+      let i = this.parent(o);
+      return !i || n.hasNode(i) ? (t[o] = i, i) : i in t ? t[i] : r(i);
+    };
+    return this._isCompound && n.nodes().forEach((o) => n.setParent(o, r(o))), n;
+  }
+  setDefaultEdgeLabel(e) {
+    return typeof e != "function" ? this._defaultEdgeLabelFn = () => e : this._defaultEdgeLabelFn = e, this;
+  }
+  edgeCount() {
+    return this._edgeCount;
+  }
+  edges() {
+    return Object.values(this._edgeObjs);
+  }
+  setPath(e, n) {
+    return e.reduce((t, r) => (n !== void 0 ? this.setEdge(t, r, n) : this.setEdge(t, r), r)), this;
+  }
+  setEdge(e, n, t, r) {
+    let o, i, s, a, l = false;
+    typeof e == "object" && e !== null && "v" in e ? (o = e.v, i = e.w, s = e.name, arguments.length === 2 && (a = n, l = true)) : (o = e, i = n, s = r, arguments.length > 2 && (a = t, l = true)), o = "" + o, i = "" + i, s !== void 0 && (s = "" + s);
+    let u = z(this._isDirected, o, i, s);
+    if (u in this._edgeLabels) return l && (this._edgeLabels[u] = a), this;
+    if (s !== void 0 && !this._isMultigraph) throw new Error("Cannot set a named edge when isMultigraph = false");
+    this.setNode(o), this.setNode(i), this._edgeLabels[u] = l ? a : this._defaultEdgeLabelFn(o, i, s);
+    let d = Fn(this._isDirected, o, i, s);
+    return o = d.v, i = d.w, Object.freeze(d), this._edgeObjs[u] = d, Re(this._preds[i], o), Re(this._sucs[o], i), this._in[i][u] = d, this._out[o][u] = d, this._edgeCount++, this;
+  }
+  edge(e, n, t) {
+    let r = arguments.length === 1 ? oe(this._isDirected, e) : z(this._isDirected, e, n, t);
+    return this._edgeLabels[r];
+  }
+  edgeAsObj(e, n, t) {
+    let r = arguments.length === 1 ? this.edge(e) : this.edge(e, n, t);
+    return typeof r != "object" || r === null ? { label: r } : r;
+  }
+  hasEdge(e, n, t) {
+    return (arguments.length === 1 ? oe(this._isDirected, e) : z(this._isDirected, e, n, t)) in this._edgeLabels;
+  }
+  removeEdge(e, n, t) {
+    let r = arguments.length === 1 ? oe(this._isDirected, e) : z(this._isDirected, e, n, t), o = this._edgeObjs[r];
+    if (o) {
+      let i = o.v, s = o.w;
+      delete this._edgeLabels[r], delete this._edgeObjs[r], Ie(this._preds[s], i), Ie(this._sucs[i], s), delete this._in[s][r], delete this._out[i][r], this._edgeCount--;
+    }
+    return this;
+  }
+  inEdges(e, n) {
+    return this.isDirected() ? this.filterEdges(this._in[e], e, n) : this.nodeEdges(e, n);
+  }
+  outEdges(e, n) {
+    return this.isDirected() ? this.filterEdges(this._out[e], e, n) : this.nodeEdges(e, n);
+  }
+  nodeEdges(e, n) {
+    if (e in this._nodes) return this.filterEdges({ ...this._in[e], ...this._out[e] }, e, n);
+  }
+  _removeFromParentsChildList(e) {
+    delete this._children[this._parent[e]][e];
+  }
+  filterEdges(e, n, t) {
+    if (!e) return;
+    let r = Object.values(e);
+    return t ? r.filter((o) => o.v === n && o.w === t || o.v === t && o.w === n) : r;
+  }
+};
+function Re(e, n) {
+  e[n] ? e[n]++ : e[n] = 1;
+}
+function Ie(e, n) {
+  e[n] !== void 0 && !--e[n] && delete e[n];
+}
+function z(e, n, t, r) {
+  let o = "" + n, i = "" + t;
+  if (!e && o > i) {
+    let s = o;
+    o = i, i = s;
+  }
+  return o + "" + i + "" + (r === void 0 ? "\0" : r);
+}
+function Fn(e, n, t, r) {
+  let o = "" + n, i = "" + t;
+  if (!e && o > i) {
+    let a = o;
+    o = i, i = a;
+  }
+  let s = { v: o, w: i };
+  return r && (s.name = r), s;
+}
+function oe(e, n) {
+  return z(e, n.v, n.w, n.name);
+}
+var Dn = {};
+Se(Dn, { read: () => Bn, write: () => An });
+function An(e) {
+  let n = { options: { directed: e.isDirected(), multigraph: e.isMultigraph(), compound: e.isCompound() }, nodes: Vn(e), edges: Yn(e) }, t = e.graph();
+  return t !== void 0 && (n.value = structuredClone(t)), n;
+}
+function Vn(e) {
+  return e.nodes().map((n) => {
+    let t = e.node(n), r = e.parent(n), o = { v: n };
+    return t !== void 0 && (o.value = t), r !== void 0 && (o.parent = r), o;
+  });
+}
+function Yn(e) {
+  return e.edges().map((n) => {
+    let t = e.edge(n), r = { v: n.v, w: n.w };
+    return n.name !== void 0 && (r.name = n.name), t !== void 0 && (r.value = t), r;
+  });
+}
+function Bn(e) {
+  let n = new Q(e.options);
+  return e.value !== void 0 && n.setGraph(e.value), e.nodes.forEach((t) => {
+    n.setNode(t.v, t.value), t.parent && n.setParent(t.v, t.parent);
+  }), e.edges.forEach((t) => {
+    n.setEdge({ v: t.v, w: t.w, name: t.name }, t.value);
+  }), n;
+}
+var H = {};
+Se(H, { CycleException: () => K, bellmanFord: () => Me, components: () => zn, dijkstra: () => J, dijkstraAll: () => $n, findCycles: () => Un, floydWarshall: () => Kn, isAcyclic: () => Zn, postorder: () => nt, preorder: () => tt, prim: () => rt, shortestPaths: () => ot, tarjan: () => Fe, topsort: () => De });
+var Wn = () => 1;
+function Me(e, n, t, r) {
+  return Xn(e, String(n), t || Wn, r || function(o) {
+    var i;
+    return (i = e.outEdges(o)) != null ? i : [];
+  });
+}
+function Xn(e, n, t, r) {
+  let o = {}, i, s = 0, a = e.nodes(), l = function(c) {
+    let f = o[c.v], h2 = o[c.w];
+    if (!f || !h2) return;
+    let g = t(c);
+    f.distance + g < h2.distance && (o[c.w] = { distance: f.distance + g, predecessor: c.v }, i = true);
+  }, u = function() {
+    a.forEach(function(c) {
+      r(c).forEach(function(f) {
+        let h2 = f.v === c ? f.v : f.w, g = h2 === f.v ? f.w : f.v;
+        l({ v: h2, w: g });
+      });
+    });
+  };
+  a.forEach(function(c) {
+    let f = c === n ? 0 : Number.POSITIVE_INFINITY;
+    o[c] = { distance: f, predecessor: "" };
+  });
+  let d = a.length;
+  for (let c = 1; c < d && (i = false, s++, u(), !!i); c++) ;
+  if (s === d - 1 && (i = false, u(), i)) throw new Error("The graph contains a negative weight cycle");
+  return o;
+}
+function zn(e) {
+  let n = {}, t = [], r;
+  function o(i) {
+    var s, a;
+    i in n || (n[i] = true, r.push(i), (s = e.successors(i)) == null || s.forEach(o), (a = e.predecessors(i)) == null || a.forEach(o));
+  }
+  return e.nodes().forEach(function(i) {
+    r = [], o(i), r.length && t.push(r);
+  }), t;
+}
+var Pe = class {
+  constructor() {
+    this._arr = [], this._keyIndices = {};
+  }
+  size() {
+    return this._arr.length;
+  }
+  keys() {
+    return this._arr.map((e) => e.key);
+  }
+  has(e) {
+    return e in this._keyIndices;
+  }
+  priority(e) {
+    let n = this._keyIndices[e];
+    if (n !== void 0) return this._arr[n].priority;
+  }
+  min() {
+    if (this.size() === 0) throw new Error("Queue underflow");
+    return this._arr[0].key;
+  }
+  add(e, n) {
+    let t = this._keyIndices, r = String(e);
+    if (!(r in t)) {
+      let o = this._arr, i = o.length;
+      return t[r] = i, o.push({ key: r, priority: n }), this._decrease(i), true;
+    }
+    return false;
+  }
+  removeMin() {
+    if (this.size() === 0) throw new Error("Queue underflow");
+    this._swap(0, this._arr.length - 1);
+    let e = this._arr.pop();
+    return delete this._keyIndices[e.key], this._heapify(0), e.key;
+  }
+  decrease(e, n) {
+    let t = this._keyIndices[e];
+    if (t === void 0) throw new Error(`Key not found: ${e}`);
+    let r = this._arr[t].priority;
+    if (n > r) throw new Error(`New priority is greater than current priority. Key: ${e} Old: ${r} New: ${n}`);
+    this._arr[t].priority = n, this._decrease(t);
+  }
+  _heapify(e) {
+    let n = this._arr, t = 2 * e, r = t + 1, o = e;
+    t < n.length && (o = n[t].priority < n[o].priority ? t : o, r < n.length && (o = n[r].priority < n[o].priority ? r : o), o !== e && (this._swap(e, o), this._heapify(o)));
+  }
+  _decrease(e) {
+    let n = this._arr, t = n[e].priority, r;
+    for (; e !== 0 && (r = e >> 1, !(n[r].priority < t)); ) this._swap(e, r), e = r;
+  }
+  _swap(e, n) {
+    let t = this._arr, r = this._keyIndices, o = t[e], i = t[n];
+    t[e] = i, t[n] = o, r[i.key] = e, r[o.key] = n;
+  }
+};
+var Hn = () => 1;
+function J(e, n, t, r) {
+  let o = function(i) {
+    var s;
+    return (s = e.outEdges(i)) != null ? s : [];
+  };
+  return qn(e, String(n), t || Hn, r || o);
+}
+function qn(e, n, t, r) {
+  let o = {}, i = new Pe(), s, a, l = function(u) {
+    let d = u.v !== s ? u.v : u.w, c = o[d];
+    if (!c) return;
+    let f = t(u), h2 = a.distance + f;
+    if (f < 0) throw new Error("dijkstra does not allow negative edge weights. Bad edge: " + u + " Weight: " + f);
+    h2 < c.distance && (c.distance = h2, c.predecessor = s, i.decrease(d, h2));
+  };
+  for (e.nodes().forEach(function(u) {
+    let d = u === n ? 0 : Number.POSITIVE_INFINITY;
+    o[u] = { distance: d, predecessor: "" }, i.add(u, d);
+  }); i.size() > 0; ) {
+    s = i.removeMin();
+    let u = o[s];
+    if (!u || u.distance === Number.POSITIVE_INFINITY) break;
+    a = u, r(s).forEach(l);
+  }
+  return o;
+}
+function $n(e, n, t) {
+  return e.nodes().reduce(function(r, o) {
+    return r[o] = J(e, o, n, t), r;
+  }, {});
+}
+function Fe(e) {
+  let n = 0, t = [], r = {}, o = [];
+  function i(s) {
+    var a;
+    let l = r[s] = { onStack: true, lowlink: n, index: n++ };
+    if (t.push(s), (a = e.successors(s)) == null || a.forEach(function(u) {
+      if (u in r) {
+        let d = r[u];
+        d != null && d.onStack && (l.lowlink = Math.min(l.lowlink, d.index));
+      } else {
+        i(u);
+        let d = r[u];
+        d && (l.lowlink = Math.min(l.lowlink, d.lowlink));
+      }
+    }), l.lowlink === l.index) {
+      let u = [], d;
+      do {
+        d = t.pop();
+        let c = r[d];
+        c && (c.onStack = false), u.push(d);
+      } while (s !== d);
+      o.push(u);
+    }
+  }
+  return e.nodes().forEach(function(s) {
+    s in r || i(s);
+  }), o;
+}
+function Un(e) {
+  return Fe(e).filter(function(n) {
+    var t;
+    let r = n[0];
+    return r ? n.length > 1 || n.length === 1 && ((t = e.outEdges(r, r)) != null ? t : []).length > 0 : false;
+  });
+}
+var Jn = () => 1;
+function Kn(e, n, t) {
+  return Qn(e, n || Jn, t || function(r) {
+    var o;
+    return (o = e.outEdges(r)) != null ? o : [];
+  });
+}
+function Qn(e, n, t) {
+  let r = {}, o = e.nodes();
+  return o.forEach(function(i) {
+    let s = {};
+    r[i] = s, s[i] = { distance: 0, predecessor: "" }, o.forEach(function(a) {
+      i !== a && (s[a] = { distance: Number.POSITIVE_INFINITY, predecessor: "" });
+    }), t(i).forEach(function(a) {
+      let l = a.v === i ? a.w : a.v, u = n(a);
+      s[l] = { distance: u, predecessor: i };
+    });
+  }), o.forEach(function(i) {
+    let s = r[i];
+    s && o.forEach(function(a) {
+      let l = r[a];
+      l && o.forEach(function(u) {
+        let d = l[i], c = s[u], f = l[u];
+        if (d && c && f) {
+          let h2 = d.distance + c.distance;
+          h2 < f.distance && (f.distance = h2, f.predecessor = c.predecessor);
+        }
+      });
+    });
+  }), r;
+}
+var K = class extends Error {
+  constructor(e) {
+    super(e), this.name = "CycleException";
+  }
+};
+function De(e) {
+  let n = {}, t = {}, r = [];
+  function o(i) {
+    var s;
+    if (i in t) throw new K();
+    i in n || (t[i] = true, n[i] = true, (s = e.predecessors(i)) == null || s.forEach(o), delete t[i], r.push(i));
+  }
+  if (e.sinks().forEach(o), Object.keys(n).length !== e.nodeCount()) throw new K();
+  return r;
+}
+function Zn(e) {
+  try {
+    De(e);
+  } catch (n) {
+    if (n instanceof K) return false;
+    throw n;
+  }
+  return true;
+}
+function et(e, n, t, r, o) {
+  Array.isArray(n) || (n = [n]);
+  let i = (a) => {
+    var l;
+    return (l = e.isDirected() ? e.successors(a) : e.neighbors(a)) != null ? l : [];
+  }, s = {};
+  return n.forEach(function(a) {
+    if (!e.hasNode(a)) throw new Error("Graph does not have node: " + a);
+    o = Ae(e, a, t === "post", s, i, r, o);
+  }), o;
+}
+function Ae(e, n, t, r, o, i, s) {
+  return n in r || (r[n] = true, t || (s = i(s, n)), o(n).forEach(function(a) {
+    s = Ae(e, a, t, r, o, i, s);
+  }), t && (s = i(s, n))), s;
+}
+function Ve(e, n, t) {
+  return et(e, n, t, function(r, o) {
+    return r.push(o), r;
+  }, []);
+}
+function nt(e, n) {
+  return Ve(e, n, "post");
+}
+function tt(e, n) {
+  return Ve(e, n, "pre");
+}
+function rt(e, n) {
+  var t;
+  let r = new Q(), o = {}, i = new Pe(), s;
+  function a(d) {
+    let c = d.v === s ? d.w : d.v, f = i.priority(c);
+    if (f !== void 0) {
+      let h2 = n(d);
+      h2 < f && (o[c] = s, i.decrease(c, h2));
+    }
+  }
+  if (e.nodeCount() === 0) return r;
+  e.nodes().forEach(function(d) {
+    i.add(d, Number.POSITIVE_INFINITY), r.setNode(d);
+  });
+  let l = e.nodes()[0];
+  l !== void 0 && i.decrease(l, 0);
+  let u = false;
+  for (; i.size() > 0; ) {
+    if (s = i.removeMin(), s in o) r.setEdge(s, o[s]);
+    else {
+      if (u) throw new Error("Input graph is not connected: " + e);
+      u = true;
+    }
+    (t = e.nodeEdges(s)) == null || t.forEach(a);
+  }
+  return r;
+}
+function ot(e, n, t, r) {
+  return it(e, n, t, r != null ? r : (o) => {
+    var i;
+    return (i = e.outEdges(o)) != null ? i : [];
+  });
+}
+function it(e, n, t, r) {
+  if (t === void 0) return J(e, n, t, r);
+  let o = false, i = e.nodes();
+  for (let s = 0; s < i.length; s++) {
+    let a = i[s];
+    if (a === void 0) continue;
+    let l = r(a);
+    for (let u = 0; u < l.length; u++) {
+      let d = l[u];
+      if (!d) continue;
+      let c = d.v === a ? d.v : d.w, f = c === d.v ? d.w : d.v;
+      t({ v: c, w: f }) < 0 && (o = true);
+    }
+    if (o) return Me(e, n, t, r);
+  }
+  return J(e, n, t, r);
+}
+var T = Q;
+function M(e, n, t, r) {
+  let o = r;
+  for (; e.hasNode(o); ) o = $2(r);
+  return t.dummy = n, e.setNode(o, t), o;
+}
+function Ye(e) {
+  let n = new T().setGraph(e.graph());
+  return e.nodes().forEach((t) => n.setNode(t, e.node(t))), e.edges().forEach((t) => {
+    let r = n.edge(t.v, t.w) || { weight: 0, minlen: 1 }, o = e.edge(t);
+    n.setEdge(t.v, t.w, { weight: r.weight + o.weight, minlen: Math.max(r.minlen, o.minlen) });
+  }), n;
+}
+function Z(e) {
+  let n = new T({ multigraph: e.isMultigraph() }).setGraph(e.graph());
+  return e.nodes().forEach((t) => {
+    e.children(t).length || n.setNode(t, e.node(t));
+  }), e.edges().forEach((t) => {
+    n.setEdge(t, e.edge(t));
+  }), n;
+}
+function se(e, n) {
+  let t = e.x, r = e.y, o = n.x - t, i = n.y - r, s = e.width / 2, a = e.height / 2;
+  if (!o && !i) throw new Error("Not possible to find intersection inside of the rectangle");
+  let l, u;
+  return o === 0 || Math.abs(i) * s > Math.abs(o) * a ? (i < 0 && (a = -a), l = a * o / i, u = a) : (o < 0 && (s = -s), l = s, u = s * i / o), { x: t + l, y: r + u };
+}
+function P(e) {
+  let n = D(de(e) + 1).map(() => []);
+  return e.nodes().forEach((t) => {
+    let r = e.node(t), o = r.rank;
+    o !== void 0 && (n[o] || (n[o] = []), n[o][r.order] = t);
+  }), n;
+}
+function Be(e) {
+  let n = e.nodes().map((r) => {
+    let o = e.node(r).rank;
+    return o === void 0 ? Number.MAX_VALUE : o;
+  }), t = S(Math.min, n);
+  e.nodes().forEach((r) => {
+    let o = e.node(r);
+    Object.hasOwn(o, "rank") && (o.rank -= t);
+  });
+}
+function We(e) {
+  let n = e.nodes().map((s) => e.node(s).rank).filter((s) => s !== void 0), t = S(Math.min, n), r = [];
+  e.nodes().forEach((s) => {
+    let a = e.node(s).rank - t;
+    r[a] || (r[a] = []), r[a].push(s);
+  });
+  let o = 0, i = e.graph().nodeRankFactor;
+  Array.from(r).forEach((s, a) => {
+    s === void 0 && a % i !== 0 ? --o : s !== void 0 && o && s.forEach((l) => e.node(l).rank += o);
+  });
+}
+function ae(e, n, t, r) {
+  let o = { width: 0, height: 0 };
+  return arguments.length >= 4 && (o.rank = t, o.order = r), M(e, "border", o, n);
+}
+function st(e, n = Xe) {
+  let t = [];
+  for (let r = 0; r < e.length; r += n) {
+    let o = e.slice(r, r + n);
+    t.push(o);
+  }
+  return t;
+}
+var Xe = 65535;
+function S(e, n) {
+  if (n.length > Xe) {
+    let t = st(n);
+    return e(...t.map((r) => e(...r)));
+  } else return e(...n);
+}
+function de(e) {
+  let t = e.nodes().map((r) => {
+    let o = e.node(r).rank;
+    return o === void 0 ? Number.MIN_VALUE : o;
+  });
+  return S(Math.max, t);
+}
+function ze(e, n) {
+  let t = { lhs: [], rhs: [] };
+  return e.forEach((r) => {
+    n(r) ? t.lhs.push(r) : t.rhs.push(r);
+  }), t;
+}
+function le(e, n) {
+  let t = Date.now();
+  try {
+    return n();
+  } finally {
+    console.log(e + " time: " + (Date.now() - t) + "ms");
+  }
+}
+function q(e, n) {
+  return n();
+}
+var at = 0;
+function $2(e) {
+  let n = ++at;
+  return e + ("" + n);
+}
+function D(e, n, t = 1) {
+  n == null && (n = e, e = 0);
+  let r = (i) => i < n;
+  t < 0 && (r = (i) => n < i);
+  let o = [];
+  for (let i = e; r(i); i += t) o.push(i);
+  return o;
+}
+function W(e, n) {
+  let t = {};
+  for (let r of n) e[r] !== void 0 && (t[r] = e[r]);
+  return t;
+}
+function X(e, n) {
+  let t;
+  return typeof n == "string" ? t = (r) => r[n] : t = n, Object.entries(e).reduce((r, [o, i]) => (r[o] = t(i, o), r), {});
+}
+function He(e, n) {
+  return e.reduce((t, r, o) => (t[r] = n[o], t), {});
+}
+var V = "\0";
+function ee(e, n, t) {
+  var u, d, c, f, h2, g;
+  if (!(e && n && t && n.dummy === "edge" && t.dummy === "edge" && n.edgeObj && t.edgeObj && e[n.edgeObj.v] && e[t.edgeObj.v] && e[n.edgeObj.w] && e[t.edgeObj.w])) return 0;
+  let r = true;
+  n.edgeObj.w === t.edgeObj.w && (r = false);
+  let o = r ? (d = (u = e[n.edgeObj.v]) == null ? void 0 : u.rank) != null ? d : NaN + 1 : (f = (c = e[n.edgeObj.w]) == null ? void 0 : c.rank) != null ? f : NaN - 1, i = Object.entries(e).find((m) => {
+    var L, y;
+    return ((L = m[1].edgeObj) == null ? void 0 : L.v) === n.edgeObj.v && ((y = m[1].edgeObj) == null ? void 0 : y.w) === n.edgeObj.w && m[1].rank === o;
+  }), s = Object.entries(e).find((m) => {
+    var L, y;
+    return ((L = m[1].edgeObj) == null ? void 0 : L.v) === t.edgeObj.v && ((y = m[1].edgeObj) == null ? void 0 : y.w) === t.edgeObj.w && m[1].rank === o;
+  });
+  if (!i || !s) return 0;
+  let a = (h2 = i[1].order) != null ? h2 : NaN, l = (g = s[1].order) != null ? g : NaN;
+  return isNaN(a - l) ? 0 : a - l;
+}
+var ue = "3.1.3";
+var ce = class {
+  constructor() {
+    je(this, "_sentinel");
+    let n = {};
+    n._next = n._prev = n, this._sentinel = n;
+  }
+  dequeue() {
+    let n = this._sentinel, t = n._prev;
+    if (t !== n) return qe(t), t;
+  }
+  enqueue(n) {
+    let t = this._sentinel;
+    n._prev && n._next && qe(n), n._next = t._next, t._next._prev = n, t._next = n, n._prev = t;
+  }
+  toString() {
+    let n = [], t = this._sentinel, r = t._prev;
+    for (; r !== t; ) n.push(JSON.stringify(r, dt)), r = r._prev;
+    return "[" + n.join(", ") + "]";
+  }
+};
+function qe(e) {
+  e._prev._next = e._next, e._next._prev = e._prev, delete e._next, delete e._prev;
+}
+function dt(e, n) {
+  if (e !== "_next" && e !== "_prev") return n;
+}
+var $e = ce;
+var lt = () => 1;
+function be(e, n) {
+  if (e.nodeCount() <= 1) return [];
+  let t = ct(e, n || lt);
+  return ut(t.graph, t.buckets, t.zeroIdx).flatMap((o) => e.outEdges(o.v, o.w) || []);
+}
+function ut(e, n, t) {
+  var a;
+  let r = [], o = n[n.length - 1], i = n[0], s;
+  for (; e.nodeCount(); ) {
+    for (; s = i.dequeue(); ) fe(e, n, t, s);
+    for (; s = o.dequeue(); ) fe(e, n, t, s);
+    if (e.nodeCount()) {
+      for (let l = n.length - 2; l > 0; --l) if (s = (a = n[l]) == null ? void 0 : a.dequeue(), s) {
+        r = r.concat(fe(e, n, t, s, true) || []);
+        break;
+      }
+    }
+  }
+  return r;
+}
+function fe(e, n, t, r, o) {
+  let i = [], s = o ? i : void 0;
+  return (e.inEdges(r.v) || []).forEach((a) => {
+    let l = e.edge(a), u = e.node(a.v);
+    o && i.push({ v: a.v, w: a.w }), u.out -= l, he(n, t, u);
+  }), (e.outEdges(r.v) || []).forEach((a) => {
+    let l = e.edge(a), u = a.w, d = e.node(u);
+    d.in -= l, he(n, t, d);
+  }), e.removeNode(r.v), s;
+}
+function ct(e, n) {
+  let t = new T(), r = 0, o = 0;
+  e.nodes().forEach((a) => {
+    t.setNode(a, { v: a, in: 0, out: 0 });
+  }), e.edges().forEach((a) => {
+    let l = t.edge(a.v, a.w) || 0, u = n(a), d = l + u;
+    t.setEdge(a.v, a.w, d);
+    let c = t.node(a.v), f = t.node(a.w);
+    o = Math.max(o, c.out += u), r = Math.max(r, f.in += u);
+  });
+  let i = ft(o + r + 3).map(() => new $e()), s = r + 1;
+  return t.nodes().forEach((a) => {
+    he(i, s, t.node(a));
+  }), { graph: t, buckets: i, zeroIdx: s };
+}
+function he(e, n, t) {
+  var r, o, i;
+  t.out ? t.in ? (i = e[t.out - t.in + n]) == null || i.enqueue(t) : (o = e[e.length - 1]) == null || o.enqueue(t) : (r = e[0]) == null || r.enqueue(t);
+}
+function ft(e) {
+  let n = [];
+  for (let t = 0; t < e; t++) n.push(t);
+  return n;
+}
+function Ue(e, n) {
+  (e.graph().acyclicer === "greedy" ? be(e, r(e)) : ht(e, n != null ? n : null)).forEach((o) => {
+    let i = e.edge(o);
+    e.removeEdge(o), i.forwardName = o.name, i.reversed = true, e.setEdge(o.w, o.v, i, $2("rev"));
+  });
+  function r(o) {
+    return (i) => o.edge(i).weight;
+  }
+}
+function ht(e, n) {
+  let t = [], r = {}, o = {};
+  function i(l) {
+    Object.hasOwn(o, l) || (o[l] = true, r[l] = true, e.outEdges(l).forEach((u) => {
+      Object.hasOwn(r, u.w) ? t.push(u) : i(u.w);
+    }), delete r[l]);
+  }
+  function s(l) {
+    var u;
+    Object.hasOwn(o, l) || (o[l] = true, r[l] = true, (u = e.outEdges(l)) == null || u.forEach((d) => {
+      var c, f;
+      Object.hasOwn(r, d.w) || ((c = n.node(l)) == null ? void 0 : c.rank) > ((f = n.node(d.w)) == null ? void 0 : f.rank) && bt(e, d.w, d) ? t.push(d) : s(d.w);
+    }), delete r[l]);
+  }
+  let a = i;
+  return n && typeof n.node == "function" && (a = s), e.sources().forEach(a), e.nodes().forEach(a), t;
+}
+function Je(e) {
+  e.edges().forEach((n) => {
+    let t = e.edge(n);
+    if (t.reversed) {
+      e.removeEdge(n);
+      let r = t.forwardName;
+      delete t.reversed, delete t.forwardName, e.setEdge(n.w, n.v, t, r);
+    }
+  });
+}
+function bt(e, n, t) {
+  let r = /* @__PURE__ */ new Set();
+  function o(i) {
+    var s;
+    if (e.sources().includes(i)) return true;
+    r.add(i);
+    for (let a of (s = e.inEdges(i)) != null ? s : []) if (!(a.v === t.v && a.w === t.w) && !r.has(a.v) && o(a.v)) return true;
+    return false;
+  }
+  return o(n);
+}
+function Ke(e) {
+  e.graph().dummyChains = [], e.edges().forEach((n) => pt(e, n));
+}
+function pt(e, n) {
+  let t = n.v, r = e.node(t).rank, o = n.w, i = e.node(o).rank, s = n.name, a = e.edge(n), l = a.labelRank;
+  if (i === r + 1) return;
+  e.removeEdge(n);
+  let u, d, c;
+  for (c = 0, ++r; r < i; ++c, ++r) a.points = [], d = { width: 0, height: 0, edgeLabel: a, edgeObj: n, rank: r }, u = M(e, "edge", d, "_d"), r === l && (d.width = a.width, d.height = a.height, d.dummy = "edge-label", d.labelpos = a.labelpos), e.setEdge(t, u, { weight: a.weight }, s), c === 0 && e.graph().dummyChains.push(u), t = u;
+  e.setEdge(t, o, { weight: a.weight }, s);
+}
+function Qe(e) {
+  e.graph().dummyChains.forEach((n) => {
+    let t = e.node(n), r = t.edgeLabel, o;
+    for (e.setEdge(t.edgeObj, r); t.dummy; ) o = e.successors(n)[0], e.removeNode(n), r.points.push({ x: t.x, y: t.y }), t.dummy === "edge-label" && (r.x = t.x, r.y = t.y, r.width = t.width, r.height = t.height), n = o, t = e.node(n);
+  });
+}
+function U(e) {
+  let n = {};
+  function t(r) {
+    let o = e.node(r);
+    if (Object.hasOwn(n, r)) return o.rank;
+    n[r] = true;
+    let i = e.outEdges(r), s = i ? i.map((l) => l == null ? Number.POSITIVE_INFINITY : t(l.w) - e.edge(l).minlen) : [], a = S(Math.min, s);
+    return a === Number.POSITIVE_INFINITY && (a = 0), o.rank = a;
+  }
+  e.sources().forEach(t);
+}
+function A(e, n) {
+  return e.node(n.w).rank - e.node(n.v).rank - e.edge(n).minlen;
+}
+var ne = Et;
+function Et(e) {
+  let n = new T({ directed: false }), t = e.nodes();
+  if (t.length === 0) throw new Error("Graph must have at least one node");
+  let r = t[0], o = e.nodeCount();
+  n.setNode(r, {});
+  let i, s;
+  for (; Lt(n, e) < o && (i = yt(n, e), !!i); ) s = n.hasNode(i.v) ? A(e, i) : -A(e, i), wt(n, e, s);
+  return n;
+}
+function Lt(e, n) {
+  function t(r) {
+    let o = n.nodeEdges(r);
+    o && o.forEach((i) => {
+      let s = i.v, a = r === s ? i.w : s;
+      !e.hasNode(a) && !A(n, i) && (e.setNode(a, {}), e.setEdge(r, a, {}), t(a));
+    });
+  }
+  return e.nodes().forEach(t), e.nodeCount();
+}
+function yt(e, n) {
+  return n.edges().reduce((r, o) => {
+    let i = Number.POSITIVE_INFINITY;
+    return e.hasNode(o.v) !== e.hasNode(o.w) && (i = A(n, o)), i < r[0] ? [i, o] : r;
+  }, [Number.POSITIVE_INFINITY, null])[1];
+}
+function wt(e, n, t) {
+  e.nodes().forEach((r) => n.node(r).rank += t);
+}
+var { preorder: Nt, postorder: Gt } = H;
+var en = Y;
+Y.initLowLimValues = pe;
+Y.initCutValues = ge;
+Y.calcCutValue = nn;
+Y.leaveEdge = rn;
+Y.enterEdge = on;
+Y.exchangeEdges = sn;
+function Y(e) {
+  e = Ye(e), U(e);
+  let n = ne(e);
+  pe(n), ge(n, e);
+  let t, r;
+  for (; t = rn(n); ) r = on(n, e, t), sn(n, e, t, r);
+}
+function ge(e, n) {
+  let t = Gt(e, e.nodes());
+  t = t.slice(0, t.length - 1), t.forEach((r) => vt(e, n, r));
+}
+function vt(e, n, t) {
+  let o = e.node(t).parent, i = e.edge(t, o);
+  i.cutvalue = nn(e, n, t);
+}
+function nn(e, n, t) {
+  let o = e.node(t).parent, i = true, s = n.edge(t, o), a = 0;
+  s || (i = false, s = n.edge(o, t)), a = s.weight;
+  let l = n.nodeEdges(t);
+  return l && l.forEach((u) => {
+    let d = u.v === t, c = d ? u.w : u.v;
+    if (c !== o) {
+      let f = d === i, h2 = n.edge(u).weight;
+      if (a += f ? h2 : -h2, xt(e, t, c)) {
+        let m = e.edge(t, c).cutvalue;
+        a += f ? -m : m;
+      }
+    }
+  }), a;
+}
+function pe(e, n) {
+  arguments.length < 2 && (n = e.nodes()[0]), tn(e, {}, 1, n);
+}
+function tn(e, n, t, r, o) {
+  let i = t, s = e.node(r);
+  n[r] = true;
+  let a = e.neighbors(r);
+  return a && a.forEach((l) => {
+    Object.hasOwn(n, l) || (t = tn(e, n, t, l, r));
+  }), s.low = i, s.lim = t++, o ? s.parent = o : delete s.parent, t;
+}
+function rn(e) {
+  return e.edges().find((n) => e.edge(n).cutvalue < 0);
+}
+function on(e, n, t) {
+  let r = t.v, o = t.w;
+  n.hasEdge(r, o) || (r = t.w, o = t.v);
+  let i = e.node(r), s = e.node(o), a = i, l = false;
+  return i.lim > s.lim && (a = s, l = true), n.edges().filter((d) => l === Ze(e, e.node(d.v), a) && l !== Ze(e, e.node(d.w), a)).reduce((d, c) => A(n, c) < A(n, d) ? c : d);
+}
+function sn(e, n, t, r) {
+  let o = t.v, i = t.w;
+  e.removeEdge(o, i), e.setEdge(r.v, r.w, {}), pe(e), ge(e, n), kt(e, n);
+}
+function kt(e, n) {
+  let t = e.nodes().find((o) => !e.node(o).parent);
+  if (!t) return;
+  let r = Nt(e, [t]);
+  r = r.slice(1), r.forEach((o) => {
+    let s = e.node(o).parent, a = n.edge(o, s), l = false;
+    a || (a = n.edge(s, o), l = true), n.node(o).rank = n.node(s).rank + (l ? a.minlen : -a.minlen);
+  });
+}
+function xt(e, n, t) {
+  return e.hasEdge(n, t);
+}
+function Ze(e, n, t) {
+  return t.low <= n.lim && n.lim <= t.lim;
+}
+var dn = _t;
+function _t(e) {
+  let n = e.graph().ranker;
+  if (typeof n == "function") return n(e);
+  switch (n) {
+    case "network-simplex":
+      an(e);
+      break;
+    case "tight-tree":
+      Ct(e);
+      break;
+    case "longest-path":
+      Ot(e);
+      break;
+    case "none":
+      break;
+    default:
+      an(e);
+  }
+}
+var Ot = U;
+function Ct(e) {
+  U(e), ne(e);
+}
+function an(e) {
+  en(e);
+}
+var ln = Tt;
+function Tt(e) {
+  let n = Rt(e), t = e.graph();
+  if (!Array.isArray(t.dummyChains)) return;
+  t.dummyChains.forEach((o) => {
+    let i = e.node(o), s = i.edgeObj, a = jt(e, n, s.v, s.w), l = a.path, u = a.lca, d = 0, c = l[d], f = true;
+    for (; o !== s.w; ) {
+      if (i = e.node(o), f) {
+        for (; (c = l[d]) !== u && e.node(c).maxRank < i.rank; ) d++;
+        c === u && (f = false);
+      }
+      if (!f) {
+        for (; d < l.length - 1 && e.node(l[d + 1]).minRank <= i.rank; ) d++;
+        c = l[d];
+      }
+      c !== void 0 && e.setParent(o, c), o = e.successors(o)[0];
+    }
+  });
+}
+function jt(e, n, t, r) {
+  let o = [], i = [], s = Math.min(n[t].low, n[r].low), a = Math.max(n[t].lim, n[r].lim), l;
+  l = t;
+  do
+    l = e.parent(l), o.push(l);
+  while (l && (n[l].low > s || a > n[l].lim));
+  let u = l, d = r;
+  for (; (d = e.parent(d)) !== u; ) i.push(d);
+  return { path: o.concat(i.reverse()), lca: u };
+}
+function Rt(e) {
+  let n = {}, t = 0;
+  function r(o) {
+    let i = t;
+    e.children(o).forEach(r), n[o] = { low: i, lim: t++ };
+  }
+  return e.children(V).forEach(r), n;
+}
+function un(e) {
+  let n = M(e, "root", {}, "_root"), t = It(e), r = Object.values(t), o = S(Math.max, r) - 1, i = 2 * o + 1;
+  e.graph().nestingRoot = n, e.edges().forEach((a) => e.edge(a).minlen *= i);
+  let s = St(e) + 1;
+  e.children(V).forEach((a) => {
+    cn(e, n, i, s, o, t, a);
+  }), e.graph().nodeRankFactor = i;
+}
+function cn(e, n, t, r, o, i, s) {
+  var c;
+  let a = e.children(s);
+  if (!a.length) {
+    s !== n && e.setEdge(n, s, { weight: 0, minlen: t });
+    return;
+  }
+  let l = ae(e, "_bt"), u = ae(e, "_bb"), d = e.node(s);
+  e.setParent(l, s), d.borderTop = l, e.setParent(u, s), d.borderBottom = u, a.forEach((f) => {
+    var b;
+    cn(e, n, t, r, o, i, f);
+    let h2 = e.node(f), g = h2.borderTop ? h2.borderTop : f, m = h2.borderBottom ? h2.borderBottom : f, L = h2.borderTop ? r : 2 * r, y = g !== m ? 1 : o - ((b = i[s]) != null ? b : 0) + 1;
+    e.setEdge(l, g, { weight: L, minlen: y, nestingEdge: true }), e.setEdge(m, u, { weight: L, minlen: y, nestingEdge: true });
+  }), e.parent(s) || e.setEdge(n, l, { weight: 0, minlen: o + ((c = i[s]) != null ? c : 0) });
+}
+function It(e) {
+  let n = {};
+  function t(r, o) {
+    let i = e.children(r);
+    i && i.length && i.forEach((s) => t(s, o + 1)), n[r] = o;
+  }
+  return e.children(V).forEach((r) => t(r, 1)), n;
+}
+function St(e) {
+  return e.edges().reduce((n, t) => n + e.edge(t).weight, 0);
+}
+function fn(e) {
+  let n = e.graph();
+  e.removeNode(n.nestingRoot), delete n.nestingRoot, e.edges().forEach((t) => {
+    e.edge(t).nestingEdge && e.removeEdge(t);
+  });
+}
+var bn = Pt;
+function Pt(e) {
+  function n(t) {
+    let r = e.children(t), o = e.node(t);
+    if (r.length && r.forEach(n), o && Object.hasOwn(o, "minRank")) {
+      o.borderLeft = [], o.borderRight = [];
+      for (let i = o.minRank, s = o.maxRank + 1; i < s; ++i) hn(e, "borderLeft", "_bl", t, o, i), hn(e, "borderRight", "_br", t, o, i);
+    }
+  }
+  e.children(V).forEach(n);
+}
+function hn(e, n, t, r, o, i) {
+  let s = { width: 0, height: 0, rank: i, borderType: n }, a = o[n][i - 1], l = M(e, "border", s, t);
+  o[n][i] = l, e.setParent(l, r), a && e.setEdge(a, l, { weight: 1 });
+}
+function pn(e) {
+  var t;
+  let n = (t = e.graph().rankdir) == null ? void 0 : t.toLowerCase();
+  (n === "lr" || n === "rl") && En(e);
+}
+function mn(e) {
+  var t;
+  let n = (t = e.graph().rankdir) == null ? void 0 : t.toLowerCase();
+  (n === "bt" || n === "rl") && Ft(e), (n === "lr" || n === "rl") && (Dt(e), En(e));
+}
+function En(e) {
+  e.nodes().forEach((n) => gn(e.node(n))), e.edges().forEach((n) => gn(e.edge(n)));
+}
+function gn(e) {
+  let n = e.width;
+  e.width = e.height, e.height = n;
+}
+function Ft(e) {
+  e.nodes().forEach((n) => me(e.node(n))), e.edges().forEach((n) => {
+    var r;
+    let t = e.edge(n);
+    (r = t.points) == null || r.forEach(me), Object.hasOwn(t, "y") && me(t);
+  });
+}
+function me(e) {
+  e.y = -e.y;
+}
+function Dt(e) {
+  e.nodes().forEach((n) => Ee(e.node(n))), e.edges().forEach((n) => {
+    var r;
+    let t = e.edge(n);
+    (r = t.points) == null || r.forEach(Ee), Object.hasOwn(t, "x") && Ee(t);
+  });
+}
+function Ee(e) {
+  let n = e.x;
+  e.x = e.y, e.y = n;
+}
+function Le(e, n = null) {
+  let t = {}, r = e.nodes().filter((d) => !e.children(d).length), o = r.map((d) => e.node(d).rank), i = S(Math.max, o), s = D(i + 1).map(() => []);
+  function a(d) {
+    if (t[d]) return;
+    t[d] = true;
+    let c = e.node(d);
+    s[c.rank].push(d);
+    let f = e.successors(d);
+    f && [...f].sort((g, m) => u(g, m)).forEach(a);
+  }
+  r.sort((d, c) => e.node(d).rank - e.node(c).rank).forEach(a);
+  function u(d, c) {
+    let f = e.node(d), h2 = e.node(c);
+    return ee(n, f, h2);
+  }
+  return s;
+}
+function ye(e, n) {
+  let t = 0;
+  for (let r = 1; r < n.length; ++r) t += Vt(e, n[r - 1], n[r]);
+  return t;
+}
+function Vt(e, n, t) {
+  let r = He(t, t.map((u, d) => d)), o = n.flatMap((u) => {
+    let d = e.outEdges(u);
+    return d ? d.map((c) => ({ pos: r[c.w], weight: e.edge(c).weight })).sort((c, f) => c.pos - f.pos) : [];
+  }), i = 1;
+  for (; i < t.length; ) i <<= 1;
+  let s = 2 * i - 1;
+  i -= 1;
+  let a = new Array(s).fill(0), l = 0;
+  return o.forEach((u) => {
+    let d = u.pos + i;
+    a[d] += u.weight;
+    let c = 0;
+    for (; d > 0; ) d % 2 && (c += a[d + 1]), d = d - 1 >> 1, a[d] += u.weight;
+    l += u.weight * c;
+  }), l;
+}
+function we(e, n = []) {
+  return n.map((t) => {
+    let r = e.inEdges(t);
+    if (!r || !r.length) return { v: t };
+    {
+      let o = r.reduce((i, s) => {
+        let a = e.edge(s), l = e.node(s.v);
+        return { sum: i.sum + a.weight * l.order, weight: i.weight + a.weight };
+      }, { sum: 0, weight: 0 });
+      return { v: t, barycenter: o.sum / o.weight, weight: o.weight };
+    }
+  });
+}
+function Ne(e, n) {
+  let t = {};
+  e.forEach((o, i) => {
+    let s = { indegree: 0, in: [], out: [], vs: [o.v], i };
+    o.barycenter !== void 0 && (s.barycenter = o.barycenter, s.weight = o.weight), t[o.v] = s;
+  }), n.edges().forEach((o) => {
+    let i = t[o.v], s = t[o.w];
+    i !== void 0 && s !== void 0 && (s.indegree++, i.out.push(s));
+  });
+  let r = Object.values(t).filter((o) => !o.indegree);
+  return Yt(r);
+}
+function Yt(e) {
+  let n = [];
+  function t(o) {
+    return (i) => {
+      i.merged || (i.barycenter === void 0 || o.barycenter === void 0 || i.barycenter >= o.barycenter) && Bt(o, i);
+    };
+  }
+  function r(o) {
+    return (i) => {
+      i.in.push(o), --i.indegree === 0 && e.push(i);
+    };
+  }
+  for (; e.length; ) {
+    let o = e.pop();
+    n.push(o), o.in.reverse().forEach(t(o)), o.out.forEach(r(o));
+  }
+  return n.filter((o) => !o.merged).map((o) => W(o, ["vs", "i", "barycenter", "weight"]));
+}
+function Bt(e, n) {
+  let t = 0, r = 0;
+  e.weight && (t += e.barycenter * e.weight, r += e.weight), n.weight && (t += n.barycenter * n.weight, r += n.weight), e.vs = n.vs.concat(e.vs), e.barycenter = t / r, e.weight = r, e.i = Math.min(n.i, e.i), n.merged = true;
+}
+function Ge(e, n, t, r, o) {
+  let i = {}, s = null, a = null, l = o;
+  typeof n == "boolean" ? (l = n, i = {}) : n && (i = n, s = t != null ? t : null, a = r != null ? r : null);
+  let u = ze(e, (y) => Object.hasOwn(y, "barycenter")), d = u.lhs, c = u.rhs.sort((y, b) => b.i - y.i), f = [], h2 = 0, g = 0, m = 0;
+  d.sort(Wt(a, s, !!l));
+  for (let [y, b] of Object.entries(i)) {
+    let p = d.findIndex((E) => E.vs[0] === y);
+    d.splice(p + 1, 0, b);
+  }
+  m = Ln(f, c, m), d.forEach((y) => {
+    m += y.vs.length, f.push(y.vs), h2 += y.barycenter * y.weight, g += y.weight, m = Ln(f, c, m);
+  });
+  let L = { vs: f.flat(1) };
+  return g && (L.barycenter = h2 / g, L.weight = g), L;
+}
+function Ln(e, n, t) {
+  let r;
+  for (; n.length && (r = n[n.length - 1]).i <= t; ) n.pop(), e.push(r.vs), t++;
+  return t;
+}
+function Wt(e, n, t) {
+  return (r, o) => {
+    if (r.barycenter < o.barycenter) return -1;
+    if (r.barycenter > o.barycenter) return 1;
+    if (e && (typeof r.vs[0] == "string" || typeof o.vs[0] == "string")) {
+      let i = e.node(r.vs[0]), s = e.node(o.vs[0]), a = ee(n, i, s);
+      if (a !== 0) return a;
+    }
+    return t ? o.i - r.i : r.i - o.i;
+  };
+}
+function te(e, n, t, r, o) {
+  var y, b, p, E, w, k, _, O, j, R, I;
+  let i = null, s = o;
+  typeof r == "boolean" ? (s = r, i = null) : r !== void 0 && (i = r);
+  let a = e.children(n), l = e.node(n), u = l ? l.borderLeft : void 0, d = l ? l.borderRight : void 0, c = {};
+  u && (a = a.filter((v) => v !== u && v !== d));
+  let f = we(e, a);
+  f.forEach((v) => {
+    if (e.children(v.v).length) {
+      let { result: x } = te(e, v.v, t, i, s);
+      c[v.v] = x, Object.hasOwn(x, "barycenter") && zt(v, x);
+    }
+  });
+  let h2 = Ne(f, t);
+  Xt(h2, c);
+  let g = {}, m = false;
+  for (let v = 0; v < h2.length; v++) for (let x = v + 1; x < h2.length; x++) if (!(!h2[v] || !h2[x] || !((y = h2[v]) != null && y.barycenter) || !((b = h2[x]) != null && b.barycenter)) && ((p = h2[v]) == null ? void 0 : p.barycenter) === h2[x].barycenter) {
+    let G = (w = (E = h2[v]) == null ? void 0 : E.vs[0]) != null ? w : "", N = (_ = (k = h2[x]) == null ? void 0 : k.vs[0]) != null ? _ : "", C = e.node(G), B = e.node(N);
+    if (C.dummy === "edge" && B.dummy === "edge" && ((O = C.edgeObj) == null ? void 0 : O.v) === ((j = B.edgeObj) == null ? void 0 : j.v) && ((R = C.edgeObj) == null ? void 0 : R.w) === ((I = B.edgeObj) == null ? void 0 : I.w)) if (C.edgeLabel.reversed) {
+      g[N] = h2[v], h2.splice(v, 1), v--;
+      break;
+    } else g[G] || (g[G] = h2[x], h2.splice(x, 1), x--);
+    else m = true;
+  }
+  let L = Ge(h2, g, i, e, s);
+  if (u && d) {
+    L.vs = [u, L.vs, d].flat(1);
+    let v = e.predecessors(u);
+    if (v && v.length) {
+      let x = e.node(v[0]), G = e.predecessors(d), N = e.node(G[0]);
+      Object.hasOwn(L, "barycenter") || (L.barycenter = 0, L.weight = 0), L.barycenter = (L.barycenter * L.weight + x.order + N.order) / (L.weight + 2), L.weight += 2;
+    }
+  }
+  return Object.defineProperty(L, "result", { value: L, enumerable: false, configurable: true, writable: true }), Object.defineProperty(L, "usedBias", { value: m, enumerable: false, configurable: true, writable: true }), L;
+}
+function Xt(e, n) {
+  e.forEach((t) => {
+    t.vs = t.vs.flatMap((r) => n[r] ? n[r].vs : r);
+  });
+}
+function zt(e, n) {
+  e.barycenter !== void 0 ? (e.barycenter = (e.barycenter * e.weight + n.barycenter * n.weight) / (e.weight + n.weight), e.weight += n.weight) : (e.barycenter = n.barycenter, e.weight = n.weight);
+}
+function ve(e, n, t, r) {
+  r || (r = e.nodes());
+  let o = Ht(e), i = new T({ compound: true }).setGraph({ root: o }).setDefaultNodeLabel((s) => e.node(s));
+  return r.forEach((s) => {
+    let a = e.node(s), l = e.parent(s);
+    if (a.rank === n || a.minRank <= n && n <= a.maxRank) {
+      i.setNode(s), i.setParent(s, l || o);
+      let u = e[t](s);
+      u && u.forEach((d) => {
+        let c = d.v === s ? d.w : d.v, f = i.edge(c, s), h2 = f !== void 0 ? f.weight : 0;
+        i.setEdge(c, s, { weight: e.edge(d).weight + h2 });
+      }), Object.hasOwn(a, "minRank") && i.setNode(s, { borderLeft: a.borderLeft[n], borderRight: a.borderRight[n] });
+    }
+  }), i;
+}
+function Ht(e) {
+  let n;
+  for (; e.hasNode(n = $2("_root")); ) ;
+  return n;
+}
+function ke(e, n, t) {
+  let r = {}, o;
+  t.forEach((i) => {
+    let s = e.parent(i), a, l;
+    for (; s; ) {
+      if (a = e.parent(s), a ? (l = r[a], r[a] = s) : (l = o, o = s), l && l !== s) {
+        n.setEdge(l, s);
+        return;
+      }
+      s = a;
+    }
+  });
+}
+function re(e, n = {}, t = null) {
+  if (typeof n.customOrder == "function") {
+    n.customOrder(e, re);
+    return;
+  }
+  let r = de(e), o = yn(e, D(1, r + 1), "inEdges"), i = yn(e, D(r - 1, -1, -1), "outEdges"), s = Le(e, t);
+  if (wn(e, s), n.disableOptimalOrderHeuristic) return;
+  let a = Number.POSITIVE_INFINITY, l, u = n.constraints || [];
+  for (let d = 0, c = 0; c < 4; ++d, ++c) {
+    qt(d % 2 ? o : i, d % 4 >= 2, u, t), s = P(e);
+    let f = ye(e, s);
+    f < a ? (c = 0, l = Object.assign({}, s), a = f) : f === a && (l = structuredClone(s));
+  }
+  wn(e, l);
+}
+function yn(e, n, t) {
+  let r = /* @__PURE__ */ new Map(), o = (i, s) => {
+    r.has(i) || r.set(i, []), r.get(i).push(s);
+  };
+  for (let i of e.nodes()) {
+    let s = e.node(i);
+    if (typeof s.rank == "number" && o(s.rank, i), typeof s.minRank == "number" && typeof s.maxRank == "number") for (let a = s.minRank; a <= s.maxRank; a++) a !== s.rank && o(a, i);
+  }
+  return n.map(function(i) {
+    return ve(e, i, t, r.get(i) || []);
+  });
+}
+function qt(e, n, t, r) {
+  let o = true, i = new T();
+  e.forEach(function(s) {
+    t.forEach((d) => i.setEdge(d.left, d.right));
+    let a = s.graph().root, { result: l, usedBias: u } = te(s, a, i, r, o);
+    n && u && (o = !o), l.vs.forEach((d, c) => s.node(d).order = c), ke(s, i, l.vs);
+  });
+}
+function wn(e, n) {
+  Object.values(n).forEach((t) => t.forEach((r, o) => e.node(r).order = o));
+}
+function $t(e, n) {
+  let t = {};
+  function r(o, i) {
+    let s = 0, a = 0, l = o.length, u = i[i.length - 1];
+    return i.forEach((d, c) => {
+      let f = Jt(e, d), h2 = f ? e.node(f).order : l;
+      (f || d === u) && (i.slice(a, c + 1).forEach((g) => {
+        let m = e.predecessors(g);
+        m && m.forEach((L) => {
+          let y = e.node(L), b = y.order;
+          (b < s || h2 < b) && !(y.dummy && e.node(g).dummy) && Gn(t, L, g);
+        });
+      }), a = c + 1, s = h2);
+    }), i;
+  }
+  return n.length && n.reduce(r), t;
+}
+function Ut(e, n) {
+  let t = {};
+  function r(a) {
+    var l;
+    return ((l = e.node(a)) == null ? void 0 : l.dummy) === "border";
+  }
+  if (!e.nodes().some(r)) return t;
+  function i(a, l, u, d, c) {
+    D(l, u).forEach((f) => {
+      let h2 = a[f];
+      if (h2 !== void 0 && e.node(h2).dummy) {
+        let g = e.predecessors(h2);
+        g && g.forEach((m) => {
+          if (m === void 0) return;
+          let L = e.node(m);
+          L.dummy && (L.order < d || L.order > c) && Gn(t, m, h2);
+        });
+      }
+    });
+  }
+  function s(a, l) {
+    let u = -1, d = -1, c = 0;
+    return l.forEach((f, h2) => {
+      if (r(f)) {
+        let g = e.predecessors(f);
+        if (g && g.length) {
+          let m = g[0];
+          if (m === void 0) return;
+          d = e.node(m).order, i(l, c, h2, u, d), c = h2, u = d;
+        }
+      }
+      i(l, c, l.length, d, a.length);
+    }), l;
+  }
+  return n.length && n.reduce(s), t;
+}
+function Jt(e, n) {
+  if (e.node(n).dummy) {
+    let t = e.predecessors(n);
+    if (t) return t.find((r) => e.node(r).dummy);
+  }
+}
+function Gn(e, n, t) {
+  if (n > t) {
+    let o = n;
+    n = t, t = o;
+  }
+  let r = e[n];
+  r || (e[n] = r = {}), r[t] = true;
+}
+function Kt(e, n, t) {
+  if (n > t) {
+    let o = n;
+    n = t, t = o;
+  }
+  let r = e[n];
+  return r !== void 0 && Object.hasOwn(r, t);
+}
+function Qt(e, n, t, r, o) {
+  let i = {}, s = {}, a = {};
+  return n.forEach((l) => {
+    l.forEach((u, d) => {
+      i[u] = u, s[u] = u, a[u] = d;
+    });
+  }), n.forEach((l) => {
+    let u = -1, d = -1, c = false, f = l, h2 = l.findIndex((g) => (o == null ? void 0 : o.includes(g)) || Nn(g, e, o));
+    h2 > 0 && (f = [l[h2], ...l.slice(0, h2), ...l.slice(h2 + 1)], c = true), f.forEach((g) => {
+      var L;
+      let m = r(g);
+      if (m && m.length) {
+        o != null && o.includes(g) && (m = m.filter((p) => Nn(p, e, o)));
+        let y = m.sort((p, E) => {
+          let w = a[p], k = a[E];
+          return (w !== void 0 ? w : 0) - (k !== void 0 ? k : 0);
+        }), b = (y.length - 1) / 2;
+        for (let p = Math.floor(b), E = Math.ceil(b); p <= E; ++p) {
+          let w = y[p];
+          if (w === void 0) continue;
+          let k = a[w];
+          if (k !== void 0 && s[g] === g && u < k && a[w] !== d && !Kt(t, g, w)) {
+            let _ = i[w];
+            _ !== void 0 && (s[w] = g, s[g] = i[g] = _, u = k, c && (u = -1, d = (L = a[w]) != null ? L : -1, c = false));
+          }
+        }
+      }
+    });
+  }), { root: i, align: s };
+}
+function Zt(e, n, t, r, o = false) {
+  let i = {}, s = er(e, n, t, o), a = o ? "borderLeft" : "borderRight";
+  function l(h2, g) {
+    let m = s.nodes().slice(), L = {}, y = m.pop();
+    for (; y; ) {
+      if (L[y]) h2(y);
+      else {
+        L[y] = true, m.push(y);
+        for (let b of g(y)) m.push(b);
+      }
+      y = m.pop();
+    }
+  }
+  function u(h2) {
+    let g = s.inEdges(h2);
+    g ? i[h2] = g.reduce((m, L) => {
+      var p;
+      let y = (p = i[L.v]) != null ? p : 0, b = s.edge(L);
+      return Math.max(m, y + (b !== void 0 ? b : 0));
+    }, 0) : i[h2] = 0;
+  }
+  function d(h2) {
+    let g = s.outEdges(h2), m = Number.POSITIVE_INFINITY;
+    g && (m = g.reduce((y, b) => {
+      let p = i[b.w], E = s.edge(b);
+      return Math.min(y, (p !== void 0 ? p : 0) - (E !== void 0 ? E : 0));
+    }, Number.POSITIVE_INFINITY));
+    let L = e.node(h2);
+    m !== Number.POSITIVE_INFINITY && L.borderType !== a && (i[h2] = Math.max(i[h2] !== void 0 ? i[h2] : 0, m));
+  }
+  function c(h2) {
+    return s.predecessors(h2) || [];
+  }
+  function f(h2) {
+    return s.successors(h2) || [];
+  }
+  return l(u, c), l(d, f), Object.keys(r).forEach((h2) => {
+    var m;
+    let g = t[h2];
+    g !== void 0 && (i[h2] = (m = i[g]) != null ? m : 0);
+  }), i;
+}
+function er(e, n, t, r) {
+  let o = new T(), i = e.graph(), s = or(i.nodesep, i.edgesep, r);
+  return n.forEach((a) => {
+    let l;
+    a.forEach((u) => {
+      let d = t[u];
+      if (d !== void 0) {
+        if (o.setNode(d), l !== void 0) {
+          let c = t[l];
+          if (c !== void 0) {
+            let f = o.edge(c, d);
+            o.setEdge(c, d, Math.max(s(e, u, l), f || 0));
+          }
+        }
+        l = u;
+      }
+    });
+  }), o;
+}
+function nr(e, n) {
+  return Object.values(n).reduce((t, r) => {
+    let o = Number.NEGATIVE_INFINITY, i = Number.POSITIVE_INFINITY;
+    Object.entries(r).forEach(([a, l]) => {
+      let u = ir(e, a) / 2;
+      o = Math.max(l + u, o), i = Math.min(l - u, i);
+    });
+    let s = o - i;
+    return s < t[0] && (t = [s, r]), t;
+  }, [Number.POSITIVE_INFINITY, null])[1];
+}
+function tr(e, n) {
+  let t = Object.values(n), r = S(Math.min, t), o = S(Math.max, t);
+  ["u", "d"].forEach((i) => {
+    ["l", "r"].forEach((s) => {
+      let a = i + s, l = e[a];
+      if (!l || l === n) return;
+      let u = Object.values(l), d = r - S(Math.min, u);
+      s !== "l" && (d = o - S(Math.max, u)), d && (e[a] = X(l, (c) => c + d));
+    });
+  });
+}
+function rr(e, n = void 0) {
+  let t = e.ul;
+  return t ? X(t, (r, o) => {
+    var s, a;
+    if (n) {
+      let l = n.toLowerCase(), u = e[l];
+      if (u && u[o] !== void 0) return u[o];
+    }
+    let i = Object.values(e).map((l) => {
+      let u = l[o];
+      return u !== void 0 ? u : 0;
+    }).sort((l, u) => l - u);
+    return (((s = i[1]) != null ? s : 0) + ((a = i[2]) != null ? a : 0)) / 2;
+  }) : {};
+}
+function vn(e, n) {
+  let t = P(e), r = Object.assign($t(e, t), Ut(e, t)), o = {}, i;
+  ["u", "d"].forEach((a) => {
+    i = a === "u" ? t : Object.values(t).reverse(), ["l", "r"].forEach((l) => {
+      l === "r" && (i = i.map((f) => Object.values(f).reverse()));
+      let d = Qt(e, i, r, (f) => (a === "u" ? e.predecessors(f) : e.successors(f)) || [], n), c = Zt(e, i, d.root, d.align, l === "r");
+      l === "r" && (c = X(c, (f) => -f)), o[a + l] = c;
+    });
+  });
+  let s = nr(e, o);
+  return tr(o, s), rr(o, e.graph().align);
+}
+function or(e, n, t) {
+  return (r, o, i) => {
+    let s = r.node(o), a = r.node(i), l = 0, u;
+    if (l += s.width / 2, Object.hasOwn(s, "labelpos")) switch (s.labelpos.toLowerCase()) {
+      case "l":
+        u = -s.width / 2;
+        break;
+      case "r":
+        u = s.width / 2;
+        break;
+    }
+    if (u && (l += t ? u : -u), u = void 0, l += (s.dummy ? n : e) / 2, l += (a.dummy ? n : e) / 2, l += a.width / 2, Object.hasOwn(a, "labelpos")) switch (a.labelpos.toLowerCase()) {
+      case "l":
+        u = a.width / 2;
+        break;
+      case "r":
+        u = -a.width / 2;
+        break;
+    }
+    return u && (l += t ? u : -u), l;
+  };
+}
+function ir(e, n) {
+  return e.node(n).width;
+}
+function Nn(e, n, t) {
+  var s;
+  if (!t) return false;
+  let r = (s = n.node(e)) == null ? void 0 : s.edgeObj;
+  if (!r || n.node(e).edgeLabel.reversed) return false;
+  let o = t.indexOf(r == null ? void 0 : r.v), i = t.indexOf(r == null ? void 0 : r.w);
+  return o !== -1 && i !== -1 && o === (i + 1) % t.length || o === (i - 1) % t.length;
+}
+function kn(e, n) {
+  e = Z(e), sr(e), Object.entries(vn(e, n)).forEach(([t, r]) => e.node(t).x = r);
+}
+function sr(e) {
+  let n = P(e), t = e.graph(), r = t.ranksep, o = t.rankalign, i = 0;
+  n.forEach((s) => {
+    let a = s.reduce((l, u) => {
+      var c;
+      let d = (c = e.node(u).height) != null ? c : 0;
+      return l > d ? l : d;
+    }, 0);
+    s.forEach((l) => {
+      let u = e.node(l);
+      o === "top" ? u.y = i + u.height / 2 : o === "bottom" ? u.y = i + a - u.height / 2 : u.y = i + a / 2;
+    }), i += a + r;
+  });
+}
+var xn = /* @__PURE__ */ new WeakMap();
+function Oe(e, n = {}) {
+  return In(e, q, n), e;
+}
+function _n(e, n, t) {
+  let r = n;
+  for (; r !== void 0; ) {
+    let o = e.parent(r);
+    if (o === t) return r;
+    r = o;
+  }
+}
+function In(e, n, t) {
+  var y;
+  let r = e.nodes().filter((b) => e.children(b).length), o = {};
+  r.forEach((b) => {
+    let p = e.node(b);
+    if (p && p.rankdir) {
+      let E = new T({ multigraph: true, compound: true });
+      E.setGraph({ rankdir: p.rankdir });
+      let w = e.children(b);
+      w.forEach((G) => {
+        let N = { ...e.node(G) };
+        E.setNode(G, N);
+        let C = e.parent(G);
+        C && C !== b && w.includes(C) && E.setParent(G, C);
+      });
+      let k = /* @__PURE__ */ new Set();
+      e.edges().forEach((G) => {
+        let N = _n(e, G.v, b), C = _n(e, G.w, b);
+        if (N === G.v && C === G.w) E.setEdge(G, { ...e.edge(G) });
+        else if (N && C && N !== C) {
+          let B = `${N}\0${C}`;
+          k.has(B) || (k.add(B), E.setEdge(N, C, { ...e.edge(G) }));
+        }
+      }), In(E, n, t);
+      let _ = Rn(E);
+      Cn(_, n, t, null), Tn(E, _);
+      let O = 1 / 0, j = 1 / 0, R = -1 / 0, I = -1 / 0;
+      E.nodes().forEach((G) => {
+        if (G === b) return;
+        let N = E.node(G);
+        N && typeof N.x == "number" && typeof N.y == "number" && typeof N.width == "number" && typeof N.height == "number" && (O = Math.min(O, N.x - N.width / 2), R = Math.max(R, N.x + N.width / 2), j = Math.min(j, N.y - N.height / 2), I = Math.max(I, N.y + N.height / 2));
+      }), (!isFinite(O) || !isFinite(j) || !isFinite(R) || !isFinite(I)) && (O = j = 0, R = I = 0);
+      let v = R - O, x = I - j;
+      o[b] = { minX: O, minY: j, maxX: R, maxY: I, width: v, height: x, offsetX: O, offsetY: j }, p._dagreClusterSubgraph = E;
+    }
+  });
+  let i = [], s = (b) => {
+    let p = [], E = (e.children(b) || []).filter((w) => w !== b);
+    for (; E.length > 0; ) {
+      let w = E.shift();
+      p.push(w), (e.children(w) || []).filter((k) => k !== w).forEach((k) => E.push(k));
+    }
+    return p;
+  }, a = /* @__PURE__ */ new Map();
+  r.forEach((b) => {
+    let p = e.node(b);
+    p && p.rankdir && o[b] && a.set(b, (e.children(b) || []).filter((E) => E !== b));
+  });
+  let l = new Set([...a.values()].flat()), u = /* @__PURE__ */ new Map();
+  a.forEach((b, p) => {
+    l.has(p) || u.set(p, s(p));
+  });
+  let d = new Set([...u.values()].flat()), c = (b) => {
+    for (let [p, E] of u) if (E.includes(b)) return p;
+    return b;
+  }, f = [];
+  e.edges().forEach((b) => {
+    (d.has(b.v) || d.has(b.w)) && f.push({ edge: b, label: e.edge(b) });
+  });
+  let h2 = /* @__PURE__ */ new Map();
+  d.forEach((b) => {
+    let p = e.parent(b);
+    h2.set(b, typeof p == "string" ? p : void 0);
+  }), u.forEach((b, p) => {
+    let E = e.node(p), w = [];
+    b.forEach((O) => {
+      let j = e.node(O);
+      j && (w.push({ id: O, node: j, parent: h2.get(O) }), e.removeNode(O));
+    });
+    let k = f.filter(({ edge: O }) => b.includes(O.v) || b.includes(O.w)), _ = o[p];
+    E && (i.push({ clusterId: p, subgraph: E._dagreClusterSubgraph, bounds: _, children: b, removedNodes: w, removedEdges: k }), E.width = _.width, E.height = _.height);
+  });
+  let g = /* @__PURE__ */ new Set();
+  f.forEach(({ edge: b, label: p }) => {
+    let E = c(b.v), w = c(b.w);
+    if (E !== w && e.hasNode(E) && e.hasNode(w)) {
+      let k = `${E}\0${w}`;
+      g.has(k) || (g.add(k), e.setEdge(E, w, { ...p, width: 0, height: 0 }));
+    }
+  });
+  let m = Rn(e), L = Cn(m, n, t, (y = xn.get(e)) != null ? y : null);
+  xn.set(e, L), Tn(e, m), g.forEach((b) => {
+    let p = b.indexOf("\0"), E = b.slice(0, p), w = b.slice(p + 1);
+    e.hasEdge(E, w) && e.removeEdge(E, w);
+  }), i.forEach(({ clusterId: b, subgraph: p, bounds: E, removedNodes: w, removedEdges: k }) => {
+    var v, x;
+    let _ = e.node(b), O = (v = _ == null ? void 0 : _.x) != null ? v : 0, j = (x = _ == null ? void 0 : _.y) != null ? x : 0, R = (E.minX + E.maxX) / 2, I = (E.minY + E.maxY) / 2;
+    w.forEach(({ id: G, node: N, parent: C }) => {
+      e.setNode(G, N), C !== void 0 && e.setParent(G, C);
+    }), k.forEach(({ edge: G, label: N }) => {
+      e.setEdge(G, N);
+    }), p.nodes().forEach((G) => {
+      if (G === b) return;
+      let N = p.node(G), C = e.node(G);
+      C && N && typeof N.x == "number" && typeof N.y == "number" && (C.x = O + (N.x - R), C.y = j + (N.y - I));
+    }), On(e, p, O - R, j - I), delete _._dagreClusterSubgraph;
+  }), r.forEach((b) => {
+    var w, k;
+    let p = e.node(b), E = o[b];
+    if (p && p.rankdir && p._dagreClusterSubgraph && E) {
+      let _ = p._dagreClusterSubgraph, O = (w = p.x) != null ? w : 0, j = (k = p.y) != null ? k : 0, R = (E.minX + E.maxX) / 2, I = (E.minY + E.maxY) / 2;
+      _.nodes().forEach((v) => {
+        if (v === b) return;
+        let x = _.node(v), G = e.node(v);
+        if (G && x && typeof x.x == "number" && typeof x.y == "number") {
+          let N = x.x - R, C = x.y - I;
+          G.x = O + N, G.y = j + C;
+        }
+      }), On(e, _, O - R, j - I), delete p._dagreClusterSubgraph;
+    }
+  });
+}
+function On(e, n, t, r) {
+  n.edges().forEach((o) => {
+    if (!e.hasEdge(o)) return;
+    let i = n.edge(o), s = e.edge(o);
+    s.points = i.points.map((a) => ({ x: a.x + t, y: a.y + r })), Object.hasOwn(i, "x") && (s.x = i.x + t, s.y = i.y + r);
+  });
+}
+function Cn(e, n, t, r = null) {
+  var l, u;
+  let o = (t == null ? void 0 : t.useDynamic) !== false, i = o && (l = r == null ? void 0 : r.graph) != null ? l : null, s = o && (u = r == null ? void 0 : r.rawNodes) != null ? u : null;
+  n("    makeSpaceForEdgeLabels", () => br(e)), n("    removeSelfEdges", () => Gr(e)), n("    acyclic", () => Ue(e, i)), n("    nestingGraph.run", () => un(e)), n("    rank", () => dn(Z(e))), n("    injectEdgeLabelProxies", () => gr(e)), n("    removeEmptyRanks", () => We(e)), n("    nestingGraph.cleanup", () => fn(e)), n("    normalizeRanks", () => Be(e)), n("    assignRankMinMax", () => pr(e)), n("    removeEdgeLabelProxies", () => mr(e)), n("    normalize.run", () => Ke(e)), n("    parentDummyChains", () => ln(e)), n("    addBorderSegments", () => bn(e)), n("    order", () => re(e, t, s)), n("    insertSelfEdges", () => vr(e)), n("    adjustCoordinateSystem", () => pn(e)), n("    position", () => kn(e, t.corePath)), n("    positionSelfEdges", () => kr(e));
+  let a = JSON.parse(JSON.stringify(e._nodes));
+  return n("    removeBorderNodes", () => Nr(e)), n("    normalize.undo", () => Qe(e)), n("    fixupEdgeLabelCoords", () => yr(e)), n("    undoCoordinateSystem", () => mn(e)), n("    translateGraph", () => Er(e)), n("    assignNodeIntersects", () => Lr(e)), n("    reversePoints", () => wr(e)), n("    acyclic.undo", () => Je(e)), { graph: e, rawNodes: a };
+}
+function Tn(e, n) {
+  e.nodes().forEach((t) => {
+    let r = e.node(t), o = n.node(t);
+    r && (r.x = o.x, r.y = o.y, r.order = o.order, r.rank = o.rank, n.children(t).length && (r.width = o.width, r.height = o.height));
+  }), e.edges().forEach((t) => {
+    let r = e.edge(t), o = n.edge(t);
+    r.points = o.points, Object.hasOwn(o, "x") && (r.x = o.x, r.y = o.y);
+  }), e.graph().width = n.graph().width, e.graph().height = n.graph().height;
+}
+var ar = ["nodesep", "edgesep", "ranksep", "marginx", "marginy"];
+var dr = { ranksep: 50, edgesep: 20, nodesep: 50, rankdir: "TB", rankalign: "center" };
+var lr = ["acyclicer", "ranker", "rankdir", "align", "rankalign"];
+var ur = ["width", "height", "rank"];
+var jn = { width: 0, height: 0 };
+var cr = ["minlen", "weight", "width", "height", "labeloffset"];
+var fr = { minlen: 1, weight: 1, width: 0, height: 0, labeloffset: 10, labelpos: "r" };
+var hr = ["labelpos"];
+function Rn(e) {
+  let n = new T({ multigraph: true, compound: true }), t = _e(e.graph());
+  return n.setGraph(Object.assign({}, dr, xe(t, ar), W(t, lr))), e.nodes().forEach((r) => {
+    let o = _e(e.node(r)), i = xe(o, ur);
+    Object.keys(jn).forEach((a) => {
+      i[a] === void 0 && (i[a] = jn[a]);
+    }), n.setNode(r, i);
+    let s = e.parent(r);
+    s !== void 0 && n.setParent(r, s);
+  }), e.edges().forEach((r) => {
+    let o = _e(e.edge(r));
+    n.setEdge(r, Object.assign({}, fr, xe(o, cr), W(o, hr)));
+  }), n;
+}
+function br(e) {
+  let n = e.graph();
+  n.ranksep /= 2, e.edges().forEach((t) => {
+    var o;
+    let r = e.edge(t);
+    r.minlen *= 2, ((o = r.labelpos) != null ? o : "r").toLowerCase() !== "c" && (n.rankdir === "TB" || n.rankdir === "BT" ? r.width += r.labeloffset : r.height += r.labeloffset);
+  });
+}
+function gr(e) {
+  e.edges().forEach((n) => {
+    let t = e.edge(n);
+    if (t.width && t.height) {
+      let r = e.node(n.v), i = { rank: (e.node(n.w).rank - r.rank) / 2 + r.rank, e: n };
+      M(e, "edge-proxy", i, "_ep");
+    }
+  });
+}
+function pr(e) {
+  let n = 0;
+  e.nodes().forEach((t) => {
+    let r = e.node(t);
+    r.borderTop && (r.minRank = e.node(r.borderTop).rank, r.maxRank = e.node(r.borderBottom).rank, n = Math.max(n, r.maxRank));
+  }), e.graph().maxRank = n;
+}
+function mr(e) {
+  e.nodes().forEach((n) => {
+    let t = e.node(n);
+    if (t.dummy === "edge-proxy") {
+      let r = t;
+      e.edge(r.e).labelRank = t.rank, e.removeNode(n);
+    }
+  });
+}
+function Er(e) {
+  let n = Number.POSITIVE_INFINITY, t = 0, r = Number.POSITIVE_INFINITY, o = 0, i = e.graph(), s = i.marginx || 0, a = i.marginy || 0;
+  function l(u) {
+    let d = u.x, c = u.y, f = u.width, h2 = u.height;
+    n = Math.min(n, d - f / 2), t = Math.max(t, d + f / 2), r = Math.min(r, c - h2 / 2), o = Math.max(o, c + h2 / 2);
+  }
+  e.nodes().forEach((u) => l(e.node(u))), e.edges().forEach((u) => {
+    let d = e.edge(u);
+    Object.hasOwn(d, "x") && l(d);
+  }), n -= s, r -= a, e.nodes().forEach((u) => {
+    let d = e.node(u);
+    d.x -= n, d.y -= r;
+  }), e.edges().forEach((u) => {
+    let d = e.edge(u);
+    d.points.forEach((c) => {
+      c.x -= n, c.y -= r;
+    }), Object.hasOwn(d, "x") && (d.x -= n), Object.hasOwn(d, "y") && (d.y -= r);
+  }), i.width = t - n + s, i.height = o - r + a;
+}
+function Lr(e) {
+  e.edges().forEach((n) => {
+    if (n.v === n.w) return;
+    let t = e.edge(n), r = e.node(n.v), o = e.node(n.w), i, s;
+    t.points ? (i = t.points[0], s = t.points[t.points.length - 1]) : (t.points = [], i = o, s = r), t.points.unshift(se(r, i)), t.points.push(se(o, s));
+  });
+}
+function yr(e) {
+  e.edges().forEach((n) => {
+    let t = e.edge(n);
+    if (Object.hasOwn(t, "x")) switch ((t.labelpos === "l" || t.labelpos === "r") && (t.width -= t.labeloffset), t.labelpos) {
+      case "l":
+        t.x -= t.width / 2 + t.labeloffset;
+        break;
+      case "r":
+        t.x += t.width / 2 + t.labeloffset;
+        break;
+    }
+  });
+}
+function wr(e) {
+  e.edges().forEach((n) => {
+    let t = e.edge(n);
+    t.reversed && t.points.reverse();
+  });
+}
+function Nr(e) {
+  e.nodes().forEach((n) => {
+    if (e.children(n).length) {
+      let t = e.node(n), r = e.node(t.borderTop), o = e.node(t.borderBottom), i = e.node(t.borderLeft[t.borderLeft.length - 1]), s = e.node(t.borderRight[t.borderRight.length - 1]);
+      t.width = Math.abs(s.x - i.x), t.height = Math.abs(o.y - r.y), t.x = i.x + t.width / 2, t.y = r.y + t.height / 2;
+    }
+  }), e.nodes().forEach((n) => {
+    e.node(n).dummy === "border" && e.removeNode(n);
+  });
+}
+function Gr(e) {
+  e.edges().forEach((n) => {
+    if (n.v === n.w) {
+      let t = e.node(n.v);
+      t.selfEdges || (t.selfEdges = []), t.selfEdges.push({ e: n, label: e.edge(n) }), e.removeEdge(n);
+    }
+  });
+}
+function vr(e) {
+  P(e).forEach((t) => {
+    let r = 0;
+    t.forEach((o, i) => {
+      let s = e.node(o);
+      typeof s.rank != "number" && (s.rank = 0), s.order = i + r, (s.selfEdges || []).forEach((a) => {
+        M(e, "selfedge", { width: a.label.width, height: a.label.height, rank: s.rank, order: i + ++r, e: a.e, edgeLabel: a.label }, "_se"), (!Array.isArray(a.label.points) || a.label.points.length !== 7) && (a.label.points = [{ x: 0, y: -10 }, { x: 0, y: -10 }, { x: 0, y: 0 }, { x: 0, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }, { x: 0, y: 0 }]);
+      }), delete s.selfEdges;
+    });
+  });
+}
+function kr(e) {
+  e.nodes().forEach((n) => {
+    let t = e.node(n), r = (o) => typeof o == "number" && isFinite(o);
+    if (t.dummy === "selfedge") {
+      let o = t, i = e.node(o.e.v), s = r(i == null ? void 0 : i.x) ? i.x : 0, a = r(i == null ? void 0 : i.y) ? i.y : 0, l = r(i == null ? void 0 : i.width) ? i.width : 0, u = r(i == null ? void 0 : i.height) ? i.height : 0, d = r(t.x) ? t.x : s, c = r(t.y) ? t.y : a, f = l / 2, h2 = u / 2;
+      o.edgeLabel.points = [{ x: d + f, y: c - h2 }, { x: d + f, y: c - h2 }, { x: d, y: c }, { x: d - f, y: c + h2 }, { x: d - f, y: c + h2 }, { x: d, y: c }, { x: d, y: c }], o.edgeLabel.x = d, o.edgeLabel.y = c, e.setEdge(o.e, o.edgeLabel), e.removeNode(n);
+    } else t && Array.isArray(t.selfEdges) && t.selfEdges.forEach((o) => {
+      if (!Array.isArray(o.label.points) || o.label.points.length !== 7) {
+        let i = r(t.x) ? t.x : 0, s = r(t.y) ? t.y : 0, a = r(t.width) ? t.width : 0, l = r(t.height) ? t.height : 0, u = a / 2, d = l / 2;
+        o.label.points = [{ x: i + u, y: s - d }, { x: i + u, y: s - d }, { x: i, y: s }, { x: i - u, y: s + d }, { x: i - u, y: s + d }, { x: i, y: s }, { x: i, y: s }];
+      }
+    });
+  });
+}
+function xe(e, n) {
+  return X(W(e, n), Number);
+}
+function _e(e) {
+  let n = {};
+  return e && Object.entries(e).forEach(([t, r]) => {
+    typeof t == "string" && (t = t.toLowerCase()), n[t] = r;
+  }), n;
+}
+function Ce(e) {
+  let n = P(e), t = new T({ compound: true, multigraph: true }).setGraph({});
+  return e.nodes().forEach((r) => {
+    t.setNode(r, { label: r }), t.setParent(r, "layer" + e.node(r).rank);
+  }), e.edges().forEach((r) => t.setEdge(r.v, r.w, {}, r.name)), n.forEach((r, o) => {
+    let i = "layer" + o;
+    t.setNode(i, { rank: "same" }), r.reduce((s, a) => (t.setEdge(s, a, { style: "invis" }), a));
+  }), t;
+}
+var xr = { graphlib: ie, version: ue, layout: Oe, debug: Ce, util: { time: le, notime: q } };
+var Uo = xr;
+
+// src/depmap.ts
+function needPairs(items, view) {
+  const shown = new Set(view);
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const i of view) {
+    for (const e of items[i].edges) {
+      const t = e.target;
+      if (!e.needs || t === null || t === i || !shown.has(t) || seen.has(`${t} ${i}`)) continue;
+      seen.add(`${t} ${i}`);
+      out.push([t, i]);
+    }
+  }
+  return out;
+}
+function reach(next, i) {
+  const out = /* @__PURE__ */ new Set();
+  const queue = [i];
+  while (queue.length) {
+    for (const j of next.get(queue.pop()) ?? []) {
+      if (j === i || out.has(j)) continue;
+      out.add(j);
+      queue.push(j);
+    }
+  }
+  return out;
+}
+function adjacency(pairs, up) {
+  const out = /* @__PURE__ */ new Map();
+  for (const [from, to] of pairs) {
+    const [a, b] = up ? [to, from] : [from, to];
+    out.set(a, [...out.get(a) ?? [], b]);
+  }
+  return out;
+}
+function cascadeOf(items, view, i) {
+  return reach(adjacency(needPairs(items, view), false), i);
+}
+function groundOf(items, view, i) {
+  return reach(adjacency(needPairs(items, view), true), i);
+}
+function depMap(items, view, i, node) {
+  const keep = /* @__PURE__ */ new Set([i, ...groundOf(items, view, i), ...cascadeOf(items, view, i)]);
+  const pairs = needPairs(items, view).filter(([from, to]) => keep.has(from) && keep.has(to));
+  const g = new Uo.graphlib.Graph();
+  g.setGraph({ rankdir: "LR", nodesep: node.height * 0.3, ranksep: node.width * 0.35, marginx: 8, marginy: 8 });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const k of view) if (keep.has(k)) g.setNode(String(k), { ...node });
+  for (const [from, to] of pairs) g.setEdge(String(from), String(to));
+  Uo.layout(g);
+  const nodes = /* @__PURE__ */ new Map();
+  for (const id of g.nodes()) {
+    const n = g.node(id);
+    nodes.set(Number(id), { x: n.x, y: n.y });
+  }
+  const edges = pairs.map(([from, to]) => ({
+    from,
+    to,
+    points: g.edge(String(from), String(to)).points ?? [],
+    outOfOrder: items[to].reviewed && !items[from].reviewed
+  }));
+  const { width = 0, height = 0 } = g.graph();
+  return { nodes, edges, width, height };
+}
+function smoothPath(ps) {
+  if (!ps.length) return "";
+  let d = `M ${ps[0].x} ${ps[0].y}`;
+  for (let k = 1; k < ps.length - 1; k++) {
+    const mid = { x: (ps[k].x + ps[k + 1].x) / 2, y: (ps[k].y + ps[k + 1].y) / 2 };
+    d += ` Q ${ps[k].x} ${ps[k].y} ${mid.x} ${mid.y}`;
+  }
+  const last = ps[ps.length - 1];
+  return `${d} L ${last.x} ${last.y}`;
+}
+
 // src/palette.ts
 function parseCommand(line) {
   const t = line.trim().replace(/^:/, "").trimStart();
@@ -1838,6 +3823,7 @@ function parseCommand(line) {
 }
 var CLIENT_COMMANDS = [
   { name: "theme", args: "<name>", help: "switch the colour theme (auto follows the system)" },
+  { name: "map", args: "", help: "the hunk's whole chain: what it stands on to its left, what rejecting it strands to its right" },
   { name: "size", args: "<small|normal|large|larger|factor>", help: "make the text and rows bigger or smaller, for this browser" }
 ];
 function complete(input, commands, args) {
@@ -1906,7 +3892,7 @@ var token = new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStora
 sessionStorage.setItem("ordo.token", token);
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
 var api = new Api(token, rev);
-var st = {
+var st2 = {
   review: null,
   status: "starting\u2026",
   version: -1,
@@ -1941,32 +3927,37 @@ async function refresh() {
     slot = await api.review();
   } catch (e) {
     if (seq !== refreshSeq) return;
-    st.status = String(e.message);
+    st2.status = String(e.message);
     return renderAll();
   }
   if (seq !== refreshSeq) return;
   if (slot.state !== "ready") {
-    st.status = slot.status;
-    st.empty = slot.state === "empty";
-    st.review = null;
+    st2.status = slot.status;
+    st2.empty = slot.state === "empty";
+    st2.review = null;
     return renderAll();
   }
-  st.empty = false;
-  if (slot.version < st.version && slot.generation === st.review?.generation) return;
-  const prev = st.review;
-  st.review = slot;
-  st.version = slot.version;
-  st.keymap = new Keymap(slot.keys);
+  st2.empty = false;
+  if (slot.version < st2.version && slot.generation === st2.review?.generation) return;
+  const prev = st2.review;
+  st2.review = slot;
+  st2.version = slot.version;
+  st2.keymap = new Keymap(slot.keys);
   const moved = !!prev && prev.generation !== slot.generation;
   const remap = (i) => {
     if (!prev || !moved) return i;
     const id = identity(prev.items[i]);
-    return id ? slot.items.findIndex((it) => identity(it) === id) : -1;
+    return id ? slot.items.findIndex((it2) => identity(it2) === id) : -1;
   };
-  let sel = st.sel >= 0 ? remap(st.sel) : -1;
-  if (sel < 0) sel = prev ? clampToView(Math.min(st.sel, slot.items.length - 1)) : slot.sel;
+  let sel = st2.sel >= 0 ? remap(st2.sel) : -1;
+  if (sel < 0) sel = prev ? clampToView(Math.min(st2.sel, slot.items.length - 1)) : slot.sel;
   if (moved) {
-    st.jumps = st.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
+    st2.jumps = st2.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
+    if (depmap) {
+      depmap.root = remap(depmap.root);
+      depmap.sel = remap(depmap.sel);
+      if (depmap.root < 0) closeSheet();
+    }
     if (canvas) {
       const c = canvas;
       c.anchor = remap(c.anchor);
@@ -1979,40 +3970,41 @@ async function refresh() {
       }
     }
   }
-  if (slot.delta.new + slot.delta.changed + slot.delta.moved === 0) st.sinceOnly = false;
+  if (slot.delta.new + slot.delta.changed + slot.delta.moved === 0) st2.sinceOnly = false;
   if (prev?.version !== slot.version) {
-    st.files.clear();
+    st2.files.clear();
     filesGen++;
-    st.facts = null;
+    st2.facts = null;
   }
-  const same = sel === st.sel && !!st.file;
-  if (same) st.sel = -1;
+  const same = sel === st2.sel && !!st2.file;
+  if (same) st2.sel = -1;
   await select(sel, { keepCursor: same });
   if (canvas) renderCanvas();
+  if (depmap) renderMap();
 }
-function identity(it) {
-  return it ? `${it.path}\0${it.new[0]}\0${it.rationale}` : "";
+function identity(it2) {
+  return it2 ? `${it2.path}\0${it2.new[0]}\0${it2.rationale}` : "";
 }
 function clampToView(i) {
-  const v = st.review.view;
+  const v = st2.review.view;
   return v.includes(i) ? i : v[0] ?? 0;
 }
 async function fileOf(path) {
-  const hit = st.files.get(path);
+  const hit = st2.files.get(path);
   if (hit) return hit;
   const gen = filesGen;
   const f = await api.file(path);
-  if (gen === filesGen) st.files.set(path, f);
+  if (gen === filesGen) st2.files.set(path, f);
   return f;
 }
 var factsFor = -1;
 async function loadFacts(i) {
   factsFor = i;
-  const version = st.version;
+  const version = st2.version;
   try {
     const f = await api.item(i);
-    if (factsFor === i && version === st.version) {
-      st.facts = f;
+    if (factsFor === i && version === st2.version) {
+      st2.facts = f;
       renderWhy();
       renderBand();
     }
@@ -2020,43 +4012,43 @@ async function loadFacts(i) {
   }
 }
 async function select(i, opts = {}) {
-  const r = st.review;
+  const r = st2.review;
   if (!r || i < 0 || i >= r.items.length) return renderAll();
   const seq = ++selectSeq;
-  const it = r.items[i];
+  const it2 = r.items[i];
   let f;
   try {
-    f = await fileOf(it.path);
+    f = await fileOf(it2.path);
   } catch (e) {
     if (seq === selectSeq) toast(e.message, true);
     return;
   }
-  if (seq !== selectSeq || st.review !== r) return;
-  const changed = i !== st.sel;
-  if (changed && st.file?.path !== it.path) st.search = null;
-  st.sel = i;
-  if (opts.focus) st.focus = opts.focus;
-  st.file = f.missing ? null : f;
-  st.rows = st.file ? codeRows(st.file) : [];
+  if (seq !== selectSeq || st2.review !== r) return;
+  const changed = i !== st2.sel;
+  if (changed && st2.file?.path !== it2.path) st2.search = null;
+  st2.sel = i;
+  if (opts.focus) st2.focus = opts.focus;
+  st2.file = f.missing ? null : f;
+  st2.rows = st2.file ? codeRows(st2.file) : [];
   if (!opts.keepCursor) {
-    st.col = null;
-    st.cursor = firstRowOf(st.rows, i);
-    st.from = null;
+    st2.col = null;
+    st2.cursor = firstRowOf(st2.rows, i);
+    st2.from = null;
   }
-  st.cursor = Math.min(st.cursor, Math.max(0, st.rows.length - 1));
+  st2.cursor = Math.min(st2.cursor, Math.max(0, st2.rows.length - 1));
   if (changed) {
-    st.facts = null;
-    st.whyCur = -1;
+    st2.facts = null;
+    st2.whyCur = -1;
   }
   renderAll();
-  scrollCodeTo(firstRowOf(st.rows, i), !opts.keepCursor || changed);
+  scrollCodeTo(firstRowOf(st2.rows, i), !opts.keepCursor || changed);
   loadFacts(i);
 }
 async function act(body) {
   try {
     const out = await api.act({
-      sel: st.sel,
-      generation: st.review?.generation,
+      sel: st2.sel,
+      generation: st2.review?.generation,
       line: lineOfCursor(),
       from: fromLine(),
       ...body
@@ -2071,11 +4063,11 @@ async function act(body) {
       );
     }
     if (out.navigate) {
-      const q = new URLSearchParams({ rev: out.navigate });
-      location.href = `/?${q}#t=${token}`;
+      const q2 = new URLSearchParams({ rev: out.navigate });
+      location.href = `/?${q2}#t=${token}`;
     }
-    if (out.version > st.version) await refresh();
-    if (out.sel !== void 0 && out.sel !== st.sel) await select(out.sel);
+    if (out.version > st2.version) await refresh();
+    if (out.sel !== void 0 && out.sel !== st2.sel) await select(out.sel);
     renderConfig();
     return out;
   } catch (e) {
@@ -2085,20 +4077,20 @@ async function act(body) {
   }
 }
 function lineOfCursor() {
-  const row = st.rows[st.cursor];
+  const row = st2.rows[st2.cursor];
   if (!row) return void 0;
   if (row.kind !== "del") return row.n - 1;
-  const next = st.rows.slice(st.cursor).find((r) => r.kind !== "del");
+  const next = st2.rows.slice(st2.cursor).find((r) => r.kind !== "del");
   return next ? next.n - 1 : void 0;
 }
 function fromLine() {
-  if (st.from === null) return void 0;
-  const row = st.rows[st.from];
+  if (st2.from === null) return void 0;
+  const row = st2.rows[st2.from];
   return row && row.kind !== "del" ? row.n - 1 : void 0;
 }
 function shownRows() {
-  const r = st.review;
-  if (!st.sinceOnly) return r.rows;
+  const r = st2.review;
+  if (!st2.sinceOnly) return r.rows;
   const keep = (i) => r.items[i].delta !== null;
   const out = [];
   for (const row of r.rows) {
@@ -2113,31 +4105,31 @@ function shownRows() {
 }
 function stops() {
   return shownRows().flatMap(
-    (row) => row.kind === "item" ? [row.i] : row.kind === "folded" ? [row.items.includes(st.sel) ? st.sel : row.items[0]] : []
+    (row) => row.kind === "item" ? [row.i] : row.kind === "folded" ? [row.items.includes(st2.sel) ? st2.sel : row.items[0]] : []
   );
 }
 function step(by) {
   const s = stops();
   if (!s.length) return;
-  const at = s.indexOf(st.sel);
-  const to = at < 0 ? 0 : Math.max(0, Math.min(s.length - 1, at + by));
+  const at2 = s.indexOf(st2.sel);
+  const to = at2 < 0 ? 0 : Math.max(0, Math.min(s.length - 1, at2 + by));
   select(s[to]);
 }
 function rowClass(items, selected) {
-  const r = st.review;
+  const r = st2.review;
   const its = items.map((i) => r.items[i]);
-  const reviewed = its.every((it) => it.reviewed);
-  const level = LEVELS.find((l) => its.some((it) => it.level === l));
-  const quiet = reviewed || its.every((it) => it.noise);
+  const reviewed = its.every((it2) => it2.reviewed);
+  const level = LEVELS.find((l) => its.some((it2) => it2.level === l));
+  const quiet = reviewed || its.every((it2) => it2.noise);
   return ["r", reviewed && "reviewed", level && `lv-${level}`, selected && "sel", quiet && "quiet"].filter(Boolean).join(" ");
 }
 function renderList() {
   const pane = $("#list");
-  const r = st.review;
+  const r = st2.review;
   const scope = [
     `${r.view.length} hunk${r.view.length === 1 ? "" : "s"}`,
     r.mode === "ledger" && "by symbol",
-    st.sinceOnly && "changed since your last look",
+    st2.sinceOnly && "changed since your last look",
     r.path_filter
   ].filter(Boolean);
   replace(
@@ -2159,7 +4151,7 @@ function renderList() {
     } else {
       const items = row.kind === "item" ? [row.i] : row.items;
       const first = r.items[items[0]];
-      const selected = items.includes(st.sel);
+      const selected = items.includes(st2.sel);
       const folded = row.kind === "folded";
       const level = LEVELS.find((l) => items.some((i) => r.items[i].level === l));
       const el = h(
@@ -2168,8 +4160,8 @@ function renderList() {
           class: `${rowClass(items, selected)}${folded ? " folded" : ""}`,
           title: folded ? first.symbol ?? "" : first.rationale,
           onclick: () => {
-            st.focus = "list";
-            select(items.includes(st.sel) ? st.sel : items[0]);
+            st2.focus = "list";
+            select(items.includes(st2.sel) ? st2.sel : items[0]);
           }
         },
         h("span", { class: "txt" }, folded ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : sentence(first.rationale)),
@@ -2193,9 +4185,9 @@ function renderList() {
   }
 }
 function drawArcs(rows, dots) {
-  const it = st.review.items[st.sel];
-  const from = dots.get(st.sel);
-  if (!it || !from) return;
+  const it2 = st2.review.items[st2.sel];
+  const from = dots.get(st2.sel);
+  if (!it2 || !from) return;
   const rail = parseFloat(getComputedStyle(rows).getPropertyValue("--rail")) || 30;
   const mid = (el) => el.offsetTop + el.offsetHeight / 2;
   const y0 = mid(from);
@@ -2204,7 +4196,7 @@ function drawArcs(rows, dots) {
   svg.setAttribute("height", String(rows.offsetHeight));
   svg.setAttribute("aria-hidden", "true");
   const arcs = /* @__PURE__ */ new Map();
-  for (const e of it.edges) {
+  for (const e of it2.edges) {
     const to = e.target === null ? void 0 : dots.get(e.target);
     if (to && to !== from) arcs.set(to, (arcs.get(to) ?? false) || e.needs);
   }
@@ -2233,20 +4225,20 @@ function followCursor() {
   const body = $("#code .body");
   const rh = rowHeight();
   const el = body.querySelector(".l.cur");
-  const top = el ? el.offsetTop : st.cursor * rh;
+  const top = el ? el.offsetTop : st2.cursor * rh;
   if (top < body.scrollTop) body.scrollTop = top;
   else if (top + rh > body.scrollTop + body.clientHeight) body.scrollTop = top + rh - body.clientHeight;
 }
 function lineEl(row, k, mine, findings, uses, commented) {
-  const search = st.search;
-  const caret = k === st.cursor ? caretCol(row.text) : -1;
-  let at = 0;
+  const search = st2.search;
+  const caret = k === st2.cursor ? caretCol(row.text) : -1;
+  let at2 = 0;
   const parts = runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).flatMap((run2) => {
     if (run2.gone) return [h("del", { class: "gone", title: "removed" }, run2.text)];
     const piece = (text, extra) => h(run2.changed ? "mark" : "span", { class: [run2.role && `s-${run2.role}`, extra].filter(Boolean).join(" ") || null }, text);
     const cs = [...run2.text];
-    const i = caret - at;
-    at += cs.length;
+    const i = caret - at2;
+    at2 += cs.length;
     if (i < 0 || i >= cs.length) return [piece(run2.text)];
     const before = cs.slice(0, i).join("");
     const after = cs.slice(i + 1).join("");
@@ -2258,8 +4250,8 @@ function lineEl(row, k, mine, findings, uses, commented) {
     "l",
     row.kind,
     row.hunk !== null && !mine && "other",
-    k === st.cursor && "cur",
-    st.from !== null && k >= Math.min(st.from, st.cursor) && k <= Math.max(st.from, st.cursor) && "picked",
+    k === st2.cursor && "cur",
+    st2.from !== null && k >= Math.min(st2.from, st2.cursor) && k <= Math.max(st2.from, st2.cursor) && "picked",
     row.kind !== "del" && commented.has(row.n) && "commented"
   ].filter(Boolean).join(" ");
   const out = [
@@ -2269,10 +4261,10 @@ function lineEl(row, k, mine, findings, uses, commented) {
         class: cls,
         dataset: { k: String(k) },
         onclick: (e) => {
-          st.cursor = k;
-          st.col = caretColumn(e, row.text);
-          st.focus = "code";
-          if (row.hunk !== null && row.hunk !== st.sel) select(row.hunk, { keepCursor: true, focus: "code" });
+          st2.cursor = k;
+          st2.col = caretColumn(e, row.text);
+          st2.focus = "code";
+          if (row.hunk !== null && row.hunk !== st2.sel) select(row.hunk, { keepCursor: true, focus: "code" });
           else renderCode();
         }
       },
@@ -2292,71 +4284,71 @@ function lineEl(row, k, mine, findings, uses, commented) {
 function highlightHits(text, s, k) {
   const out = [];
   const low = text.toLowerCase();
-  const q = s.query.toLowerCase();
-  let at = 0;
-  for (let p = low.indexOf(q); q && p >= 0; p = low.indexOf(q, p + q.length)) {
-    out.push(document.createTextNode(text.slice(at, p)));
-    out.push(h("span", { class: `hit${s.hits[s.k] === k ? " now" : ""}` }, text.slice(p, p + q.length)));
-    at = p + q.length;
+  const q2 = s.query.toLowerCase();
+  let at2 = 0;
+  for (let p = low.indexOf(q2); q2 && p >= 0; p = low.indexOf(q2, p + q2.length)) {
+    out.push(document.createTextNode(text.slice(at2, p)));
+    out.push(h("span", { class: `hit${s.hits[s.k] === k ? " now" : ""}` }, text.slice(p, p + q2.length)));
+    at2 = p + q2.length;
   }
-  out.push(document.createTextNode(text.slice(at)));
+  out.push(document.createTextNode(text.slice(at2)));
   return out;
 }
-function renderReading(it) {
-  const r = st.review;
+function renderReading(it2) {
+  const r = st2.review;
   const head = $("#code > .head");
   const actions = $("#code .foot .actions");
-  if (!it) {
+  if (!it2) {
     replace(head);
     replace(actions);
     return;
   }
-  const pos = r.view.indexOf(st.sel);
-  const what = it.what.length ? it.what : ["a change ordo found nothing to say about"];
-  const search = st.search;
+  const pos = r.view.indexOf(st2.sel);
+  const what = it2.what.length ? it2.what : ["a change ordo found nothing to say about"];
+  const search = st2.search;
   replace(
     head,
     h(
       "div",
       { class: "kicker" },
       h("span", null, pos >= 0 ? `Hunk ${pos + 1} of ${r.view.length}` : "Outside the current filter"),
-      h("span", { class: "path" }, `${it.path}:${it.new[0]}`),
+      h("span", { class: "path" }, `${it2.path}:${it2.new[0]}`),
       h("span", { class: "grow" }),
       zoomButton("code")
     ),
     h("h1", { class: "headline" }, prose(sentence(what[0]))),
-    (what.length > 1 || it.details.length > 0 || it.grouped_by) && h(
+    (what.length > 1 || it2.details.length > 0 || it2.grouped_by) && h(
       "div",
       { class: "lede" },
       what.slice(1).map((w) => h("p", null, prose(sentence(w)))),
-      it.details.map((d) => h("p", { class: "detail" }, prose(sentence(d)))),
-      it.grouped_by && h("p", null, "Grouped by ", prose(it.grouped_by))
+      it2.details.map((d) => h("p", { class: "detail" }, prose(sentence(d)))),
+      it2.grouped_by && h("p", null, "Grouped by ", prose(it2.grouped_by))
     ),
     h(
       "div",
       { class: "pills" },
-      it.reviewed && h("span", { class: "pill done" }, "Read"),
-      it.delta && h("span", { class: "pill accent" }, SINCE[it.delta][0], sentence(SINCE[it.delta][1].split(" \u2014")[0])),
-      it.noise && !/formatting/.test(it.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
-      it.wave !== null && h("span", { class: "pill" }, `Wave ${it.wave}`)
+      it2.reviewed && h("span", { class: "pill done" }, "Read"),
+      it2.delta && h("span", { class: "pill accent" }, SINCE[it2.delta][0], sentence(SINCE[it2.delta][1].split(" \u2014")[0])),
+      it2.noise && !/formatting/.test(it2.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
+      it2.wave !== null && h("span", { class: "pill" }, `Wave ${it2.wave}`)
     ),
-    (search || st.from !== null) && h(
+    (search || st2.from !== null) && h(
       "div",
       { class: "status" },
       search && h("span", null, `Searching for \u201C${search.query}\u201D: ${search.hits.length ? `${search.k + 1} of ${search.hits.length}` : "no match"}`),
-      st.from !== null && h("span", null, "Selecting lines; press c to comment on them")
+      st2.from !== null && h("span", null, "Selecting lines; press c to comment on them")
     )
   );
-  const key = st.keymap.keysFor("toggle-reviewed")[0];
+  const key = st2.keymap.keysFor("toggle-reviewed")[0];
   const s = stops();
-  const at = s.indexOf(st.sel);
-  const next = at >= 0 && at + 1 < s.length ? r.items[s[at + 1]] : null;
+  const at2 = s.indexOf(st2.sel);
+  const next = at2 >= 0 && at2 + 1 < s.length ? r.items[s[at2 + 1]] : null;
   replace(
     actions,
     h(
       "button",
-      { class: `read${it.reviewed ? " done" : ""}`, onclick: () => run("toggle-reviewed"), title: it.reviewed ? "Mark as unread" : "Mark as read and go to the next hunk" },
-      it.reviewed ? "Marked as read" : "Mark as read",
+      { class: `read${it2.reviewed ? " done" : ""}`, onclick: () => run("toggle-reviewed"), title: it2.reviewed ? "Mark as unread" : "Mark as read and go to the next hunk" },
+      it2.reviewed ? "Marked as read" : "Mark as read",
       key && h("kbd", null, key)
     ),
     next && h(
@@ -2374,34 +4366,34 @@ var NAME = /`[^`]+`|[A-Za-z_][\w]*(?:[._/:][\w]+)+|\b[a-z]+[A-Z]\w*|\b[A-Z][a-z0
 var NAME_AT_START = /^(?:[A-Za-z_][\w]*(?:[._/:][\w]+)+|[a-z]+[A-Z]\w*)/;
 function prose(text) {
   const out = [];
-  let at = 0;
+  let at2 = 0;
   for (const m of text.matchAll(NAME)) {
-    if (m.index > at) out.push(text.slice(at, m.index));
+    if (m.index > at2) out.push(text.slice(at2, m.index));
     out.push(h("span", { class: "code-word" }, m[0].replace(/^`|`$/g, "")));
-    at = m.index + m[0].length;
+    at2 = m.index + m[0].length;
   }
-  if (at < text.length) out.push(text.slice(at));
+  if (at2 < text.length) out.push(text.slice(at2));
   return out;
 }
 function renderCode() {
   const pane = $("#code");
-  const r = st.review;
-  const it = r.items[st.sel];
-  renderReading(it);
+  const r = st2.review;
+  const it2 = r.items[st2.sel];
+  renderReading(it2);
   const body = pane.querySelector(".body");
-  if (!st.file || !it) return replace(body);
+  if (!st2.file || !it2) return replace(body);
   const findings = /* @__PURE__ */ new Map();
-  for (const f of it.findings) {
+  for (const f of it2.findings) {
     if (f.row == null) continue;
     findings.set(f.row, [...findings.get(f.row) ?? [], f]);
   }
-  const uses = new Set(it.uses_at.flatMap((u) => u.rows));
-  const commented = new Set(st.file.comments.flatMap((c) => range(c.start, c.end)));
+  const uses = new Set(it2.uses_at.flatMap((u) => u.rows));
+  const commented = new Set(st2.file.comments.flatMap((c) => range(c.start, c.end)));
   const code = h("div", { class: "code" });
-  st.rows.forEach((row, k) => {
-    for (const el of lineEl(row, k, row.hunk === st.sel, findings, uses, commented)) code.append(el);
+  st2.rows.forEach((row, k) => {
+    for (const el of lineEl(row, k, row.hunk === st2.sel, findings, uses, commented)) code.append(el);
     if (row.kind !== "del") {
-      for (const c of st.file.comments.filter((c2) => c2.end === row.n)) {
+      for (const c of st2.file.comments.filter((c2) => c2.end === row.n)) {
         code.append(h("div", { class: "cmt" }, `\u270E ${c.text}${c.stale ? " (lines changed since)" : ""}`));
       }
     }
@@ -2416,49 +4408,49 @@ function caretColumn(e, text) {
   const line = e.currentTarget.lastElementChild;
   if (!pos || !line || !line.contains(pos.offsetNode)) return null;
   const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
-  let at = 0;
+  let at2 = 0;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (n.parentElement?.closest(".gone")) {
-      if (n === pos.offsetNode) return Math.min(at, [...text].length);
+      if (n === pos.offsetNode) return Math.min(at2, [...text].length);
       continue;
     }
-    if (n === pos.offsetNode) return Math.min(at + [...(n.textContent ?? "").slice(0, pos.offset)].length, [...text].length);
-    at += [...n.textContent ?? ""].length;
+    if (n === pos.offsetNode) return Math.min(at2 + [...(n.textContent ?? "").slice(0, pos.offset)].length, [...text].length);
+    at2 += [...n.textContent ?? ""].length;
   }
   return null;
 }
 function caretCol(text) {
-  if (st.col === null) return -1;
-  return Math.min(st.col, Math.max(0, [...text].length - 1));
+  if (st2.col === null) return -1;
+  return Math.min(st2.col, Math.max(0, [...text].length - 1));
 }
 function firstWordCol(text) {
   const m = /[A-Za-z_]/.exec(text);
   return m ? [...text.slice(0, m.index)].length : 0;
 }
 function openEditor() {
-  const r = st.review;
-  const it = r.items[st.sel];
-  if (!it) return;
-  const row = st.rows[st.cursor];
-  const line = row && row.kind !== "del" ? row.n : it.new[0];
+  const r = st2.review;
+  const it2 = r.items[st2.sel];
+  if (!it2) return;
+  const row = st2.rows[st2.cursor];
+  const line = row && row.kind !== "del" ? row.n : it2.new[0];
   if (r.editor === "server") {
     act({ op: "open-editor" });
     return;
   }
   const segments = (p) => p.split("/").map(encodeURIComponent).join("/");
-  const url = (r.editor || "vscode://file/{root}/{path}:{line}").replaceAll("{root}", segments(r.root).replace(/^\//, "")).replaceAll("{path}", segments(it.path)).replaceAll("{line}", String(line));
+  const url = (r.editor || "vscode://file/{root}/{path}:{line}").replaceAll("{root}", segments(r.root).replace(/^\//, "")).replaceAll("{path}", segments(it2.path)).replaceAll("{line}", String(line));
   window.open(url, "_self");
 }
 function range(a, b) {
   return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
 }
 function moveCursor(by) {
-  cursorToRow(Math.max(0, Math.min(st.rows.length - 1, st.cursor + by)));
+  cursorToRow(Math.max(0, Math.min(st2.rows.length - 1, st2.cursor + by)));
 }
 function cursorToRow(k) {
-  st.cursor = k;
-  const hunk = st.rows[st.cursor]?.hunk;
-  if (hunk !== null && hunk !== void 0 && hunk !== st.sel) {
+  st2.cursor = k;
+  const hunk = st2.rows[st2.cursor]?.hunk;
+  if (hunk !== null && hunk !== void 0 && hunk !== st2.sel) {
     select(hunk, { keepCursor: true }).then(followCursor);
     return;
   }
@@ -2466,12 +4458,12 @@ function cursorToRow(k) {
   followCursor();
 }
 function cursorTo(pred, forward) {
-  const n = st.rows.length;
+  const n = st2.rows.length;
   for (let d = 1; d < n; d++) {
-    const k = forward ? st.cursor + d : st.cursor - d;
+    const k = forward ? st2.cursor + d : st2.cursor - d;
     if (k < 0 || k >= n) break;
-    if (pred(st.rows[k], k)) {
-      st.cursor = k;
+    if (pred(st2.rows[k], k)) {
+      st2.cursor = k;
       renderCode();
       followCursor();
       return;
@@ -2479,18 +4471,18 @@ function cursorTo(pred, forward) {
   }
 }
 function edgeRows(targets, limit) {
-  const r = st.review;
+  const r = st2.review;
   return targets.slice(0, limit).map(({ target, label }) => {
     if (target === null || !r.items[target]) {
       return h("div", { class: "link out" }, h("span", { class: "who" }, label), h("span", { class: "what" }, "Not part of this review"));
     }
     const t = r.items[target];
-    const link = st.whyLinks.length;
-    st.whyLinks.push(target);
+    const link = st2.whyLinks.length;
+    st2.whyLinks.push(target);
     return h(
       "div",
       {
-        class: `link${st.whyCur === link ? " cur" : ""}`,
+        class: `link${st2.whyCur === link ? " cur" : ""}`,
         title: "Go there (Enter); come back with C-o",
         onclick: () => jumpTo(target)
       },
@@ -2504,7 +4496,7 @@ function basename(p) {
   return p.slice(p.lastIndexOf("/") + 1);
 }
 function table(title, hint, targets, empty) {
-  const limit = tableLimit(targets.length, st.zoom && st.focus === "why");
+  const limit = tableLimit(targets.length, st2.zoom && st2.focus === "why");
   const more = targets.length - limit;
   return [
     h("h3", null, title, hint && h("small", null, hint)),
@@ -2514,8 +4506,8 @@ function table(title, hint, targets, empty) {
       {
         class: "more",
         onclick: () => {
-          st.focus = "why";
-          st.zoom = true;
+          st2.focus = "why";
+          st2.zoom = true;
           renderAll();
         }
       },
@@ -2532,17 +4524,17 @@ function rulesChecked(r) {
 }
 function renderWhy() {
   const pane = $("#why");
-  const r = st.review;
-  const it = r.items[st.sel];
+  const r = st2.review;
+  const it2 = r.items[st2.sel];
   replace(pane.querySelector(".head"), h("span", { class: "t" }, "Why it is here"), h("span", { class: "grow" }), zoomButton("why"));
   const body = pane.querySelector(".body");
-  if (!it) return replace(body);
-  st.whyLinks = [];
-  const facts = st.facts && st.facts.i === st.sel ? st.facts : null;
-  const needs = it.edges.filter((e) => e.needs);
-  const neededBy = it.edges.filter((e) => !e.needs);
-  const findings = [...it.findings].sort((a, b) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level));
-  const churn = r.file_churn[it.path];
+  if (!it2) return replace(body);
+  st2.whyLinks = [];
+  const facts = st2.facts && st2.facts.i === st2.sel ? st2.facts : null;
+  const needs = it2.edges.filter((e) => e.needs);
+  const neededBy = it2.edges.filter((e) => !e.needs);
+  const findings = [...it2.findings].sort((a, b) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level));
+  const churn = r.file_churn[it2.path];
   const lc = facts?.line_churn;
   const top = body.scrollTop;
   replace(
@@ -2550,7 +4542,7 @@ function renderWhy() {
     h(
       "div",
       { class: "why" },
-      it.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it.note)],
+      it2.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it2.note)],
       !!facts?.comments.length && [
         h("h3", null, "Your comments"),
         facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `\u2013${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`))
@@ -2583,12 +4575,12 @@ function renderWhy() {
           h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
         )
       ) : h("p", { class: "muted" }, `None. Checked against ${rulesChecked(r)}.`),
-      it.executed && [
+      it2.executed && [
         h("h3", null, "Test coverage"),
         h(
           "p",
-          { class: it.executed[0] === it.executed[1] ? "" : "warnline" },
-          it.executed[0] === it.executed[1] ? `All ${it.executed[1]} executable lines here run under a test.` : `${it.executed[1] - it.executed[0]} of ${it.executed[1]} executable lines here run under no test.`
+          { class: it2.executed[0] === it2.executed[1] ? "" : "warnline" },
+          it2.executed[0] === it2.executed[1] ? `All ${it2.executed[1]} executable lines here run under a test.` : `${it2.executed[1] - it2.executed[0]} of ${it2.executed[1]} executable lines here run under no test.`
         )
       ],
       (churn || lc) && [
@@ -2601,47 +4593,47 @@ function renderWhy() {
           lc.last ? `, last by ${lc.last.author} on ${lc.last.date}.` : "."
         )
       ],
-      it.notes.length > 0 && [h("h3", null, "Also"), it.notes.map((n) => h("p", null, prose(sentence(n))))],
-      it.wave !== null && [
+      it2.notes.length > 0 && [h("h3", null, "Also"), it2.notes.map((n) => h("p", null, prose(sentence(n))))],
+      it2.wave !== null && [
         h("h3", null, "Wave"),
-        h("p", null, `Wave ${it.wave}${r.wave_intents[String(it.wave)] ? `, asked for: ${r.wave_intents[String(it.wave)]}` : ""}`)
+        h("p", null, `Wave ${it2.wave}${r.wave_intents[String(it2.wave)] ? `, asked for: ${r.wave_intents[String(it2.wave)]}` : ""}`)
       ]
     )
   );
   body.scrollTop = top;
 }
 function cursorToLine(n) {
-  const k = st.rows.findIndex((row) => row.kind !== "del" && row.n === n);
+  const k = st2.rows.findIndex((row) => row.kind !== "del" && row.n === n);
   if (k < 0) return;
-  st.cursor = k;
-  st.focus = "code";
+  st2.cursor = k;
+  st2.focus = "code";
   renderAll();
   followCursor();
 }
 function jumpTo(target) {
-  st.jumps.push({ sel: st.sel, cursor: st.cursor });
+  st2.jumps.push({ sel: st2.sel, cursor: st2.cursor });
   select(target, { focus: "code" });
 }
 function jumpBack() {
-  const j = st.jumps.pop();
+  const j = st2.jumps.pop();
   if (!j) return;
   select(j.sel, { focus: "code" }).then(() => {
-    st.cursor = Math.min(j.cursor, st.rows.length - 1);
+    st2.cursor = Math.min(j.cursor, st2.rows.length - 1);
     renderCode();
     followCursor();
   });
 }
 function renderBand() {
   const band = $("#band");
-  const r = st.review;
+  const r = st2.review;
   const help = h("button", { class: "sig help", onclick: () => showHelp(), title: "Every key and command" }, "Keys");
   if (!r) {
     return replace(
       band,
       h("span", { class: "mark" }, "ordo"),
       h("span", { class: "rev" }, rev),
-      h("span", { class: "subject" }, st.status),
-      st.empty && h("button", { class: "sig", onclick: () => act({ op: "reload" }) }, "Read again")
+      h("span", { class: "subject" }, st2.status),
+      st2.empty && h("button", { class: "sig", onclick: () => act({ op: "reload" }) }, "Read again")
     );
   }
   const sinceCount = r.delta.new + r.delta.changed + r.delta.moved;
@@ -2661,10 +4653,10 @@ function renderBand() {
       "button",
       {
         class: "sig",
-        "aria-pressed": st.sinceOnly ? "true" : "false",
+        "aria-pressed": st2.sinceOnly ? "true" : "false",
         title: `${r.delta.new} new, ${r.delta.changed} changed, ${r.delta.moved} moved, ${r.delta.gone} gone. Show only these.`,
         onclick: () => {
-          st.sinceOnly = !st.sinceOnly;
+          st2.sinceOnly = !st2.sinceOnly;
           renderAll();
         }
       },
@@ -2696,27 +4688,27 @@ var HINTS = {
   why: [["next", "next link"], ["jump-to-edge", "go there"], ["jump-back", "back"]]
 };
 function renderHints() {
-  const items = HINTS[st.focus].map(([action, label]) => {
-    const k = st.keymap.keysFor(action)[0];
+  const items = HINTS[st2.focus].map(([action, label]) => {
+    const k = st2.keymap.keysFor(action)[0];
     return k ? h("span", null, h("kbd", null, k), label) : null;
   });
-  replace($("#hints"), st.notice ? h("span", { class: "notice" }, st.notice) : items);
+  replace($("#hints"), st2.notice ? h("span", { class: "notice" }, st2.notice) : items);
 }
 function zoomButton(p) {
-  const on = st.zoom && st.focus === p;
+  const on2 = st2.zoom && st2.focus === p;
   return h(
     "button",
     {
       class: "zoomer",
-      title: on ? "Show all three columns" : "Give this column the whole page",
-      "aria-label": on ? "restore the columns" : "maximise this column",
+      title: on2 ? "Show all three columns" : "Give this column the whole page",
+      "aria-label": on2 ? "restore the columns" : "maximise this column",
       onclick: () => {
-        st.zoom = !on;
-        st.focus = p;
+        st2.zoom = !on2;
+        st2.focus = p;
         renderAll();
       }
     },
-    on ? "\u2921" : "\u2922"
+    on2 ? "\u2921" : "\u2922"
   );
 }
 function showSheet(title, text) {
@@ -2745,11 +4737,12 @@ function closeSheet() {
   ov.hidden = true;
   delete ov.dataset.kind;
   canvas = null;
+  depmap = null;
   replace(ov);
   return true;
 }
 function showHelp() {
-  const r = st.review;
+  const r = st2.review;
   if (!r) return;
   const by = /* @__PURE__ */ new Map();
   for (const b of r.keys) {
@@ -2769,20 +4762,20 @@ function toast(msg, err = false) {
   toastTimer = window.setTimeout(() => t.className = "", err ? 4e3 : 2200);
 }
 function renderAll() {
-  document.body.classList.toggle("zoom", st.zoom);
+  document.body.classList.toggle("zoom", st2.zoom);
   for (const p of PANES) {
     const el = $(`#${p}`);
-    el.classList.toggle("focus", st.focus === p);
-    el.classList.toggle("zoomed", st.zoom && st.focus === p);
+    el.classList.toggle("focus", st2.focus === p);
+    el.classList.toggle("zoomed", st2.zoom && st2.focus === p);
   }
   renderBand();
-  if (!st.review) {
+  if (!st2.review) {
     for (const p of PANES) {
       replace($(`#${p} > .head`));
       replace($(`#${p} > .body`));
     }
     replace($("#code .foot .actions"));
-    replace($("#code > .body"), h("div", { class: "loading" }, st.empty ? "Nothing to read in this revision." : "Reading the change\u2026", h("small", null, st.status)));
+    replace($("#code > .body"), h("div", { class: "loading" }, st2.empty ? "Nothing to read in this revision." : "Reading the change\u2026", h("small", null, st2.status)));
     renderHints();
     return;
   }
@@ -2822,7 +4815,7 @@ function closePalette() {
   document.activeElement?.blur();
 }
 function argCandidates() {
-  const r = st.review;
+  const r = st2.review;
   return {
     strategy: ["comprehension", "defs-first", "file"],
     mode: ["ledger", "hunks"],
@@ -2837,14 +4830,14 @@ function argCandidates() {
   };
 }
 function candidates() {
-  if (paletteMode !== "command" || !st.review) return [];
+  if (paletteMode !== "command" || !st2.review) return [];
   const input = $("#palette-input").value;
-  return complete(input, [...st.review.commands, ...CLIENT_COMMANDS], argCandidates()).slice(0, 40);
+  return complete(input, [...st2.review.commands, ...CLIENT_COMMANDS], argCandidates()).slice(0, 40);
 }
 function renderPalette() {
   const list = $("#palette-list");
-  if (paletteMode !== "command" || !st.review) return replace(list);
-  const all = [...st.review.commands, ...CLIENT_COMMANDS];
+  if (paletteMode !== "command" || !st2.review) return replace(list);
+  const all = [...st2.review.commands, ...CLIENT_COMMANDS];
   replace(
     list,
     candidates().map((c, k) => {
@@ -2877,6 +4870,7 @@ async function runPalette() {
     localStorage.setItem("ordo.look", arg || "auto");
     return;
   }
+  if (name === "map") return openMap();
   if (name === "size") {
     const ui = sizeOf(arg);
     if (ui === null) return toast(`:size takes ${Object.keys(SIZES).join(", ")} or a factor like 1.2`, true);
@@ -2885,49 +4879,49 @@ async function runPalette() {
     return renderAll();
   }
   const out = await act({ op: "command", line_text: value });
-  if (out && !out.error && name === "comment" && st.from !== null) {
-    st.from = null;
+  if (out && !out.error && name === "comment" && st2.from !== null) {
+    st2.from = null;
     renderCode();
   }
 }
 function runSearch(query, forward = true) {
   if (!query) {
-    st.search = null;
+    st2.search = null;
     return renderCode();
   }
-  const q = query.toLowerCase();
-  const hits = st.rows.flatMap((row, k2) => row.text.toLowerCase().includes(q) ? [k2] : []);
-  const after = hits.findIndex((x) => x > st.cursor);
-  const at = hits.indexOf(st.cursor);
-  const k = forward ? Math.max(0, at >= 0 ? at : after) : Math.max(0, (after < 0 ? hits.length : after) - (at >= 0 ? 2 : 1));
-  st.search = { query, hits, k };
-  if (hits.length) st.cursor = hits[k];
-  st.focus = "code";
+  const q2 = query.toLowerCase();
+  const hits = st2.rows.flatMap((row, k2) => row.text.toLowerCase().includes(q2) ? [k2] : []);
+  const after = hits.findIndex((x) => x > st2.cursor);
+  const at2 = hits.indexOf(st2.cursor);
+  const k = forward ? Math.max(0, at2 >= 0 ? at2 : after) : Math.max(0, (after < 0 ? hits.length : after) - (at2 >= 0 ? 2 : 1));
+  st2.search = { query, hits, k };
+  if (hits.length) st2.cursor = hits[k];
+  st2.focus = "code";
   renderAll();
   followCursor();
 }
 function searchStep(by) {
-  const s = st.search;
+  const s = st2.search;
   if (!s || !s.hits.length) return;
   s.k = (s.k + by + s.hits.length) % s.hits.length;
-  st.cursor = s.hits[s.k];
+  st2.cursor = s.hits[s.k];
   renderCode();
   followCursor();
 }
 function page(by) {
-  const body = $(`#${st.focus} .body`);
+  const body = $(`#${st2.focus} .body`);
   body.scrollTop += by * body.clientHeight;
 }
 function run(action) {
-  const r = st.review;
+  const r = st2.review;
   if (!r) return;
-  const focus = st.focus;
+  const focus = st2.focus;
   switch (action) {
     case "quit":
       if (dismissSheet()) return;
-      if (st.search) st.search = null;
-      else if (st.from !== null) st.from = null;
-      else if (st.zoom) st.zoom = false;
+      if (st2.search) st2.search = null;
+      else if (st2.from !== null) st2.from = null;
+      else if (st2.zoom) st2.zoom = false;
       return renderAll();
     case "help":
       return showHelp();
@@ -2943,10 +4937,10 @@ function run(action) {
       return searchStep(-1);
     case "symbol-next":
     case "symbol-prev": {
-      const it = r.items[st.sel];
-      const name = it?.symbols[0] ?? it?.enclosing;
+      const it2 = r.items[st2.sel];
+      const name = it2?.symbols[0] ?? it2?.enclosing;
       const by = action === "symbol-next" ? 1 : -1;
-      if (name && st.search?.query === name) return searchStep(by);
+      if (name && st2.search?.query === name) return searchStep(by);
       if (name) runSearch(name, by > 0);
       return;
     }
@@ -2959,12 +4953,12 @@ function run(action) {
     }
     case "first":
       if (focus === "list") return void (stops().length && select(stops()[0]));
-      if (focus === "code") return moveCursor(-st.rows.length);
+      if (focus === "code") return moveCursor(-st2.rows.length);
       $("#why .body").scrollTop = 0;
       return;
     case "last":
       if (focus === "list") return void (stops().length && select(stops().at(-1)));
-      if (focus === "code") return moveCursor(st.rows.length);
+      if (focus === "code") return moveCursor(st2.rows.length);
       $("#why .body").scrollTop = 1e9;
       return;
     case "page-down":
@@ -2977,28 +4971,28 @@ function run(action) {
       return page(-0.5);
     case "toggle-reviewed": {
       const s = stops();
-      const at = s.indexOf(st.sel);
+      const at2 = s.indexOf(st2.sel);
       act({ op: "mark" }).then((out) => {
-        if (out && !out.error && at >= 0 && at + 1 < s.length) select(s[at + 1]);
+        if (out && !out.error && at2 >= 0 && at2 + 1 < s.length) select(s[at2 + 1]);
       });
       return;
     }
     case "focus-next":
     case "focus-prev": {
       const k = PANES.indexOf(focus) + (action === "focus-next" ? 1 : PANES.length - 1);
-      st.focus = PANES[k % PANES.length];
+      st2.focus = PANES[k % PANES.length];
       return renderAll();
     }
     case "focus-list":
     case "focus-code":
     case "focus-why": {
       const p = action.slice(6);
-      if (st.focus === p) st.zoom = !st.zoom;
-      st.focus = p;
+      if (st2.focus === p) st2.zoom = !st2.zoom;
+      st2.focus = p;
       return renderAll();
     }
     case "zoom":
-      st.zoom = !st.zoom;
+      st2.zoom = !st2.zoom;
       return renderAll();
     case "finding-next":
     case "finding-prev":
@@ -3012,18 +5006,18 @@ function run(action) {
       act({ op: "action", action });
       return;
     case "jump-to-edge":
-      if (focus === "why" && st.whyLinks[st.whyCur] !== void 0) jumpTo(st.whyLinks[st.whyCur]);
+      if (focus === "why" && st2.whyLinks[st2.whyCur] !== void 0) jumpTo(st2.whyLinks[st2.whyCur]);
       return;
     case "jump-back":
       return jumpBack();
     case "mark-next":
     case "mark-prev": {
-      const uses = new Set(r.items[st.sel].uses_at.flatMap((u) => u.rows));
+      const uses = new Set(r.items[st2.sel].uses_at.flatMap((u) => u.rows));
       return cursorTo((row) => row.kind !== "del" && uses.has(row.n), action === "mark-next");
     }
     case "comment-next":
     case "comment-prev": {
-      const c = new Set(st.file?.comments.map((c2) => c2.start) ?? []);
+      const c = new Set(st2.file?.comments.map((c2) => c2.start) ?? []);
       return cursorTo((row) => row.kind !== "del" && c.has(row.n), action === "comment-next");
     }
     case "para-next":
@@ -3033,31 +5027,31 @@ function run(action) {
     case "cursor-right":
     case "line-start":
     case "line-end": {
-      const text = st.rows[st.cursor]?.text ?? "";
+      const text = st2.rows[st2.cursor]?.text ?? "";
       const last = Math.max(0, [...text].length - 1);
-      const now = st.col === null ? firstWordCol(text) : caretCol(text);
-      st.col = action === "line-start" ? 0 : action === "line-end" ? last : Math.max(0, Math.min(last, now + (action === "cursor-right" ? 1 : -1)));
-      st.focus = "code";
+      const now = st2.col === null ? firstWordCol(text) : caretCol(text);
+      st2.col = action === "line-start" ? 0 : action === "line-end" ? last : Math.max(0, Math.min(last, now + (action === "cursor-right" ? 1 : -1)));
+      st2.focus = "code";
       return renderAll();
     }
     case "word-next":
     case "word-prev":
     case "word-end": {
       const kind = action === "word-next" ? "next" : action === "word-prev" ? "prev" : "end";
-      const text = st.rows[st.cursor]?.text ?? "";
+      const text = st2.rows[st2.cursor]?.text ?? "";
       const to = wordMove(
-        st.rows.map((r2) => r2.text),
-        { row: st.cursor, col: st.col === null ? firstWordCol(text) : caretCol(text) },
+        st2.rows.map((r2) => r2.text),
+        { row: st2.cursor, col: st2.col === null ? firstWordCol(text) : caretCol(text) },
         kind
       );
-      st.col = to.col;
-      st.focus = "code";
-      if (to.row === st.cursor) return renderAll();
+      st2.col = to.col;
+      st2.focus = "code";
+      if (to.row === st2.cursor) return renderAll();
       return cursorToRow(to.row);
     }
     case "select-lines":
-      st.from = st.from === null ? st.cursor : null;
-      st.focus = "code";
+      st2.from = st2.from === null ? st2.cursor : null;
+      st2.focus = "code";
       return renderAll();
     case "comment":
       return openPalette("command", "comment ");
@@ -3065,8 +5059,8 @@ function run(action) {
       act({ op: "reload" });
       return;
     case "hover":
-      if (focus === "why" && st.whyLinks[st.whyCur] !== void 0) return void previewHunk(st.whyLinks[st.whyCur]);
-      act({ op: "hover", col: st.col === null ? firstWordCol(st.rows[st.cursor]?.text ?? "") : caretCol(st.rows[st.cursor]?.text ?? "") });
+      if (focus === "why" && st2.whyLinks[st2.whyCur] !== void 0) return void previewHunk(st2.whyLinks[st2.whyCur]);
+      act({ op: "hover", col: st2.col === null ? firstWordCol(st2.rows[st2.cursor]?.text ?? "") : caretCol(st2.rows[st2.cursor]?.text ?? "") });
       return;
     case "open-editor":
       return openEditor();
@@ -3076,12 +5070,12 @@ function run(action) {
   }
 }
 function whyStep(by) {
-  const n = st.whyLinks.length;
+  const n = st2.whyLinks.length;
   if (!n) {
     $("#why .body").scrollTop += by * 40;
     return;
   }
-  st.whyCur = Math.max(0, Math.min(n - 1, st.whyCur + by));
+  st2.whyCur = Math.max(0, Math.min(n - 1, st2.whyCur + by));
   renderWhy();
   $("#why tr.cur")?.scrollIntoView({ block: "nearest" });
 }
@@ -3097,32 +5091,36 @@ function onKey(e) {
     e.preventDefault();
     return void canvasKey("jump-to-edge");
   }
+  if (key === "Enter" && depmap) {
+    e.preventDefault();
+    return void mapKey("jump-to-edge");
+  }
   if (key === "Esc" && $("#overlay").dataset.kind === "config") {
     e.preventDefault();
     return void dismissSheet();
   }
-  if (key === "Enter" && st.focus === "why" && st.whyCur >= 0) {
+  if (key === "Enter" && st2.focus === "why" && st2.whyCur >= 0) {
     e.preventDefault();
     return run("jump-to-edge");
   }
-  const pending = st.pending;
-  const res = st.keymap.resolve(pending, key);
-  clearTimeout(st.pendingTimer);
-  st.pending = null;
+  const pending = st2.pending;
+  const res = st2.keymap.resolve(pending, key);
+  clearTimeout(st2.pendingTimer);
+  st2.pending = null;
   if ("pending" in res) {
     e.preventDefault();
-    st.pending = key;
-    const bare = st.keymap.bare(key);
-    if (bare) st.pendingTimer = window.setTimeout(() => (st.pending = null, run(bare)), CHORD_TIMEOUT);
+    st2.pending = key;
+    const bare = st2.keymap.bare(key);
+    if (bare) st2.pendingTimer = window.setTimeout(() => (st2.pending = null, run(bare)), CHORD_TIMEOUT);
     return;
   }
   if ("act" in res) {
     e.preventDefault();
-    if (canvasKey(res.act)) return;
+    if (canvasKey(res.act) || mapKey(res.act)) return;
     return run(res.act);
   }
   if (pending) {
-    const bare = st.keymap.bare(pending);
+    const bare = st2.keymap.bare(pending);
     if (bare) run(bare);
     onKey(e);
   }
@@ -3174,34 +5172,34 @@ function excerpt(f, hunk, context, max) {
   );
 }
 function hunkTitle(i) {
-  const t = st.review.items[i];
+  const t = st2.review.items[i];
   return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} \xB7 ${basename(t.path)}:${t.new[0]}`;
 }
 async function previewHunk(i) {
-  const t = st.review.items[i];
+  const t = st2.review.items[i];
   const f = await fileOf(t.path);
   showSheet(hunkTitle(i), h("div", null, h("p", { class: "muted" }, t.rationale), h("div", { class: "src" }, excerpt(f, i, 2, 40))));
 }
 var canvas = null;
 async function openCanvas() {
-  const r = st.review;
-  const it = r.items[st.sel];
-  const cards = it.edges.filter((e) => e.target !== null && r.items[e.target]).map((e) => ({ i: e.target, needs: e.needs }));
+  const r = st2.review;
+  const it2 = r.items[st2.sel];
+  const cards = it2.edges.filter((e) => e.target !== null && r.items[e.target]).map((e) => ({ i: e.target, needs: e.needs }));
   if (!cards.length) return toast("nothing in this change needs this hunk, and it needs nothing");
-  canvas = { anchor: st.sel, cards, sel: 0 };
+  canvas = { anchor: st2.sel, cards, sel: 0 };
   await renderCanvas();
 }
 async function renderCanvas() {
   if (!canvas) return;
   const c = canvas;
-  const files = await Promise.all([c.anchor, ...c.cards.map((k) => k.i)].map((i) => fileOf(st.review.items[i].path)));
+  const files = await Promise.all([c.anchor, ...c.cards.map((k) => k.i)].map((i) => fileOf(st2.review.items[i].path)));
   if (canvas !== c) return;
   const card = (k) => {
     const { i } = c.cards[k];
     return h(
       "div",
       { class: `card${k === c.sel ? " cur" : ""}`, onclick: () => goCanvas(k) },
-      h("header", null, hunkTitle(i), h("span", { class: "muted" }, st.review.items[i].rationale)),
+      h("header", null, hunkTitle(i), h("span", { class: "muted" }, st2.review.items[i].rationale)),
       excerpt(files[k + 1], i, 1, 14)
     );
   };
@@ -3238,14 +5236,150 @@ function canvasKey(action) {
     renderCanvas();
   } else if (action === "jump-to-edge") {
     goCanvas(canvas.sel);
-  } else if (action === "quit" || action === "open-deps" || action === "focus-deps") {
+  } else if (action === "open-deps" || action === "focus-deps") {
+    const root = canvas.anchor;
+    canvas = null;
+    depmap = { root, sel: root, order: [] };
+    renderMap();
+  } else if (action === "quit") {
     canvas = null;
     closeSheet();
   }
   return true;
 }
+var depmap = null;
+function openMap() {
+  const r = st2.review;
+  if (!needPairs(r.items, r.view).some((p) => p.includes(st2.sel))) {
+    return toast("nothing in this change needs this hunk, and it needs nothing");
+  }
+  depmap = { root: st2.sel, sel: st2.sel, order: [] };
+  renderMap();
+}
+function renderMap() {
+  if (!depmap) return;
+  const r = st2.review;
+  const root = depmap.root;
+  const ui = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui")) || 1;
+  const box = { width: 236 * ui, height: 54 * ui };
+  const m = depMap(r.items, r.view, root, box);
+  depmap.order = r.view.filter((i) => m.nodes.has(i));
+  if (!m.nodes.has(depmap.sel)) depmap.sel = root;
+  const pick = (i) => {
+    if (!depmap || depmap.sel === i) return;
+    depmap.sel = i;
+    paintMap();
+  };
+  const node = (i, at2) => {
+    const it2 = r.items[i];
+    const name = it2.symbols[0] ?? it2.enclosing ?? it2.symbol ?? basename(it2.path);
+    return h(
+      "button",
+      {
+        class: `node${i === root ? " root" : ""}`,
+        dataset: { i: String(i) },
+        style: `left:${at2.x - box.width / 2}px;top:${at2.y - box.height / 2}px;width:${box.width}px;height:${box.height}px`,
+        title: it2.rationale,
+        onmouseenter: () => pick(i),
+        onfocus: () => pick(i),
+        onclick: () => goMap(i)
+      },
+      h("span", { class: "name" }, it2.reviewed ? `\u2713 ${name}` : name),
+      h("span", { class: "at" }, `${basename(it2.path)}:${it2.new[0]}`),
+      it2.level && h("span", { class: `dot ${it2.level}`, title: `${it2.level} finding` })
+    );
+  };
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", String(m.width));
+  svg.setAttribute("height", String(m.height));
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = '<defs><marker id="map-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 z" fill="context-stroke"/></marker></defs>';
+  for (const e of m.edges) {
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", smoothPath(e.points));
+    p.setAttribute("marker-end", "url(#map-head)");
+    p.dataset.from = String(e.from);
+    p.dataset.to = String(e.to);
+    if (e.outOfOrder) p.classList.add("early");
+    svg.append(p);
+  }
+  const ground = groundOf(r.items, r.view, root).size;
+  const strands = cascadeOf(r.items, r.view, root).size;
+  const hunks = (n) => `${n} hunk${n === 1 ? "" : "s"}`;
+  const early = m.edges.filter((e) => e.outOfOrder).length;
+  showSheet(
+    `Dependencies of ${hunkTitle(root)}`,
+    h(
+      "div",
+      { class: "mapview" },
+      h(
+        "p",
+        { class: "lede" },
+        `It stands on ${hunks(ground)}, drawn to its left, and ${hunks(strands)} ${strands === 1 ? "stands" : "stand"} on it, drawn to its right.`,
+        early ? h("span", { class: "early" }, ` ${hunks(early)} marked reviewed before what ${early === 1 ? "it needs" : "they need"}, dashed.`) : null
+      ),
+      h("p", { class: "said", "aria-live": "polite" }),
+      h("div", { class: "depmap", style: `width:${m.width}px;height:${m.height}px` }, svg, [...m.nodes].map(([i, at2]) => node(i, at2)))
+    )
+  );
+  $("#overlay").querySelector(".sheet")?.classList.add("wide");
+  $("#overlay").dataset.kind = "map";
+  paintMap();
+  $("#overlay .node.root")?.scrollIntoView({ block: "center", inline: "center" });
+}
+function paintMap() {
+  if (!depmap) return;
+  const r = st2.review;
+  const i = depmap.sel;
+  const strands = cascadeOf(r.items, r.view, i);
+  const needs = new Set(needPairs(r.items, r.view).flatMap(([from, to]) => to === i ? [from] : []));
+  for (const el of $("#overlay").querySelectorAll(".node")) {
+    const k = Number(el.dataset.i);
+    el.classList.toggle("picked", k === i);
+    el.classList.toggle("strands", strands.has(k));
+    el.classList.toggle("needed", needs.has(k));
+    el.classList.toggle("reviewed", r.items[k].reviewed);
+  }
+  for (const p of $("#overlay").querySelectorAll(".depmap path[data-from]")) {
+    const from = Number(p.dataset.from);
+    const to = Number(p.dataset.to);
+    p.classList.toggle("strands", (from === i || strands.has(from)) && strands.has(to));
+    p.classList.toggle("needed", to === i);
+  }
+  const said = $("#overlay").querySelector(".mapview .said");
+  if (said && r.items[i]) {
+    const name = hunkTitle(i);
+    const stranded = strands.size ? `rejecting it strands ${strands.size} hunk${strands.size === 1 ? "" : "s"}, shaded red` : "nothing here needs it";
+    const needed = needs.size ? `; it needs ${needs.size}, outlined` : "";
+    said.textContent = `${i === depmap.root ? "This hunk" : name}: ${stranded}${needed}. Click a hunk to read it; gD on it draws its own chain.`;
+  }
+}
+function goMap(i) {
+  depmap = null;
+  closeSheet();
+  jumpTo(i);
+}
+function mapKey(action) {
+  if (!depmap) return false;
+  const order = depmap.order;
+  if (action === "next" || action === "prev") {
+    const at2 = order.indexOf(depmap.sel);
+    depmap.sel = order[Math.max(0, Math.min(order.length - 1, at2 + (action === "next" ? 1 : -1)))];
+    paintMap();
+    $("#overlay .node.picked")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  } else if (action === "jump-to-edge") {
+    goMap(depmap.sel);
+  } else if ((action === "open-deps" || action === "focus-deps") && depmap.sel !== depmap.root) {
+    depmap.root = depmap.sel;
+    renderMap();
+  } else if (action === "quit" || action === "open-deps" || action === "focus-deps") {
+    depmap = null;
+    closeSheet();
+  }
+  return true;
+}
 function renderConfig() {
-  const cfg = st.review?.config;
+  const cfg = st2.review?.config;
   const ov = $("#overlay");
   if (!cfg) {
     if (ov.dataset.kind === "config") closeSheet();
@@ -3311,7 +5445,7 @@ function wireSplits() {
         split.classList.remove("drag");
         split.removeEventListener("pointermove", move);
         localStorage.setItem("ordo.splits", JSON.stringify([panes.style.getPropertyValue("--c0") || "27%", panes.style.getPropertyValue("--c2") || "30%"]));
-        if (st.review) renderList();
+        if (st2.review) renderList();
       };
       split.addEventListener("pointermove", move);
       split.addEventListener("pointerup", up, { once: true });
@@ -3322,10 +5456,10 @@ function wire() {
   document.addEventListener("keydown", onKey);
   for (const p of PANES) {
     $(`#${p}`).addEventListener("mousedown", () => {
-      if (st.focus !== p) {
-        st.focus = p;
+      if (st2.focus !== p) {
+        st2.focus = p;
         renderHints();
-        for (const q of PANES) $(`#${q}`).classList.toggle("focus", q === p);
+        for (const q2 of PANES) $(`#${q2}`).classList.toggle("focus", q2 === p);
       }
     });
   }
@@ -3343,17 +5477,17 @@ function wire() {
   $("#overlay").addEventListener("mousedown", (e) => {
     if (e.target === e.currentTarget) dismissSheet();
   });
-  window.addEventListener("resize", () => st.review && renderList());
+  window.addEventListener("resize", () => st2.review && renderList());
   wireSplits();
   api.events((event, data) => {
-    if (event === "progress" && !st.review) {
-      st.status = data.status;
+    if (event === "progress" && !st2.review) {
+      st2.status = data.status;
       renderAll();
     } else if (event === "progress") {
-      st.notice = data.status;
+      st2.notice = data.status;
       renderHints();
-    } else if (event === "changed" && data.version !== st.version) {
-      st.notice = "";
+    } else if (event === "changed" && data.version !== st2.version) {
+      st2.notice = "";
       refresh();
     }
   });
