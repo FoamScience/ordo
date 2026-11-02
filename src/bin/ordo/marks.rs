@@ -339,7 +339,7 @@ pub(super) fn save_notes(path: &Path, notes: &HashMap<u64, String>) {
         .map(|(k, v)| (format!("{k:016x}"), v.clone()))
         .collect();
     if let Ok(text) = serde_json::to_string(&body) {
-        let _ = std::fs::write(path, text);
+        let _ = write_atomic(path, &text);
     }
 }
 

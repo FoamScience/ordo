@@ -2,6 +2,7 @@
 use crate::build_globs;
 use crate::build_items;
 use crate::code_view::Theme;
+use crate::comments::load_comments;
 use crate::comments::save_comments;
 use crate::comments::LineComment;
 use crate::compute_view;
@@ -25,6 +26,7 @@ use crate::hidden_breakdown;
 use crate::keys::Keymap;
 use crate::keys::Pane;
 use crate::keys::ViewMode;
+use crate::marks::load_notes;
 use crate::marks::mark_key;
 use crate::marks::note_key;
 use crate::marks::save_notes;
@@ -1066,6 +1068,11 @@ fn set_note(app: &mut App, text: &str) -> Result<(), String> {
                 .to_string(),
         );
     };
+    // another reviewer of this repository may have written since this one
+    // loaded: change their file, not this session's copy of it
+    if let Some(p) = app.notes_path.as_deref() {
+        app.notes = load_notes(p);
+    }
     if text.is_empty() {
         app.notes.remove(&key);
     } else {
@@ -1098,6 +1105,14 @@ fn set_comment(app: &mut App, text: &str) -> Result<(), String> {
         return Err(format!("{path} has no new side to comment on"));
     };
     let (start, end) = comment_lines(app);
+    if let Some(p) = app.comments_path.as_deref() {
+        app.comments = load_comments(p);
+        for c in &mut app.comments {
+            if let Some((_, new)) = app.sources.get(&c.path) {
+                c.relocate(new);
+            }
+        }
+    }
     let touches = |c: &LineComment| c.path == path && c.start <= end && start <= c.end;
     if text.is_empty() {
         let before = app.comments.len();
