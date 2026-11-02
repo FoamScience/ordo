@@ -1733,7 +1733,7 @@ struct Walker<'a> {
     stack: Vec<String>,
     c: Collected,
     /// rst sections of the last parent read, by that parent's id
-    rst: Option<(usize, HashMap<usize, (usize, Vec<String>)>)>,
+    rst: Option<(usize, RstSections)>,
     /// yaml document names of the last stream read, by that stream's id
     yaml_docs: Option<(usize, HashMap<usize, String>)>,
 }
@@ -4016,13 +4016,17 @@ fn section_heading(node: Node) -> Option<Node> {
     })
 }
 
+/// each section node's id, with the row it ends on and the titles of the
+/// sections it sits in
+type RstSections = HashMap<usize, (usize, Vec<String>)>;
+
 /// Every rst section under `parent`, by node id: its last row and the titles
 /// of the sections it sits in. The grammar leaves every section a sibling of
 /// the text under it, so both come from the headings around it: a heading's
 /// level is the order its adornment style (the underline character, and
 /// whether it has an overline) first appears in, and a section runs until the
 /// next heading at its level or above.
-fn rst_sections(parent: Node, src: &[u8]) -> HashMap<usize, (usize, Vec<String>)> {
+fn rst_sections(parent: Node, src: &[u8]) -> RstSections {
     let mut out = HashMap::new();
     let mut styles: Vec<(bool, char)> = vec![];
     // the sections still open: (id, level, title)
