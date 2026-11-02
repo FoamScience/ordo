@@ -306,6 +306,18 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 }
 .fileband span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
 .gap { height: 6px; }
+.symhead {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 8px 8px 2px calc(var(--rail) + 14px); font-size: var(--fs-small); color: var(--faint); cursor: pointer;
+}
+.symhead .code-word { color: var(--fg); font-weight: 600; background: none; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.symhead span:last-child { font-size: var(--fs-tiny); flex: none; }
+.symhead.cur .code-word { color: var(--accent); }
+.r.inrun { padding-left: calc(var(--rail) + 30px); }
+.r .ln { color: var(--faint); font-size: var(--fs-tiny); margin-right: 10px; }
+.r .gist { color: var(--dim); }
+.r .gist.removed { text-decoration: line-through; text-decoration-color: var(--faint); }
+.r.sel .gist { color: var(--fg); }
 
 /* ---- the reading column: one hunk ---------------------------------- */
 

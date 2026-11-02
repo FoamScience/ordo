@@ -6,6 +6,7 @@ import { Api } from "./api.ts";
 import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
+import { rowText, withSymbols } from "./list.ts";
 import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
 import { files as fileLines, flagged, written } from "./summary.ts";
@@ -330,8 +331,25 @@ function renderList(): void {
   const rows = h("div", { class: "rows" });
   const dots = new Map<number, HTMLElement>();
   let selEl: HTMLElement | null = null;
-  for (const row of shownRows()) {
-    if (row.kind === "file") {
+  const { rows: listRows, runOf } = withSymbols(shownRows(), r.items);
+  for (const row of listRows) {
+    if (row.kind === "symbol") {
+      rows.append(
+        h(
+          "div",
+          {
+            class: `symhead${row.items.includes(st.sel) ? " cur" : ""}`,
+            title: `${row.items.length} hunks in a row change ${row.name}`,
+            onclick: () => {
+              st.focus = "list";
+              select(row.items.find((i) => !r.items[i].reviewed) ?? row.items[0]);
+            },
+          },
+          h("span", { class: "code-word" }, row.name),
+          h("span", null, `${row.items.length} hunks`),
+        ),
+      );
+    } else if (row.kind === "file") {
       rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, row.n)));
     } else if (row.kind === "gap") {
       rows.append(h("div", { class: "gap" }));
@@ -341,17 +359,29 @@ function renderList(): void {
       const selected = items.includes(st.sel);
       const folded = row.kind === "folded";
       const level = LEVELS.find((l) => items.some((i) => r.items[i].level === l));
+      const run = folded ? undefined : runOf.get(items[0]);
+      const said = rowText(first, run ? run.map((i) => r.items[i]) : null);
+      const removal = first.new[1] < first.new[0];
       const el = h(
         "div",
         {
-          class: `${rowClass(items, selected)}${folded ? " folded" : ""}`,
+          class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run ? " inrun" : ""}`,
           title: folded ? first.symbol ?? "" : first.rationale,
           onclick: () => {
             st.focus = "list";
             select(items.includes(st.sel) ? st.sel : items[0]);
           },
         },
-        h("span", { class: "txt" }, folded ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : sentence(first.rationale)),
+        h(
+          "span",
+          { class: "txt" },
+          run && h("span", { class: "ln" }, `L${removal ? first.old[0] : first.new[0]}`),
+          folded
+            ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded`
+            : said.code
+              ? h("span", { class: `gist${removal ? " removed" : ""}` }, said.text)
+              : sentence(said.text),
+        ),
         h(
           "span",
           { class: "meta" },

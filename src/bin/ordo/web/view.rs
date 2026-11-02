@@ -68,6 +68,7 @@ pub(super) fn review(app: &App) -> Value {
                 "rationale": it.rationale,
                 "what": what,
                 "details": it.details,
+                "gist": gist(app, it),
                 "notes": it.notes,
                 "edges": it.edges.iter().map(|e| json!({
                     "label": e.label,
@@ -166,6 +167,24 @@ pub(super) fn review(app: &App) -> Value {
             "name": c.name, "args": c.args, "help": c.help,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// The hunk's first changed line that says anything, trimmed — what the list
+/// names a hunk by when its sentence repeats a neighbour's. A removal has no
+/// new line, so it is named by the old one.
+fn gist(app: &App, it: &Item) -> Option<String> {
+    let (old, new) = app.sources.get(&it.path)?;
+    let (lines, [a, b]) = if it.new_range[1] >= it.new_range[0] {
+        (new, it.new_range)
+    } else {
+        (old, it.old_range)
+    };
+    lines
+        .get(a.saturating_sub(1)..b.min(lines.len()))?
+        .iter()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
 }
 
 /// The repository's top level, for `ge`'s URL. It does not move while the
