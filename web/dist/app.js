@@ -3970,6 +3970,17 @@ function flagged(r, levels) {
   const out = r.view.flatMap((i) => r.items[i].findings.filter((f) => levels.includes(f.level)).map((f) => ({ i, f })));
   return out.sort((a, b) => levels.indexOf(a.f.level) - levels.indexOf(b.f.level));
 }
+function byRule(found) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const x of found) {
+    const g = groups.get(x.f.name) ?? { name: x.f.name, level: x.f.level, said: [], at: [] };
+    const line = x.f.message.split("\n")[0];
+    if (!g.said.includes(line)) g.said.push(line);
+    g.at.push(x);
+    groups.set(x.f.name, g);
+  }
+  return [...groups.values()];
+}
 
 // src/theme.ts
 var themes = {};
@@ -5071,13 +5082,19 @@ function renderSummary() {
       serious.length ? h(
         "ol",
         { class: "flagged" },
-        serious.map(
-          ({ i, f }) => h(
+        byRule(serious).map(
+          (g) => h(
             "li",
-            { "data-level": f.level },
-            h("div", { class: "where" }, h("span", { class: `lv lv-${f.level}` }, f.level === "warn" ? "warning" : f.level), h("b", null, f.name)),
-            h("p", { class: "said" }, prose(f.message.split("\n")[0])),
-            link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0]))
+            { "data-level": g.level },
+            h(
+              "div",
+              { class: "where" },
+              h("span", { class: `lv lv-${g.level}` }, g.level === "warn" ? "warning" : g.level),
+              h("b", null, g.name),
+              h("span", { class: "count" }, n(g.at.length, "place"))
+            ),
+            g.said.map((s) => h("p", { class: "said" }, prose(s))),
+            h("ul", { class: "places" }, g.at.map(({ i, f }) => h("li", null, link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0])))))
           )
         )
       ) : h("p", { class: "aside" }, "No verdicts or warnings."),

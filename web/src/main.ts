@@ -9,7 +9,7 @@ import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordA
 import { rowText, withSymbols } from "./list.ts";
 import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
-import { files as fileLines, flagged, written } from "./summary.ts";
+import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
 import type { ActResult, FileData, Item, ItemFacts, Level, Review, Row } from "./types.ts";
 
@@ -1215,13 +1215,19 @@ function renderSummary(): void {
         ? h(
             "ol",
             { class: "flagged" },
-            serious.map(({ i, f }) =>
+            byRule(serious).map((g) =>
               h(
                 "li",
-                { "data-level": f.level },
-                h("div", { class: "where" }, h("span", { class: `lv lv-${f.level}` }, f.level === "warn" ? "warning" : f.level), h("b", null, f.name)),
-                h("p", { class: "said" }, prose(f.message.split("\n")[0])),
-                link(i, at(r.items[i].path, f.row ?? r.items[i].new[0])),
+                { "data-level": g.level },
+                h(
+                  "div",
+                  { class: "where" },
+                  h("span", { class: `lv lv-${g.level}` }, g.level === "warn" ? "warning" : g.level),
+                  h("b", null, g.name),
+                  h("span", { class: "count" }, n(g.at.length, "place")),
+                ),
+                g.said.map((s) => h("p", { class: "said" }, prose(s))),
+                h("ul", { class: "places" }, g.at.map(({ i, f }) => h("li", null, link(i, at(r.items[i].path, f.row ?? r.items[i].new[0]))))),
               ),
             ),
           )
