@@ -20,6 +20,30 @@ const INDEX: &str = include_str!("../../../../web/dist/index.html");
 const APP_JS: &str = include_str!("../../../../web/dist/app.js");
 const APP_CSS: &str = include_str!("../../../../web/dist/app.css");
 
+/// The faces the page is set in, so it looks the same offline.
+const FONTS: &[(&str, &[u8])] = &[
+    (
+        "literata-latin-wght-normal.woff2",
+        include_bytes!("../../../../web/dist/fonts/literata-latin-wght-normal.woff2"),
+    ),
+    (
+        "literata-latin-wght-italic.woff2",
+        include_bytes!("../../../../web/dist/fonts/literata-latin-wght-italic.woff2"),
+    ),
+    (
+        "ibm-plex-mono-latin-400-normal.woff2",
+        include_bytes!("../../../../web/dist/fonts/ibm-plex-mono-latin-400-normal.woff2"),
+    ),
+    (
+        "ibm-plex-mono-latin-600-normal.woff2",
+        include_bytes!("../../../../web/dist/fonts/ibm-plex-mono-latin-600-normal.woff2"),
+    ),
+    (
+        "ibm-plex-mono-latin-400-italic.woff2",
+        include_bytes!("../../../../web/dist/fonts/ibm-plex-mono-latin-400-italic.woff2"),
+    ),
+];
+
 /// How often loads, the watcher and the marks file are looked at.
 const TICK: Duration = Duration::from_millis(100);
 
@@ -342,6 +366,23 @@ impl Hub {
                 "text/css; charset=utf-8",
                 asset("app.css", APP_CSS),
             ),
+            (Method::Get, p) if p.starts_with("/fonts/") => {
+                let name = &p["/fonts/".len()..];
+                match FONTS.iter().find(|(n, _)| *n == name) {
+                    Some((n, built)) => {
+                        let bytes = std::env::var_os("ORDO_WEB_DIST")
+                            .and_then(|dir| {
+                                std::fs::read(Path::new(&dir).join("fonts").join(n)).ok()
+                            })
+                            .unwrap_or_else(|| built.to_vec());
+                        let resp = Response::from_data(bytes)
+                            .with_header(header("Content-Type", "font/woff2"))
+                            .with_header(header("Cache-Control", "max-age=86400"));
+                        let _ = req.respond(resp);
+                    }
+                    None => fail(req, 404, "no such font"),
+                }
+            }
             (_, p) if p.starts_with("/api/") => {
                 let q = query(&url);
                 // an EventSource cannot send a header; nothing else may use

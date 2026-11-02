@@ -303,9 +303,6 @@ async function loadThemes(api2) {
   try {
     const t = await api2.themes();
     themes = t.themes;
-    if (!localStorage.getItem("ordo.theme") && t.chosen && t.chosen !== "terminal") {
-      localStorage.setItem("ordo.theme", t.chosen);
-    }
   } catch {
     themes = {};
   }
@@ -569,53 +566,91 @@ function rowClass(items, selected) {
 function renderList() {
   const pane = $("#list");
   const r = st.review;
+  const scope = [
+    `${r.view.length} hunk${r.view.length === 1 ? "" : "s"}`,
+    r.mode === "ledger" && "by symbol",
+    st.sinceOnly && "changed since your last look",
+    r.path_filter
+  ].filter(Boolean);
   replace(
     pane.querySelector(".head"),
-    paneHead(1, "list", r.mode === "ledger" ? "by symbol" : "by hunk"),
-    st.sinceOnly && h("span", null, "\xB7 since last look"),
-    r.path_filter && h("span", null, `\xB7 ${r.path_filter}`),
+    h("span", { class: "t" }, "Reading order"),
+    h("span", { class: "sub" }, scope.join(", ")),
     h("span", { class: "grow" }),
     zoomButton("list")
   );
   const body = pane.querySelector(".body");
   const rows = h("div", { class: "rows" });
+  const dots = /* @__PURE__ */ new Map();
   let selEl = null;
   for (const row of shownRows()) {
     if (row.kind === "file") {
-      rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, `${row.n} hunk${row.n === 1 ? "" : "s"}`)));
+      rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, row.n)));
     } else if (row.kind === "gap") {
       rows.append(h("div", { class: "gap" }));
     } else {
       const items = row.kind === "item" ? [row.i] : row.items;
       const first = r.items[items[0]];
       const selected = items.includes(st.sel);
-      const text = row.kind === "folded" ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : first.rationale;
-      const sym = row.kind === "folded" || row.opens ? first.symbol ?? "" : "";
-      const since = first.delta ? SINCE[first.delta][0] : "";
+      const folded = row.kind === "folded";
+      const level = LEVELS.find((l) => items.some((i) => r.items[i].level === l));
       const el = h(
         "div",
         {
-          class: rowClass(items, selected),
-          title: first.rationale,
+          class: `${rowClass(items, selected)}${folded ? " folded" : ""}`,
+          title: folded ? first.symbol ?? "" : first.rationale,
           onclick: () => {
             st.focus = "list";
             select(items.includes(st.sel) ? st.sel : items[0]);
           }
         },
-        h("span", { class: "sign" }, since),
-        h("span", { class: "sym" }, sym),
-        h("span", { class: "txt" }, text),
-        h("span", { class: "num" }, first.new[0])
+        h("span", { class: "txt" }, folded ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : sentence(first.rationale)),
+        h(
+          "span",
+          { class: "meta" },
+          first.delta && h("span", { class: "since", title: SINCE[first.delta][1] }, SINCE[first.delta][0]),
+          level && h("span", { class: `dot ${level}`, title: `${level} finding` })
+        )
       );
+      for (const i of items) dots.set(i, el);
       if (selected) selEl = el;
       rows.append(el);
     }
   }
   replace(body, rows);
+  drawArcs(rows, dots);
   if (selEl) {
     const el = selEl;
     body.scrollTop = centerScroll(el.offsetTop, el.offsetHeight, body.clientHeight, rows.offsetHeight);
   }
+}
+function drawArcs(rows, dots) {
+  const it = st.review.items[st.sel];
+  const from = dots.get(st.sel);
+  if (!it || !from) return;
+  const rail = parseFloat(getComputedStyle(rows).getPropertyValue("--rail")) || 30;
+  const mid = (el) => el.offsetTop + el.offsetHeight / 2;
+  const y0 = mid(from);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "arcs");
+  svg.setAttribute("height", String(rows.offsetHeight));
+  svg.setAttribute("aria-hidden", "true");
+  const arcs = /* @__PURE__ */ new Map();
+  for (const e of it.edges) {
+    const to = e.target === null ? void 0 : dots.get(e.target);
+    if (to && to !== from) arcs.set(to, (arcs.get(to) ?? false) || e.needs);
+  }
+  const lanes = [...arcs].sort(([a], [b]) => Math.abs(mid(a) - y0) - Math.abs(mid(b) - y0));
+  const step2 = Math.max(2, (rail - 10) / Math.max(1, lanes.length));
+  lanes.forEach(([to, needs], k) => {
+    const y1 = mid(to);
+    const bulge = Math.min(rail - 4, 7 + k * step2);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", `M ${rail} ${y0} C ${rail - bulge * 1.3} ${y0}, ${rail - bulge * 1.3} ${y1}, ${rail} ${y1}`);
+    path.setAttribute("class", needs ? "needs" : "used");
+    svg.append(path);
+  });
+  rows.prepend(svg);
 }
 function rowHeight() {
   return document.querySelector("#code .l")?.offsetHeight || 26;
@@ -698,21 +733,87 @@ function highlightHits(text, s, k) {
   out.push(document.createTextNode(text.slice(at)));
   return out;
 }
+function renderReading(it) {
+  const r = st.review;
+  const head = $("#code > .head");
+  const actions = $("#code .foot .actions");
+  if (!it) {
+    replace(head);
+    replace(actions);
+    return;
+  }
+  const pos = r.view.indexOf(st.sel);
+  const what = it.what.length ? it.what : ["a change ordo found nothing to say about"];
+  const search = st.search;
+  replace(
+    head,
+    h(
+      "div",
+      { class: "kicker" },
+      h("span", null, pos >= 0 ? `Hunk ${pos + 1} of ${r.view.length}` : "Outside the current filter"),
+      h("span", { class: "path" }, `${it.path}:${it.new[0]}`),
+      h("span", { class: "grow" }),
+      zoomButton("code")
+    ),
+    h("h1", { class: "headline" }, prose(sentence(what[0]))),
+    (what.length > 1 || it.details.length > 0 || it.grouped_by) && h(
+      "div",
+      { class: "lede" },
+      what.slice(1).map((w) => h("p", null, prose(sentence(w)))),
+      it.details.map((d) => h("p", { class: "detail" }, prose(sentence(d)))),
+      it.grouped_by && h("p", null, "Grouped by ", prose(it.grouped_by))
+    ),
+    h(
+      "div",
+      { class: "pills" },
+      it.reviewed && h("span", { class: "pill done" }, "Read"),
+      it.delta && h("span", { class: "pill accent" }, SINCE[it.delta][0], sentence(SINCE[it.delta][1].split(" \u2014")[0])),
+      it.noise && !/formatting/.test(it.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
+      it.wave !== null && h("span", { class: "pill" }, `Wave ${it.wave}`)
+    ),
+    (search || st.from !== null) && h(
+      "div",
+      { class: "status" },
+      search && h("span", null, `Searching for \u201C${search.query}\u201D: ${search.hits.length ? `${search.k + 1} of ${search.hits.length}` : "no match"}`),
+      st.from !== null && h("span", null, "Selecting lines; press c to comment on them")
+    )
+  );
+  const key = st.keymap.keysFor("toggle-reviewed")[0];
+  const s = stops();
+  const at = s.indexOf(st.sel);
+  const next = at >= 0 && at + 1 < s.length ? r.items[s[at + 1]] : null;
+  replace(
+    actions,
+    h(
+      "button",
+      { class: `read${it.reviewed ? " done" : ""}`, onclick: () => run("toggle-reviewed"), title: it.reviewed ? "Mark as unread" : "Mark as read and go to the next hunk" },
+      it.reviewed ? "Marked as read" : "Mark as read",
+      key && h("kbd", null, key)
+    ),
+    next && h("button", { class: "next", onclick: () => step(1), title: next.rationale }, h("b", null, "Next"), " ", prose(sentence(next.rationale)))
+  );
+}
+function sentence(s) {
+  return /^[a-z]/.test(s) && !NAME_AT_START.test(s) ? s[0].toUpperCase() + s.slice(1) : s;
+}
+var NAME = /`[^`]+`|[A-Za-z_][\w]*(?:[._/:][\w]+)+|\b[a-z]+[A-Z]\w*|\b[A-Z][a-z0-9]+[A-Z]\w*|\b\w+\(\)/g;
+var NAME_AT_START = /^(?:[A-Za-z_][\w]*(?:[._/:][\w]+)+|[a-z]+[A-Z]\w*)/;
+function prose(text) {
+  const out = [];
+  let at = 0;
+  for (const m of text.matchAll(NAME)) {
+    if (m.index > at) out.push(text.slice(at, m.index));
+    out.push(h("span", { class: "code-word" }, m[0].replace(/^`|`$/g, "")));
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
 function renderCode() {
   const pane = $("#code");
   const r = st.review;
   const it = r.items[st.sel];
-  const head = pane.querySelector(".head");
-  replace(
-    head,
-    paneHead(2, "code"),
-    it && h("span", { class: "path" }, it.path),
-    it && h("span", null, `L${it.new[0]}`),
-    st.search && h("span", null, `/${st.search.query} ${st.search.hits.length ? `${st.search.k + 1}/${st.search.hits.length}` : "no match"}`),
-    st.from !== null && h("span", null, "selecting lines \xB7 c comments them"),
-    h("span", { class: "grow" }),
-    zoomButton("code")
-  );
+  renderReading(it);
   const body = pane.querySelector(".body");
   if (!st.file || !it) return replace(body);
   const findings = /* @__PURE__ */ new Map();
@@ -803,21 +904,21 @@ function edgeRows(targets, limit) {
   const r = st.review;
   return targets.slice(0, limit).map(({ target, label }) => {
     if (target === null || !r.items[target]) {
-      return h("tr", { class: "out" }, h("td", null, label), h("td", { class: "loc" }, ""), h("td", null, "not part of this review"));
+      return h("div", { class: "link out" }, h("span", { class: "who" }, label), h("span", { class: "what" }, "Not part of this review"));
     }
     const t = r.items[target];
     const link = st.whyLinks.length;
     st.whyLinks.push(target);
     return h(
-      "tr",
+      "div",
       {
         class: `link${st.whyCur === link ? " cur" : ""}`,
-        title: "go there (Enter); back with C-o",
+        title: "Go there (Enter); come back with C-o",
         onclick: () => jumpTo(target)
       },
-      h("td", null, t.symbols[0] ?? t.enclosing ?? t.symbol ?? label),
-      h("td", { class: "loc" }, `${basename(t.path)}:${t.new[0]}`),
-      h("td", null, t.rationale)
+      h("span", { class: "who" }, t.symbols[0] ?? t.enclosing ?? t.symbol ?? label ?? basename(t.path)),
+      h("span", { class: "loc" }, `${basename(t.path)}:${t.new[0]}`),
+      h("span", { class: "what" }, prose(sentence(t.rationale)))
     );
   });
 }
@@ -829,7 +930,7 @@ function table(title, hint, targets, empty) {
   const more = targets.length - limit;
   return [
     h("h3", null, title, hint && h("small", null, hint)),
-    targets.length ? h("table", null, h("tbody", null, edgeRows(targets, limit))) : h("p", { class: "muted" }, empty),
+    targets.length ? h("div", { class: "links" }, edgeRows(targets, limit)) : h("p", { class: "muted" }, empty),
     more > 0 && h(
       "button",
       {
@@ -840,7 +941,7 @@ function table(title, hint, targets, empty) {
           renderAll();
         }
       },
-      `${more} more \u2014 maximise the pane to see them`
+      `Show ${more} more`
     )
   ];
 }
@@ -855,7 +956,7 @@ function renderWhy() {
   const pane = $("#why");
   const r = st.review;
   const it = r.items[st.sel];
-  replace(pane.querySelector(".head"), paneHead(3, "why"), it && h("span", { class: "path" }, it.symbols[0] ?? it.enclosing ?? ""), h("span", { class: "grow" }), zoomButton("why"));
+  replace(pane.querySelector(".head"), h("span", { class: "t" }, "Why it is here"), h("span", { class: "grow" }), zoomButton("why"));
   const body = pane.querySelector(".body");
   if (!it) return replace(body);
   st.whyLinks = [];
@@ -863,52 +964,32 @@ function renderWhy() {
   const needs = it.edges.filter((e) => e.needs);
   const neededBy = it.edges.filter((e) => !e.needs);
   const findings = [...it.findings].sort((a, b) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level));
+  const churn = r.file_churn[it.path];
+  const lc = facts?.line_churn;
   const top = body.scrollTop;
   replace(
     body,
     h(
       "div",
       { class: "why" },
-      it.note && [h("h3", null, "your note"), h("p", { class: "warnline" }, it.note)],
+      it.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it.note)],
       !!facts?.comments.length && [
-        h("h3", null, "your comments"),
-        facts.comments.map((c) => h("p", { class: "warnline" }, `L${c.start}${c.end > c.start ? `\u2013${c.end}` : ""} ${c.text}${c.stale ? " (lines changed since)" : ""}`))
+        h("h3", null, "Your comments"),
+        facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `\u2013${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`))
       ],
       !!facts?.out_of_order.length && [
-        h("h3", null, "order"),
-        h("p", { class: "warnline" }, "marked reviewed, but it depends on hunks not reviewed yet:"),
-        h("table", null, h("tbody", null, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length)))
+        h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
+        h("div", { class: "links" }, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length))
       ],
-      h(
-        "div",
-        { class: "what" },
-        h("h3", null, "what"),
-        it.what.length ? it.what.map((w) => h("p", null, w)) : h("p", { class: "muted" }, "ordo found nothing to say about this hunk"),
-        it.details.map((d) => h("p", { class: "detail" }, d))
-      ),
-      it.grouped_by && [h("h3", null, "grouped by", h("small", null, "why it sits with its neighbours")), h("p", null, it.grouped_by)],
-      table("needs", "what this hunk uses", needs, "nothing in this change"),
-      table("needed by", "what uses this hunk", neededBy, "nothing in this change"),
+      table("Needs", "what this hunk uses", needs, "Nothing in this change."),
+      table("Needed by", "what uses this hunk", neededBy, "Nothing in this change."),
       facts && table(
-        "if rejected",
-        "everything that loses its footing, in reading order",
+        "If you reject it",
+        "what loses its footing, in reading order",
         facts.cascade.map((t) => ({ target: t, label: "" })),
-        "rejecting this hunk strands nothing"
+        "Rejecting it strands nothing."
       ),
-      it.executed && [
-        h("h3", null, "coverage"),
-        h(
-          "p",
-          { class: it.executed[0] === it.executed[1] ? "" : "warnline" },
-          it.executed[0] === it.executed[1] ? `all ${it.executed[1]} executable lines here are covered by tests` : `${it.executed[1] - it.executed[0]} of ${it.executed[1]} executable lines here are executed by no test`
-        )
-      ],
-      it.notes.length > 0 && [h("h3", null, "notes"), it.notes.map((n) => h("p", null, n))],
-      it.wave !== null && [
-        h("h3", null, "wave"),
-        h("p", null, `wave ${it.wave}${r.wave_intents[String(it.wave)] ? ` \xB7 asked: ${r.wave_intents[String(it.wave)]}` : ""}`)
-      ],
-      h("h3", null, "findings", h("small", null, findings.length ? "the hardest-pressing first" : "")),
+      h("h3", null, "Findings", findings.length > 0 && h("small", null, "the most pressing first")),
       findings.length ? findings.map(
         (f) => h(
           "div",
@@ -916,14 +997,37 @@ function renderWhy() {
           h(
             "div",
             { class: "h" },
-            h("span", { class: `chip ${f.level}` }, f.level),
-            h("b", null, f.name),
-            h("span", { class: "src" }, f.source + (f.original_level ? `, ${f.original_level} in its rule, moved by rules.toml` : "")),
-            f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row) }, `L${f.row}`)
+            h("span", { class: `lv ${f.level}` }, sentence(f.level)),
+            h("span", { class: "name" }, f.name),
+            f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`)
           ),
-          h("p", null, f.message)
+          h("p", null, f.message),
+          h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
         )
-      ) : h("p", { class: "muted" }, `No findings. Checked: ${rulesChecked(r)}.`)
+      ) : h("p", { class: "muted" }, `None. Checked against ${rulesChecked(r)}.`),
+      it.executed && [
+        h("h3", null, "Test coverage"),
+        h(
+          "p",
+          { class: it.executed[0] === it.executed[1] ? "" : "warnline" },
+          it.executed[0] === it.executed[1] ? `All ${it.executed[1]} executable lines here run under a test.` : `${it.executed[1] - it.executed[0]} of ${it.executed[1]} executable lines here run under no test.`
+        )
+      ],
+      (churn || lc) && [
+        h("h3", null, "History"),
+        churn !== void 0 && churn > 0 && h("p", null, `${churn} commit${churn === 1 ? "" : "s"} touched this file in the last six months.`),
+        lc && h(
+          "p",
+          null,
+          `These lines changed ${lc.commits}${lc.capped ? "+" : ""} time${lc.commits === 1 ? "" : "s"} before`,
+          lc.last ? `, last by ${lc.last.author} on ${lc.last.date}.` : "."
+        )
+      ],
+      it.notes.length > 0 && [h("h3", null, "Also"), it.notes.map((n) => h("p", null, prose(sentence(n))))],
+      it.wave !== null && [
+        h("h3", null, "Wave"),
+        h("p", null, `Wave ${it.wave}${r.wave_intents[String(it.wave)] ? `, asked for: ${r.wave_intents[String(it.wave)]}` : ""}`)
+      ]
     )
   );
   body.scrollTop = top;
@@ -952,84 +1056,82 @@ function jumpBack() {
 function renderBand() {
   const band = $("#band");
   const r = st.review;
+  const help = h("button", { class: "sig help", onclick: () => showHelp(), title: "Every key and command" }, "Keys");
   if (!r) {
     return replace(
       band,
       h("span", { class: "mark" }, "ordo"),
       h("span", { class: "rev" }, rev),
       h("span", { class: "subject" }, st.status),
-      st.empty && h("button", { class: "sig", onclick: () => act({ op: "reload" }) }, "read again")
+      st.empty && h("button", { class: "sig", onclick: () => act({ op: "reload" }) }, "Read again")
     );
   }
-  const it = r.items[st.sel];
-  const since = it?.delta ? SINCE[it.delta] : null;
   const sinceCount = r.delta.new + r.delta.changed + r.delta.moved;
-  const churn = it ? r.file_churn[it.path] : void 0;
-  const lc = st.facts?.i === st.sel ? st.facts.line_churn : null;
-  const pct = r.coverage.total ? 100 * r.coverage.done / r.coverage.total : 0;
+  const plural = { verdict: ["verdict", "verdicts"], warn: ["warning", "warnings"], note: ["note", "notes"] };
   replace(
     band,
-    h("span", { class: "mark" }, "ordo", h("span", null, ".")),
-    h("span", { class: "rev" }, r.rev),
-    h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "uncommitted work" : "")),
-    r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }) }, r.stale),
+    h("span", { class: "mark" }, "ordo"),
+    h("span", { class: "rev", title: "the revision under review" }, r.rev),
+    h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "Uncommitted work" : "")),
+    r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }), title: "Read the working tree again" }, r.stale),
     r.watch !== "off" && h(
       "span",
       { class: "sig", title: r.watch === "auto" ? "--watch=auto: read again once the working tree settles and you pause" : "--watch=hint: says when the working tree has moved on" },
-      r.watch === "auto" ? "watching, reloads" : "watching"
+      r.watch === "auto" ? "Watching, reloads" : "Watching"
     ),
-    since && h("span", { class: "sig", title: since[1] }, h("span", { class: "glyph" }, since[0]), since[1].split(",")[0]),
     !r.delta.first_run && sinceCount > 0 && h(
       "button",
       {
         class: "sig",
         "aria-pressed": st.sinceOnly ? "true" : "false",
-        title: `${r.delta.new} new, ${r.delta.changed} changed, ${r.delta.moved} moved, ${r.delta.gone} gone \u2014 show only these`,
+        title: `${r.delta.new} new, ${r.delta.changed} changed, ${r.delta.moved} moved, ${r.delta.gone} gone. Show only these.`,
         onclick: () => {
           st.sinceOnly = !st.sinceOnly;
           renderAll();
         }
       },
-      h("span", { class: "glyph" }, "\u25D0"),
       h("b", null, sinceCount),
-      "since last look"
+      "changed since your last look"
     ),
-    churn !== void 0 && churn > 0 && h("span", { class: "sig", title: "commits that touched this file in the last 6 months" }, "\u27F3", h("b", null, churn), "/6mo"),
-    lc && h(
-      "span",
-      { class: "sig", title: "how often these lines changed before, and who touched them last" },
-      "lines \u27F3",
-      h("b", null, `${lc.commits}${lc.capped ? "+" : ""}`),
-      lc.last && `\xB7 ${lc.last.author} ${lc.last.date}`
-    ),
-    h("span", { class: "sig", title: "hunks reviewed" }, h("span", { class: "meter" }, h("i", { style: `width:${pct}%` })), h("b", null, r.coverage.done), `/${r.coverage.total}`),
-    h("span", { class: "sig", title: "def\u2192use links with both ends reviewed" }, h("b", null, r.coverage.both), `/${r.coverage.edges} edges`),
     LEVELS.filter((l) => r.levels[l]).map(
-      (l) => h("button", { class: `chip ${l}`, style: "border:0;cursor:pointer", title: `next ${l}`, onclick: () => act({ op: "action", action: "finding-next" }) }, `${r.levels[l]} ${l}`)
-    )
+      (l) => h(
+        "button",
+        { class: "sig", title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
+        h("span", { class: `dot ${l}` }),
+        h("b", null, r.levels[l]),
+        plural[l][r.levels[l] === 1 ? 0 : 1]
+      )
+    ),
+    h(
+      "span",
+      { class: "sig", title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read` },
+      h("span", { class: "meter" }, h("i", { style: `width:${r.coverage.total ? 100 * r.coverage.done / r.coverage.total : 0}%` })),
+      h("b", null, r.coverage.done),
+      `of ${r.coverage.total} read`
+    ),
+    help
   );
 }
 var HINTS = {
-  list: [["next", "move"], ["toggle-reviewed", "reviewed"], ["finding-next", "finding"], ["fold-toggle", "fold"], ["command", "command"], ["help", "all keys"]],
-  code: [["next", "line"], ["search", "search"], ["mark-next", "next use"], ["select-lines", "select"], ["comment", "comment"], ["jump-back", "back"]],
-  why: [["next", "link"], ["jump-to-edge", "go there"], ["jump-back", "back"], ["zoom", "maximise"], ["help", "all keys"]]
+  list: [["next", "next hunk"], ["finding-next", "next finding"], ["command", "commands"]],
+  code: [["next", "next line"], ["search", "search"], ["select-lines", "select"], ["jump-back", "back"]],
+  why: [["next", "next link"], ["jump-to-edge", "go there"], ["jump-back", "back"]]
 };
 function renderHints() {
   const items = HINTS[st.focus].map(([action, label]) => {
     const k = st.keymap.keysFor(action)[0];
     return k ? h("span", null, h("kbd", null, k), label) : null;
   });
-  replace($("#hints"), items, st.notice && h("span", { class: "notice" }, st.notice));
-}
-function paneHead(n, title, sub) {
-  return [h("span", { class: "n" }, n), h("span", { class: "t" }, title), sub ? h("span", null, sub) : null].filter(Boolean);
+  replace($("#hints"), st.notice ? h("span", { class: "notice" }, st.notice) : items);
 }
 function zoomButton(p) {
   const on = st.zoom && st.focus === p;
   return h(
     "button",
     {
-      title: on ? "restore the panes" : "maximise this pane",
+      class: "zoomer",
+      title: on ? "Show all three columns" : "Give this column the whole page",
+      "aria-label": on ? "restore the columns" : "maximise this column",
       onclick: () => {
         st.zoom = !on;
         st.focus = p;
@@ -1097,8 +1199,12 @@ function renderAll() {
   }
   renderBand();
   if (!st.review) {
-    for (const p of PANES) replace($(`#${p} .body`));
-    replace($("#code .body"), h("div", { class: "loading" }, st.status));
+    for (const p of PANES) {
+      replace($(`#${p} > .head`));
+      replace($(`#${p} > .body`));
+    }
+    replace($("#code .foot .actions"));
+    replace($("#code > .body"), h("div", { class: "loading" }, st.empty ? "Nothing to read in this revision." : "Reading the change\u2026", h("small", null, st.status)));
     renderHints();
     return;
   }
@@ -1190,7 +1296,7 @@ async function runPalette() {
   if (!name) return;
   if (name === "theme") {
     applyTheme(arg || "auto");
-    localStorage.setItem("ordo.theme", arg || "auto");
+    localStorage.setItem("ordo.look", arg || "auto");
     return;
   }
   if (name === "size") {
@@ -1672,7 +1778,7 @@ async function boot() {
   wire();
   renderAll();
   applySize(Number(localStorage.getItem("ordo.size")) || 1);
-  loadThemes(api).then(() => applyTheme(localStorage.getItem("ordo.theme") ?? "auto"));
+  loadThemes(api).then(() => applyTheme(localStorage.getItem("ordo.look") ?? "auto"));
   await refresh();
 }
 boot();

@@ -26,10 +26,8 @@ export function baseOf(theme: Theme): "light" | "dark" | null {
 export async function loadThemes(api: Api): Promise<void> {
   try {
     const t = await api.themes();
+    // the page has its own look; a terminal theme applies only when asked for
     themes = t.themes;
-    if (!localStorage.getItem("ordo.theme") && t.chosen && t.chosen !== "terminal") {
-      localStorage.setItem("ordo.theme", t.chosen);
-    }
   } catch {
     themes = {};
   }
