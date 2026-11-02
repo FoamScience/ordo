@@ -5,7 +5,7 @@
 import { Api } from "./api.ts";
 import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
-import { centerScroll, codeRows, firstRowOf, runs, tableLimit, type CodeRow } from "./layout.ts";
+import { centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove, type CodeRow } from "./layout.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
 import type { ActResult, FileData, Item, ItemFacts, Level, Review, Row } from "./types.ts";
@@ -368,9 +368,19 @@ function followCursor(): void {
 
 function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, Item["findings"]>, uses: Set<number>, commented: Set<number>): HTMLElement[] {
   const search = st.search;
-  const parts = runs(row.text, row.spans, row.marks).map((run) =>
-    h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text),
-  );
+  const caret = k === st.cursor ? caretCol(row.text) : -1;
+  let at = 0;
+  const parts = runs(row.text, row.spans, row.marks).flatMap((run) => {
+    const piece = (text: string, extra?: string) =>
+      h(run.changed ? "mark" : "span", { class: [run.role && `s-${run.role}`, extra].filter(Boolean).join(" ") || null }, text);
+    const cs = [...run.text];
+    const i = caret - at;
+    at += cs.length;
+    if (i < 0 || i >= cs.length) return [piece(run.text)];
+    const before = cs.slice(0, i).join("");
+    const after = cs.slice(i + 1).join("");
+    return [before && piece(before), piece(cs[i], "caret"), after && piece(after)].filter((x): x is HTMLElement => !!x);
+  });
   const content = search && search.hits.includes(k) ? highlightHits(row.text, search, k) : parts;
   const n = row.kind === "del" ? "" : row.n;
   const cls = [
@@ -478,6 +488,12 @@ function caretColumn(e: MouseEvent, text: string): number | null {
   return null;
 }
 
+/** The caret's column on a line, kept inside it; -1 when no column is set. */
+function caretCol(text: string): number {
+  if (st.col === null) return -1;
+  return Math.min(st.col, Math.max(0, [...text].length - 1));
+}
+
 function firstWordCol(text: string): number {
   const m = /[A-Za-z_]/.exec(text);
   return m ? [...text.slice(0, m.index)].length : 0;
@@ -506,8 +522,12 @@ function range(a: number, b: number): number[] {
 }
 
 function moveCursor(by: number): void {
-  st.cursor = Math.max(0, Math.min(st.rows.length - 1, st.cursor + by));
-  st.col = null;
+  cursorToRow(Math.max(0, Math.min(st.rows.length - 1, st.cursor + by)));
+}
+
+/** Puts the code cursor on row `k`, keeping its column, and follows it into the hunk there. */
+function cursorToRow(k: number): void {
+  st.cursor = k;
   const hunk = st.rows[st.cursor]?.hunk;
   if (hunk !== null && hunk !== undefined && hunk !== st.sel) {
     select(hunk, { keepCursor: true }).then(followCursor);
@@ -1114,6 +1134,33 @@ function run(action: string): void {
     case "para-next":
     case "para-prev":
       return cursorTo((row) => row.text.trim() === "", action === "para-next");
+    case "cursor-left":
+    case "cursor-right":
+    case "line-start":
+    case "line-end": {
+      const text = st.rows[st.cursor]?.text ?? "";
+      const last = Math.max(0, [...text].length - 1);
+      const now = st.col === null ? firstWordCol(text) : caretCol(text);
+      st.col =
+        action === "line-start" ? 0 : action === "line-end" ? last : Math.max(0, Math.min(last, now + (action === "cursor-right" ? 1 : -1)));
+      st.focus = "code";
+      return renderAll();
+    }
+    case "word-next":
+    case "word-prev":
+    case "word-end": {
+      const kind = action === "word-next" ? "next" : action === "word-prev" ? "prev" : "end";
+      const text = st.rows[st.cursor]?.text ?? "";
+      const to = wordMove(
+        st.rows.map((r) => r.text),
+        { row: st.cursor, col: st.col === null ? firstWordCol(text) : caretCol(text) },
+        kind,
+      );
+      st.col = to.col;
+      st.focus = "code";
+      if (to.row === st.cursor) return renderAll();
+      return cursorToRow(to.row);
+    }
     case "select-lines":
       st.from = st.from === null ? st.cursor : null;
       st.focus = "code";
@@ -1125,7 +1172,7 @@ function run(action: string): void {
       return;
     case "hover":
       if (focus === "why" && st.whyLinks[st.whyCur] !== undefined) return void previewHunk(st.whyLinks[st.whyCur]);
-      act({ op: "hover", col: st.col ?? firstWordCol(st.rows[st.cursor]?.text ?? "") });
+      act({ op: "hover", col: st.col === null ? firstWordCol(st.rows[st.cursor]?.text ?? "") : caretCol(st.rows[st.cursor]?.text ?? "") });
       return;
     case "open-editor":
       return openEditor();

@@ -241,6 +241,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 /* ---- code ---------------------------------------------------------- */
 
 #code .body { position: relative; font-family: var(--mono); font-size: 12.5px; }
+#code .caret { outline: 1px solid var(--accent); outline-offset: -1px; border-radius: 1px; }
 .code { min-width: max-content; padding-bottom: 40vh; }
 .l { display: grid; grid-template-columns: 2ch 6ch 2ch auto; height: var(--row); line-height: var(--row); white-space: pre; }
 .l .g { color: var(--accent); text-align: center; }

@@ -216,6 +216,52 @@ function runs(text, spans, marks) {
   }
   return out;
 }
+function wordClass(c) {
+  if (/\s/u.test(c)) return 0;
+  return /[\p{L}\p{N}_]/u.test(c) ? 1 : 2;
+}
+function flatten(lines) {
+  const chars = [];
+  const starts = [];
+  lines.forEach((l, k) => {
+    starts.push(chars.length);
+    chars.push(...l);
+    if (k + 1 < lines.length) chars.push("\n");
+  });
+  return { chars, starts };
+}
+function caretAt(lines, starts, i) {
+  let row = 0;
+  while (row + 1 < starts.length && starts[row + 1] <= i) row++;
+  return { row, col: Math.min(i - starts[row], [...lines[row]].length) };
+}
+function wordMove(lines, at, kind) {
+  const { chars, starts } = flatten(lines);
+  if (!chars.length) return { row: 0, col: 0 };
+  let i = Math.min((starts[at.row] ?? 0) + at.col, chars.length - 1);
+  const cls = (k) => wordClass(chars[k]);
+  if (kind === "next") {
+    const c2 = cls(i);
+    if (c2 !== 0) while (i + 1 < chars.length && cls(i + 1) === c2) i++;
+    while (i + 1 < chars.length && cls(i + 1) === 0) i++;
+    return caretAt(lines, starts, Math.min(i + 1, chars.length - 1));
+  }
+  if (kind === "prev") {
+    if (i === 0) return { row: 0, col: 0 };
+    i--;
+    while (i > 0 && cls(i) === 0) i--;
+    const c2 = cls(i);
+    while (i > 0 && cls(i - 1) === c2) i--;
+    return caretAt(lines, starts, i);
+  }
+  if (i + 1 >= chars.length) return caretAt(lines, starts, i);
+  i++;
+  while (i < chars.length && cls(i) === 0) i++;
+  if (i >= chars.length) return caretAt(lines, starts, chars.length - 1);
+  const c = cls(i);
+  while (i + 1 < chars.length && cls(i + 1) === c) i++;
+  return caretAt(lines, starts, i);
+}
 
 // src/palette.ts
 function parseCommand(line) {
@@ -589,9 +635,18 @@ function followCursor() {
 }
 function lineEl(row, k, mine, findings, uses, commented) {
   const search = st.search;
-  const parts = runs(row.text, row.spans, row.marks).map(
-    (run2) => h(run2.changed ? "mark" : "span", { class: run2.role ? `s-${run2.role}` : null }, run2.text)
-  );
+  const caret = k === st.cursor ? caretCol(row.text) : -1;
+  let at = 0;
+  const parts = runs(row.text, row.spans, row.marks).flatMap((run2) => {
+    const piece = (text, extra) => h(run2.changed ? "mark" : "span", { class: [run2.role && `s-${run2.role}`, extra].filter(Boolean).join(" ") || null }, text);
+    const cs = [...run2.text];
+    const i = caret - at;
+    at += cs.length;
+    if (i < 0 || i >= cs.length) return [piece(run2.text)];
+    const before = cs.slice(0, i).join("");
+    const after = cs.slice(i + 1).join("");
+    return [before && piece(before), piece(cs[i], "caret"), after && piece(after)].filter((x) => !!x);
+  });
   const content = search && search.hits.includes(k) ? highlightHits(row.text, search, k) : parts;
   const n = row.kind === "del" ? "" : row.n;
   const cls = [
@@ -692,6 +747,10 @@ function caretColumn(e, text) {
   }
   return null;
 }
+function caretCol(text) {
+  if (st.col === null) return -1;
+  return Math.min(st.col, Math.max(0, [...text].length - 1));
+}
 function firstWordCol(text) {
   const m = /[A-Za-z_]/.exec(text);
   return m ? [...text.slice(0, m.index)].length : 0;
@@ -714,8 +773,10 @@ function range(a, b) {
   return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
 }
 function moveCursor(by) {
-  st.cursor = Math.max(0, Math.min(st.rows.length - 1, st.cursor + by));
-  st.col = null;
+  cursorToRow(Math.max(0, Math.min(st.rows.length - 1, st.cursor + by)));
+}
+function cursorToRow(k) {
+  st.cursor = k;
   const hunk = st.rows[st.cursor]?.hunk;
   if (hunk !== null && hunk !== void 0 && hunk !== st.sel) {
     select(hunk, { keepCursor: true }).then(followCursor);
@@ -1264,6 +1325,32 @@ function run(action) {
     case "para-next":
     case "para-prev":
       return cursorTo((row) => row.text.trim() === "", action === "para-next");
+    case "cursor-left":
+    case "cursor-right":
+    case "line-start":
+    case "line-end": {
+      const text = st.rows[st.cursor]?.text ?? "";
+      const last = Math.max(0, [...text].length - 1);
+      const now = st.col === null ? firstWordCol(text) : caretCol(text);
+      st.col = action === "line-start" ? 0 : action === "line-end" ? last : Math.max(0, Math.min(last, now + (action === "cursor-right" ? 1 : -1)));
+      st.focus = "code";
+      return renderAll();
+    }
+    case "word-next":
+    case "word-prev":
+    case "word-end": {
+      const kind = action === "word-next" ? "next" : action === "word-prev" ? "prev" : "end";
+      const text = st.rows[st.cursor]?.text ?? "";
+      const to = wordMove(
+        st.rows.map((r2) => r2.text),
+        { row: st.cursor, col: st.col === null ? firstWordCol(text) : caretCol(text) },
+        kind
+      );
+      st.col = to.col;
+      st.focus = "code";
+      if (to.row === st.cursor) return renderAll();
+      return cursorToRow(to.row);
+    }
     case "select-lines":
       st.from = st.from === null ? st.cursor : null;
       st.focus = "code";
@@ -1275,7 +1362,7 @@ function run(action) {
       return;
     case "hover":
       if (focus === "why" && st.whyLinks[st.whyCur] !== void 0) return void previewHunk(st.whyLinks[st.whyCur]);
-      act({ op: "hover", col: st.col ?? firstWordCol(st.rows[st.cursor]?.text ?? "") });
+      act({ op: "hover", col: st.col === null ? firstWordCol(st.rows[st.cursor]?.text ?? "") : caretCol(st.rows[st.cursor]?.text ?? "") });
       return;
     case "open-editor":
       return openEditor();

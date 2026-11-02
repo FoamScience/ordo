@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { centerScroll, codeRows, firstRowOf, runs, tableLimit } from "../src/layout.ts";
+import { centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove } from "../src/layout.ts";
 import type { FileData } from "../src/types.ts";
 
 test("the selected row sits in the middle of the list", () => {
@@ -69,4 +69,22 @@ test("a line splits into runs by syntax role and by what changed", () => {
     { text: "2", role: "number", changed: false },
     { text: "2", role: "number", changed: true },
   ]);
+});
+
+test("w skips the word, then the space after it, and crosses rows", () => {
+  const lines = ["let a = b;", "  call(x)"];
+  assert.deepEqual(wordMove(lines, { row: 0, col: 0 }, "next"), { row: 0, col: 4 });
+  assert.deepEqual(wordMove(lines, { row: 0, col: 9 }, "next"), { row: 1, col: 2 });
+});
+
+test("b mirrors w, and e lands on a word's last character", () => {
+  const lines = ["let a = b;", "  call(x)"];
+  assert.deepEqual(wordMove(lines, { row: 1, col: 2 }, "prev"), { row: 0, col: 9 });
+  assert.deepEqual(wordMove(lines, { row: 0, col: 4 }, "prev"), { row: 0, col: 0 });
+  assert.deepEqual(wordMove(lines, { row: 1, col: 2 }, "end"), { row: 1, col: 5 });
+});
+
+test("a caret counts characters, not UTF-16 units", () => {
+  assert.deepEqual(wordMove(["é😀 x"], { row: 0, col: 0 }, "next"), { row: 0, col: 1 });
+  assert.deepEqual(wordMove(["😀😀 x"], { row: 0, col: 0 }, "end"), { row: 0, col: 1 });
 });
