@@ -366,6 +366,8 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .l.del { background: var(--del-bg); }
 .l.add .op, .l.del .op { color: var(--dim); }
 .l.add mark { background: var(--add-strong-bg); color: inherit; border-radius: 2px; }
+.l.edit mark { background: var(--add-strong-bg); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--add-strong-bg); }
+.l.edit .op { color: var(--reviewed); font-weight: 600; }
 .l.del mark { background: var(--del-strong-bg); color: inherit; border-radius: 2px; }
 .l.other { opacity: 0.55; }
 .l.cur { box-shadow: inset 3px 0 0 var(--accent); }
@@ -412,8 +414,10 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
   background: none; border: 0; padding: 0; cursor: pointer; color: var(--dim);
   min-width: 0; max-width: 40em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
 }
-.next b { color: var(--accent); font-weight: 600; }
-.next:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.next { display: inline-flex; align-items: baseline; gap: 10px; }
+.next .said { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.next b { color: var(--accent); font-weight: 600; font-size: var(--fs-title); line-height: 1; }
+.next:hover { color: var(--fg); }
 #hints { margin-left: auto; display: flex; gap: 14px; color: var(--faint); font-size: var(--fs-tiny); white-space: nowrap; }
 #hints span { display: inline-flex; gap: 6px; align-items: center; }
 #hints .notice { color: var(--accent); }

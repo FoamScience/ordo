@@ -19,6 +19,8 @@ const SINCE: Record<string, [string, string]> = {
   moved: ["⇅", "unchanged, but it reads in a different place now — its dependencies moved"],
 };
 const CHORD_TIMEOUT = 500;
+/** The gutter mark for each kind of code row; `~` is a line that only gained text. */
+const OP: Record<CodeRow["kind"], string> = { ctx: " ", add: "+", del: "-", edit: "~" };
 
 const rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
 const token =
@@ -452,7 +454,7 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
       },
       h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "▸" : ""),
       h("span", { class: "ln" }, n),
-      h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+      h("span", { class: "op" }, OP[row.kind]),
       h("span", null, content),
     ),
   ];
@@ -538,7 +540,13 @@ function renderReading(it: Item | undefined): void {
       it.reviewed ? "Marked as read" : "Mark as read",
       key && h("kbd", null, key),
     ),
-    next && h("button", { class: "next", onclick: () => step(1), title: next.rationale }, h("b", null, "Next"), " ", prose(sentence(next.rationale))),
+    next &&
+      h(
+        "button",
+        { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` },
+        h("b", { "aria-hidden": "true" }, "⟶"),
+        h("span", { class: "said" }, prose(sentence(next.rationale))),
+      ),
   );
 }
 
@@ -1423,7 +1431,7 @@ function excerpt(f: FileData, hunk: number, context: number, max: number): HTMLE
         { class: `l ${row.kind}${row.hunk !== null && row.hunk !== hunk ? " other" : ""}` },
         h("span", { class: "g" }),
         h("span", { class: "ln" }, row.kind === "del" ? "" : row.n),
-        h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+        h("span", { class: "op" }, OP[row.kind]),
         h("span", null, runs(row.text, row.spans, row.marks).map((run) => h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text))),
       ),
     ),

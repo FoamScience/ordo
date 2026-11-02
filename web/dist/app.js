@@ -164,9 +164,11 @@ function codeRows(f) {
       added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null });
     }
   }
+  const { folded, edited } = insertionsOnly(f, hunks);
   const removedBefore = (n) => {
     for (const h2 of startingAt.get(n) ?? []) {
       for (let o = h2.old[0]; o <= h2.old[1]; o++) {
+        if (folded.has(o)) continue;
         rows.push({
           kind: "del",
           o,
@@ -182,7 +184,7 @@ function codeRows(f) {
     removedBefore(n);
     const a = added.get(n);
     rows.push({
-      kind: a ? "add" : "ctx",
+      kind: a ? edited.has(n) ? "edit" : "add" : "ctx",
       n,
       text: f.new[n - 1],
       spans: f.new_spans?.[n - 1] ?? null,
@@ -192,6 +194,32 @@ function codeRows(f) {
   }
   removedBefore(f.new.length + 1);
   return rows;
+}
+function insertionsOnly(f, hunks) {
+  const folded = /* @__PURE__ */ new Set();
+  const edited = /* @__PURE__ */ new Set();
+  const without = (text, spans) => {
+    const cs = [...text];
+    return cs.filter((_, k) => !spans.some(([a, b]) => k >= a && k < b)).join("");
+  };
+  for (const h2 of hunks) {
+    let next = h2.new[0];
+    for (let o = h2.old[0]; o <= h2.old[1]; o++) {
+      const rm = h2.removed[o - h2.old[0]];
+      if (!rm) continue;
+      for (let n = next; n <= h2.new[1]; n++) {
+        const add = h2.added[n - h2.new[0]];
+        if (!add) continue;
+        if (rm.length === 0 && add.length > 0 && without(f.new[n - 1] ?? "", add) === (f.old[o - 1] ?? "")) {
+          folded.add(o);
+          edited.add(n);
+          next = n + 1;
+        }
+        break;
+      }
+    }
+  }
+  return { folded, edited };
 }
 function firstRowOf(rows, hunk) {
   const k = rows.findIndex((r) => r.hunk === hunk);
@@ -333,6 +361,7 @@ var SINCE = {
   moved: ["\u21C5", "unchanged, but it reads in a different place now \u2014 its dependencies moved"]
 };
 var CHORD_TIMEOUT = 500;
+var OP = { ctx: " ", add: "+", del: "-", edit: "~" };
 var rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
 var token = new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStorage.getItem("ordo.token") ?? "";
 sessionStorage.setItem("ordo.token", token);
@@ -709,7 +738,7 @@ function lineEl(row, k, mine, findings, uses, commented) {
       },
       h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "\u25B8" : ""),
       h("span", { class: "ln" }, n),
-      h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+      h("span", { class: "op" }, OP[row.kind]),
       h("span", null, content)
     )
   ];
@@ -790,7 +819,12 @@ function renderReading(it) {
       it.reviewed ? "Marked as read" : "Mark as read",
       key && h("kbd", null, key)
     ),
-    next && h("button", { class: "next", onclick: () => step(1), title: next.rationale }, h("b", null, "Next"), " ", prose(sentence(next.rationale)))
+    next && h(
+      "button",
+      { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` },
+      h("b", { "aria-hidden": "true" }, "\u27F6"),
+      h("span", { class: "said" }, prose(sentence(next.rationale)))
+    )
   );
 }
 function sentence(s) {
@@ -1583,7 +1617,7 @@ function excerpt(f, hunk, context, max) {
         { class: `l ${row.kind}${row.hunk !== null && row.hunk !== hunk ? " other" : ""}` },
         h("span", { class: "g" }),
         h("span", { class: "ln" }, row.kind === "del" ? "" : row.n),
-        h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+        h("span", { class: "op" }, OP[row.kind]),
         h("span", null, runs(row.text, row.spans, row.marks).map((run2) => h(run2.changed ? "mark" : "span", { class: run2.role ? `s-${run2.role}` : null }, run2.text)))
       )
     )
