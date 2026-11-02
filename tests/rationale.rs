@@ -359,12 +359,13 @@ fn containment_edge_joins_nested_def_cluster_without_merging_groups() {
 }
 
 #[test]
-fn sibling_methods_of_a_changed_class_are_not_fused() {
+fn sibling_methods_of_a_changed_class_keep_their_own_groups() {
     // click 8a1b1a33-shaped case: three sibling methods of one class change
     // independently (no shared def/use, and the class body itself is
     // untouched, so there's no "Context" group for a containment edge to
     // anchor on) — an outermost-def key would wrongly fuse them; they must
-    // stay in three separate groups and clusters.
+    // stay in three separate groups. Being a line apart, they still read as
+    // one part of the change.
     let out = run_json(serde_json::json!({
         "changes": [
             { "path": "ctx.py",
@@ -387,10 +388,29 @@ fn sibling_methods_of_a_changed_class_are_not_fused() {
     );
     assert_eq!(
         out.clusters.len(),
-        3,
-        "no containment anchor (class body untouched) → no fused cluster: {:?}",
+        1,
+        "neighbouring hunks of one file share a cluster: {:?}",
         out.clusters
     );
+}
+
+/// Two one-line edits in one file with `between` unchanged lines separating
+/// them, and no def/use linking them.
+fn clusters_with_lines_between(between: usize) -> usize {
+    let filler = "x = 0\n".repeat(between - 1);
+    let old = format!("def a():\n    return 1\n{filler}def b():\n    return 2\n");
+    let new = format!("def a():\n    return 10\n{filler}def b():\n    return 20\n");
+    let out = run_json(serde_json::json!({
+        "changes": [ { "path": "m.py", "old": old, "new": new } ]
+    }));
+    assert_eq!(out.files[0].hunks.len(), 2, "{:?}", out.files[0].hunks);
+    out.clusters.len()
+}
+
+#[test]
+fn hunks_of_one_file_share_a_cluster_up_to_nine_lines_apart() {
+    assert_eq!(clusters_with_lines_between(9), 1);
+    assert_eq!(clusters_with_lines_between(10), 2);
 }
 
 #[test]

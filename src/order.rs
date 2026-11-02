@@ -389,11 +389,13 @@ pub fn order_all(
     // a doc's code fence orders the doc after the code in another file, but
     // never joins its cluster; a doc's own sections still cluster together
     let prose = |g: usize| crate::lang::for_path(&paths[group_file[g]]).is_some_and(|s| s.prose);
+    let near_gedges = near_links(&flat, &group_idx);
     let clusters = components(
         &groups,
         gedges
             .iter()
             .chain(&contain_gedges)
+            .chain(&near_gedges)
             .filter(|&&(a, b)| group_file[a] == group_file[b] || !prose(b)),
     );
 
@@ -947,11 +949,47 @@ impl<'a> Frontier<'a> {
     }
 }
 
+/// How many unchanged lines may sit between two consecutive hunks of one file
+/// for them to still read as one part of the change. Chosen on the corpus
+/// against squashed commit pairs that share a file (`shared_merged` in
+/// `tests/corpus.rs`): joining whole files instead joined most such pairs.
+const NEAR_LINES: usize = 9;
+
+/// Group pairs whose hunks sit at most `NEAR_LINES` apart in one file —
+/// an edit spread over neighbouring definitions with no symbol between them
+/// (a run of tests, a function and the `#ifdef` arm beside it) is one part of
+/// the change, not one part per definition.
+///
+/// Cluster membership only, like `containment_edges`: nearness says nothing
+/// about which to read first. Imports stay out — they sit together at the top
+/// of a file whatever the change did — and so does noise, which says nothing
+/// about what it sits beside.
+fn near_links(flat: &Flat, group_idx: &[usize]) -> Vec<(usize, usize)> {
+    let mut by_file: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, s) in flat.sem.iter().enumerate() {
+        if s.category != Category::Import && !s.noise {
+            by_file.entry(flat.coord[i].0).or_default().push(i);
+        }
+    }
+    let mut out = vec![];
+    for hs in by_file.values_mut() {
+        hs.sort_by_key(|&i| flat.sem[i].start_row);
+        for w in hs.windows(2) {
+            let (a, b) = (flat.sem[w[0]], flat.sem[w[1]]);
+            let end = a.start_row + a.new_len.max(1) - 1;
+            if b.start_row.saturating_sub(end + 1) <= NEAR_LINES {
+                out.push((group_idx[w[0]], group_idx[w[1]]));
+            }
+        }
+    }
+    out
+}
+
 /// P12.3: connected components of the group graph = independent parts, each
 /// a sorted list of global hunk indices, in order of first hunk. Containment
 /// edges join components here too (a nested def and its parent def are part
 /// of the same change even with no def→use edge between them) without joining
-/// the groups themselves.
+/// the groups themselves, and so do `near_links`.
 fn components<'a>(
     groups: &[GroupInfo],
     links: impl Iterator<Item = &'a (usize, usize)>,

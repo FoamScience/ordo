@@ -2,6 +2,7 @@
   "buildtheworld": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 44,
     "degraded_files": 0,
     "fix_code_first": 3,
     "fix_commits": 3,
@@ -12,6 +13,10 @@
     "other_commits": 25,
     "other_with_finding": 1,
     "pairs": 1,
+    "shared_merged": 0,
+    "shared_pairs": 0,
+    "shared_skipped": 8,
+    "singletons": 27,
     "unsupported_files": 0,
     "with_details": 18,
     "with_symbols": 20
@@ -19,6 +24,7 @@
   "click": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 1744,
     "degraded_files": 0,
     "fix_code_first": 63,
     "fix_commits": 70,
@@ -29,6 +35,10 @@
     "other_commits": 219,
     "other_with_finding": 5,
     "pairs": 64,
+    "shared_merged": 1,
+    "shared_pairs": 5,
+    "shared_skipped": 44,
+    "singletons": 1036,
     "unsupported_files": 0,
     "with_details": 677,
     "with_symbols": 1983
@@ -36,6 +46,7 @@
   "cobra": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 833,
     "degraded_files": 0,
     "fix_code_first": 46,
     "fix_commits": 49,
@@ -46,6 +57,10 @@
     "other_commits": 201,
     "other_with_finding": 4,
     "pairs": 157,
+    "shared_merged": 7,
+    "shared_pairs": 12,
+    "shared_skipped": 45,
+    "singletons": 565,
     "unsupported_files": 0,
     "with_details": 291,
     "with_symbols": 494
@@ -53,6 +68,7 @@
   "curl": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 1087,
     "degraded_files": 0,
     "fix_code_first": 15,
     "fix_commits": 23,
@@ -63,6 +79,10 @@
     "other_commits": 155,
     "other_with_finding": 16,
     "pairs": 119,
+    "shared_merged": 0,
+    "shared_pairs": 1,
+    "shared_skipped": 12,
+    "singletons": 684,
     "unsupported_files": 0,
     "with_details": 174,
     "with_symbols": 766
@@ -70,6 +90,7 @@
   "excalidraw": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 3054,
     "degraded_files": 0,
     "fix_code_first": 172,
     "fix_commits": 181,
@@ -80,6 +101,10 @@
     "other_commits": 94,
     "other_with_finding": 28,
     "pairs": 176,
+    "shared_merged": 1,
+    "shared_pairs": 13,
+    "shared_skipped": 66,
+    "singletons": 1778,
     "unsupported_files": 0,
     "with_details": 2008,
     "with_symbols": 1523
@@ -87,6 +112,7 @@
   "execa": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 5956,
     "degraded_files": 0,
     "fix_code_first": 53,
     "fix_commits": 64,
@@ -97,6 +123,10 @@
     "other_commits": 247,
     "other_with_finding": 15,
     "pairs": 148,
+    "shared_merged": 3,
+    "shared_pairs": 13,
+    "shared_skipped": 129,
+    "singletons": 3675,
     "unsupported_files": 0,
     "with_details": 3181,
     "with_symbols": 4079
@@ -104,6 +134,7 @@
   "junit5": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 252,
     "degraded_files": 0,
     "fix_code_first": 2,
     "fix_commits": 2,
@@ -114,6 +145,10 @@
     "other_commits": 32,
     "other_with_finding": 0,
     "pairs": 7,
+    "shared_merged": 0,
+    "shared_pairs": 1,
+    "shared_skipped": 1,
+    "singletons": 141,
     "unsupported_files": 0,
     "with_details": 4,
     "with_symbols": 190
@@ -121,6 +156,7 @@
   "lazy": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 642,
     "degraded_files": 0,
     "fix_code_first": 100,
     "fix_commits": 103,
@@ -131,6 +167,10 @@
     "other_commits": 140,
     "other_with_finding": 0,
     "pairs": 179,
+    "shared_merged": 2,
+    "shared_pairs": 10,
+    "shared_skipped": 32,
+    "singletons": 413,
     "unsupported_files": 0,
     "with_details": 2195,
     "with_symbols": 257
@@ -138,6 +178,7 @@
   "nvm": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 260,
     "degraded_files": 0,
     "fix_code_first": 13,
     "fix_commits": 13,
@@ -148,6 +189,10 @@
     "other_commits": 85,
     "other_with_finding": 0,
     "pairs": 18,
+    "shared_merged": 0,
+    "shared_pairs": 13,
+    "shared_skipped": 19,
+    "singletons": 178,
     "unsupported_files": 0,
     "with_details": 230,
     "with_symbols": 233
@@ -155,6 +200,7 @@
   "openfoam": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 6185,
     "degraded_files": 0,
     "fix_code_first": 8,
     "fix_commits": 10,
@@ -165,13 +211,18 @@
     "other_commits": 153,
     "other_with_finding": 33,
     "pairs": 115,
+    "shared_merged": 0,
+    "shared_pairs": 2,
+    "shared_skipped": 32,
+    "singletons": 4026,
     "unsupported_files": 0,
     "with_details": 770,
-    "with_symbols": 2570
+    "with_symbols": 2571
   },
   "ripgrep": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 625,
     "degraded_files": 0,
     "fix_code_first": 34,
     "fix_commits": 40,
@@ -182,6 +233,10 @@
     "other_commits": 164,
     "other_with_finding": 1,
     "pairs": 120,
+    "shared_merged": 5,
+    "shared_pairs": 12,
+    "shared_skipped": 41,
+    "singletons": 456,
     "unsupported_files": 0,
     "with_details": 49,
     "with_symbols": 464
@@ -189,6 +244,7 @@
   "vue": {
     "anonymous": 0,
     "bare_change": 0,
+    "clusters": 529,
     "degraded_files": 0,
     "fix_code_first": 32,
     "fix_commits": 118,
@@ -199,6 +255,10 @@
     "other_commits": 28,
     "other_with_finding": 4,
     "pairs": 111,
+    "shared_merged": 0,
+    "shared_pairs": 1,
+    "shared_skipped": 9,
+    "singletons": 346,
     "unsupported_files": 0,
     "with_details": 80,
     "with_symbols": 398

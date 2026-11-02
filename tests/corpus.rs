@@ -158,6 +158,20 @@ struct Metrics {
     /// cross-file edge between two independent commits; an upper bound on
     /// false edges, since the child may legitimately use what the parent added.
     merged: usize,
+    /// pairs that share a file, where every squashed hunk still belongs to
+    /// exactly one of the two commits — the only witness of a wrong join inside
+    /// one file
+    shared_pairs: usize,
+    /// ...where some cluster mixes hunks from both
+    shared_merged: usize,
+    /// pairs sharing a file that were left out because some squashed hunk
+    /// belonged to both commits or neither
+    shared_skipped: usize,
+    /// clusters summed over every commit — the "independent parts" a reviewer
+    /// is offered as a split
+    clusters: usize,
+    /// ...of which a single hunk
+    singletons: usize,
 }
 
 impl Metrics {
@@ -179,6 +193,11 @@ impl Metrics {
             ("fix_code_first", self.fix_code_first, Dir::Up),
             ("pairs", self.pairs, Dir::Any),
             ("merged", self.merged, Dir::Down),
+            ("shared_pairs", self.shared_pairs, Dir::Any),
+            ("shared_merged", self.shared_merged, Dir::Down),
+            ("shared_skipped", self.shared_skipped, Dir::Any),
+            ("clusters", self.clusters, Dir::Any),
+            ("singletons", self.singletons, Dir::Any),
         ]
     }
 }
@@ -297,46 +316,85 @@ fn fix_signals(out: &Output, m: &mut Metrics, fix: bool) {
     }
 }
 
+/// Each file a commit touched, with the new-side range of every hunk the engine
+/// made of it.
+type NewRanges = Vec<(String, Vec<[usize; 2]>)>;
+
+/// Whether two inclusive `[start, end]` ranges share a line. An empty range
+/// (`end < start`) — the point a pure insertion or deletion sits at — still
+/// occupies its start line.
+fn overlaps([a0, a1]: [usize; 2], [b0, b1]: [usize; 2]) -> bool {
+    a0 <= b1.max(b0) && b0 <= a1.max(a0)
+}
+
 /// Squash `child` onto its parent `sha` and ask whether ordo keeps them apart.
-/// Only pairs touching disjoint file sets count: a shared file blends both
-/// commits' lines into one hunk, and no cluster boundary can fall inside it.
-/// The file sets are the engine's own — what it turned into hunks for each
-/// commit alone — so a file it skipped cannot make a pair look shared.
+/// On disjoint file sets a hunk belongs to whichever commit touched its file.
+/// A shared file can blend both commits' lines into one hunk, where no cluster
+/// boundary can fall, so there each squashed hunk is attributed by its ranges —
+/// its old side against the parent's hunks (both on the grandparent), its new
+/// side against the child's (both on the child) — and a pair with any hunk
+/// claimed by both or neither is skipped. The file sets are the engine's own —
+/// what it turned into hunks for each commit alone — so a file it skipped
+/// cannot make a pair look shared.
 fn pair_signals(
     repo: &str,
     dir: &Path,
-    (child, child_files): (&str, &[String]),
+    (child, child_new): (&str, &NewRanges),
     sha: &str,
     sha_out: &Output,
     parent: &str,
     m: &mut Metrics,
 ) {
-    if sha_out.files.iter().any(|f| child_files.contains(&f.path)) {
-        return;
-    }
+    let child_ranges = |path: &str| child_new.iter().find(|(p, _)| p == path).map(|(_, r)| r);
+    let shared = sha_out
+        .files
+        .iter()
+        .any(|f| child_ranges(&f.path).is_some());
     let Some(input) = range_input(dir, parent, child) else {
         return;
     };
     let out = ordo::run(input);
-    let from_child: BTreeMap<&str, bool> = out
-        .files
-        .iter()
-        .flat_map(|f| {
-            f.hunks
-                .iter()
-                .map(move |h| (h.id.as_str(), f.path.as_str()))
-        })
-        .map(|(id, path)| (id, child_files.iter().any(|p| p == path)))
-        .collect();
+    let mut from_child: BTreeMap<&str, bool> = BTreeMap::new();
+    for f in &out.files {
+        let mine = child_ranges(&f.path);
+        let theirs = sha_out.files.iter().find(|pf| pf.path == f.path);
+        for h in &f.hunks {
+            let c = mine.is_some_and(|r| r.iter().any(|&r| overlaps(r, h.new_range)));
+            let p = theirs.is_some_and(|pf| {
+                pf.hunks
+                    .iter()
+                    .any(|ph| overlaps(ph.old_range, h.old_range))
+            });
+            let owner = if shared {
+                match (c, p) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _ => {
+                        m.shared_skipped += 1;
+                        return;
+                    }
+                }
+            } else {
+                mine.is_some()
+            };
+            from_child.insert(h.id.as_str(), owner);
+        }
+    }
     let mixed = out.clusters.iter().any(|c| {
         let mut owners = c.iter().filter_map(|id| from_child.get(id.as_str()));
         owners.clone().any(|o| *o) && owners.any(|o| !*o)
     });
-    m.pairs += 1;
-    m.merged += mixed as usize;
+    if shared {
+        m.shared_pairs += 1;
+        m.shared_merged += mixed as usize;
+    } else {
+        m.pairs += 1;
+        m.merged += mixed as usize;
+    }
     if mixed {
         // named so a rise in `merged` can be chased to the pair that caused it
-        eprintln!("{repo}: merged pair {}..{}", &sha[..8], &child[..8]);
+        let kind = if shared { "shared-file" } else { "merged" };
+        eprintln!("{repo}: {kind} pair {}..{}", &sha[..8], &child[..8]);
     }
 }
 
@@ -361,9 +419,9 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
     }
     let mut m = Metrics::default();
     let mut swept = 0usize;
-    // the previously swept commit — its sha, its parent, the files the engine
-    // saw — kept for one iteration in case this commit turns out to be that parent
-    let mut child: Option<(&str, String, Vec<String>)> = None;
+    // the previously swept commit — its sha, its parent, the hunks the engine
+    // made — kept for one iteration in case this commit turns out to be that parent
+    let mut child: Option<(&str, String, NewRanges)> = None;
     for (sha, subject) in shas {
         let Some((parent, input)) = commit_input(dir, sha) else {
             child = None;
@@ -378,10 +436,20 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
         if let Some((c, _, c_files)) = child.as_ref().filter(|(_, c_parent, _)| c_parent == sha) {
             pair_signals(&repo.name, dir, (c, c_files), sha, &out, &parent, &mut m);
         }
+        m.clusters += out.clusters.len();
+        m.singletons += out.clusters.iter().filter(|c| c.len() == 1).count();
         child = Some((
             sha,
             parent,
-            out.files.iter().map(|f| f.path.clone()).collect(),
+            out.files
+                .iter()
+                .map(|f| {
+                    (
+                        f.path.clone(),
+                        f.hunks.iter().map(|h| h.new_range).collect(),
+                    )
+                })
+                .collect(),
         ));
         for f in &out.files {
             m.degraded_files += f.degraded as usize;
@@ -462,14 +530,19 @@ fn corpora_hold_their_invariants_and_do_not_regress() {
         let pct = |a: usize, b: usize| (a * 100).checked_div(b).unwrap_or(0);
         eprintln!(
             "corpus: {:10} fix commits={} finding on fix={}% on other={}% code first={}% \
-             pairs={} merged={}",
+             pairs={} merged={} shared pairs={} merged={} skipped={} clusters={} singletons={}",
             "",
             m.fix_commits,
             pct(m.fix_with_finding, m.fix_commits),
             pct(m.other_with_finding, m.other_commits),
             pct(m.fix_code_first, m.fix_commits),
             m.pairs,
-            m.merged
+            m.merged,
+            m.shared_pairs,
+            m.shared_merged,
+            m.shared_skipped,
+            m.clusters,
+            m.singletons
         );
 
         if let Some(before) = baseline.get(&repo.name) {
