@@ -23,6 +23,14 @@ const APP_CSS: &str = include_str!("../../../../web/dist/app.css");
 /// How often loads, the watcher and the marks file are looked at.
 const TICK: Duration = Duration::from_millis(100);
 
+/// A page asset: the bundle built into this binary, or, while working on the
+/// client, the one `$ORDO_WEB_DIST` names, read on every request.
+fn asset(name: &str, built: &str) -> String {
+    std::env::var_os("ORDO_WEB_DIST")
+        .and_then(|dir| std::fs::read_to_string(Path::new(&dir).join(name)).ok())
+        .unwrap_or_else(|| built.to_string())
+}
+
 /// What `ordo web` was asked for on top of a review's own settings.
 pub(super) struct WebArgs {
     pub(super) port: u16,
@@ -255,16 +263,24 @@ impl Hub {
         let url = req.url().to_string();
         let path = url.split('?').next().unwrap_or("").to_string();
         match (req.method(), path.as_str()) {
-            (Method::Get, "/") => reply(req, 200, "text/html; charset=utf-8", INDEX.to_string()),
+            (Method::Get, "/") => reply(
+                req,
+                200,
+                "text/html; charset=utf-8",
+                asset("index.html", INDEX),
+            ),
             (Method::Get, "/app.js") => reply(
                 req,
                 200,
                 "text/javascript; charset=utf-8",
-                APP_JS.to_string(),
+                asset("app.js", APP_JS),
             ),
-            (Method::Get, "/app.css") => {
-                reply(req, 200, "text/css; charset=utf-8", APP_CSS.to_string())
-            }
+            (Method::Get, "/app.css") => reply(
+                req,
+                200,
+                "text/css; charset=utf-8",
+                asset("app.css", APP_CSS),
+            ),
             (_, p) if p.starts_with("/api/") => {
                 let q = query(&url);
                 let token = req
@@ -410,6 +426,34 @@ impl Hub {
             "reload" => {
                 app.reload_requested = true;
                 Ok(())
+            }
+            "action" => {
+                let name = body.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                // the moves whose rule lives on this side: the finding cycle,
+                // folds and waves. Plain motion stays in the browser.
+                const SERVED: &[&str] = &[
+                    "finding-next",
+                    "finding-prev",
+                    "fold-toggle",
+                    "fold-open",
+                    "fold-close",
+                    "fold-open-all",
+                    "fold-close-all",
+                    "wave-next",
+                    "wave-prev",
+                ];
+                match crate::keys::action_by_name(name).filter(|_| SERVED.contains(&name)) {
+                    Some(a) => {
+                        app.focus = Pane::List;
+                        app.popup = None;
+                        apply_anywhere(app, a);
+                        if let Some(n) = app.notice.take() {
+                            extra.insert("notice".into(), n.into());
+                        }
+                        Ok(())
+                    }
+                    None => Err(format!("'{name}' is not an action the browser sends")),
+                }
             }
             "command" => {
                 let line = body.get("line_text").and_then(|v| v.as_str()).unwrap_or("");

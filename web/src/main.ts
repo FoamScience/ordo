@@ -1,0 +1,1127 @@
+// The browser half of `ordo web`. The server owns the review — what each hunk
+// means, what is reviewed, what a command does — and this file lays it out and
+// turns keys and clicks into requests.
+
+import { Api } from "./api.ts";
+import { $, h, replace } from "./dom.ts";
+import { Keymap, keyLabel } from "./keys.ts";
+import { centerScroll, codeRows, firstRowOf, runs, tableLimit, type CodeRow } from "./layout.ts";
+import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
+import { applyTheme, loadThemes, themeNames } from "./theme.ts";
+import type { ActResult, FileData, Item, ItemFacts, Level, Review, Row } from "./types.ts";
+
+type Pane = "list" | "code" | "why";
+const PANES: Pane[] = ["list", "code", "why"];
+const LEVELS: Level[] = ["verdict", "warn", "note"];
+const SINCE: Record<string, [string, string]> = {
+  new: ["✦", "new since you last looked"],
+  changed: ["◐", "changed since you last looked"],
+  moved: ["⇅", "unchanged, but it reads in a different place now — its dependencies moved"],
+};
+const CHORD_TIMEOUT = 500;
+
+const rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
+const token =
+  new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStorage.getItem("ordo.token") ?? "";
+sessionStorage.setItem("ordo.token", token);
+const api = new Api(token, rev);
+
+interface Search {
+  query: string;
+  hits: number[];
+  k: number;
+}
+
+const st = {
+  review: null as Review | null,
+  status: "starting…",
+  version: -1,
+  keymap: new Keymap([]),
+  sel: -1,
+  focus: "list" as Pane,
+  zoom: false,
+  file: null as FileData | null,
+  rows: [] as CodeRow[],
+  files: new Map<string, FileData>(),
+  facts: null as ItemFacts | null,
+  cursor: 0,
+  from: null as number | null,
+  jumps: [] as { sel: number; cursor: number }[],
+  pending: null as string | null,
+  pendingTimer: 0,
+  search: null as Search | null,
+  sinceOnly: false,
+  whyLinks: [] as number[],
+  whyCur: -1,
+  notice: "",
+};
+
+// ------------------------------------------------------------------ data
+
+async function refresh(): Promise<void> {
+  let slot;
+  try {
+    slot = await api.review();
+  } catch (e) {
+    st.status = String((e as Error).message);
+    return renderAll();
+  }
+  if (slot.state !== "ready") {
+    st.status = slot.status;
+    st.review = null;
+    return renderAll();
+  }
+  const prev = st.review;
+  const keep = prev && st.sel >= 0 ? identity(prev.items[st.sel]) : null;
+  st.review = slot;
+  st.version = slot.version;
+  st.keymap = new Keymap(slot.keys);
+  // a reload renumbers the hunks: find the one being read by what it is
+  let sel = keep ? slot.items.findIndex((it) => identity(it) === keep) : -1;
+  if (sel < 0) sel = prev ? clampToView(st.sel) : slot.sel;
+  if (prev?.items.length !== slot.items.length || prev?.version !== slot.version) {
+    st.files.clear();
+  }
+  await select(sel, { keepCursor: sel === st.sel && !!st.file });
+}
+
+function identity(it: Item | undefined): string {
+  return it ? `${it.path}\u0000${it.new[0]}\u0000${it.rationale}` : "";
+}
+
+function clampToView(i: number): number {
+  const v = st.review!.view;
+  return v.includes(i) ? i : (v[0] ?? 0);
+}
+
+async function fileOf(path: string): Promise<FileData> {
+  const hit = st.files.get(path);
+  if (hit) return hit;
+  const f = await api.file(path);
+  st.files.set(path, f);
+  return f;
+}
+
+let factsFor = -1;
+async function loadFacts(i: number): Promise<void> {
+  factsFor = i;
+  try {
+    const f = await api.item(i);
+    if (factsFor === i) {
+      st.facts = f;
+      renderWhy();
+      renderBand();
+    }
+  } catch {
+    // the review reloaded underneath; the refresh that follows asks again
+  }
+}
+
+async function select(i: number, opts: { keepCursor?: boolean; focus?: Pane } = {}): Promise<void> {
+  const r = st.review;
+  if (!r || i < 0 || i >= r.items.length) return renderAll();
+  const changed = i !== st.sel;
+  st.sel = i;
+  if (opts.focus) st.focus = opts.focus;
+  const it = r.items[i];
+  st.file = await fileOf(it.path);
+  st.rows = codeRows(st.file);
+  if (!opts.keepCursor || changed) {
+    st.cursor = firstRowOf(st.rows, i);
+    st.from = null;
+  }
+  st.cursor = Math.min(st.cursor, Math.max(0, st.rows.length - 1));
+  if (changed) {
+    st.facts = null;
+    st.whyCur = -1;
+  }
+  renderAll();
+  scrollCodeTo(firstRowOf(st.rows, i), !opts.keepCursor || changed);
+  loadFacts(i);
+}
+
+async function act(body: Record<string, unknown>): Promise<ActResult | null> {
+  try {
+    const out = await api.act({ sel: st.sel, line: lineOfCursor(), from: fromLine(), ...body });
+    if (out.error) toast(out.error, true);
+    if (out.notice) toast(out.notice);
+    if (out.popup) showSheet(out.popup.title, out.popup.lines.join("\n"));
+    if (out.clipboard !== undefined) {
+      await navigator.clipboard.writeText(out.clipboard).then(
+        () => toast("copied the review prompt to the clipboard"),
+        () => showSheet("review prompt", out.clipboard!),
+      );
+    }
+    if (out.navigate) {
+      const q = new URLSearchParams({ rev: out.navigate });
+      location.href = `/?${q}#t=${token}`;
+    }
+    if (out.version !== st.version) await refresh();
+    return out;
+  } catch (e) {
+    toast((e as Error).message, true);
+    return null;
+  }
+}
+
+/** The new-side line (0-based) the code cursor stands on, as the server's cursor. */
+function lineOfCursor(): number | undefined {
+  const row = st.rows[st.cursor];
+  if (!row) return undefined;
+  if (row.kind !== "del") return row.n - 1;
+  const next = st.rows.slice(st.cursor).find((r): r is Exclude<CodeRow, { kind: "del" }> => r.kind !== "del");
+  return next ? next.n - 1 : undefined;
+}
+
+function fromLine(): number | undefined {
+  if (st.from === null) return undefined;
+  const row = st.rows[st.from];
+  return row && row.kind !== "del" ? row.n - 1 : undefined;
+}
+
+// ------------------------------------------------------------------ list
+
+/** The list's rows as shown: with `since` on, only hunks that changed since the last look. */
+function shownRows(): Row[] {
+  const r = st.review!;
+  if (!st.sinceOnly) return r.rows;
+  const keep = (i: number) => r.items[i].delta !== null;
+  const out: Row[] = [];
+  for (const row of r.rows) {
+    if (row.kind === "item" && !keep(row.i)) continue;
+    if (row.kind === "folded" && !row.items.some(keep)) continue;
+    if (row.kind === "gap") continue;
+    if (row.kind === "file" && out.at(-1)?.kind === "file") out.pop();
+    out.push(row);
+  }
+  if (out.at(-1)?.kind === "file") out.pop();
+  return out;
+}
+
+/** Where `j`/`k` stop: a hunk, or a fold standing for the hunks it hides. */
+function stops(): number[] {
+  return shownRows().flatMap((row) =>
+    row.kind === "item" ? [row.i] : row.kind === "folded" ? [row.items.includes(st.sel) ? st.sel : row.items[0]] : [],
+  );
+}
+
+function step(by: number): void {
+  const s = stops();
+  if (!s.length) return;
+  const at = s.indexOf(st.sel);
+  const to = at < 0 ? 0 : Math.max(0, Math.min(s.length - 1, at + by));
+  select(s[to]);
+}
+
+function rowClass(items: number[], selected: boolean): string {
+  const r = st.review!;
+  const its = items.map((i) => r.items[i]);
+  const reviewed = its.every((it) => it.reviewed);
+  const level = LEVELS.find((l) => its.some((it) => it.level === l));
+  const quiet = reviewed || its.every((it) => it.noise);
+  return ["r", reviewed && "reviewed", level && `lv-${level}`, selected && "sel", quiet && "quiet"].filter(Boolean).join(" ");
+}
+
+function renderList(): void {
+  const pane = $("#list");
+  const r = st.review!;
+  replace(
+    pane.querySelector(".head")!,
+    paneHead(1, "list", r.mode === "ledger" ? "by symbol" : "by hunk"),
+    st.sinceOnly && h("span", null, "· since last look"),
+    r.path_filter && h("span", null, `· ${r.path_filter}`),
+    h("span", { class: "grow" }),
+    zoomButton("list"),
+  );
+  const body = pane.querySelector(".body")!;
+  const rows = h("div", { class: "rows" });
+  let selEl: HTMLElement | null = null;
+  for (const row of shownRows()) {
+    if (row.kind === "file") {
+      rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, `${row.n} hunk${row.n === 1 ? "" : "s"}`)));
+    } else if (row.kind === "gap") {
+      rows.append(h("div", { class: "gap" }));
+    } else {
+      const items = row.kind === "item" ? [row.i] : row.items;
+      const first = r.items[items[0]];
+      const selected = items.includes(st.sel);
+      const text =
+        row.kind === "folded" ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : first.rationale;
+      const sym = row.kind === "folded" || row.opens ? (first.symbol ?? "") : "";
+      const since = first.delta ? SINCE[first.delta][0] : "";
+      const el = h(
+        "div",
+        {
+          class: rowClass(items, selected),
+          title: first.rationale,
+          onclick: () => {
+            st.focus = "list";
+            select(items.includes(st.sel) ? st.sel : items[0]);
+          },
+        },
+        h("span", { class: "sign" }, since),
+        h("span", { class: "sym" }, sym),
+        h("span", { class: "txt" }, text),
+        h("span", { class: "num" }, first.new[0]),
+      );
+      if (selected) selEl = el;
+      rows.append(el);
+    }
+  }
+  replace(body, rows);
+  if (selEl) {
+    const el = selEl as HTMLElement;
+    body.scrollTop = centerScroll(el.offsetTop, el.offsetHeight, body.clientHeight, rows.offsetHeight);
+  }
+}
+
+// ------------------------------------------------------------------ code
+
+function rowHeight(): number {
+  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 22;
+}
+
+function scrollCodeTo(row: number, force: boolean): void {
+  const body = $("#code .body");
+  const y = Math.max(0, row - 3) * rowHeight();
+  if (force) body.scrollTop = y;
+}
+
+function followCursor(): void {
+  const body = $("#code .body");
+  const rh = rowHeight();
+  const el = body.querySelector<HTMLElement>(".l.cur");
+  const top = el ? el.offsetTop : st.cursor * rh;
+  if (top < body.scrollTop) body.scrollTop = top;
+  else if (top + rh > body.scrollTop + body.clientHeight) body.scrollTop = top + rh - body.clientHeight;
+}
+
+function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, Item["findings"]>, uses: Set<number>, commented: Set<number>): HTMLElement[] {
+  const search = st.search;
+  const parts = runs(row.text, row.spans, row.marks).map((run) =>
+    h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text),
+  );
+  const content = search && search.hits.includes(k) ? highlightHits(row.text, search, k) : parts;
+  const n = row.kind === "del" ? "" : row.n;
+  const cls = [
+    "l",
+    row.kind,
+    row.hunk !== null && !mine && "other",
+    k === st.cursor && "cur",
+    st.from !== null && k >= Math.min(st.from, st.cursor) && k <= Math.max(st.from, st.cursor) && "picked",
+    row.kind !== "del" && commented.has(row.n) && "commented",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const out: HTMLElement[] = [
+    h(
+      "div",
+      {
+        class: cls,
+        onclick: () => {
+          st.cursor = k;
+          st.focus = "code";
+          if (row.hunk !== null && row.hunk !== st.sel) select(row.hunk, { keepCursor: true, focus: "code" });
+          else renderCode();
+        },
+      },
+      h("span", { class: "g" }, row.kind !== "del" && uses.has(row.n) ? "▸" : ""),
+      h("span", { class: "ln" }, n),
+      h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+      h("span", null, content),
+    ),
+  ];
+  if (row.kind !== "del") {
+    for (const f of findings.get(row.n) ?? []) {
+      out.push(h("div", { class: `fl ${f.level}` }, h("b", null, `${f.level} ${f.name}`), f.message.split("\n")[0]));
+    }
+  }
+  return out;
+}
+
+function highlightHits(text: string, s: Search, k: number): Node[] {
+  const out: Node[] = [];
+  const low = text.toLowerCase();
+  const q = s.query.toLowerCase();
+  let at = 0;
+  for (let p = low.indexOf(q); q && p >= 0; p = low.indexOf(q, p + q.length)) {
+    out.push(document.createTextNode(text.slice(at, p)));
+    out.push(h("span", { class: `hit${s.hits[s.k] === k ? " now" : ""}` }, text.slice(p, p + q.length)));
+    at = p + q.length;
+  }
+  out.push(document.createTextNode(text.slice(at)));
+  return out;
+}
+
+function renderCode(): void {
+  const pane = $("#code");
+  const r = st.review!;
+  const it = r.items[st.sel];
+  const head = pane.querySelector(".head")!;
+  replace(
+    head,
+    paneHead(2, "code"),
+    it && h("span", { class: "path" }, it.path),
+    it && h("span", null, `L${it.new[0]}`),
+    st.search && h("span", null, `/${st.search.query} ${st.search.hits.length ? `${st.search.k + 1}/${st.search.hits.length}` : "no match"}`),
+    st.from !== null && h("span", null, "selecting lines · c comments them"),
+    h("span", { class: "grow" }),
+    zoomButton("code"),
+  );
+  const body = pane.querySelector(".body")!;
+  if (!st.file || !it) return replace(body);
+  const findings = new Map<number, Item["findings"]>();
+  for (const f of it.findings) {
+    if (f.row === null) continue;
+    findings.set(f.row, [...(findings.get(f.row) ?? []), f]);
+  }
+  const uses = new Set(it.uses_at.flatMap((u) => u.rows));
+  const commented = new Set(st.file.comments.flatMap((c) => range(c.start, c.end)));
+  const code = h("div", { class: "code" });
+  st.rows.forEach((row, k) => {
+    for (const el of lineEl(row, k, row.hunk === st.sel, findings, uses, commented)) code.append(el);
+    if (row.kind !== "del") {
+      for (const c of st.file!.comments.filter((c) => c.end === row.n)) {
+        code.append(h("div", { class: "cmt" }, `✎ ${c.text}${c.stale ? " (lines changed since)" : ""}`));
+      }
+    }
+  });
+  const top = body.scrollTop;
+  replace(body, code);
+  body.scrollTop = top;
+}
+
+function range(a: number, b: number): number[] {
+  return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
+}
+
+function moveCursor(by: number): void {
+  st.cursor = Math.max(0, Math.min(st.rows.length - 1, st.cursor + by));
+  const hunk = st.rows[st.cursor]?.hunk;
+  if (hunk !== null && hunk !== undefined && hunk !== st.sel) {
+    select(hunk, { keepCursor: true }).then(followCursor);
+    return;
+  }
+  renderCode();
+  followCursor();
+}
+
+function cursorTo(pred: (row: CodeRow, k: number) => boolean, forward: boolean): void {
+  const n = st.rows.length;
+  for (let d = 1; d < n; d++) {
+    const k = forward ? st.cursor + d : st.cursor - d;
+    if (k < 0 || k >= n) break;
+    if (pred(st.rows[k], k)) {
+      st.cursor = k;
+      renderCode();
+      followCursor();
+      return;
+    }
+  }
+}
+
+// ------------------------------------------------------------------ why
+
+function edgeRows(targets: { target: number | null; label: string }[], limit: number): HTMLElement[] {
+  const r = st.review!;
+  return targets.slice(0, limit).map(({ target, label }) => {
+    if (target === null || !r.items[target]) {
+      return h("tr", { class: "out" }, h("td", null, label), h("td", { class: "loc" }, ""), h("td", null, "not part of this review"));
+    }
+    const t = r.items[target];
+    const link = st.whyLinks.length;
+    st.whyLinks.push(target);
+    return h(
+      "tr",
+      {
+        class: `link${st.whyCur === link ? " cur" : ""}`,
+        title: "go there (Enter); back with C-o",
+        onclick: () => jumpTo(target),
+      },
+      h("td", null, t.symbols[0] ?? t.enclosing ?? t.symbol ?? label),
+      h("td", { class: "loc" }, `${basename(t.path)}:${t.new[0]}`),
+      h("td", null, t.rationale),
+    );
+  });
+}
+
+function basename(p: string): string {
+  return p.slice(p.lastIndexOf("/") + 1);
+}
+
+/** How many table rows a maximised why pane can afford per table. */
+function fitRows(): number {
+  return Math.max(3, Math.floor(window.innerHeight / 26 / 3));
+}
+
+function table(title: string, hint: string, targets: { target: number | null; label: string }[], empty: string): (HTMLElement | false)[] {
+  const limit = tableLimit(targets.length, st.zoom && st.focus === "why", fitRows());
+  const more = targets.length - limit;
+  return [
+    h("h3", null, title, hint && h("small", null, hint)),
+    targets.length
+      ? h("table", null, h("tbody", null, edgeRows(targets, limit)))
+      : h("p", { class: "muted" }, empty),
+    more > 0 &&
+      h(
+        "button",
+        {
+          class: "more",
+          onclick: () => {
+            st.focus = "why";
+            st.zoom = true;
+            renderAll();
+          },
+        },
+        `${more} more — maximise the pane to see them`,
+      ),
+  ];
+}
+
+function rulesChecked(r: Review): string {
+  const parts: string[] = [];
+  parts.push(r.rules.catalog ? "the construct catalog" : "no catalog (switched off)");
+  if (r.rules.own) parts.push(`${r.rules.own} rule${r.rules.own === 1 ? "" : "s"} of your own`);
+  if (r.rules.includes.length) parts.push(`rulesets ${r.rules.includes.join(", ")}`);
+  return parts.join(", ");
+}
+
+function renderWhy(): void {
+  const pane = $("#why");
+  const r = st.review!;
+  const it = r.items[st.sel];
+  replace(pane.querySelector(".head")!, paneHead(3, "why"), it && h("span", { class: "path" }, it.symbols[0] ?? it.enclosing ?? ""), h("span", { class: "grow" }), zoomButton("why"));
+  const body = pane.querySelector(".body")!;
+  if (!it) return replace(body);
+  st.whyLinks = [];
+  const facts = st.facts && st.facts.i === st.sel ? st.facts : null;
+  const needs = it.edges.filter((e) => e.needs);
+  const neededBy = it.edges.filter((e) => !e.needs);
+  const findings = [...it.findings].sort((a, b) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level));
+  const top = body.scrollTop;
+  replace(
+    body,
+    h(
+      "div",
+      { class: "why" },
+      it.note && [h("h3", null, "your note"), h("p", { class: "warnline" }, it.note)],
+      !!facts?.comments.length && [
+        h("h3", null, "your comments"),
+        facts.comments.map((c) => h("p", { class: "warnline" }, `L${c.start}${c.end > c.start ? `–${c.end}` : ""} ${c.text}${c.stale ? " (lines changed since)" : ""}`)),
+      ],
+      !!facts?.out_of_order.length && [
+        h("h3", null, "order"),
+        h("p", { class: "warnline" }, "marked reviewed, but it depends on hunks not reviewed yet:"),
+        h("table", null, h("tbody", null, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length))),
+      ],
+      h(
+        "div",
+        { class: "what" },
+        h("h3", null, "what"),
+        it.what.length ? it.what.map((w) => h("p", null, w)) : h("p", { class: "muted" }, "ordo found nothing to say about this hunk"),
+        it.details.map((d) => h("p", { class: "detail" }, d)),
+      ),
+      it.grouped_by && [h("h3", null, "grouped by", h("small", null, "why it sits with its neighbours")), h("p", null, it.grouped_by)],
+      table("needs", "what this hunk uses", needs, "nothing in this change"),
+      table("needed by", "what uses this hunk", neededBy, "nothing in this change"),
+      facts &&
+        table(
+          "if rejected",
+          "everything that loses its footing, in reading order",
+          facts.cascade.map((t) => ({ target: t, label: "" })),
+          "rejecting this hunk strands nothing",
+        ),
+      it.executed && [
+        h("h3", null, "coverage"),
+        h(
+          "p",
+          { class: it.executed[0] === it.executed[1] ? "" : "warnline" },
+          it.executed[0] === it.executed[1]
+            ? `all ${it.executed[1]} executable lines here are covered by tests`
+            : `${it.executed[1] - it.executed[0]} of ${it.executed[1]} executable lines here are executed by no test`,
+        ),
+      ],
+      it.notes.length > 0 && [h("h3", null, "notes"), it.notes.map((n) => h("p", null, n))],
+      it.wave !== null && [
+        h("h3", null, "wave"),
+        h("p", null, `wave ${it.wave}${r.wave_intents[String(it.wave)] ? ` · asked: ${r.wave_intents[String(it.wave)]}` : ""}`),
+      ],
+      h("h3", null, "findings", h("small", null, findings.length ? "the hardest-pressing first" : "")),
+      findings.length
+        ? findings.map((f) =>
+            h(
+              "div",
+              { class: "finding" },
+              h(
+                "div",
+                { class: "h" },
+                h("span", { class: `chip ${f.level}` }, f.level),
+                h("b", null, f.name),
+                h("span", { class: "src" }, f.source + (f.original_level ? `, ${f.original_level} in its rule, moved by rules.toml` : "")),
+                f.row !== null && h("button", { class: "at", onclick: () => cursorToLine(f.row!) }, `L${f.row}`),
+              ),
+              h("p", null, f.message),
+            ),
+          )
+        : h("p", { class: "muted" }, `No findings. Checked: ${rulesChecked(r)}.`),
+    ),
+  );
+  body.scrollTop = top;
+}
+
+function cursorToLine(n: number): void {
+  const k = st.rows.findIndex((row) => row.kind !== "del" && row.n === n);
+  if (k < 0) return;
+  st.cursor = k;
+  st.focus = "code";
+  renderAll();
+  followCursor();
+}
+
+function jumpTo(target: number): void {
+  st.jumps.push({ sel: st.sel, cursor: st.cursor });
+  select(target, { focus: "code" });
+}
+
+function jumpBack(): void {
+  const j = st.jumps.pop();
+  if (!j) return;
+  select(j.sel, { focus: "code" }).then(() => {
+    st.cursor = Math.min(j.cursor, st.rows.length - 1);
+    renderCode();
+    followCursor();
+  });
+}
+
+// ------------------------------------------------------------------ band, hints, sheets
+
+function renderBand(): void {
+  const band = $("#band");
+  const r = st.review;
+  if (!r) {
+    return replace(band, h("span", { class: "mark" }, "ordo"), h("span", { class: "rev" }, rev), h("span", { class: "subject" }, st.status));
+  }
+  const it = r.items[st.sel];
+  const since = it?.delta ? SINCE[it.delta] : null;
+  const sinceCount = r.delta.new + r.delta.changed + r.delta.moved;
+  const churn = it ? r.file_churn[it.path] : undefined;
+  const lc = st.facts?.i === st.sel ? st.facts.line_churn : null;
+  const pct = r.coverage.total ? (100 * r.coverage.done) / r.coverage.total : 0;
+  replace(
+    band,
+    h("span", { class: "mark" }, "ordo", h("span", null, ".")),
+    h("span", { class: "rev" }, r.rev),
+    h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "uncommitted work" : "")),
+    r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }) }, r.stale),
+    since && h("span", { class: "sig", title: since[1] }, h("span", { class: "glyph" }, since[0]), since[1].split(",")[0]),
+    !r.delta.first_run &&
+      sinceCount > 0 &&
+      h(
+        "button",
+        {
+          class: "sig",
+          "aria-pressed": st.sinceOnly ? "true" : "false",
+          title: `${r.delta.new} new, ${r.delta.changed} changed, ${r.delta.moved} moved, ${r.delta.gone} gone — show only these`,
+          onclick: () => {
+            st.sinceOnly = !st.sinceOnly;
+            renderAll();
+          },
+        },
+        h("span", { class: "glyph" }, "◐"),
+        h("b", null, sinceCount),
+        "since last look",
+      ),
+    churn !== undefined && churn > 0 && h("span", { class: "sig", title: "commits that touched this file in the last 6 months" }, "⟳", h("b", null, churn), "/6mo"),
+    lc &&
+      h(
+        "span",
+        { class: "sig", title: "how often these lines changed before, and who touched them last" },
+        "lines ⟳",
+        h("b", null, `${lc.commits}${lc.capped ? "+" : ""}`),
+        lc.last && `· ${lc.last.author} ${lc.last.date}`,
+      ),
+    h("span", { class: "sig", title: "hunks reviewed" }, h("span", { class: "meter" }, h("i", { style: `width:${pct}%` })), h("b", null, r.coverage.done), `/${r.coverage.total}`),
+    h("span", { class: "sig", title: "def→use links with both ends reviewed" }, h("b", null, r.coverage.both), `/${r.coverage.edges} edges`),
+    LEVELS.filter((l) => r.levels[l]).map((l) =>
+      h("button", { class: `chip ${l}`, style: "border:0;cursor:pointer", title: `next ${l}`, onclick: () => act({ op: "action", action: "finding-next" }) }, `${r.levels[l]} ${l}`),
+    ),
+  );
+}
+
+const HINTS: Record<Pane, [string, string][]> = {
+  list: [["next", "move"], ["toggle-reviewed", "reviewed"], ["finding-next", "finding"], ["fold-toggle", "fold"], ["command", "command"], ["help", "all keys"]],
+  code: [["next", "line"], ["search", "search"], ["mark-next", "next use"], ["select-lines", "select"], ["comment", "comment"], ["jump-back", "back"]],
+  why: [["next", "link"], ["jump-to-edge", "go there"], ["jump-back", "back"], ["zoom", "maximise"], ["help", "all keys"]],
+};
+
+function renderHints(): void {
+  const items = HINTS[st.focus].map(([action, label]) => {
+    const k = st.keymap.keysFor(action)[0];
+    return k ? h("span", null, h("kbd", null, k), label) : null;
+  });
+  replace($("#hints"), items, st.notice && h("span", { class: "notice" }, st.notice));
+}
+
+function paneHead(n: number, title: string, sub?: string): HTMLElement[] {
+  return [h("span", { class: "n" }, n), h("span", { class: "t" }, title), sub ? h("span", null, sub) : null].filter(Boolean) as HTMLElement[];
+}
+
+function zoomButton(p: Pane): HTMLElement {
+  const on = st.zoom && st.focus === p;
+  return h(
+    "button",
+    {
+      title: on ? "restore the panes" : "maximise this pane",
+      onclick: () => {
+        st.zoom = !on;
+        st.focus = p;
+        renderAll();
+      },
+    },
+    on ? "⤡" : "⤢",
+  );
+}
+
+function showSheet(title: string, text: string | Node): void {
+  const ov = $("#overlay");
+  ov.hidden = false;
+  replace(
+    ov,
+    h(
+      "div",
+      { class: "sheet", role: "dialog", "aria-label": title },
+      h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "✕")),
+      typeof text === "string" ? h("pre", null, text) : h("div", { class: "scroll" }, text),
+    ),
+  );
+}
+
+function closeSheet(): boolean {
+  const ov = $("#overlay");
+  if (ov.hidden) return false;
+  ov.hidden = true;
+  replace(ov);
+  return true;
+}
+
+function showHelp(): void {
+  const r = st.review;
+  if (!r) return;
+  const by = new Map<string, string[]>();
+  for (const b of r.keys) {
+    const k = b.prefix ? `${b.prefix} ${b.key}` : b.key;
+    by.set(b.action, [...(by.get(b.action) ?? []), k]);
+  }
+  const rows = [...by].map(([a, ks]) => h("tr", null, h("td", null, ks.join(", ")), h("td", null, a)));
+  const cmds = [...r.commands, ...CLIENT_COMMANDS].map((c) => h("tr", null, h("td", null, `:${c.name} ${c.args}`), h("td", null, c.help)));
+  showSheet("keys and commands", h("div", { class: "why" }, h("table", null, h("tbody", null, rows)), h("h3", null, "commands"), h("table", null, h("tbody", null, cmds))));
+}
+
+let toastTimer = 0;
+function toast(msg: string, err = false): void {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.className = `show${err ? " err" : ""}`;
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (t.className = ""), err ? 4000 : 2200);
+}
+
+function renderAll(): void {
+  document.body.classList.toggle("zoom", st.zoom);
+  for (const p of PANES) {
+    const el = $(`#${p}`);
+    el.classList.toggle("focus", st.focus === p);
+    el.classList.toggle("zoomed", st.zoom && st.focus === p);
+  }
+  renderBand();
+  if (!st.review) {
+    for (const p of PANES) replace($(`#${p} .body`));
+    replace($("#code .body"), h("div", { class: "loading" }, st.status));
+    renderHints();
+    return;
+  }
+  renderList();
+  renderCode();
+  renderWhy();
+  renderHints();
+}
+
+// ------------------------------------------------------------------ palette
+
+type PaletteMode = "command" | "search";
+let paletteMode: PaletteMode = "command";
+let paletteCur = 0;
+
+function openPalette(mode: PaletteMode, text = ""): void {
+  paletteMode = mode;
+  const form = $<HTMLFormElement>("#palette");
+  form.hidden = false;
+  $("#palette label").textContent = mode === "command" ? ":" : "/";
+  const input = $<HTMLInputElement>("#palette-input");
+  input.value = text;
+  paletteCur = 0;
+  renderPalette();
+  input.focus();
+}
+
+function closePalette(): void {
+  $<HTMLFormElement>("#palette").hidden = true;
+  (document.activeElement as HTMLElement | null)?.blur();
+}
+
+function argCandidates(): Record<string, string[]> {
+  const r = st.review!;
+  return {
+    strategy: ["comprehension", "defs-first", "file"],
+    mode: ["ledger", "hunks"],
+    watch: ["on", "off", "auto"],
+    "only-wave": ["last", "all", ...Object.keys(r.wave_intents)],
+    yank: ["all"],
+    send: ["all"],
+    theme: ["auto", ...themeNames()],
+    goto: [...new Set(r.items.map((i) => i.path))],
+    filter: [...new Set(r.items.map((i) => i.path.replace(/[^/]*$/, "*")))],
+  };
+}
+
+function candidates(): string[] {
+  if (paletteMode !== "command" || !st.review) return [];
+  const input = $<HTMLInputElement>("#palette-input").value;
+  return complete(input, [...st.review.commands, ...CLIENT_COMMANDS], argCandidates()).slice(0, 40);
+}
+
+function renderPalette(): void {
+  const list = $("#palette-list");
+  if (paletteMode !== "command" || !st.review) return replace(list);
+  const all = [...st.review.commands, ...CLIENT_COMMANDS];
+  replace(
+    list,
+    candidates().map((c, k) => {
+      const cmd = all.find((x) => x.name === c.split(" ")[0]);
+      return h(
+        "li",
+        {
+          class: k === paletteCur ? "cur" : "",
+          onmousedown: (e: Event) => {
+            e.preventDefault();
+            $<HTMLInputElement>("#palette-input").value = c;
+            runPalette();
+          },
+        },
+        h("b", null, c),
+        h("span", null, cmd && !c.includes(" ") ? cmd.help : ""),
+      );
+    }),
+  );
+}
+
+async function runPalette(): Promise<void> {
+  const value = $<HTMLInputElement>("#palette-input").value;
+  closePalette();
+  if (paletteMode === "search") return runSearch(value);
+  const { name, arg } = parseCommand(value);
+  if (!name) return;
+  if (name === "theme") {
+    applyTheme(arg || "auto");
+    localStorage.setItem("ordo.theme", arg || "auto");
+    return;
+  }
+  await act({ op: "command", line_text: value });
+}
+
+function runSearch(query: string): void {
+  if (!query) {
+    st.search = null;
+    return renderCode();
+  }
+  const q = query.toLowerCase();
+  const hits = st.rows.flatMap((row, k) => (row.text.toLowerCase().includes(q) ? [k] : []));
+  const k = Math.max(0, hits.findIndex((x) => x >= st.cursor));
+  st.search = { query, hits, k };
+  if (hits.length) st.cursor = hits[k];
+  st.focus = "code";
+  renderAll();
+  followCursor();
+}
+
+function searchStep(by: number): void {
+  const s = st.search;
+  if (!s || !s.hits.length) return;
+  s.k = (s.k + by + s.hits.length) % s.hits.length;
+  st.cursor = s.hits[s.k];
+  renderCode();
+  followCursor();
+}
+
+// ------------------------------------------------------------------ keys
+
+function page(by: number): void {
+  const body = $("#code .body");
+  body.scrollTop += by * body.clientHeight;
+}
+
+/** One keymap action, as the focused pane takes it. */
+function run(action: string): void {
+  const r = st.review;
+  if (!r) return;
+  const focus = st.focus;
+  switch (action) {
+    case "quit":
+      if (closeSheet()) return;
+      if (st.search) st.search = null;
+      else if (st.from !== null) st.from = null;
+      else if (st.zoom) st.zoom = false;
+      return renderAll();
+    case "help":
+      return showHelp();
+    case "command":
+      return openPalette("command");
+    case "command-goto":
+      return openPalette("command", "goto ");
+    case "search":
+      return openPalette("search");
+    case "search-next":
+      return searchStep(1);
+    case "search-prev":
+      return searchStep(-1);
+    case "symbol-next":
+    case "symbol-prev": {
+      const it = r.items[st.sel];
+      const name = it.symbols[0] ?? it.enclosing;
+      if (name) runSearch(name);
+      return;
+    }
+    case "next":
+    case "prev": {
+      const by = action === "next" ? 1 : -1;
+      if (focus === "list") return step(by);
+      if (focus === "code") return moveCursor(by);
+      return whyStep(by);
+    }
+    case "first":
+      if (focus === "list") return void select(stops()[0]);
+      if (focus === "code") return moveCursor(-st.rows.length);
+      $("#why .body").scrollTop = 0;
+      return;
+    case "last":
+      if (focus === "list") return void select(stops().at(-1)!);
+      if (focus === "code") return moveCursor(st.rows.length);
+      $("#why .body").scrollTop = 1e9;
+      return;
+    case "page-down":
+      return page(1);
+    case "page-up":
+      return page(-1);
+    case "half-down":
+      return page(0.5);
+    case "half-up":
+      return page(-0.5);
+    case "toggle-reviewed": {
+      const s = stops();
+      const at = s.indexOf(st.sel);
+      act({ op: "mark" }).then((out) => {
+        if (out && !out.error && at >= 0 && at + 1 < s.length) select(s[at + 1]);
+      });
+      return;
+    }
+    case "focus-next":
+    case "focus-prev": {
+      const k = PANES.indexOf(focus) + (action === "focus-next" ? 1 : PANES.length - 1);
+      st.focus = PANES[k % PANES.length];
+      return renderAll();
+    }
+    case "focus-list":
+    case "focus-code":
+    case "focus-why": {
+      const p = action.slice(6) as Pane;
+      if (st.focus === p) st.zoom = !st.zoom;
+      st.focus = p;
+      return renderAll();
+    }
+    case "zoom":
+      st.zoom = !st.zoom;
+      return renderAll();
+    case "finding-next":
+    case "finding-prev":
+    case "fold-toggle":
+    case "fold-open":
+    case "fold-close":
+    case "fold-open-all":
+    case "fold-close-all":
+    case "wave-next":
+    case "wave-prev":
+      act({ op: "action", action }).then(() => select(st.review!.sel));
+      return;
+    case "jump-to-edge":
+      if (focus === "why" && st.whyLinks[st.whyCur] !== undefined) jumpTo(st.whyLinks[st.whyCur]);
+      return;
+    case "jump-back":
+      return jumpBack();
+    case "mark-next":
+    case "mark-prev": {
+      const uses = new Set(r.items[st.sel].uses_at.flatMap((u) => u.rows));
+      return cursorTo((row) => row.kind !== "del" && uses.has(row.n), action === "mark-next");
+    }
+    case "comment-next":
+    case "comment-prev": {
+      const c = new Set(st.file?.comments.map((c) => c.start) ?? []);
+      return cursorTo((row) => row.kind !== "del" && c.has(row.n), action === "comment-next");
+    }
+    case "para-next":
+    case "para-prev":
+      return cursorTo((row) => row.text.trim() === "", action === "para-next");
+    case "select-lines":
+      st.from = st.from === null ? st.cursor : null;
+      st.focus = "code";
+      return renderAll();
+    case "comment":
+      return openPalette("command", "comment ");
+    case "reload":
+      act({ op: "reload" });
+      return;
+  }
+}
+
+function whyStep(by: number): void {
+  const n = st.whyLinks.length;
+  if (!n) {
+    $("#why .body").scrollTop += by * 40;
+    return;
+  }
+  st.whyCur = Math.max(0, Math.min(n - 1, st.whyCur + by));
+  renderWhy();
+  $("#why tr.cur")?.scrollIntoView({ block: "nearest" });
+}
+
+function onKey(e: KeyboardEvent): void {
+  const paletteOpen = !$<HTMLFormElement>("#palette").hidden;
+  if (paletteOpen) return paletteKey(e);
+  const key = keyLabel(e);
+  if (!key) return;
+  // Enter on a why link goes there whatever the preset calls it
+  if (key === "Enter" && st.focus === "why" && st.whyCur >= 0) {
+    e.preventDefault();
+    return run("jump-to-edge");
+  }
+  const pending = st.pending;
+  const res = st.keymap.resolve(pending, key);
+  clearTimeout(st.pendingTimer);
+  st.pending = null;
+  if ("pending" in res) {
+    e.preventDefault();
+    st.pending = key;
+    // a prefix that is also a key of its own acts once no chord follows
+    const bare = st.keymap.bare(key);
+    if (bare) st.pendingTimer = window.setTimeout(() => ((st.pending = null), run(bare)), CHORD_TIMEOUT);
+    return;
+  }
+  if ("act" in res) {
+    e.preventDefault();
+    return run(res.act);
+  }
+  if (pending) {
+    const bare = st.keymap.bare(pending);
+    if (bare) run(bare);
+    onKey(e);
+  }
+}
+
+function paletteKey(e: KeyboardEvent): void {
+  const c = candidates();
+  if (e.key === "Escape") {
+    e.preventDefault();
+    return closePalette();
+  }
+  if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!c.length) return;
+    if (e.key === "Tab") {
+      $<HTMLInputElement>("#palette-input").value = c[paletteCur] + (c[paletteCur].includes(" ") ? "" : " ");
+      paletteCur = 0;
+    } else {
+      paletteCur = (paletteCur + (e.key === "ArrowDown" ? 1 : c.length - 1)) % c.length;
+    }
+    return renderPalette();
+  }
+}
+
+// ------------------------------------------------------------------ wiring
+
+function wireSplits(): void {
+  const panes = $("#panes");
+  const saved = JSON.parse(localStorage.getItem("ordo.splits") ?? "null") as [string, string] | null;
+  if (saved) {
+    panes.style.setProperty("--c0", saved[0]);
+    panes.style.setProperty("--c2", saved[1]);
+  }
+  for (const split of document.querySelectorAll<HTMLElement>(".split")) {
+    split.addEventListener("pointerdown", (e) => {
+      split.setPointerCapture(e.pointerId);
+      split.classList.add("drag");
+      const which = split.dataset.split;
+      const move = (ev: PointerEvent) => {
+        const box = panes.getBoundingClientRect();
+        const x = ((ev.clientX - box.left) / box.width) * 100;
+        if (which === "0") panes.style.setProperty("--c0", `${Math.min(60, Math.max(12, x))}%`);
+        else panes.style.setProperty("--c2", `${Math.min(60, Math.max(14, 100 - x))}%`);
+      };
+      const up = () => {
+        split.classList.remove("drag");
+        split.removeEventListener("pointermove", move);
+        localStorage.setItem("ordo.splits", JSON.stringify([panes.style.getPropertyValue("--c0") || "27%", panes.style.getPropertyValue("--c2") || "30%"]));
+        renderList();
+      };
+      split.addEventListener("pointermove", move);
+      split.addEventListener("pointerup", up, { once: true });
+    });
+  }
+}
+
+function wire(): void {
+  document.addEventListener("keydown", onKey);
+  for (const p of PANES) {
+    $(`#${p}`).addEventListener("mousedown", () => {
+      if (st.focus !== p) {
+        st.focus = p;
+        renderHints();
+        for (const q of PANES) $(`#${q}`).classList.toggle("focus", q === p);
+      }
+    });
+  }
+  const form = $<HTMLFormElement>("#palette");
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    runPalette();
+  });
+  $("#palette-input").addEventListener("input", () => {
+    paletteCur = 0;
+    renderPalette();
+  });
+  $("#palette-input").addEventListener("blur", () => setTimeout(() => (form.hidden = true), 100));
+  $("#overlay").addEventListener("mousedown", (e) => {
+    if (e.target === e.currentTarget) closeSheet();
+  });
+  window.addEventListener("resize", () => st.review && renderList());
+  wireSplits();
+  api.events((event, data) => {
+    if (event === "progress" && !st.review) {
+      st.status = (data as { status: string }).status;
+      renderAll();
+    } else if (event === "progress") {
+      st.notice = (data as { status: string }).status;
+      renderHints();
+    } else if (event === "changed" && (data as { version: number }).version !== st.version) {
+      st.notice = "";
+      refresh();
+    }
+  });
+}
+
+async function boot(): Promise<void> {
+  wire();
+  renderAll();
+  loadThemes(api).then(() => applyTheme(localStorage.getItem("ordo.theme") ?? "auto"));
+  await refresh();
+}
+
+boot();

@@ -3,10 +3,12 @@
 
 use super::{Phase, Slot};
 use crate::code_view::{apply_theme_colors, theme, theme_names, theme_role_color, THEME_ROLES};
+use crate::commands::COMMANDS;
 use crate::draw::{
     cascade, churn_line, coverage, note_for, scope_line, top_level, unreviewed_deps,
 };
 use crate::highlight::{highlight_roles, RoleSpans};
+use crate::keys::{key_label, ACTION_NAMES};
 use crate::*;
 use ratatui::style::Color;
 use serde_json::{json, Value};
@@ -150,6 +152,14 @@ pub(super) fn review(app: &App) -> Value {
             "report": app.rules_report,
         },
         "file_churn": app.file_churn,
+        "sel": app.sel,
+        "keys": app.keys.binds.iter().filter_map(|(pre, key, action)| {
+            let name = ACTION_NAMES.iter().find(|(_, a)| a == action)?.0;
+            Some(json!({ "prefix": pre.map(key_label), "key": key_label(*key), "action": name }))
+        }).collect::<Vec<_>>(),
+        "commands": COMMANDS.iter().map(|c| json!({
+            "name": c.name, "args": c.args, "help": c.help,
+        })).collect::<Vec<_>>(),
     })
 }
 
