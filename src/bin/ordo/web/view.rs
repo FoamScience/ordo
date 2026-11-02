@@ -69,6 +69,7 @@ pub(super) fn review(app: &App) -> Value {
                 "what": what,
                 "details": it.details,
                 "gist": gist(app, it),
+                "rules_for": rules_here(app, &it.path),
                 "notes": it.notes,
                 "edges": it.edges.iter().map(|e| json!({
                     "label": e.label,
@@ -167,6 +168,14 @@ pub(super) fn review(app: &App) -> Value {
             "name": c.name, "args": c.args, "help": c.help,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// The rules that can fire in this file, by its language — what the findings
+/// note says was checked, so an empty list does not read as no rules.
+fn rules_here(app: &App, path: &str) -> Value {
+    let lang = ordo::lang_name_for_path(path);
+    let (catalog, own) = crate::rules::rules_for(&app.rules, app.catalog, &app.disables, lang);
+    json!({ "lang": lang, "catalog": catalog, "own": own })
 }
 
 /// The hunk's first changed line that says anything, trimmed — what the list

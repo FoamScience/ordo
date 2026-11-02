@@ -4384,7 +4384,7 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
         "{:?}",
         r.problems
     );
-    assert!(r.lines().iter().any(|l| l == "  magic-number → warn"));
+    assert!(r.lines(false).iter().any(|l| l == "  magic-number → warn"));
 
     // and the engine applies them: the finding moves and keeps where it was
     let out = ordo::run(ordo::model::Input {
@@ -4503,7 +4503,7 @@ fn a_rules_flag_names_a_preset_or_a_file() {
         r.origins,
         vec![("c-power-of-ten".to_string(), r.rules.len())]
     );
-    assert!(r.lines()[0].ends_with("rules active"));
+    assert!(r.lines(false)[0].ends_with("rules active"));
 }
 
 #[test]
@@ -6074,4 +6074,28 @@ fn a_linked_worktrees_branch_and_commit_ids_resolve() {
     assert_eq!(names, vec!["feat", "wtb"]);
     assert!(matches!(commit_target(&ws, "torx"), Some(Target::Commit(c)) if c == "2d221776"));
     assert!(matches!(commit_target(&ws, "twxq"), Some(Target::Commit(c)) if c == "4c35259a"));
+}
+
+#[test]
+fn the_rules_report_counts_the_built_in_catalog_it_runs() {
+    let r = report_from(vec![], &[]);
+    let with = r.lines(true);
+    let catalog: usize = ordo::catalog::rules().len();
+    assert_eq!(with[0], format!("{catalog} rules active"));
+    assert!(with.iter().any(|l| l.ends_with("built-in catalog: python")));
+    assert_eq!(r.lines(false)[0], "0 rules active");
+}
+
+#[test]
+fn rules_for_a_language_count_only_what_can_fire_there() {
+    let (py, _) = crate::rules::rules_for(&[], true, &[], Some("python"));
+    let (go, _) = crate::rules::rules_for(&[], true, &[], Some("go"));
+    assert!(py > go, "python {py}, go {go}");
+    let (silenced, _) =
+        crate::rules::rules_for(&[], true, &["magic-*".to_string()], Some("python"));
+    assert!(silenced < py);
+    assert_eq!(
+        crate::rules::rules_for(&[], false, &[], Some("python")).0,
+        0
+    );
 }

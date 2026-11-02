@@ -950,10 +950,11 @@ fn main() -> std::io::Result<()> {
     for p in &report.problems {
         eprintln!("ordo: {p}");
     }
-    let rules_report = report.lines();
     // the catalog is on unless this run turned it off, either way round: the
     // flag for once, `catalog = false` in a rules file for always
-    let rules = report.rule_set(!no_catalog && report.catalog);
+    let catalog = !no_catalog && report.catalog;
+    let rules_report = report.lines(catalog);
+    let rules = report.rule_set(catalog);
     let mut session = Session {
         rev,
         review_sha,
