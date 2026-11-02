@@ -55,8 +55,8 @@ pub(super) enum FieldKind {
 pub(super) struct ConfigField {
     /// the config key this writes, e.g. `theme.accent`, `binds.j`, `catalog`
     pub(super) key: String,
-    label: String,
-    help: String,
+    pub(super) label: String,
+    pub(super) help: String,
     pub(super) kind: FieldKind,
 }
 
@@ -65,7 +65,7 @@ pub(super) struct ConfigSection {
     pub(super) title: String,
     /// which file this section is written to, shown in the UI so a reviewer
     /// knows what `:config` is about to edit
-    file: String,
+    pub(super) file: String,
     pub(super) fields: Vec<ConfigField>,
 }
 

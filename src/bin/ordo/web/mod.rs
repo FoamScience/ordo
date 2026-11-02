@@ -50,6 +50,8 @@ struct Slot {
     rx: Option<mpsc::Receiver<LoadMsg>>,
     /// bumped whenever what `view::review` returns would differ
     version: u64,
+    /// bumped when a load lands: hunk indices from before it mean other hunks
+    generation: u64,
     /// when a reader last did something here, for `--watch=auto`'s idle rule
     touched: Instant,
     marks_seen: Option<SystemTime>,
@@ -102,10 +104,18 @@ pub(super) fn serve(seed: Session, args: WebArgs) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 128 bits nobody else on the machine can guess: `RandomState` is seeded
-/// from the OS, and two of them are two independent draws.
+/// 128 bits nobody else on the machine can guess: the OS's random device, or
+/// where there is none, std's per-process random hasher keys over the clock.
 fn session_token() -> String {
     use std::hash::{BuildHasher, Hasher};
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .is_ok()
+    {
+        return bytes.iter().map(|b| format!("{b:02x}")).collect();
+    }
     let draw = || {
         let mut h = std::collections::hash_map::RandomState::new().build_hasher();
         h.write_u128(
@@ -154,14 +164,15 @@ fn url_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         match b[i] {
-            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                Ok(v) => {
-                    out.push(v);
-                    i += 3;
-                    continue;
-                }
-                Err(_) => out.push(b'%'),
-            },
+            b'%' if i + 2 < b.len()
+                && b[i + 1].is_ascii_hexdigit()
+                && b[i + 2].is_ascii_hexdigit() =>
+            {
+                let hex = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+                out.push(hex(b[i + 1]) << 4 | hex(b[i + 2]));
+                i += 3;
+                continue;
+            }
             b'+' => out.push(b' '),
             c => out.push(c),
         }
@@ -182,8 +193,23 @@ fn query(url: &str) -> HashMap<String, String> {
         .collect()
 }
 
+/// A panic while one request held the lock leaves the review as it was; the
+/// server goes on rather than failing every request after it.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("an ascii header")
+}
+
+/// Equal without saying, by how long it took, how much of a guess was right.
+fn same_secret(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 fn reply(req: Request, status: u16, ctype: &str, body: String) {
@@ -211,11 +237,15 @@ impl Hub {
     /// The slot reviewing `rev`, its load started the first time it is asked
     /// for. `None` when `rev` names nothing reviewable.
     fn slot_for(&self, rev: &str) -> Option<()> {
-        let mut slots = self.slots.lock().expect("slots");
+        if lock(&self.slots).contains_key(rev) {
+            return Some(());
+        }
+        // resolving runs git: not while every other request waits on `slots`
+        let session = lock(&self.seed).for_rev(rev)?;
+        let mut slots = lock(&self.slots);
         if slots.contains_key(rev) {
             return Some(());
         }
-        let session = self.seed.lock().expect("seed").for_rev(rev)?;
         let rx = session.spawn_load(session.target.clone());
         slots.insert(
             rev.to_string(),
@@ -224,6 +254,7 @@ impl Hub {
                 phase: Phase::Loading("starting…".to_string()),
                 rx: Some(rx),
                 version: 0,
+                generation: 0,
                 touched: Instant::now(),
                 marks_seen: None,
                 stale_seen: None,
@@ -234,10 +265,7 @@ impl Hub {
 
     fn broadcast(&self, rev: &str, event: &str, data: serde_json::Value) {
         let msg = format!("event: {event}\ndata: {data}\n\n");
-        self.subs
-            .lock()
-            .expect("subs")
-            .retain(|(r, tx)| r != rev || tx.send(msg.clone()).is_ok());
+        lock(&self.subs).retain(|(r, tx)| r != rev || tx.send(msg.clone()).is_ok());
     }
 
     /// Everything that moves without a request: loads finishing, the working
@@ -245,7 +273,7 @@ impl Hub {
     fn tick(&self) {
         let mut events: Vec<(String, &str, serde_json::Value)> = vec![];
         {
-            let mut slots = self.slots.lock().expect("slots");
+            let mut slots = lock(&self.slots);
             for (rev, slot) in slots.iter_mut() {
                 drain(slot, rev, &mut events);
                 watch(slot, rev, &mut events);
@@ -283,13 +311,19 @@ impl Hub {
             ),
             (_, p) if p.starts_with("/api/") => {
                 let q = query(&url);
+                // an EventSource cannot send a header; nothing else may use
+                // the query, which lands in more places than a header does
                 let token = req
                     .headers()
                     .iter()
                     .find(|h| h.field.equiv("X-Ordo-Token"))
                     .map(|h| h.value.as_str().to_string())
-                    .or_else(|| q.get("t").cloned());
-                if token.as_deref() != Some(self.token.as_str()) {
+                    .or_else(|| {
+                        (path == "/api/events")
+                            .then(|| q.get("t").cloned())
+                            .flatten()
+                    });
+                if !token.is_some_and(|t| same_secret(&t, &self.token)) {
                     return fail(req, 401, "missing or wrong session token");
                 }
                 self.api(req, &path, &q);
@@ -298,7 +332,8 @@ impl Hub {
         }
     }
 
-    /// A page from this server, asked for by the name it was served under:
+    /// A page from this server, asked for by the name it was served under
+    /// (a browser leaves out port 80):
     /// anything else is another site resolving to localhost (DNS rebinding).
     fn host_ok(&self, req: &Request) -> bool {
         let host = req
@@ -307,7 +342,10 @@ impl Hub {
             .find(|h| h.field.equiv("Host"))
             .map(|h| h.value.as_str().to_string());
         let port = self.port;
-        host.is_some_and(|h| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}"))
+        host.is_some_and(|h| {
+            let (name, at) = h.rsplit_once(':').unwrap_or((h.as_str(), "80"));
+            matches!(name, "127.0.0.1" | "localhost") && at == port.to_string()
+        })
     }
 
     fn api(&self, mut req: Request, path: &str, q: &HashMap<String, String>) {
@@ -324,24 +362,35 @@ impl Hub {
                 &format!("'{rev}' is not a git revision, a commit range or a GitButler CLI ID"),
             );
         }
-        let mut body = String::new();
+        let mut body = serde_json::Value::Null;
         if *req.method() == Method::Post {
-            let _ = req.as_reader().read_to_string(&mut body);
+            let mut text = String::new();
+            let read = req.as_reader().read_to_string(&mut text);
+            match read.ok().and_then(|_| serde_json::from_str(&text).ok()) {
+                Some(v) => body = v,
+                None => return fail(req, 400, "the body is not JSON"),
+            }
         }
-        let body: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
         let num = |k: &str| q.get(k).and_then(|v| v.parse::<usize>().ok());
         match path {
             "/api/review" => {
-                let slots = self.slots.lock().expect("slots");
-                let slot = &slots[&rev];
-                json(req, view::slot(slot))
+                let out = view::slot(&lock(&self.slots)[&rev]);
+                json(req, out)
             }
             "/api/file" => {
                 let p = q.get("path").cloned().unwrap_or_default();
-                let slots = self.slots.lock().expect("slots");
-                match &slots[&rev].phase {
-                    Phase::Ready(app) => json(req, view::file(app, &p)),
-                    _ => fail(req, 409, "the review is still loading"),
+                let out = {
+                    let mut slots = lock(&self.slots);
+                    let slot = slots.get_mut(&rev).expect("slot");
+                    slot.touched = Instant::now();
+                    match &slot.phase {
+                        Phase::Ready(app) => Some(view::file(app, &p)),
+                        _ => None,
+                    }
+                };
+                match out {
+                    Some(v) => json(req, v),
+                    None => fail(req, 409, "the review is still loading"),
                 }
             }
             "/api/item" => {
@@ -360,8 +409,10 @@ impl Hub {
     /// is `git log -L` (~0.2s on a large file), run with the lock released.
     fn item(&self, req: Request, rev: &str, i: usize) {
         let todo = {
-            let mut slots = self.slots.lock().expect("slots");
-            let Phase::Ready(app) = &mut slots.get_mut(rev).expect("slot").phase else {
+            let mut slots = lock(&self.slots);
+            let slot = slots.get_mut(rev).expect("slot");
+            slot.touched = Instant::now();
+            let Phase::Ready(app) = &mut slot.phase else {
                 return fail(req, 409, "the review is still loading");
             };
             if i >= app.items.len() {
@@ -379,35 +430,63 @@ impl Hub {
         };
         if let Some((key, query, sha)) = todo {
             let churn = sha.map(|sha| hunk_churn(&sha, &key.0, &query));
-            let mut slots = self.slots.lock().expect("slots");
+            let mut slots = lock(&self.slots);
             if let Phase::Ready(app) = &mut slots.get_mut(rev).expect("slot").phase {
                 app.churn_cache.insert(key, churn);
             }
         }
-        let slots = self.slots.lock().expect("slots");
-        match &slots[rev].phase {
-            Phase::Ready(app) => json(req, view::item(app, i)),
-            _ => fail(req, 409, "the review is still loading"),
+        // a reload may have landed while the lock was down
+        let out = match &lock(&self.slots)[rev].phase {
+            Phase::Ready(app) if i < app.items.len() => Some(view::item(app, i)),
+            _ => None,
+        };
+        match out {
+            Some(v) => json(req, v),
+            None => fail(req, 409, "the review was read again; ask once more"),
         }
     }
 
     fn act(&self, req: Request, rev: &str, body: &serde_json::Value) {
-        let mut slots = self.slots.lock().expect("slots");
+        let mut slots = lock(&self.slots);
         let slot = slots.get_mut(rev).expect("slot");
         slot.touched = Instant::now();
+        let op = body.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        let int = |k: &str| body.get(k).and_then(|v| v.as_u64()).map(|v| v as usize);
+        if op == "reload" && matches!(slot.phase, Phase::Empty(_)) {
+            // the terminal quits on an empty review; a server stays, so the
+            // reader can ask again once there is something to read
+            slot.rx = Some(slot.session.spawn_load(slot.session.target.clone()));
+            slot.phase = Phase::Loading("starting…".to_string());
+            slot.version += 1;
+            let version = slot.version;
+            drop(slots);
+            self.broadcast(rev, "changed", serde_json::json!({ "version": version }));
+            return json(req, serde_json::json!({ "version": version }));
+        }
+        // indices into a review that has since been read again name other hunks
+        if int("generation").is_some_and(|g| g as u64 != slot.generation) {
+            return fail(req, 409, "the review was read again; try once more");
+        }
+        let generation = slot.generation;
         let Phase::Ready(app) = &mut slot.phase else {
             return fail(req, 409, "the review is still loading");
         };
-        let int = |k: &str| body.get(k).and_then(|v| v.as_u64()).map(|v| v as usize);
         if let Some(sel) = int("sel").filter(|&s| s < app.items.len()) {
             app.sel = sel;
+            let lines = app
+                .sources
+                .get(&app.items[sel].path)
+                .map_or(0, |(_, n)| n.len());
+            let clamp = |l: usize| l.min(lines.saturating_sub(1));
             app.cursor = Cursor {
-                line: int("line").unwrap_or_else(|| start_cursor(&app.items[sel]).line),
+                line: int("line")
+                    .map(clamp)
+                    .unwrap_or_else(|| start_cursor(&app.items[sel]).line),
                 col: 0,
             };
-            app.selection = int("from");
+            app.selection = int("from").map(clamp);
         }
-        let op = body.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        let before = fingerprint(app);
         let mut extra = serde_json::Map::new();
         let result: Result<(), String> = match op {
             "mark" => {
@@ -455,15 +534,30 @@ impl Hub {
                     None => Err(format!("'{name}' is not an action the browser sends")),
                 }
             }
+            "hover" => {
+                app.cursor.col = int("col").unwrap_or(0);
+                hover(app);
+                if let Some(p) = app.popup.take() {
+                    extra.insert("popup".into(), view::popup(&p));
+                }
+                Ok(())
+            }
+            "config" => config(app, body),
+            "open-editor" => open_in_editor(app, &mut extra),
             "command" => {
                 let line = body.get("line_text").and_then(|v| v.as_str()).unwrap_or("");
                 command(app, line, &mut extra)
             }
             _ => Err(format!("unknown action '{op}'")),
         };
-        slot.version += 1;
+        let sel = app.sel;
+        let changed = fingerprint(app) != before;
+        if changed {
+            slot.version += 1;
+        }
         let version = slot.version;
-        let mut out = serde_json::json!({ "version": version });
+        let mut out =
+            serde_json::json!({ "version": version, "generation": generation, "sel": sel });
         if let Err(e) = result {
             out["error"] = e.into();
         }
@@ -471,7 +565,9 @@ impl Hub {
             out[k] = v;
         }
         drop(slots);
-        self.broadcast(rev, "changed", serde_json::json!({ "version": version }));
+        if changed {
+            self.broadcast(rev, "changed", serde_json::json!({ "version": version }));
+        }
         json(req, out)
     }
 
@@ -481,7 +577,7 @@ impl Hub {
     /// comment every so often, so a closed tab is noticed and dropped.
     fn events(&self, req: Request, rev: String) {
         let (tx, rx) = mpsc::channel::<String>();
-        self.subs.lock().expect("subs").push((rev, tx));
+        lock(&self.subs).push((rev, tx));
         let mut out = req.into_writer();
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
                     Cache-Control: no-store\r\nConnection: keep-alive\r\n\r\n: ordo\n\n";
@@ -509,6 +605,13 @@ impl Hub {
     }
 }
 
+/// The review as every tab reads it; the selection is each tab's own.
+fn fingerprint(app: &App) -> String {
+    let mut v = view::review(app);
+    v["sel"] = serde_json::Value::Null;
+    v.to_string()
+}
+
 /// What the load worker has said since the last tick.
 fn drain(slot: &mut Slot, rev: &str, events: &mut Vec<(String, &'static str, serde_json::Value)>) {
     let Some(rx) = slot.rx.as_ref() else { return };
@@ -531,6 +634,7 @@ fn drain(slot: &mut Slot, rev: &str, events: &mut Vec<(String, &'static str, ser
                 let app = slot.session.fresh_app(*r);
                 slot.marks_seen = app.marks_path.as_deref().and_then(modified);
                 slot.phase = Phase::Ready(Box::new(app));
+                slot.generation += 1;
                 slot.rx = None;
                 break;
             }
@@ -600,6 +704,72 @@ fn watch(slot: &mut Slot, rev: &str, events: &mut Vec<(String, &'static str, ser
     }
 }
 
+/// `:config` from the browser: the same `ConfigUi` the terminal edits, driven
+/// by row rather than by cursor.
+fn config(app: &mut App, body: &serde_json::Value) -> Result<(), String> {
+    let what = body.get("do").and_then(|v| v.as_str()).unwrap_or("");
+    let row = body.get("row").and_then(|v| v.as_u64()).map(|v| v as usize);
+    if what == "open" {
+        app.config = Some(crate::config::ConfigUi::open(app));
+        return Ok(());
+    }
+    let Some(c) = app.config.as_mut() else {
+        return Err(":config is not open".into());
+    };
+    if let Some(r) = row.filter(|&r| r < c.rows.len()) {
+        c.sel = r;
+    }
+    match what {
+        "toggle" => config_toggle(app),
+        "edit" => {
+            c.editing = Some(
+                body.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            );
+            config_commit_edit(app);
+        }
+        "write" => config_write(app),
+        "close" => app.config = None,
+        _ => return Err(format!("unknown config step '{what}'")),
+    }
+    Ok(())
+}
+
+/// `ge`: the hunk's file at its line, in the editor `$ORDO_WEB_EDITOR` names —
+/// a URL the browser opens (`{root}`, `{path}` and `{line}` filled in; the
+/// default is VS Code's), or `server`, to start `$VISUAL` from here the way
+/// the terminal's `ge` does.
+fn open_in_editor(
+    app: &App,
+    extra: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    if std::env::var("ORDO_WEB_EDITOR").as_deref() != Ok("server") {
+        return Err("the browser opens this one".into());
+    }
+    let (path, _, approx) = crate::editor::edit_target(app);
+    let line = app.cursor.line + 1;
+    let (program, args) =
+        crate::editor::build_command(&crate::editor::resolve_editor(), &path, line)
+            .ok_or("$VISUAL is empty")?;
+    let mut child = Command::new(&program)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start {program}: {e}"))?;
+    thread::spawn(move || child.wait());
+    if approx {
+        extra.insert(
+            "notice".into(),
+            format!("{path} has changed since this revision; line {line} is approximate").into(),
+        );
+    }
+    Ok(())
+}
+
 /// A command from the palette, as the terminal's `:` bar runs it. The few
 /// that act on the terminal itself answer the browser instead.
 fn command(
@@ -649,4 +819,24 @@ fn command(
         extra.insert("notice".into(), n.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_query_decodes_without_trusting_what_follows_a_percent() {
+        assert_eq!(url_decode("a%20b+c"), "a b c");
+        assert_eq!(url_decode("%a\u{e9}"), "%a\u{e9}");
+        assert_eq!(url_decode("%+f"), "% f");
+        assert_eq!(url_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn a_secret_matches_only_itself() {
+        assert!(same_secret("abc", "abc"));
+        assert!(!same_secret("abd", "abc"));
+        assert!(!same_secret("ab", "abc"));
+    }
 }

@@ -13,9 +13,7 @@ var Api = class {
   }
   async get(path, params = {}) {
     const res = await fetch(this.url(path, params), { headers: { "X-Ordo-Token": this.token } });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error ?? res.statusText);
-    return body;
+    return answer(res);
   }
   review() {
     return this.get("/api/review");
@@ -35,9 +33,7 @@ var Api = class {
       headers: { "X-Ordo-Token": this.token, "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-    const out = await res.json();
-    if (!res.ok) throw new Error(out.error ?? res.statusText);
-    return out;
+    return answer(res);
   }
   events(on) {
     const es = new EventSource(this.url("/api/events", { t: this.token }));
@@ -47,6 +43,17 @@ var Api = class {
     return es;
   }
 };
+async function answer(res) {
+  const text = await res.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+  }
+  if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+  if (body === null) throw new Error("the server sent something that is not JSON");
+  return body;
+}
 
 // src/dom.ts
 function h(tag, attrs = null, ...children) {
@@ -143,17 +150,14 @@ function centerScroll(rowTop, rowHeight2, viewHeight, contentHeight) {
   const max = Math.max(0, contentHeight - viewHeight);
   return Math.round(Math.min(max, Math.max(0, want)));
 }
-function tableLimit(total, maximised, fitRows2) {
-  const room = maximised ? Math.max(3, fitRows2) : 3;
-  return Math.min(total, room);
+function tableLimit(total, maximised) {
+  return maximised ? total : Math.min(total, 3);
 }
 function codeRows(f) {
   const hunks = [...f.hunks].sort((a, b) => a.new[0] - b.new[0] || a.old[0] - b.old[0]);
   const rows = [];
-  const at = /* @__PURE__ */ new Map();
-  hunks.forEach((h2, k) => {
-    if (!at.has(h2.new[0])) at.set(h2.new[0], k);
-  });
+  const startingAt = /* @__PURE__ */ new Map();
+  for (const h2 of hunks) startingAt.set(h2.new[0], [...startingAt.get(h2.new[0]) ?? [], h2]);
   const added = /* @__PURE__ */ new Map();
   for (const h2 of hunks) {
     for (let n = h2.new[0]; n <= h2.new[1]; n++) {
@@ -161,7 +165,7 @@ function codeRows(f) {
     }
   }
   const removedBefore = (n) => {
-    for (const h2 of hunks.filter((h3) => h3.new[0] === n)) {
+    for (const h2 of startingAt.get(n) ?? []) {
       for (let o = h2.old[0]; o <= h2.old[1]; o++) {
         rows.push({
           kind: "del",
@@ -239,7 +243,7 @@ function cssVar(role) {
   if (role.startsWith("syntax-")) return `--syn-${role.slice(7)}`;
   const own = { border: "--line", "border-focus": "--focus" };
   if (own[role]) return own[role];
-  return ["fg", "dim", "accent", "reviewed", "warn", "mark", "category"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
+  return ["fg", "dim", "accent", "reviewed"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
 }
 function baseOf(theme) {
   const fg = theme["fg"];
@@ -288,6 +292,7 @@ var CHORD_TIMEOUT = 500;
 var rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
 var token = new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStorage.getItem("ordo.token") ?? "";
 sessionStorage.setItem("ordo.token", token);
+if (location.hash) history.replaceState(null, "", location.pathname + location.search);
 var api = new Api(token, rev);
 var st = {
   review: null,
@@ -308,34 +313,70 @@ var st = {
   pendingTimer: 0,
   search: null,
   sinceOnly: false,
+  empty: false,
+  col: null,
   whyLinks: [],
   whyCur: -1,
   notice: ""
 };
+var refreshSeq = 0;
+var selectSeq = 0;
+var filesGen = 0;
 async function refresh() {
+  const seq = ++refreshSeq;
   let slot;
   try {
     slot = await api.review();
   } catch (e) {
+    if (seq !== refreshSeq) return;
     st.status = String(e.message);
     return renderAll();
   }
+  if (seq !== refreshSeq) return;
   if (slot.state !== "ready") {
     st.status = slot.status;
+    st.empty = slot.state === "empty";
     st.review = null;
     return renderAll();
   }
+  st.empty = false;
+  if (slot.version < st.version && slot.generation === st.review?.generation) return;
   const prev = st.review;
-  const keep = prev && st.sel >= 0 ? identity(prev.items[st.sel]) : null;
   st.review = slot;
   st.version = slot.version;
   st.keymap = new Keymap(slot.keys);
-  let sel = keep ? slot.items.findIndex((it) => identity(it) === keep) : -1;
-  if (sel < 0) sel = prev ? clampToView(st.sel) : slot.sel;
-  if (prev?.items.length !== slot.items.length || prev?.version !== slot.version) {
-    st.files.clear();
+  const moved = !!prev && prev.generation !== slot.generation;
+  const remap = (i) => {
+    if (!prev || !moved) return i;
+    const id = identity(prev.items[i]);
+    return id ? slot.items.findIndex((it) => identity(it) === id) : -1;
+  };
+  let sel = st.sel >= 0 ? remap(st.sel) : -1;
+  if (sel < 0) sel = prev ? clampToView(Math.min(st.sel, slot.items.length - 1)) : slot.sel;
+  if (moved) {
+    st.jumps = st.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
+    if (canvas) {
+      const c = canvas;
+      c.anchor = remap(c.anchor);
+      c.cards = c.cards.map((k) => ({ ...k, i: remap(k.i) })).filter((k) => k.i >= 0);
+      if (c.anchor < 0 || !c.cards.length) {
+        canvas = null;
+        closeSheet();
+      } else {
+        c.sel = Math.min(c.sel, c.cards.length - 1);
+      }
+    }
   }
-  await select(sel, { keepCursor: sel === st.sel && !!st.file });
+  if (slot.delta.new + slot.delta.changed + slot.delta.moved === 0) st.sinceOnly = false;
+  if (prev?.version !== slot.version) {
+    st.files.clear();
+    filesGen++;
+    st.facts = null;
+  }
+  const same = sel === st.sel && !!st.file;
+  if (same) st.sel = -1;
+  await select(sel, { keepCursor: same });
+  if (canvas) renderCanvas();
 }
 function identity(it) {
   return it ? `${it.path}\0${it.new[0]}\0${it.rationale}` : "";
@@ -347,16 +388,18 @@ function clampToView(i) {
 async function fileOf(path) {
   const hit = st.files.get(path);
   if (hit) return hit;
+  const gen = filesGen;
   const f = await api.file(path);
-  st.files.set(path, f);
+  if (gen === filesGen) st.files.set(path, f);
   return f;
 }
 var factsFor = -1;
 async function loadFacts(i) {
   factsFor = i;
+  const version = st.version;
   try {
     const f = await api.item(i);
-    if (factsFor === i) {
+    if (factsFor === i && version === st.version) {
       st.facts = f;
       renderWhy();
       renderBand();
@@ -367,13 +410,24 @@ async function loadFacts(i) {
 async function select(i, opts = {}) {
   const r = st.review;
   if (!r || i < 0 || i >= r.items.length) return renderAll();
+  const seq = ++selectSeq;
+  const it = r.items[i];
+  let f;
+  try {
+    f = await fileOf(it.path);
+  } catch (e) {
+    if (seq === selectSeq) toast(e.message, true);
+    return;
+  }
+  if (seq !== selectSeq || st.review !== r) return;
   const changed = i !== st.sel;
+  if (changed && st.file?.path !== it.path) st.search = null;
   st.sel = i;
   if (opts.focus) st.focus = opts.focus;
-  const it = r.items[i];
-  st.file = await fileOf(it.path);
-  st.rows = codeRows(st.file);
-  if (!opts.keepCursor || changed) {
+  st.file = f.missing ? null : f;
+  st.rows = st.file ? codeRows(st.file) : [];
+  if (!opts.keepCursor) {
+    st.col = null;
     st.cursor = firstRowOf(st.rows, i);
     st.from = null;
   }
@@ -388,7 +442,13 @@ async function select(i, opts = {}) {
 }
 async function act(body) {
   try {
-    const out = await api.act({ sel: st.sel, line: lineOfCursor(), from: fromLine(), ...body });
+    const out = await api.act({
+      sel: st.sel,
+      generation: st.review?.generation,
+      line: lineOfCursor(),
+      from: fromLine(),
+      ...body
+    });
     if (out.error) toast(out.error, true);
     if (out.notice) toast(out.notice);
     if (out.popup) showSheet(out.popup.title, out.popup.lines.join("\n"));
@@ -402,10 +462,13 @@ async function act(body) {
       const q = new URLSearchParams({ rev: out.navigate });
       location.href = `/?${q}#t=${token}`;
     }
-    if (out.version !== st.version) await refresh();
+    if (out.version > st.version) await refresh();
+    if (out.sel !== void 0 && out.sel !== st.sel) await select(out.sel);
+    renderConfig();
     return out;
   } catch (e) {
     toast(e.message, true);
+    refresh();
     return null;
   }
 }
@@ -511,9 +574,10 @@ function rowHeight() {
   return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 22;
 }
 function scrollCodeTo(row, force) {
+  if (!force) return;
   const body = $("#code .body");
-  const y = Math.max(0, row - 3) * rowHeight();
-  if (force) body.scrollTop = y;
+  const el = body.querySelector(`.l[data-k="${Math.max(0, row - 3)}"]`);
+  body.scrollTop = el ? el.offsetTop : 0;
 }
 function followCursor() {
   const body = $("#code .body");
@@ -543,8 +607,10 @@ function lineEl(row, k, mine, findings, uses, commented) {
       "div",
       {
         class: cls,
-        onclick: () => {
+        dataset: { k: String(k) },
+        onclick: (e) => {
           st.cursor = k;
+          st.col = caretColumn(e, row.text);
           st.focus = "code";
           if (row.hunk !== null && row.hunk !== st.sel) select(row.hunk, { keepCursor: true, focus: "code" });
           else renderCode();
@@ -595,7 +661,7 @@ function renderCode() {
   if (!st.file || !it) return replace(body);
   const findings = /* @__PURE__ */ new Map();
   for (const f of it.findings) {
-    if (f.row === null) continue;
+    if (f.row == null) continue;
     findings.set(f.row, [...findings.get(f.row) ?? [], f]);
   }
   const uses = new Set(it.uses_at.flatMap((u) => u.rows));
@@ -613,11 +679,43 @@ function renderCode() {
   replace(body, code);
   body.scrollTop = top;
 }
+function caretColumn(e, text) {
+  const doc = document;
+  const pos = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+  const line = e.currentTarget.lastElementChild;
+  if (!pos || !line || !line.contains(pos.offsetNode)) return null;
+  const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+  let at = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n === pos.offsetNode) return Math.min(at + [...(n.textContent ?? "").slice(0, pos.offset)].length, [...text].length);
+    at += [...n.textContent ?? ""].length;
+  }
+  return null;
+}
+function firstWordCol(text) {
+  const m = /[A-Za-z_]/.exec(text);
+  return m ? [...text.slice(0, m.index)].length : 0;
+}
+function openEditor() {
+  const r = st.review;
+  const it = r.items[st.sel];
+  if (!it) return;
+  const row = st.rows[st.cursor];
+  const line = row && row.kind !== "del" ? row.n : it.new[0];
+  if (r.editor === "server") {
+    act({ op: "open-editor" });
+    return;
+  }
+  const segments = (p) => p.split("/").map(encodeURIComponent).join("/");
+  const url = (r.editor || "vscode://file/{root}/{path}:{line}").replaceAll("{root}", segments(r.root).replace(/^\//, "")).replaceAll("{path}", segments(it.path)).replaceAll("{line}", String(line));
+  window.open(url, "_self");
+}
 function range(a, b) {
   return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
 }
 function moveCursor(by) {
   st.cursor = Math.max(0, Math.min(st.rows.length - 1, st.cursor + by));
+  st.col = null;
   const hunk = st.rows[st.cursor]?.hunk;
   if (hunk !== null && hunk !== void 0 && hunk !== st.sel) {
     select(hunk, { keepCursor: true }).then(followCursor);
@@ -664,11 +762,8 @@ function edgeRows(targets, limit) {
 function basename(p) {
   return p.slice(p.lastIndexOf("/") + 1);
 }
-function fitRows() {
-  return Math.max(3, Math.floor(window.innerHeight / 26 / 3));
-}
 function table(title, hint, targets, empty) {
-  const limit = tableLimit(targets.length, st.zoom && st.focus === "why", fitRows());
+  const limit = tableLimit(targets.length, st.zoom && st.focus === "why");
   const more = targets.length - limit;
   return [
     h("h3", null, title, hint && h("small", null, hint)),
@@ -762,7 +857,7 @@ function renderWhy() {
             h("span", { class: `chip ${f.level}` }, f.level),
             h("b", null, f.name),
             h("span", { class: "src" }, f.source + (f.original_level ? `, ${f.original_level} in its rule, moved by rules.toml` : "")),
-            f.row !== null && h("button", { class: "at", onclick: () => cursorToLine(f.row) }, `L${f.row}`)
+            f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row) }, `L${f.row}`)
           ),
           h("p", null, f.message)
         )
@@ -796,7 +891,13 @@ function renderBand() {
   const band = $("#band");
   const r = st.review;
   if (!r) {
-    return replace(band, h("span", { class: "mark" }, "ordo"), h("span", { class: "rev" }, rev), h("span", { class: "subject" }, st.status));
+    return replace(
+      band,
+      h("span", { class: "mark" }, "ordo"),
+      h("span", { class: "rev" }, rev),
+      h("span", { class: "subject" }, st.status),
+      st.empty && h("button", { class: "sig", onclick: () => act({ op: "reload" }) }, "read again")
+    );
   }
   const it = r.items[st.sel];
   const since = it?.delta ? SINCE[it.delta] : null;
@@ -810,6 +911,11 @@ function renderBand() {
     h("span", { class: "rev" }, r.rev),
     h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "uncommitted work" : "")),
     r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }) }, r.stale),
+    r.watch !== "off" && h(
+      "span",
+      { class: "sig", title: r.watch === "auto" ? "--watch=auto: read again once the working tree settles and you pause" : "--watch=hint: says when the working tree has moved on" },
+      r.watch === "auto" ? "watching, reloads" : "watching"
+    ),
     since && h("span", { class: "sig", title: since[1] }, h("span", { class: "glyph" }, since[0]), since[1].split(",")[0]),
     !r.delta.first_run && sinceCount > 0 && h(
       "button",
@@ -884,10 +990,19 @@ function showSheet(title, text) {
     )
   );
 }
+function dismissSheet() {
+  if ($("#overlay").dataset.kind === "config") {
+    act({ op: "config", do: "close" });
+    return true;
+  }
+  return closeSheet();
+}
 function closeSheet() {
   const ov = $("#overlay");
   if (ov.hidden) return false;
   ov.hidden = true;
+  delete ov.dataset.kind;
+  canvas = null;
   replace(ov);
   return true;
 }
@@ -932,6 +1047,7 @@ function renderAll() {
 }
 var paletteMode = "command";
 var paletteCur = 0;
+var palettePicked = false;
 function openPalette(mode, text = "") {
   paletteMode = mode;
   const form = $("#palette");
@@ -940,6 +1056,7 @@ function openPalette(mode, text = "") {
   const input = $("#palette-input");
   input.value = text;
   paletteCur = 0;
+  palettePicked = false;
   renderPalette();
   input.focus();
 }
@@ -991,7 +1108,8 @@ function renderPalette() {
   );
 }
 async function runPalette() {
-  const value = $("#palette-input").value;
+  const picked = palettePicked && candidates()[paletteCur];
+  const value = picked || $("#palette-input").value;
   closePalette();
   if (paletteMode === "search") return runSearch(value);
   const { name, arg } = parseCommand(value);
@@ -1001,16 +1119,22 @@ async function runPalette() {
     localStorage.setItem("ordo.theme", arg || "auto");
     return;
   }
-  await act({ op: "command", line_text: value });
+  const out = await act({ op: "command", line_text: value });
+  if (out && !out.error && name === "comment" && st.from !== null) {
+    st.from = null;
+    renderCode();
+  }
 }
-function runSearch(query) {
+function runSearch(query, forward = true) {
   if (!query) {
     st.search = null;
     return renderCode();
   }
   const q = query.toLowerCase();
   const hits = st.rows.flatMap((row, k2) => row.text.toLowerCase().includes(q) ? [k2] : []);
-  const k = Math.max(0, hits.findIndex((x) => x >= st.cursor));
+  const after = hits.findIndex((x) => x > st.cursor);
+  const at = hits.indexOf(st.cursor);
+  const k = forward ? Math.max(0, at >= 0 ? at : after) : Math.max(0, (after < 0 ? hits.length : after) - (at >= 0 ? 2 : 1));
   st.search = { query, hits, k };
   if (hits.length) st.cursor = hits[k];
   st.focus = "code";
@@ -1026,7 +1150,7 @@ function searchStep(by) {
   followCursor();
 }
 function page(by) {
-  const body = $("#code .body");
+  const body = $(`#${st.focus} .body`);
   body.scrollTop += by * body.clientHeight;
 }
 function run(action) {
@@ -1035,7 +1159,7 @@ function run(action) {
   const focus = st.focus;
   switch (action) {
     case "quit":
-      if (closeSheet()) return;
+      if (dismissSheet()) return;
       if (st.search) st.search = null;
       else if (st.from !== null) st.from = null;
       else if (st.zoom) st.zoom = false;
@@ -1055,8 +1179,10 @@ function run(action) {
     case "symbol-next":
     case "symbol-prev": {
       const it = r.items[st.sel];
-      const name = it.symbols[0] ?? it.enclosing;
-      if (name) runSearch(name);
+      const name = it?.symbols[0] ?? it?.enclosing;
+      const by = action === "symbol-next" ? 1 : -1;
+      if (name && st.search?.query === name) return searchStep(by);
+      if (name) runSearch(name, by > 0);
       return;
     }
     case "next":
@@ -1067,12 +1193,12 @@ function run(action) {
       return whyStep(by);
     }
     case "first":
-      if (focus === "list") return void select(stops()[0]);
+      if (focus === "list") return void (stops().length && select(stops()[0]));
       if (focus === "code") return moveCursor(-st.rows.length);
       $("#why .body").scrollTop = 0;
       return;
     case "last":
-      if (focus === "list") return void select(stops().at(-1));
+      if (focus === "list") return void (stops().length && select(stops().at(-1)));
       if (focus === "code") return moveCursor(st.rows.length);
       $("#why .body").scrollTop = 1e9;
       return;
@@ -1118,7 +1244,7 @@ function run(action) {
     case "fold-close-all":
     case "wave-next":
     case "wave-prev":
-      act({ op: "action", action }).then(() => select(st.review.sel));
+      act({ op: "action", action });
       return;
     case "jump-to-edge":
       if (focus === "why" && st.whyLinks[st.whyCur] !== void 0) jumpTo(st.whyLinks[st.whyCur]);
@@ -1147,6 +1273,15 @@ function run(action) {
     case "reload":
       act({ op: "reload" });
       return;
+    case "hover":
+      if (focus === "why" && st.whyLinks[st.whyCur] !== void 0) return void previewHunk(st.whyLinks[st.whyCur]);
+      act({ op: "hover", col: st.col ?? firstWordCol(st.rows[st.cursor]?.text ?? "") });
+      return;
+    case "open-editor":
+      return openEditor();
+    case "open-deps":
+    case "focus-deps":
+      return void openCanvas();
   }
 }
 function whyStep(by) {
@@ -1160,10 +1295,21 @@ function whyStep(by) {
   $("#why tr.cur")?.scrollIntoView({ block: "nearest" });
 }
 function onKey(e) {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") && t.id !== "palette-input") return;
+  if (t?.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
   const paletteOpen = !$("#palette").hidden;
   if (paletteOpen) return paletteKey(e);
   const key = keyLabel(e);
   if (!key) return;
+  if (key === "Enter" && canvas) {
+    e.preventDefault();
+    return void canvasKey("jump-to-edge");
+  }
+  if (key === "Esc" && $("#overlay").dataset.kind === "config") {
+    e.preventDefault();
+    return void dismissSheet();
+  }
   if (key === "Enter" && st.focus === "why" && st.whyCur >= 0) {
     e.preventDefault();
     return run("jump-to-edge");
@@ -1181,6 +1327,7 @@ function onKey(e) {
   }
   if ("act" in res) {
     e.preventDefault();
+    if (canvasKey(res.act)) return;
     return run(res.act);
   }
   if (pending) {
@@ -1203,13 +1350,151 @@ function paletteKey(e) {
       paletteCur = 0;
     } else {
       paletteCur = (paletteCur + (e.key === "ArrowDown" ? 1 : c.length - 1)) % c.length;
+      palettePicked = true;
     }
     return renderPalette();
   }
 }
+function excerpt(f, hunk, context, max) {
+  if (f.missing) return h("p", { class: "muted" }, "no text to show for this file");
+  const rows = codeRows(f);
+  const ks = rows.flatMap((r, k) => r.hunk === hunk ? [k] : []);
+  const from = Math.max(0, (ks[0] ?? 0) - context);
+  const to = Math.min(rows.length, Math.min((ks.at(-1) ?? 0) + context + 1, from + max));
+  return h(
+    "div",
+    { class: "code" },
+    rows.slice(from, to).map(
+      (row) => h(
+        "div",
+        { class: `l ${row.kind}${row.hunk !== null && row.hunk !== hunk ? " other" : ""}` },
+        h("span", { class: "g" }),
+        h("span", { class: "ln" }, row.kind === "del" ? "" : row.n),
+        h("span", { class: "op" }, row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "),
+        h("span", null, runs(row.text, row.spans, row.marks).map((run2) => h(run2.changed ? "mark" : "span", { class: run2.role ? `s-${run2.role}` : null }, run2.text)))
+      )
+    )
+  );
+}
+function hunkTitle(i) {
+  const t = st.review.items[i];
+  return `${t.symbols[0] ?? t.enclosing ?? t.symbol ?? basename(t.path)} \xB7 ${basename(t.path)}:${t.new[0]}`;
+}
+async function previewHunk(i) {
+  const t = st.review.items[i];
+  const f = await fileOf(t.path);
+  showSheet(hunkTitle(i), h("div", null, h("p", { class: "muted" }, t.rationale), h("div", { class: "src" }, excerpt(f, i, 2, 40))));
+}
+var canvas = null;
+async function openCanvas() {
+  const r = st.review;
+  const it = r.items[st.sel];
+  const cards = it.edges.filter((e) => e.target !== null && r.items[e.target]).map((e) => ({ i: e.target, needs: e.needs }));
+  if (!cards.length) return toast("nothing in this change needs this hunk, and it needs nothing");
+  canvas = { anchor: st.sel, cards, sel: 0 };
+  await renderCanvas();
+}
+async function renderCanvas() {
+  if (!canvas) return;
+  const c = canvas;
+  const files = await Promise.all([c.anchor, ...c.cards.map((k) => k.i)].map((i) => fileOf(st.review.items[i].path)));
+  if (canvas !== c) return;
+  const card = (k) => {
+    const { i } = c.cards[k];
+    return h(
+      "div",
+      { class: `card${k === c.sel ? " cur" : ""}`, onclick: () => goCanvas(k) },
+      h("header", null, hunkTitle(i), h("span", { class: "muted" }, st.review.items[i].rationale)),
+      excerpt(files[k + 1], i, 1, 14)
+    );
+  };
+  const side = (needs) => h(
+    "div",
+    { class: "side" },
+    h("h3", null, needs ? "needs \u2014 what this hunk uses" : "needed by \u2014 what uses this hunk"),
+    c.cards.map((x, k) => x.needs === needs ? card(k) : null)
+  );
+  showSheet(
+    `dependencies of ${hunkTitle(c.anchor)}`,
+    h(
+      "div",
+      { class: "canvas src" },
+      h("div", { class: "anchor" }, excerpt(files[0], c.anchor, 1, 16)),
+      h("div", { class: "sides" }, side(true), side(false))
+    )
+  );
+  $("#overlay").querySelector(".sheet")?.classList.add("wide");
+  $("#overlay .card.cur")?.scrollIntoView({ block: "nearest" });
+}
+function goCanvas(k) {
+  if (!canvas) return;
+  const target = canvas.cards[k].i;
+  canvas = null;
+  closeSheet();
+  jumpTo(target);
+}
+function canvasKey(action) {
+  if (!canvas) return false;
+  const n = canvas.cards.length;
+  if (action === "next" || action === "prev") {
+    canvas.sel = (canvas.sel + (action === "next" ? 1 : n - 1)) % n;
+    renderCanvas();
+  } else if (action === "jump-to-edge") {
+    goCanvas(canvas.sel);
+  } else if (action === "quit" || action === "open-deps" || action === "focus-deps") {
+    canvas = null;
+    closeSheet();
+  }
+  return true;
+}
+function renderConfig() {
+  const cfg = st.review?.config;
+  const ov = $("#overlay");
+  if (!cfg) {
+    if (ov.dataset.kind === "config") closeSheet();
+    return;
+  }
+  const step2 = (body2) => act({ op: "config", ...body2 });
+  const field = (f) => {
+    let control;
+    if (f.kind === "flag") {
+      control = h("input", { type: "checkbox", checked: f.value === true, onchange: () => step2({ do: "toggle", row: f.row }) });
+    } else if (f.kind === "choice") {
+      control = h(
+        "button",
+        { class: "choice", title: (f.options ?? []).join(" \xB7 "), onclick: () => step2({ do: "toggle", row: f.row }) },
+        String(f.value ?? "")
+      );
+    } else {
+      control = h("input", {
+        value: String(f.value ?? ""),
+        placeholder: "(terminal)",
+        onchange: (e) => step2({ do: "edit", row: f.row, text: e.target.value })
+      });
+    }
+    return h("tr", null, h("td", null, f.label), h("td", null, control), h("td", { class: "muted" }, f.help));
+  };
+  const body = h(
+    "div",
+    { class: "why config" },
+    cfg.sections.map((s) => [h("h3", null, s.title, h("small", null, s.file)), h("table", null, h("tbody", null, s.fields.map(field)))])
+  );
+  const top = ov.querySelector(".scroll")?.scrollTop ?? 0;
+  showSheet(cfg.dirty ? "settings \u2014 changed, not written" : "settings", body);
+  ov.dataset.kind = "config";
+  const header = ov.querySelector(".sheet > header");
+  header.insertBefore(h("button", { class: "write", disabled: !cfg.dirty, onclick: () => step2({ do: "write" }) }, "Write to files"), header.lastChild);
+  header.lastElementChild.addEventListener("click", () => step2({ do: "close" }));
+  ov.querySelector(".scroll").scrollTop = top;
+}
 function wireSplits() {
   const panes = $("#panes");
-  const saved = JSON.parse(localStorage.getItem("ordo.splits") ?? "null");
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem("ordo.splits") ?? "null");
+  } catch {
+    localStorage.removeItem("ordo.splits");
+  }
   if (saved) {
     panes.style.setProperty("--c0", saved[0]);
     panes.style.setProperty("--c2", saved[1]);
@@ -1229,7 +1514,7 @@ function wireSplits() {
         split.classList.remove("drag");
         split.removeEventListener("pointermove", move);
         localStorage.setItem("ordo.splits", JSON.stringify([panes.style.getPropertyValue("--c0") || "27%", panes.style.getPropertyValue("--c2") || "30%"]));
-        renderList();
+        if (st.review) renderList();
       };
       split.addEventListener("pointermove", move);
       split.addEventListener("pointerup", up, { once: true });
@@ -1254,11 +1539,12 @@ function wire() {
   });
   $("#palette-input").addEventListener("input", () => {
     paletteCur = 0;
+    palettePicked = false;
     renderPalette();
   });
   $("#palette-input").addEventListener("blur", () => setTimeout(() => form.hidden = true, 100));
   $("#overlay").addEventListener("mousedown", (e) => {
-    if (e.target === e.currentTarget) closeSheet();
+    if (e.target === e.currentTarget) dismissSheet();
   });
   window.addEventListener("resize", () => st.review && renderList());
   wireSplits();

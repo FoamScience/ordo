@@ -8,8 +8,9 @@ export interface Finding {
   name: string;
   message: string;
   level: Level;
-  row: number | null;
-  original_level: Level | null;
+  /** absent when the finding is about the file or the name, not a line */
+  row?: number;
+  original_level?: Level;
 }
 
 export interface Edge {
@@ -67,6 +68,8 @@ export interface Command {
 export interface Review {
   state: "ready";
   version: number;
+  /** bumped when the review is read again and its hunks renumbered */
+  generation: number;
   rev: string;
   subject: string | null;
   uncommitted: boolean;
@@ -91,6 +94,24 @@ export interface Review {
   sel: number;
   keys: Bind[];
   commands: Command[];
+  root: string;
+  editor: string | null;
+  config: Config | null;
+}
+
+export interface ConfigField {
+  row: number;
+  key: string;
+  label: string;
+  help: string;
+  kind: "flag" | "choice" | "text";
+  value: boolean | string | null;
+  options: string[] | null;
+}
+
+export interface Config {
+  sections: { title: string; file: string; fields: ConfigField[] }[];
+  dirty: boolean;
 }
 
 export type Slot =
@@ -129,7 +150,6 @@ export interface ItemFacts {
   i: number;
   cascade: number[];
   out_of_order: number[];
-  churn: string | null;
   line_churn: { commits: number; capped: boolean; last: { author: string; date: string } | null } | null;
   comments: LineComment[];
 }
@@ -141,6 +161,8 @@ export interface Popup {
 
 export interface ActResult {
   version: number;
+  generation?: number;
+  sel?: number;
   error?: string;
   popup?: Popup;
   notice?: string;

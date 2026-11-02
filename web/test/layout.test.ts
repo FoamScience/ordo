@@ -15,11 +15,9 @@ test("near the ends the list does not scroll past its first or last row", () => 
 });
 
 test("a why table shows three rows until the pane is maximised", () => {
-  assert.equal(tableLimit(10, false, 20), 3);
-  assert.equal(tableLimit(2, false, 20), 2);
-  assert.equal(tableLimit(10, true, 7), 7);
-  assert.equal(tableLimit(10, true, 40), 10);
-  assert.equal(tableLimit(10, true, 1), 3);
+  assert.equal(tableLimit(10, false), 3);
+  assert.equal(tableLimit(2, false), 2);
+  assert.equal(tableLimit(10, true), 10);
 });
 
 const file = (over: Partial<FileData>): FileData => ({
