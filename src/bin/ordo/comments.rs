@@ -94,6 +94,6 @@ pub(super) fn save_comments(path: &Path, comments: &[LineComment]) {
         return;
     }
     if let Ok(text) = serde_json::to_string(comments) {
-        let _ = std::fs::write(path, text);
+        let _ = crate::marks::write_atomic(path, &text);
     }
 }
