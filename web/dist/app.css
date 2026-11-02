@@ -39,7 +39,14 @@
   --syn-attribute: #e3a96b;
   --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Ubuntu, Cantarell, sans-serif;
-  --row: 22px;
+  /* one knob for every size: `:size` sets --ui (1 is the default) */
+  --ui: 1;
+  --fs-big: calc(17px * var(--ui));
+  --fs-body: calc(15px * var(--ui));
+  --fs-code: calc(14.5px * var(--ui));
+  --fs-small: calc(13.5px * var(--ui));
+  --fs-tiny: calc(13px * var(--ui));
+  --row: calc(26px * var(--ui));
 }
 
 @media (prefers-color-scheme: light) {
@@ -123,7 +130,7 @@ html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 13px/1.45 var(--sans);
+  font: var(--fs-body)/1.45 var(--sans);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
@@ -138,7 +145,7 @@ button { font: inherit; color: inherit; }
   align-items: center;
   gap: 18px;
   padding: 0 14px;
-  min-height: 40px;
+  min-height: calc(44px * var(--ui));
   background: var(--band-bg);
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
@@ -148,15 +155,15 @@ button { font: inherit; color: inherit; }
 #band .mark span { color: var(--accent); }
 #band .rev { font-family: var(--mono); color: var(--fg); }
 #band .subject { color: var(--dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
-#band .sig { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-family: var(--mono); font-size: 12px; }
+#band .sig { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-family: var(--mono); font-size: var(--fs-small); }
 #band .sig b { color: var(--fg); font-weight: 600; }
-#band .glyph { color: var(--accent); font-size: 14px; }
+#band .glyph { color: var(--accent); font-size: var(--fs-big); }
 #band button.sig { background: none; border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; cursor: pointer; }
 #band button.sig:hover, #band button.sig[aria-pressed="true"] { border-color: var(--line); background: var(--raise); }
 #band .stale { color: var(--accent); }
 .meter { width: 90px; height: 6px; border-radius: 3px; background: var(--raise); overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--reviewed); }
-.chip { font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 3px; color: var(--fg); }
+.chip { font-family: var(--mono); font-size: var(--fs-tiny); padding: 1px 7px; border-radius: 3px; color: var(--fg); }
 .chip.verdict { background: var(--verdict-strong-bg); }
 .chip.warn { background: var(--warn-strong-bg); }
 .chip.note { background: var(--note-strong-bg); }
@@ -174,14 +181,14 @@ button { font: inherit; color: inherit; }
 .pane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); }
 .pane > .head {
   display: flex; align-items: center; gap: 10px;
-  height: 30px; padding: 0 10px;
+  height: calc(34px * var(--ui)); padding: 0 10px;
   border-bottom: 1px solid var(--line);
   border-top: 2px solid transparent;
-  color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden;
+  color: var(--dim); font-size: var(--fs-small); white-space: nowrap; overflow: hidden;
 }
 .pane > .head .n {
   font-family: var(--mono); font-weight: 700;
-  min-width: 18px; height: 18px; display: inline-grid; place-items: center;
+  min-width: calc(20px * var(--ui)); height: calc(20px * var(--ui)); display: inline-grid; place-items: center;
   border-radius: 3px; background: var(--raise); color: var(--dim);
 }
 .pane > .head .t { color: var(--fg); font-weight: 600; }
@@ -204,7 +211,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 
 /* ---- list ---------------------------------------------------------- */
 
-#list .body { position: relative; font-family: var(--mono); font-size: 12.5px; }
+#list .body { position: relative; font-family: var(--mono); font-size: var(--fs-code); }
 .rows { position: relative; padding: 0 0 0 10px; }
 .rows::before {
   /* the reading thread: the order runs down this rail */
@@ -240,7 +247,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 
 /* ---- code ---------------------------------------------------------- */
 
-#code .body { position: relative; font-family: var(--mono); font-size: 12.5px; }
+#code .body { position: relative; font-family: var(--mono); font-size: var(--fs-code); }
 #code .caret { outline: 1px solid var(--accent); outline-offset: -1px; border-radius: 1px; }
 .code { min-width: max-content; padding-bottom: 40vh; }
 .l { display: grid; grid-template-columns: 2ch 6ch 2ch auto; height: var(--row); line-height: var(--row); white-space: pre; }
@@ -259,13 +266,13 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .l .hit { background: var(--match-bg); }
 .l .hit.now { outline: 1px solid var(--accent); }
 .l.commented .g::after { content: "✎"; }
-.fl { display: flex; gap: 1.2ch; align-items: baseline; padding: 2px 8px 2px 10ch; font-family: var(--sans); font-size: 12px; white-space: normal; }
+.fl { display: flex; gap: 1.2ch; align-items: baseline; padding: 2px 8px 2px 10ch; font-family: var(--sans); font-size: var(--fs-small); white-space: normal; }
 .fl b { white-space: nowrap; }
 .fl.verdict { background: var(--verdict-bg); }
 .fl.warn { background: var(--warn-bg); }
 .fl.note { background: var(--note-bg); }
-.fl b { font-family: var(--mono); font-size: 11.5px; }
-.cmt { padding: 2px 8px 2px 10ch; font-family: var(--sans); font-size: 12px; color: var(--accent); white-space: normal; }
+.fl b { font-family: var(--mono); font-size: var(--fs-tiny); }
+.cmt { padding: 2px 8px 2px 10ch; font-family: var(--sans); font-size: var(--fs-small); color: var(--accent); white-space: normal; }
 
 .s-comment { color: var(--syn-comment); font-style: italic; }
 .s-keyword { color: var(--syn-keyword); }
@@ -284,16 +291,16 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 
 #why .body { padding: 6px 14px 30px; }
 .why h3 {
-  margin: 14px 0 4px; font-size: 11.5px; font-weight: 600; color: var(--dim);
+  margin: 14px 0 4px; font-size: var(--fs-tiny); font-weight: 600; color: var(--dim);
   display: flex; gap: 8px; align-items: baseline;
 }
-.why h3 small { font-weight: 400; }
+.why h3 small { font-weight: 400; font-size: var(--fs-tiny); }
 .why p { margin: 2px 0; max-width: 72ch; }
-.why .what p:first-child { font-size: 14px; color: var(--fg); }
+.why .what p:first-child { font-size: var(--fs-big); color: var(--fg); }
 .why .detail { color: var(--accent); }
 .why .muted { color: var(--dim); }
 .why .warnline { color: var(--accent); }
-.why table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.why table { border-collapse: collapse; width: 100%; font-size: var(--fs-code); }
 .why td { padding: 3px 8px 3px 0; vertical-align: top; border-top: 1px solid var(--line); }
 .why td:first-child { font-family: var(--mono); white-space: nowrap; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
 .why td.loc { font-family: var(--mono); color: var(--dim); white-space: nowrap; }
@@ -303,15 +310,15 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .why .more { background: none; border: 0; color: var(--accent); padding: 4px 0; cursor: pointer; }
 .why .finding { margin: 8px 0; }
 .why .finding .h { display: flex; gap: 6px; align-items: center; }
-.why .finding .src { color: var(--dim); font-size: 12px; }
+.why .finding .src { color: var(--dim); font-size: var(--fs-small); }
 .why .finding p { margin: 3px 0 0 2px; white-space: pre-wrap; }
-.why .finding button.at { background: none; border: 0; color: var(--dim); cursor: pointer; font-family: var(--mono); font-size: 11.5px; }
+.why .finding button.at { background: none; border: 0; color: var(--dim); cursor: pointer; font-family: var(--mono); font-size: var(--fs-tiny); }
 
 /* ---- overlays ------------------------------------------------------ */
 
 #hints {
-  display: flex; gap: 16px; padding: 0 14px; height: 26px; align-items: center;
-  border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden;
+  display: flex; gap: 16px; padding: 0 14px; height: calc(30px * var(--ui)); align-items: center;
+  border-top: 1px solid var(--line); color: var(--dim); font-size: var(--fs-small); white-space: nowrap; overflow: hidden;
 }
 #hints kbd { font-family: var(--mono); color: var(--fg); background: var(--raise); padding: 0 5px; border-radius: 3px; margin-right: 5px; }
 #hints .notice { color: var(--accent); margin-left: auto; }
@@ -328,7 +335,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 }
 .sheet > header { padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600; display: flex; justify-content: space-between; }
 .sheet > header button { background: none; border: 0; color: var(--dim); cursor: pointer; }
-.sheet > pre { margin: 0; padding: 12px 14px; overflow: auto; font: 12.5px/1.5 var(--mono); }
+.sheet > pre { margin: 0; padding: 12px 14px; overflow: auto; font: var(--fs-code)/1.5 var(--mono); }
 .sheet > .scroll { overflow: auto; padding: 8px 14px 14px; }
 
 #palette {
@@ -340,7 +347,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 }
 #palette[hidden] { display: none; }
 #palette label { font-family: var(--mono); color: var(--accent); padding-left: 6px; }
-#palette input { font: 14px var(--mono); background: transparent; border: 0; color: var(--fg); outline: none; padding: 6px 2px; }
+#palette input { font: var(--fs-big) var(--mono); background: transparent; border: 0; color: var(--fg); outline: none; padding: 6px 2px; }
 #palette ul { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
 #palette li { display: grid; grid-template-columns: 22ch 1fr; gap: 10px; padding: 4px 8px; border-radius: 3px; cursor: pointer; }
 #palette li b { font-family: var(--mono); font-weight: 500; }
@@ -369,16 +376,16 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .canvas .anchor { border: 1px solid var(--focus); border-radius: 4px; overflow: auto; max-height: 34vh; }
 .canvas .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
 .canvas .side { overflow: auto; min-height: 0; }
-.canvas .side h3 { margin: 0 0 6px; font-size: 12px; color: var(--dim); font-weight: 600; }
+.canvas .side h3 { margin: 0 0 6px; font-size: var(--fs-small); color: var(--dim); font-weight: 600; }
 .card { border: 1px solid var(--line); border-radius: 4px; margin-bottom: 10px; overflow: hidden; cursor: pointer; }
 .card.cur { border-color: var(--focus); }
-.card header { display: flex; flex-direction: column; padding: 6px 10px; background: var(--band-bg); font-family: var(--mono); font-size: 12px; }
+.card header { display: flex; flex-direction: column; padding: 6px 10px; background: var(--band-bg); font-family: var(--mono); font-size: var(--fs-small); }
 .card header .muted { font-family: var(--sans); color: var(--dim); }
 .card .code { overflow: auto; }
-.sheet .src { font-family: var(--mono); font-size: 12.5px; }
+.sheet .src { font-family: var(--mono); font-size: var(--fs-code); }
 .config td { border-top: 1px solid var(--line); }
 .config td:first-child { font-family: var(--mono); }
-.config input:not([type]) { font: 12px var(--mono); background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; width: 16ch; }
-.config button.choice { font: 12px var(--mono); background: var(--raise); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; cursor: pointer; }
+.config input:not([type]) { font: var(--fs-small) var(--mono); background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; width: 16ch; }
+.config button.choice { font: var(--fs-small) var(--mono); background: var(--raise); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; cursor: pointer; }
 .sheet > header button.write { border: 1px solid var(--focus); color: var(--fg); border-radius: 3px; padding: 2px 10px; margin-left: auto; margin-right: 10px; }
 .sheet > header button.write[disabled] { opacity: 0.4; border-color: var(--line); }

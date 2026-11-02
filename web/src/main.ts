@@ -346,7 +346,7 @@ function renderList(): void {
 // ------------------------------------------------------------------ code
 
 function rowHeight(): number {
-  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 22;
+  return document.querySelector<HTMLElement>("#code .l")?.offsetHeight || 26;
 }
 
 /** Puts `row` three rows below the top of the code pane. */
@@ -897,6 +897,21 @@ function renderAll(): void {
 
 // ------------------------------------------------------------------ palette
 
+const SIZES: Record<string, number> = { small: 0.9, normal: 1, large: 1.15, larger: 1.3 };
+
+/** A `:size` argument as a scale factor: a name, a factor, or a percentage. */
+function sizeOf(arg: string): number | null {
+  const a = arg.trim();
+  if (!a) return 1;
+  if (a in SIZES) return SIZES[a];
+  const n = a.endsWith("%") ? parseFloat(a) / 100 : parseFloat(a);
+  return Number.isFinite(n) && n >= 0.6 && n <= 2.5 ? n : null;
+}
+
+function applySize(ui: number): void {
+  document.documentElement.style.setProperty("--ui", String(ui));
+}
+
 type PaletteMode = "command" | "search";
 let paletteMode: PaletteMode = "command";
 let paletteCur = 0;
@@ -931,6 +946,7 @@ function argCandidates(): Record<string, string[]> {
     yank: ["all"],
     send: ["all"],
     theme: ["auto", ...themeNames()],
+    size: Object.keys(SIZES),
     goto: [...new Set(r.items.map((i) => i.path))],
     filter: [...new Set(r.items.map((i) => i.path.replace(/[^/]*$/, "*")))],
   };
@@ -978,6 +994,13 @@ async function runPalette(): Promise<void> {
     applyTheme(arg || "auto");
     localStorage.setItem("ordo.theme", arg || "auto");
     return;
+  }
+  if (name === "size") {
+    const ui = sizeOf(arg);
+    if (ui === null) return toast(`:size takes ${Object.keys(SIZES).join(", ")} or a factor like 1.2`, true);
+    applySize(ui);
+    localStorage.setItem("ordo.size", String(ui));
+    return renderAll();
   }
   const out = await act({ op: "command", line_text: value });
   if (out && !out.error && name === "comment" && st.from !== null) {
@@ -1491,6 +1514,7 @@ function wire(): void {
 async function boot(): Promise<void> {
   wire();
   renderAll();
+  applySize(Number(localStorage.getItem("ordo.size")) || 1);
   loadThemes(api).then(() => applyTheme(localStorage.getItem("ordo.theme") ?? "auto"));
   await refresh();
 }

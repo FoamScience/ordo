@@ -41,7 +41,8 @@ export function themeNames(): string[] {
 
 export function applyTheme(name: string): void {
   const root = document.documentElement;
-  for (const p of [...root.style]) if (p.startsWith("--")) root.style.removeProperty(p);
+  // a theme owns the colours; `--ui` is the size, which `:size` owns
+  for (const p of [...root.style]) if (p.startsWith("--") && p !== "--ui") root.style.removeProperty(p);
   root.removeAttribute("data-base");
   const t = themes[name];
   if (!t || name === "auto") return;

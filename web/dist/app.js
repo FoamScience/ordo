@@ -270,7 +270,8 @@ function parseCommand(line) {
   return sp < 0 ? { name: t, arg: "" } : { name: t.slice(0, sp), arg: t.slice(sp + 1).trim() };
 }
 var CLIENT_COMMANDS = [
-  { name: "theme", args: "<name>", help: "switch the colour theme (auto follows the system)" }
+  { name: "theme", args: "<name>", help: "switch the colour theme (auto follows the system)" },
+  { name: "size", args: "<small|normal|large|larger|factor>", help: "make the text and rows bigger or smaller, for this browser" }
 ];
 function complete(input, commands, args) {
   const t = input.replace(/^:/, "");
@@ -314,7 +315,7 @@ function themeNames() {
 }
 function applyTheme(name) {
   const root = document.documentElement;
-  for (const p of [...root.style]) if (p.startsWith("--")) root.style.removeProperty(p);
+  for (const p of [...root.style]) if (p.startsWith("--") && p !== "--ui") root.style.removeProperty(p);
   root.removeAttribute("data-base");
   const t = themes[name];
   if (!t || name === "auto") return;
@@ -617,7 +618,7 @@ function renderList() {
   }
 }
 function rowHeight() {
-  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 22;
+  return document.querySelector("#code .l")?.offsetHeight || 26;
 }
 function scrollCodeTo(row, force) {
   if (!force) return;
@@ -1106,6 +1107,17 @@ function renderAll() {
   renderWhy();
   renderHints();
 }
+var SIZES = { small: 0.9, normal: 1, large: 1.15, larger: 1.3 };
+function sizeOf(arg) {
+  const a = arg.trim();
+  if (!a) return 1;
+  if (a in SIZES) return SIZES[a];
+  const n = a.endsWith("%") ? parseFloat(a) / 100 : parseFloat(a);
+  return Number.isFinite(n) && n >= 0.6 && n <= 2.5 ? n : null;
+}
+function applySize(ui) {
+  document.documentElement.style.setProperty("--ui", String(ui));
+}
 var paletteMode = "command";
 var paletteCur = 0;
 var palettePicked = false;
@@ -1135,6 +1147,7 @@ function argCandidates() {
     yank: ["all"],
     send: ["all"],
     theme: ["auto", ...themeNames()],
+    size: Object.keys(SIZES),
     goto: [...new Set(r.items.map((i) => i.path))],
     filter: [...new Set(r.items.map((i) => i.path.replace(/[^/]*$/, "*")))]
   };
@@ -1179,6 +1192,13 @@ async function runPalette() {
     applyTheme(arg || "auto");
     localStorage.setItem("ordo.theme", arg || "auto");
     return;
+  }
+  if (name === "size") {
+    const ui = sizeOf(arg);
+    if (ui === null) return toast(`:size takes ${Object.keys(SIZES).join(", ")} or a factor like 1.2`, true);
+    applySize(ui);
+    localStorage.setItem("ordo.size", String(ui));
+    return renderAll();
   }
   const out = await act({ op: "command", line_text: value });
   if (out && !out.error && name === "comment" && st.from !== null) {
@@ -1651,6 +1671,7 @@ function wire() {
 async function boot() {
   wire();
   renderAll();
+  applySize(Number(localStorage.getItem("ordo.size")) || 1);
   loadThemes(api).then(() => applyTheme(localStorage.getItem("ordo.theme") ?? "auto"));
   await refresh();
 }
