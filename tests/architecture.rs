@@ -65,6 +65,12 @@ fn every_client_module_opens_with_its_banner() {
     let mut checked = 0;
     for entry in std::fs::read_dir(&dir).expect("src/bin/ordo") {
         let path = entry.expect("entry").path();
+        // a module with submodules of its own is a directory, opened by its mod.rs
+        let path = if path.join("mod.rs").exists() {
+            path.join("mod.rs")
+        } else {
+            path
+        };
         if path.extension().is_none_or(|e| e != "rs") || path.ends_with("main.rs") {
             continue;
         }

@@ -2200,7 +2200,7 @@ pub(super) fn out_of_order_labels(app: &App, i: usize) -> Vec<String> {
 /// Dependencies of item `i` that are part of this review but not yet reviewed
 /// — the hunks defining what `i` uses. Marking `i` reviewed while any of these
 /// are outstanding means a call was approved before its callee.
-fn unreviewed_deps(app: &App, i: usize) -> Vec<usize> {
+pub(super) fn unreviewed_deps(app: &App, i: usize) -> Vec<usize> {
     app.items[i]
         .edges
         .iter()
