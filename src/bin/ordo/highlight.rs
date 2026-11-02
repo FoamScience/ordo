@@ -341,9 +341,22 @@ fn ensure_hl_cfg(
     true
 }
 
+pub(super) type RoleSpans = Vec<(String, Role)>;
+
 // Syntax-highlight `src` into per-line colored segments. None when the language
 // is unsupported or the grammar/query fails to build → caller renders plain.
 pub(super) fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>> {
+    Some(
+        highlight_roles(path, src)?
+            .into_iter()
+            .map(|line| line.into_iter().map(|(t, r)| (t, syn.of(r))).collect())
+            .collect(),
+    )
+}
+
+/// Per-line segments tagged with what they mean rather than a colour, for a
+/// client that paints with its own palette (the web reviewer's CSS).
+pub(super) fn highlight_roles(path: &str, src: &str) -> Option<Vec<RoleSpans>> {
     let (language, query) = highlight_spec(path)?;
     let names: Vec<&str> = HL.iter().map(|(n, _)| *n).collect();
     let is_markdown = matches!(path.rsplit('.').next(), Some("md" | "markdown"));
@@ -373,7 +386,7 @@ pub(super) fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<
             })
             .ok()?;
 
-        spans_per_line(events, src, syn)
+        spans_per_line(events, src)
     })
 }
 
@@ -422,21 +435,20 @@ fn markdown_layers(
 fn spans_per_line(
     events: impl Iterator<Item = Result<HighlightEvent, tree_sitter_highlight::Error>>,
     src: &str,
-    syn: &Syntax,
-) -> Option<Vec<LineSpans>> {
-    let mut lines: Vec<LineSpans> = vec![vec![]];
-    let mut stack: Vec<Color> = vec![];
+) -> Option<Vec<RoleSpans>> {
+    let mut lines: Vec<RoleSpans> = vec![vec![]];
+    let mut stack: Vec<Role> = vec![];
     for ev in events {
         match ev.ok()? {
             HighlightEvent::HighlightStart(h) => {
-                stack.push(HL.get(h.0).map(|(_, r)| syn.of(*r)).unwrap_or(syn.variable));
+                stack.push(HL.get(h.0).map(|(_, r)| *r).unwrap_or(Role::Variable));
             }
             HighlightEvent::HighlightEnd => {
                 stack.pop();
             }
             HighlightEvent::Source { start, end } => {
-                let color = stack.last().copied().unwrap_or(syn.variable);
-                push_source(&mut lines, src.get(start..end).unwrap_or(""), color);
+                let role = stack.last().copied().unwrap_or(Role::Variable);
+                push_source(&mut lines, src.get(start..end).unwrap_or(""), role);
             }
         }
     }
@@ -445,14 +457,14 @@ fn spans_per_line(
 
 /// One highlighted run of source onto the current line — `lines` always
 /// holds one — and a new line per newline in it.
-fn push_source(lines: &mut Vec<LineSpans>, text: &str, color: Color) {
+fn push_source(lines: &mut Vec<RoleSpans>, text: &str, role: Role) {
     for (i, piece) in text.split('\n').enumerate() {
         if i > 0 {
             lines.push(vec![]);
         }
         if !piece.is_empty() {
             let current = lines.last_mut().expect("a current line");
-            current.push((piece.to_string(), color));
+            current.push((piece.to_string(), role));
         }
     }
 }
