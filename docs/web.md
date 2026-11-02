@@ -8,8 +8,8 @@ ordo web main...feature --no-open  # print the URL instead
 ordo web HEAD --port 4780          # a fixed port (default: any free one)
 ```
 
-Every option the terminal reviewer takes — `--watch`, `--no-catalog`,
-`--theme`, the globs — means the same here. `ordo <rev>` without `web` is
+The terminal reviewer's options — `--watch`, `--no-catalog`, the globs — mean
+the same here; the page's colours are its own (see `:theme` below). `ordo <rev>` without `web` is
 still the terminal reviewer.
 
 The server is the review: Rust reads the diff, orders it, and builds the view
@@ -30,38 +30,54 @@ open a second tab from the URL the server printed, not from the address bar.
 ## Layout
 
 ```text
-┌ band: rev · subject · coverage · ✦◐⇅ since · stale · findings ───────────┐
-│ list              │ code                          │ why                   │
-│ (reading order)   │ (the hunk, from its first row)│ (what, grouped by,    │
-│                   │                               │  needs, cascade, …)   │
-└───────────────────┴───────────────────────────────┴───────────────────────┘
+┌ ordo  rev  subject           ● verdicts  ● notes  ▬▬▬ 34 of 608 read  Keys ┐
+│ Reading order   │ Hunk 37 of 608   path:line           │ Why it is here    │
+│ ○ file.py       │ Edits the comment in _back_rz        │ Needs             │
+│ ●  ╮            │ Grouped by …                         │ Needed by         │
+│ ◉ ─┤            │ ┌ the file, opened at the hunk ────┐ │ If you reject it  │
+│ ○  │            │ │                                  │ │ Findings          │
+│ ○ ─╯            │ └──────────────────────────────────┘ │ Test coverage     │
+│                 │ [Mark as read x]  Next …             │ History           │
+└─────────────────┴──────────────────────────────────────┴───────────────────┘
 ```
 
-The **band** holds what used to scroll away in the why pane:
+The page is set in Literata and IBM Plex Mono, both compiled into the binary,
+so it reads the same offline. It follows the system's light or dark setting.
 
-| Glyph | Meaning |
+The **reading order** on the left is every hunk on one thread, grouped by file:
+a hollow dot is unread, a filled one read, a red or amber ring a finding. The
+selected hunk stays centred unless the thread runs out above or below it, and
+its dependencies are drawn as arcs off the thread — solid to what it needs,
+dashed to what needs it.
+
+The **reading column** in the middle is one hunk: where it is, what it does in
+a sentence with its names set as code, what it is grouped by, and the file
+opened at the hunk's first row with three rows above. Below the code, *Mark as
+read* (`x`) marks it and moves on, and *Next* names the hunk that follows.
+
+The **margin** on the right says why the hunk is here: what it needs, what
+needs it, and what rejecting it would strand — three of each, every one once
+the column is maximised (press its number, `3`, again, or the button in its
+corner) — then its findings (with none, which rules were checked), test
+coverage, and how often the file and these lines changed before.
+
+The header carries the review's state:
+
+| Mark | Meaning |
 | --- | --- |
 | ✦ | new since you last looked |
 | ◐ | changed since you last looked |
 | ⇅ | unchanged, but it reads in a different place now — its dependencies moved |
 
-The `◐ n since last look` button filters the list to those hunks; a first
-review compares against nothing, so it shows no count. The band also shows the
-selected hunk's churn (fetched in the background) and, when `--watch` is on,
-that it is watching. A review with nothing in it offers to read again rather
-than quitting.
+The *n changed since your last look* button narrows the reading order to those
+hunks; a first review compares against nothing, so it shows no count. The
+header also says when `--watch` is on and when the working tree has moved on
+since the review was read. A review with nothing in it offers to read again
+rather than quitting.
 
-The **list** keeps the selected hunk centred unless the list runs out above or
-below it. The **code** pane opens at the hunk's first row with three rows of
-context above it. The **why** pane lists `what` the hunk does, what it is
-`grouped by`, and its dependency tables — what it needs, what needs it, and
-what rejecting it would strand — each capped at three rows. Maximise the pane
-(press its number, `3`, again, or the button in its header) and they show
-every row. Findings follow in full; with none, the pane says which rules were
-checked.
-
-Panes resize by dragging the separators. Below 1100px wide they stack. `gD`
-opens the dependency canvas as an overlay.
+Columns resize by dragging the rules between them. Below 1100px wide they
+stack, the reading column first. `gD` opens the dependency canvas as an
+overlay.
 
 ## Keys and commands
 
@@ -78,12 +94,10 @@ terminal key do nothing here:
 `:` opens the command palette with every command the terminal's bar takes,
 except `:quickfix` (the list is already here); `:e <rev>` moves the tab to
 another revision, and `:yank` copies the hand-back prompt to the clipboard.
-`:theme <name>` switches the colour theme for this tab, and `:size` makes the
-text and rows bigger or smaller (`small`, `normal`, `large`, `larger`, or a
-factor such as `1.2`); both stick in this browser.
-
-Themes are the terminal's, with `tui.toml`'s `[theme]` colours applied. With no
-theme chosen the page follows the browser's light or dark preference.
+`:theme <name>` lays one of the terminal's colour themes, with `tui.toml`'s
+`[theme]` colours applied, over the page; `:theme auto` goes back to the page's
+own. `:size` makes the text and rows bigger or smaller (`small`, `normal`,
+`large`, `larger`, or a factor such as `1.2`). Both stick in this browser.
 
 `ge` opens the hunk at the cursor line in an editor, chosen by
 `ORDO_WEB_EDITOR`:
