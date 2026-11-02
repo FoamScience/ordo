@@ -3652,7 +3652,7 @@ fn notes_round_trip_through_the_cache_file() {
     let path = dir.join("n.json");
     let mut notes = HashMap::new();
     notes.insert(42u64, "check the retry path".to_string());
-    save_notes(&path, &notes);
+    save_notes(&path, &notes).unwrap();
     assert_eq!(load_notes(&path), notes);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3829,7 +3829,7 @@ fn a_save_never_leaves_the_file_half_written() {
     let path = dir.join("m.json");
     let mut marks: HashMap<u64, u64> = HashMap::new();
     marks.insert(7, 1234);
-    save_marks(&path, &marks);
+    save_marks(&path, &marks).unwrap();
     assert_eq!(load_marks(&path), marks);
     // the temporary is renamed, never left behind
     let strays: Vec<_> = std::fs::read_dir(&dir)
@@ -3839,6 +3839,19 @@ fn a_save_never_leaves_the_file_half_written() {
         .filter(|n| n.ends_with(".tmp"))
         .collect();
     assert!(strays.is_empty(), "{strays:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_mark_that_cannot_be_written_says_so() {
+    // a file where the directory should be: nothing can be written under it
+    let dir = std::env::temp_dir().join(format!("ordo-unwritable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, "").unwrap();
+    let marks: HashMap<u64, u64> = HashMap::from([(7, 1)]);
+    assert!(save_marks(&blocker.join("m.json"), &marks).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3863,7 +3876,7 @@ fn save_marks_then_load_marks_round_trips() {
     let mut marks: HashMap<u64, u64> = HashMap::new();
     marks.insert(0xdeadbeef, 123);
     marks.insert(0x1, 456);
-    save_marks(&path, &marks);
+    save_marks(&path, &marks).unwrap();
     let got = load_marks(&path);
     assert_eq!(got, marks);
 

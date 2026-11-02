@@ -1212,7 +1212,8 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     let mut notes = notes_path.as_deref().map(load_notes).unwrap_or_default();
     if migrate_notes(&out.ledger, &items, &mut notes) {
         if let Some(p) = notes_path.as_deref() {
-            save_notes(p, &notes);
+            // the carried notes are in memory either way; the next note written retries
+            let _ = save_notes(p, &notes);
         }
     }
     let comments_path = notes_path.as_deref().and_then(comments_file_path);
@@ -3176,7 +3177,9 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
         Action::ToggleReviewed => {
             let i = app.sel;
             app.reviewed[i] = !app.reviewed[i];
-            persist_mark(app, i);
+            if let Err(e) = persist_mark(app, i) {
+                app.notice = Some(e);
+            }
             let pos = view_pos(&app.view, i);
             if pos + 1 < app.view.len() {
                 select(app, app.view[pos + 1]);
@@ -3278,10 +3281,10 @@ fn apply_anywhere(app: &mut App, a: Action) -> bool {
 /// panic or a killed terminal never loses the session's marks. A no-op when
 /// the item's content isn't loaded or `marks_path` never resolved (see
 /// `mark_key`/`marks_file_path`); the checkmark still holds for this session
-/// either way, only the write is skipped.
-fn persist_mark(app: &mut App, i: usize) {
+/// either way, and a write that fails says so.
+fn persist_mark(app: &mut App, i: usize) -> Result<(), String> {
     let Some(key) = mark_key(&app.rev, &app.items[i], &app.sources) else {
-        return;
+        return Ok(());
     };
     // another reviewer of this repository — a browser tab, a second terminal —
     // may have written since this one loaded: merge into what is on disk
@@ -3295,10 +3298,11 @@ fn persist_mark(app: &mut App, i: usize) {
         app.marks.remove(&key);
     }
     let Some(path) = app.marks_path.clone() else {
-        return;
+        return Ok(());
     };
     prune_marks(&mut app.marks, now_unix());
-    save_marks(&path, &app.marks);
+    save_marks(&path, &app.marks)
+        .map_err(|e| format!("the mark holds for this session, but was not written: {e}"))
 }
 
 /// Read the marks file again and mark every hunk it has a key for as it

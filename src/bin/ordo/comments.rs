@@ -88,12 +88,6 @@ pub(super) fn load_comments(path: &Path) -> Vec<LineComment> {
         .unwrap_or_default()
 }
 
-pub(super) fn save_comments(path: &Path, comments: &[LineComment]) {
-    let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    if let Ok(text) = serde_json::to_string(comments) {
-        let _ = crate::marks::write_atomic(path, &text);
-    }
+pub(super) fn save_comments(path: &Path, comments: &[LineComment]) -> std::io::Result<()> {
+    crate::marks::write_atomic(path, &serde_json::to_string(comments)?)
 }
