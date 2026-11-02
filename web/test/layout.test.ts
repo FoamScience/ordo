@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { byChars, centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove } from "../src/layout.ts";
+import { byChars, centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove } from "../src/layout.ts";
 import type { FileData } from "../src/types.ts";
 import type { CodeRow } from "../src/layout.ts";
 
@@ -134,4 +134,26 @@ test("lines the refiner left whole are diffed by character when most survived", 
   assert.deepEqual(rows.map((r) => r.kind), ["edit"]);
   // two lines that share little stay apart
   assert.equal(byChars("return compute(a)", "raise ValueError('no')"), null);
+});
+
+test("the word under the pointer is the whole identifier, and only an identifier", () => {
+  assert.deepEqual(wordAt("x = side_room(rows)", 7), { word: "side_room", start: 4 });
+  assert.deepEqual(wordAt("x = side_room(rows)", 4), { word: "side_room", start: 4 });
+  assert.equal(wordAt("x = side_room(rows)", 13), null);
+  assert.equal(wordAt("n = 42", 4), null);
+});
+
+test("the strip marks runs of changed rows, then what sits on the lines", () => {
+  const row = (kind: "ctx" | "add" | "del", n: number, hunk: number | null): CodeRow =>
+    kind === "del"
+      ? { kind, o: n, text: "", spans: null, hunk: hunk!, marks: null }
+      : { kind, n, text: "", spans: null, hunk, marks: null };
+  const rows = [row("ctx", 1, null), row("del", 2, 0), row("add", 2, 0), row("add", 3, 0), row("ctx", 4, null), row("add", 5, 1)];
+  assert.deepEqual(stripMarks(rows, 0, new Map([[3, "warn"]]), new Set([4, 5]), [0]), [
+    { kind: "mine", from: 1, to: 3 },
+    { kind: "other", from: 5, to: 5 },
+    { kind: "warn", from: 3, to: 3 },
+    { kind: "comment", from: 4, to: 5 },
+    { kind: "hit", from: 0, to: 0 },
+  ]);
 });

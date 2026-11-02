@@ -274,3 +274,61 @@ export function wordMove(lines: string[], at: Caret, kind: "next" | "prev" | "en
   while (i + 1 < chars.length && cls(i + 1) === c) i++;
   return caretAt(lines, starts, i);
 }
+
+/** The identifier holding column `col` of `text`, with the column it starts at. */
+export function wordAt(text: string, col: number): { word: string; start: number } | null {
+  const cs = [...text];
+  const isWord = (c: string | undefined) => !!c && /\w/.test(c);
+  if (!isWord(cs[col])) return null;
+  let a = col;
+  while (isWord(cs[a - 1])) a--;
+  let b = col;
+  while (isWord(cs[b + 1])) b++;
+  const word = cs.slice(a, b + 1).join("");
+  return /^[A-Za-z_]/.test(word) ? { word, start: a } : null;
+}
+
+export type StripKind = "mine" | "other" | "verdict" | "warn" | "comment" | "hit";
+
+/** A run of rows that one mark covers in the strip beside the code. */
+export interface StripMark {
+  kind: StripKind;
+  from: number;
+  to: number;
+}
+
+/**
+ * What the strip beside the code marks, as runs of row indexes: the selected
+ * hunk's changes, other hunks' changes, then findings, comments and search hits
+ * on the lines that carry them.
+ */
+export function stripMarks(
+  rows: CodeRow[],
+  sel: number,
+  findings: Map<number, "verdict" | "warn">,
+  comments: Set<number>,
+  hits: number[],
+): StripMark[] {
+  const out: StripMark[] = [];
+  const last = new Map<StripKind, StripMark>();
+  const add = (kind: StripKind, k: number) => {
+    const m = last.get(kind);
+    if (m && m.to === k - 1) m.to = k;
+    else {
+      const next = { kind, from: k, to: k };
+      out.push(next);
+      last.set(kind, next);
+    }
+  };
+  rows.forEach((row, k) => {
+    if (row.kind !== "ctx" && row.hunk !== null) add(row.hunk === sel ? "mine" : "other", k);
+  });
+  rows.forEach((row, k) => {
+    if (row.kind === "del") return;
+    const level = findings.get(row.n);
+    if (level) add(level, k);
+    if (comments.has(row.n)) add("comment", k);
+  });
+  for (const k of hits) add("hit", k);
+  return out;
+}

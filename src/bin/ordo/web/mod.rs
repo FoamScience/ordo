@@ -610,7 +610,10 @@ impl Hub {
             }
             "hover" => {
                 app.cursor.col = int("col").unwrap_or(0);
-                hover(app);
+                hover(
+                    app,
+                    body.get("brief").and_then(|v| v.as_bool()) == Some(true),
+                );
                 if let Some(p) = app.popup.take() {
                     extra.insert("popup".into(), view::popup(&p));
                 }

@@ -75,6 +75,11 @@ header also says when `--watch` is on and when the working tree has moved on
 since the review was read. A review with nothing in it offers to read again
 rather than quitting.
 
+A thin strip down the right of the code maps the whole file: the hunk being
+read in blue, other hunks in grey, and beside them verdicts, warnings, line
+comments and search hits. The outlined box is the part in view; click or
+drag on the strip to go elsewhere.
+
 Columns resize by dragging the rules between them. Below 1100px wide they
 stack, the reading column first. `gD` opens the dependency canvas as an
 overlay: the hunk, what it needs and what needs it, one step each way.
@@ -91,7 +96,10 @@ on another hunk redraws the chain around it.
 The keymap is the terminal's — the `vim` preset, with `tui.toml`'s `[binds]`
 on top; `ordo help tui` has the table. The mouse selects hunks and code lines.
 The column motions (`h` `l` `w` `b` `e` `0` `$`), or a click on a name, put a
-caret in the code line, and `K` looks up the name under it. Two kinds of
+caret in the code line, and `K` looks up the name under it. Resting the
+pointer on a name shows the same lookup without its history, and lists the
+other hunks in the review that declare the name or change its body; a click
+on one reads it. Two kinds of
 terminal key do nothing here:
 
 - the `Ctrl-w` chords, which a browser keeps for closing the tab — `1` `2` `3`
