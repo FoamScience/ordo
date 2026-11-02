@@ -1,0 +1,64 @@
+[
+  {
+    "edges": [
+      {
+        "label": "helper  app.py:L1",
+        "needs": false,
+        "target": 1
+      },
+      {
+        "label": "helper  app.py:L5",
+        "needs": false,
+        "target": 2
+      }
+    ],
+    "grouped_by": "helper — added, used by 1 hunk",
+    "new": [
+      1,
+      2
+    ],
+    "noise": false,
+    "path": "util.py",
+    "what": [
+      "adds helper, used in app.py"
+    ]
+  },
+  {
+    "edges": [
+      {
+        "label": "helper  util.py:L1",
+        "needs": true,
+        "target": 0
+      }
+    ],
+    "grouped_by": "same scope: imports",
+    "new": [
+      1,
+      3
+    ],
+    "noise": true,
+    "path": "app.py",
+    "what": [
+      "adds import helper"
+    ]
+  },
+  {
+    "edges": [
+      {
+        "label": "helper  util.py:L1",
+        "needs": true,
+        "target": 0
+      }
+    ],
+    "grouped_by": "main — body",
+    "new": [
+      5,
+      5
+    ],
+    "noise": false,
+    "path": "app.py",
+    "what": [
+      "uses helper, added in util.py"
+    ]
+  }
+]
