@@ -3824,6 +3824,7 @@ function parseCommand(line) {
 var CLIENT_COMMANDS = [
   { name: "theme", args: "<name>", help: "switch the colour theme (auto follows the system)" },
   { name: "map", args: "", help: "the hunk's whole chain: what it stands on to its left, what rejecting it strands to its right" },
+  { name: "summary", args: "", help: "the review on one page: progress, what you wrote, what ordo flagged; again to go back" },
   { name: "size", args: "<small|normal|large|larger|factor>", help: "make the text and rows bigger or smaller, for this browser" }
 ];
 function complete(input, commands, args) {
@@ -3835,6 +3836,58 @@ function complete(input, commands, args) {
   const name = t.slice(0, sp);
   const typed = t.slice(sp + 1);
   return (args[name] ?? []).filter((a) => a.startsWith(typed)).map((a) => `${name} ${a}`);
+}
+
+// src/summary.ts
+function files(r) {
+  const by = /* @__PURE__ */ new Map();
+  for (const i of r.view) {
+    const it2 = r.items[i];
+    const f = by.get(it2.path) ?? { path: it2.path, hunks: [], read: 0, comments: 0, levels: {} };
+    f.hunks.push(i);
+    if (it2.reviewed) f.read++;
+    for (const x of it2.findings) f.levels[x.level] = (f.levels[x.level] ?? 0) + 1;
+    by.set(it2.path, f);
+  }
+  for (const c of r.comments) {
+    const f = by.get(c.path);
+    if (f) f.comments++;
+  }
+  return [...by.values()];
+}
+function hunkAt(r, path, line) {
+  let best = null;
+  for (const i of r.view) {
+    const it2 = r.items[i];
+    if (it2.path !== path) continue;
+    if (it2.new[0] <= line && line <= it2.new[1]) return i;
+    if (it2.new[0] <= line && (best === null || it2.new[0] > r.items[best].new[0])) best = i;
+  }
+  return best;
+}
+function written(r) {
+  const out = [];
+  const pos = new Map(r.view.map((i, k) => [i, k]));
+  const fileAt = /* @__PURE__ */ new Map();
+  for (const i of r.view) if (!fileAt.has(r.items[i].path)) fileAt.set(r.items[i].path, pos.get(i));
+  const seen = /* @__PURE__ */ new Set();
+  for (const i of r.view) {
+    const it2 = r.items[i];
+    const key = `${it2.symbol ?? it2.symbols[0] ?? i}\0${it2.note}`;
+    if (!it2.note || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ at: [fileAt.get(it2.path), it2.new[0]], w: { kind: "note", i, text: it2.note } });
+  }
+  for (const c of r.comments) {
+    const file = fileAt.get(c.path);
+    if (file === void 0) continue;
+    out.push({ at: [file, c.start], w: { kind: "comment", i: hunkAt(r, c.path, c.start), comment: c } });
+  }
+  return out.sort((a, b) => a.at[0] - b.at[0] || a.at[1] - b.at[1]).map((x) => x.w);
+}
+function flagged(r, levels) {
+  const out = r.view.flatMap((i) => r.items[i].findings.filter((f) => levels.includes(f.level)).map((f) => ({ i, f })));
+  return out.sort((a, b) => levels.indexOf(a.f.level) - levels.indexOf(b.f.level));
 }
 
 // src/theme.ts
@@ -3915,7 +3968,9 @@ var st2 = {
   col: null,
   whyLinks: [],
   whyCur: -1,
-  notice: ""
+  notice: "",
+  /** the one-page summary stands in for the columns */
+  summary: false
 };
 var refreshSeq = 0;
 var selectSeq = 0;
@@ -4673,14 +4728,136 @@ function renderBand() {
       )
     ),
     h(
-      "span",
-      { class: "sig", title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read` },
+      "button",
+      {
+        class: "sig",
+        "aria-pressed": st2.summary ? "true" : "false",
+        title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read. The review on one page (:summary).`,
+        onclick: () => toggleSummary()
+      },
       h("span", { class: "meter" }, h("i", { style: `width:${r.coverage.total ? 100 * r.coverage.done / r.coverage.total : 0}%` })),
       h("b", null, r.coverage.done),
       `of ${r.coverage.total} read`
     ),
     help
   );
+}
+function toggleSummary() {
+  st2.summary = !st2.summary;
+  renderAll();
+  if (st2.summary) $("#summary").focus();
+}
+function summaryKey(action) {
+  const page2 = $("#summary");
+  const by = { next: 60, prev: -60, "half-down": 0.5, "half-up": -0.5, "page-down": 1, "page-up": -1 };
+  if (action in by) {
+    page2.scrollTop += Math.abs(by[action]) < 2 ? by[action] * page2.clientHeight : by[action];
+  } else if (action === "first" || action === "last") {
+    page2.scrollTop = action === "first" ? 0 : page2.scrollHeight;
+  } else if (action === "quit") {
+    if (!dismissSheet()) toggleSummary();
+  } else {
+    return !["command", "command-goto", "help", "reload"].includes(action);
+  }
+  return true;
+}
+function readFromSummary(i) {
+  st2.summary = false;
+  jumpTo(i);
+}
+function renderSummary() {
+  const r = st2.review;
+  const page2 = $("#summary");
+  const keep = page2.scrollTop;
+  const fl = files(r);
+  const notes = written(r);
+  const serious = flagged(r, ["verdict", "warn"]);
+  const n = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const at2 = (path, line, end) => `${path}:${line}${end && end > line ? `\u2013${end}` : ""}`;
+  const link = (i, label) => i === null ? h("span", { class: "at" }, label) : h("button", { class: "at", title: "Read this hunk", onclick: () => readFromSummary(i) }, label);
+  const nComments = notes.filter((w) => w.kind === "comment").length;
+  const nNotes = notes.length - nComments;
+  const unreadFiles = fl.filter((f) => f.read < f.hunks.length).length;
+  const minor = (r.levels.note ?? 0) > 0 ? h("p", { class: "aside" }, `ordo also left ${n(r.levels.note ?? 0, "note")} on hunks; they are in each hunk's margin.`) : null;
+  replace(
+    page2,
+    h(
+      "article",
+      null,
+      r.subject ? h("p", { class: "kicker" }, h("span", { class: "path" }, r.rev)) : null,
+      h("h1", { class: "headline" }, r.subject ?? (r.uncommitted ? "Uncommitted work" : `Review of ${r.rev}`)),
+      h(
+        "p",
+        { class: "lede" },
+        `You have read ${r.coverage.done} of ${n(r.coverage.total, "hunk")}`,
+        unreadFiles ? `, with ${n(unreadFiles, "file")} still to finish` : ", every file",
+        `. You wrote ${n(nComments, "comment")} and ${n(nNotes, "note")}; ordo flagged ${n(r.levels.verdict ?? 0, "verdict")} and ${n(r.levels.warn ?? 0, "warning")}.`
+      ),
+      h("div", { class: "meter wide" }, h("i", { style: `width:${r.coverage.total ? 100 * r.coverage.done / r.coverage.total : 0}%` })),
+      h(
+        "div",
+        { class: "actions" },
+        h("button", { class: "primary", title: "Your notes and comments as one markdown message (:yank)", onclick: () => act({ op: "command", line_text: "yank" }) }, "Copy for the author"),
+        h("button", { title: "The same, with ordo's own notes and findings (:yank all)", onclick: () => act({ op: "command", line_text: "yank all" }) }, "Copy with ordo's findings"),
+        h("button", { onclick: () => window.print() }, "Print"),
+        h("button", { onclick: () => toggleSummary() }, "Back to reading")
+      ),
+      h("h2", null, "What you wrote"),
+      notes.length ? h(
+        "ol",
+        { class: "written" },
+        notes.map((w) => {
+          if (w.kind === "note") {
+            const it2 = r.items[w.i];
+            return h("li", null, h("div", { class: "where" }, link(w.i, at2(it2.path, it2.new[0])), h("span", null, `note on ${it2.symbol ?? it2.symbols[0] ?? "this hunk"}`)), h("p", { class: "said" }, w.text));
+          }
+          const c = w.comment;
+          return h(
+            "li",
+            null,
+            h("div", { class: "where" }, link(w.i, at2(c.path, c.start, c.end)), c.stale ? h("span", { class: "stale" }, "these lines changed since") : null),
+            h("p", { class: "said" }, c.text)
+          );
+        })
+      ) : h("p", { class: "aside" }, "Nothing written yet. Select lines and :comment, or :note a symbol."),
+      h("h2", null, "What ordo flagged"),
+      serious.length ? h(
+        "ol",
+        { class: "flagged" },
+        serious.map(
+          ({ i, f }) => h(
+            "li",
+            null,
+            h("div", { class: "where" }, h("span", { class: `dot ${f.level}` }), h("b", null, f.name), link(i, at2(r.items[i].path, f.row ?? r.items[i].new[0]))),
+            h("p", { class: "said" }, prose(f.message.split("\n")[0]))
+          )
+        )
+      ) : h("p", { class: "aside" }, "No verdicts or warnings."),
+      minor,
+      h("h2", null, "File by file"),
+      h(
+        "table",
+        { class: "files" },
+        h("thead", null, h("tr", null, h("th", null, "File"), h("th", null, "Read"), h("th", null, "Comments"), h("th", null, "Flagged"))),
+        h(
+          "tbody",
+          null,
+          fl.map((f) => {
+            const next = f.hunks.find((i) => !r.items[i].reviewed) ?? f.hunks[0];
+            return h(
+              "tr",
+              { class: f.read === f.hunks.length ? "done" : null },
+              h("td", null, link(next, f.path)),
+              h("td", null, h("span", { class: "meter" }, h("i", { style: `width:${100 * f.read / f.hunks.length}%` })), ` ${f.read} of ${f.hunks.length}`),
+              h("td", null, f.comments || ""),
+              h("td", null, LEVELS.filter((l) => l !== "note" && f.levels[l]).map((l) => h("span", { class: "lv" }, h("span", { class: `dot ${l}` }), f.levels[l])))
+            );
+          })
+        )
+      )
+    )
+  );
+  page2.scrollTop = keep;
 }
 var HINTS = {
   list: [["next", "next hunk"], ["finding-next", "next finding"], ["command", "commands"]],
@@ -4769,6 +4946,9 @@ function renderAll() {
     el.classList.toggle("zoomed", st2.zoom && st2.focus === p);
   }
   renderBand();
+  document.body.classList.toggle("summary", st2.summary && !!st2.review);
+  $("#summary").hidden = !(st2.summary && st2.review);
+  if (st2.summary && st2.review) return renderSummary();
   if (!st2.review) {
     for (const p of PANES) {
       replace($(`#${p} > .head`));
@@ -4871,6 +5051,7 @@ async function runPalette() {
     return;
   }
   if (name === "map") return openMap();
+  if (name === "summary") return toggleSummary();
   if (name === "size") {
     const ui = sizeOf(arg);
     if (ui === null) return toast(`:size takes ${Object.keys(SIZES).join(", ")} or a factor like 1.2`, true);
@@ -4915,6 +5096,7 @@ function page(by) {
 function run(action) {
   const r = st2.review;
   if (!r) return;
+  if (st2.summary && summaryKey(action)) return;
   const focus = st2.focus;
   switch (action) {
     case "quit":
@@ -5192,7 +5374,7 @@ async function openCanvas() {
 async function renderCanvas() {
   if (!canvas) return;
   const c = canvas;
-  const files = await Promise.all([c.anchor, ...c.cards.map((k) => k.i)].map((i) => fileOf(st2.review.items[i].path)));
+  const files2 = await Promise.all([c.anchor, ...c.cards.map((k) => k.i)].map((i) => fileOf(st2.review.items[i].path)));
   if (canvas !== c) return;
   const card = (k) => {
     const { i } = c.cards[k];
@@ -5200,7 +5382,7 @@ async function renderCanvas() {
       "div",
       { class: `card${k === c.sel ? " cur" : ""}`, onclick: () => goCanvas(k) },
       h("header", null, hunkTitle(i), h("span", { class: "muted" }, st2.review.items[i].rationale)),
-      excerpt(files[k + 1], i, 1, 14)
+      excerpt(files2[k + 1], i, 1, 14)
     );
   };
   const side = (needs) => h(
@@ -5214,7 +5396,7 @@ async function renderCanvas() {
     h(
       "div",
       { class: "canvas src" },
-      h("div", { class: "anchor" }, excerpt(files[0], c.anchor, 1, 16)),
+      h("div", { class: "anchor" }, excerpt(files2[0], c.anchor, 1, 16)),
       h("div", { class: "sides" }, side(true), side(false))
     )
   );

@@ -151,6 +151,9 @@ pub(super) fn review(app: &App) -> Value {
             "report": app.rules_report,
         },
         "file_churn": app.file_churn,
+        "comments": crate::commands::review_comments(app).into_iter().map(|c| json!({
+            "path": c.path, "start": c.start, "end": c.end, "text": c.text, "stale": c.stale,
+        })).collect::<Vec<_>>(),
         "sel": app.sel,
         "root": root(),
         "editor": std::env::var("ORDO_WEB_EDITOR").ok(),

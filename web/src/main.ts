@@ -8,6 +8,7 @@ import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove, type CodeRow } from "./layout.ts";
 import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
+import { files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
 import type { ActResult, FileData, Item, ItemFacts, Level, Review, Row } from "./types.ts";
 
@@ -61,6 +62,8 @@ const st = {
   whyLinks: [] as number[],
   whyCur: -1,
   notice: "",
+  /** the one-page summary stands in for the columns */
+  summary: false,
 };
 
 // ------------------------------------------------------------------ data
@@ -917,14 +920,150 @@ function renderBand(): void {
       ),
     ),
     h(
-      "span",
-      { class: "sig", title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read` },
+      "button",
+      {
+        class: "sig",
+        "aria-pressed": st.summary ? "true" : "false",
+        title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read. The review on one page (:summary).`,
+        onclick: () => toggleSummary(),
+      },
       h("span", { class: "meter" }, h("i", { style: `width:${r.coverage.total ? (100 * r.coverage.done) / r.coverage.total : 0}%` })),
       h("b", null, r.coverage.done),
       `of ${r.coverage.total} read`,
     ),
     help,
   );
+}
+
+// ------------------------------------------------------------------ summary
+
+function toggleSummary(): void {
+  st.summary = !st.summary;
+  renderAll();
+  if (st.summary) $("#summary").focus();
+}
+
+/** The keys the summary page answers; the rest would act on columns it hides. */
+function summaryKey(action: string): boolean {
+  const page = $("#summary");
+  const by: Record<string, number> = { next: 60, prev: -60, "half-down": 0.5, "half-up": -0.5, "page-down": 1, "page-up": -1 };
+  if (action in by) {
+    page.scrollTop += Math.abs(by[action]) < 2 ? by[action] * page.clientHeight : by[action];
+  } else if (action === "first" || action === "last") {
+    page.scrollTop = action === "first" ? 0 : page.scrollHeight;
+  } else if (action === "quit") {
+    if (!dismissSheet()) toggleSummary();
+  } else {
+    return !["command", "command-goto", "help", "reload"].includes(action);
+  }
+  return true;
+}
+
+function readFromSummary(i: number): void {
+  st.summary = false;
+  jumpTo(i);
+}
+
+function renderSummary(): void {
+  const r = st.review!;
+  const page = $("#summary");
+  const keep = page.scrollTop;
+  const fl = fileLines(r);
+  const notes = written(r);
+  const serious = flagged(r, ["verdict", "warn"]);
+  const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const at = (path: string, line: number, end?: number) => `${path}:${line}${end && end > line ? `–${end}` : ""}`;
+  const link = (i: number | null, label: string) =>
+    i === null ? h("span", { class: "at" }, label) : h("button", { class: "at", title: "Read this hunk", onclick: () => readFromSummary(i) }, label);
+  const nComments = notes.filter((w) => w.kind === "comment").length;
+  const nNotes = notes.length - nComments;
+  const unreadFiles = fl.filter((f) => f.read < f.hunks.length).length;
+  const count = (l: Level) => serious.filter((x) => x.f.level === l).length;
+  const notesLeft = flagged(r, ["note"]).length;
+  const minor = notesLeft ? h("p", { class: "aside" }, `ordo also left ${n(notesLeft, "note")} on hunks; they are in each hunk's margin.`) : null;
+  replace(
+    page,
+    h(
+      "article",
+      null,
+      r.subject ? h("p", { class: "kicker" }, h("span", { class: "path" }, r.rev)) : null,
+      h("h1", { class: "headline" }, r.subject ?? (r.uncommitted ? "Uncommitted work" : `Review of ${r.rev}`)),
+      h(
+        "p",
+        { class: "lede" },
+        `You have read ${r.coverage.done} of ${n(r.coverage.total, "hunk")}`,
+        unreadFiles ? `, with ${n(unreadFiles, "file")} still to finish` : ", every file",
+        `. You wrote ${n(nComments, "comment")} and ${n(nNotes, "note")}; ordo flagged ${n(count("verdict"), "verdict")} and ${n(count("warn"), "warning")}.`,
+      ),
+      h("div", { class: "meter wide" }, h("i", { style: `width:${r.coverage.total ? (100 * r.coverage.done) / r.coverage.total : 0}%` })),
+      h(
+        "div",
+        { class: "actions" },
+        h("button", { class: "primary", title: "Your notes and comments as one markdown message (:yank)", onclick: () => act({ op: "command", line_text: "yank" }) }, "Copy for the author"),
+        h("button", { title: "The same, with ordo's own notes and findings (:yank all)", onclick: () => act({ op: "command", line_text: "yank all" }) }, "Copy with ordo's findings"),
+        h("button", { onclick: () => window.print() }, "Print"),
+        h("button", { onclick: () => toggleSummary() }, "Back to reading"),
+      ),
+      h("h2", null, "What you wrote"),
+      notes.length
+        ? h(
+            "ol",
+            { class: "written" },
+            notes.map((w) => {
+              if (w.kind === "note") {
+                const it = r.items[w.i];
+                return h("li", null, h("div", { class: "where" }, link(w.i, at(it.path, it.new[0])), h("span", null, `note on ${it.symbol || it.symbols[0] || "this hunk"}`)), h("p", { class: "said" }, w.text));
+              }
+              const c = w.comment;
+              return h(
+                "li",
+                null,
+                h("div", { class: "where" }, link(w.i, at(c.path, c.start, c.end)), c.stale ? h("span", { class: "stale" }, "these lines changed since") : null),
+                h("p", { class: "said" }, c.text),
+              );
+            }),
+          )
+        : h("p", { class: "aside" }, "Nothing written yet. Select lines and :comment, or :note a symbol."),
+      h("h2", null, "What ordo flagged"),
+      serious.length
+        ? h(
+            "ol",
+            { class: "flagged" },
+            serious.map(({ i, f }) =>
+              h(
+                "li",
+                null,
+                h("div", { class: "where" }, h("span", { class: `dot ${f.level}` }), h("b", null, f.name), link(i, at(r.items[i].path, f.row ?? r.items[i].new[0]))),
+                h("p", { class: "said" }, prose(f.message.split("\n")[0])),
+              ),
+            ),
+          )
+        : h("p", { class: "aside" }, "No verdicts or warnings."),
+      minor,
+      h("h2", null, "File by file"),
+      h(
+        "table",
+        { class: "files" },
+        h("thead", null, h("tr", null, h("th", null, "File"), h("th", null, "Read"), h("th", null, "Comments"), h("th", null, "Flagged"))),
+        h(
+          "tbody",
+          null,
+          fl.map((f) => {
+            const next = f.hunks.find((i) => !r.items[i].reviewed) ?? f.hunks[0];
+            return h(
+              "tr",
+              { class: f.read === f.hunks.length ? "done" : null },
+              h("td", null, link(next, f.path)),
+              h("td", null, h("span", { class: "meter" }, h("i", { style: `width:${(100 * f.read) / f.hunks.length}%` })), ` ${f.read} of ${f.hunks.length}`),
+              h("td", null, f.comments || ""),
+              h("td", null, LEVELS.filter((l) => l !== "note" && f.levels[l]).map((l) => h("span", { class: "lv" }, h("span", { class: `dot ${l}` }), f.levels[l]))),
+            );
+          }),
+        ),
+      ),
+    ),
+  );
+  page.scrollTop = keep;
 }
 
 const HINTS: Record<Pane, [string, string][]> = {
@@ -1025,6 +1164,9 @@ function renderAll(): void {
     el.classList.toggle("zoomed", st.zoom && st.focus === p);
   }
   renderBand();
+  document.body.classList.toggle("summary", st.summary && !!st.review);
+  $("#summary").hidden = !(st.summary && st.review);
+  if (st.summary && st.review) return renderSummary();
   if (!st.review) {
     for (const p of PANES) {
       replace($(`#${p} > .head`));
@@ -1142,6 +1284,7 @@ async function runPalette(): Promise<void> {
     return;
   }
   if (name === "map") return openMap();
+  if (name === "summary") return toggleSummary();
   if (name === "size") {
     const ui = sizeOf(arg);
     if (ui === null) return toast(`:size takes ${Object.keys(SIZES).join(", ")} or a factor like 1.2`, true);
@@ -1196,6 +1339,7 @@ function page(by: number): void {
 function run(action: string): void {
   const r = st.review;
   if (!r) return;
+  if (st.summary && summaryKey(action)) return;
   const focus = st.focus;
   switch (action) {
     case "quit":
