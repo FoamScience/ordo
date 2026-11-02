@@ -27,6 +27,8 @@ export interface Item {
   rationale: string;
   what: string[];
   details: string[];
+  /** the first changed line with anything on it, trimmed; the old one for a removal */
+  gist: string | null;
   notes: string[];
   edges: Edge[];
   symbol: string | null;

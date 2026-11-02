@@ -1865,6 +1865,52 @@ function stripMarks(rows, sel, findings, comments, hits) {
   return out;
 }
 
+// src/list.ts
+function aboutOf(it2) {
+  return it2.symbols[0] || it2.enclosing || null;
+}
+function withSymbols(rows, items) {
+  const out = [];
+  const runOf = /* @__PURE__ */ new Map();
+  let run2 = [];
+  const flush = () => {
+    const name = run2.length > 1 ? aboutOf(items[run2[0]]) : null;
+    if (name) {
+      out.push({ kind: "symbol", name, items: run2 });
+      for (const i of run2) runOf.set(i, run2);
+    }
+    for (const i of run2) out.push({ kind: "item", i, opens: false });
+    run2 = [];
+  };
+  for (const row of rows) {
+    if (row.kind === "item") {
+      const about = aboutOf(items[row.i]);
+      if (run2.length && (!about || about !== aboutOf(items[run2[0]]))) flush();
+      run2.push(row.i);
+      continue;
+    }
+    flush();
+    out.push(row);
+  }
+  flush();
+  const opens = new Map(rows.flatMap((r) => r.kind === "item" ? [[r.i, r.opens]] : []));
+  return { rows: out.map((r) => r.kind === "item" ? { ...r, opens: opens.get(r.i) ?? false } : r), runOf };
+}
+function rowText(it2, run2) {
+  if (!run2) return { text: it2.rationale, code: false };
+  const alone = (pick) => {
+    const v = pick(it2);
+    return v && run2.filter((o) => pick(o) === v).length === 1 ? v : null;
+  };
+  const name = aboutOf(it2);
+  const sentence2 = alone((o) => o.rationale);
+  if (sentence2 && sentence2 !== `edits ${name}`) return { text: sentence2, code: false };
+  const detail = alone((o) => o.details[0]);
+  if (detail) return { text: detail, code: false };
+  if (it2.gist) return { text: it2.gist, code: true };
+  return { text: it2.details[0] ?? it2.rationale, code: false };
+}
+
 // node_modules/@dagrejs/dagre/dist/dagre.esm.js
 var Te = Object.defineProperty;
 var Sn = (e, n, t) => n in e ? Te(e, n, { enumerable: true, configurable: true, writable: true, value: t }) : e[n] = t;
@@ -4240,8 +4286,25 @@ function renderList() {
   const rows = h("div", { class: "rows" });
   const dots = /* @__PURE__ */ new Map();
   let selEl = null;
-  for (const row of shownRows()) {
-    if (row.kind === "file") {
+  const { rows: listRows, runOf } = withSymbols(shownRows(), r.items);
+  for (const row of listRows) {
+    if (row.kind === "symbol") {
+      rows.append(
+        h(
+          "div",
+          {
+            class: `symhead${row.items.includes(st2.sel) ? " cur" : ""}`,
+            title: `${row.items.length} hunks in a row change ${row.name}`,
+            onclick: () => {
+              st2.focus = "list";
+              select(row.items.find((i) => !r.items[i].reviewed) ?? row.items[0]);
+            }
+          },
+          h("span", { class: "code-word" }, row.name),
+          h("span", null, `${row.items.length} hunks`)
+        )
+      );
+    } else if (row.kind === "file") {
       rows.append(h("div", { class: "fileband" }, h("span", null, row.path), h("span", null, row.n)));
     } else if (row.kind === "gap") {
       rows.append(h("div", { class: "gap" }));
@@ -4251,17 +4314,25 @@ function renderList() {
       const selected = items.includes(st2.sel);
       const folded = row.kind === "folded";
       const level = LEVELS.find((l) => items.some((i) => r.items[i].level === l));
+      const run2 = folded ? void 0 : runOf.get(items[0]);
+      const said = rowText(first, run2 ? run2.map((i) => r.items[i]) : null);
+      const removal = first.new[1] < first.new[0];
       const el = h(
         "div",
         {
-          class: `${rowClass(items, selected)}${folded ? " folded" : ""}`,
+          class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run2 ? " inrun" : ""}`,
           title: folded ? first.symbol ?? "" : first.rationale,
           onclick: () => {
             st2.focus = "list";
             select(items.includes(st2.sel) ? st2.sel : items[0]);
           }
         },
-        h("span", { class: "txt" }, folded ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : sentence(first.rationale)),
+        h(
+          "span",
+          { class: "txt" },
+          run2 && h("span", { class: "ln" }, `L${removal ? first.old[0] : first.new[0]}`),
+          folded ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : said.code ? h("span", { class: `gist${removal ? " removed" : ""}` }, said.text) : sentence(said.text)
+        ),
         h(
           "span",
           { class: "meta" },
