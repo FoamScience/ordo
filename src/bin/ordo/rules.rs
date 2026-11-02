@@ -139,13 +139,29 @@ impl RulesReport {
         }
     }
 
-    /// The `:rules` popup, one line per fact.
-    pub(super) fn lines(&self) -> Vec<String> {
+    /// The `:rules` popup, one line per fact. `catalog` is whether the
+    /// built-in catalog runs this time, which a flag can decide over the files.
+    pub(super) fn lines(&self, catalog: bool) -> Vec<String> {
+        let silenced = silencer(&self.disables);
+        let sections: Vec<(&str, usize)> = if catalog {
+            ordo::catalog::sections()
+                .iter()
+                .map(|s| {
+                    let on = s.rules.iter().filter(|n| !silenced.is_match(n)).count();
+                    (s.name.as_str(), on)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let total = self.rules.len() + sections.iter().map(|(_, n)| n).sum::<usize>();
         let mut out = vec![format!(
-            "{} rule{} active",
-            self.rules.len(),
-            if self.rules.len() == 1 { "" } else { "s" }
+            "{total} rule{} active",
+            if total == 1 { "" } else { "s" }
         )];
+        for (name, n) in &sections {
+            out.push(format!("  {n:>3}  built-in catalog: {name}"));
+        }
         for (origin, n) in &self.origins {
             out.push(format!("  {n:>3}  {origin}"));
         }
@@ -179,6 +195,45 @@ impl RulesReport {
         }
         out
     }
+}
+
+/// The `disable` globs as one matcher; a malformed glob was already reported
+/// when the files were read, so it is skipped here.
+fn silencer(disables: &[String]) -> globset::GlobSet {
+    let mut set = globset::GlobSetBuilder::new();
+    for d in disables {
+        if let Ok(g) = globset::Glob::new(d) {
+            set.add(g);
+        }
+    }
+    set.build().unwrap_or_else(|_| globset::GlobSet::empty())
+}
+
+/// How many rules can fire in a file of `lang`, as (built-in catalog, the
+/// rules files'). `own` is already layered and disabled; the catalog is not.
+pub(super) fn rules_for(
+    own: &[ordo::model::Rule],
+    catalog: bool,
+    disables: &[String],
+    lang: Option<&str>,
+) -> (usize, usize) {
+    let applies = |r: &&ordo::model::Rule| {
+        r.when
+            .lang
+            .as_ref()
+            .is_none_or(|ls| ls.iter().any(|l| Some(l.as_str()) == lang))
+    };
+    let silenced = silencer(disables);
+    let built_in = if catalog {
+        ordo::catalog::rules()
+            .iter()
+            .filter(applies)
+            .filter(|r| !silenced.is_match(&r.name))
+            .count()
+    } else {
+        0
+    };
+    (built_in, own.iter().filter(applies).count())
 }
 
 /// Merge one parsed rules document into the layered list: its `include`s first

@@ -4812,12 +4812,14 @@ function table(title, hint, targets, empty) {
     )
   ];
 }
-function rulesChecked(r) {
+function rulesChecked(r, it2) {
+  const { lang, catalog, own } = it2.rules_for;
+  const n = (k) => `${k} rule${k === 1 ? "" : "s"}`;
   const parts = [];
-  parts.push(r.rules.catalog ? "the construct catalog" : "no catalog (switched off)");
-  if (r.rules.own) parts.push(`${r.rules.own} rule${r.rules.own === 1 ? "" : "s"} of your own`);
-  if (r.rules.includes.length) parts.push(`rulesets ${r.rules.includes.join(", ")}`);
-  return parts.join(", ");
+  parts.push(r.rules.catalog ? `${n(catalog)} from the built-in catalog` : "no built-in catalog (switched off)");
+  const presets = r.rules.includes.length ? `, with ${r.rules.includes.join(", ")}` : "";
+  if (own) parts.push(`${n(own)} from your rules files${presets}`);
+  return `${n(catalog + own)} that apply to ${lang ?? "this file"}: ${parts.join(" and ")}`;
 }
 function renderWhy() {
   const pane = $("#why");
@@ -4871,7 +4873,7 @@ function renderWhy() {
           h("p", null, f.message),
           h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
         )
-      ) : h("p", { class: "muted" }, `None. Checked against ${rulesChecked(r)}.`),
+      ) : h("p", { class: "muted" }, `None. Checked against ${rulesChecked(r, it2)}.`),
       it2.executed && [
         h("h3", null, "Test coverage"),
         h(
