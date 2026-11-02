@@ -368,6 +368,10 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .l.add mark { background: var(--add-strong-bg); color: inherit; border-radius: 2px; }
 .l.edit mark { background: var(--add-strong-bg); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--add-strong-bg); }
 .l.edit .op { color: var(--reviewed); font-weight: 600; }
+.l .gone {
+  background: var(--del-strong-bg); color: var(--fg); text-decoration: line-through;
+  text-decoration-color: var(--verdict); text-decoration-thickness: 1.5px; border-radius: 2px;
+}
 .l.del mark { background: var(--del-strong-bg); color: inherit; border-radius: 2px; }
 .l.other { opacity: 0.55; }
 .l.cur { box-shadow: inset 3px 0 0 var(--accent); }

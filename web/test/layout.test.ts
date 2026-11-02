@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove } from "../src/layout.ts";
+import { byChars, centerScroll, codeRows, firstRowOf, runs, tableLimit, wordMove } from "../src/layout.ts";
 import type { FileData } from "../src/types.ts";
+import type { CodeRow } from "../src/layout.ts";
 
 test("the selected row sits in the middle of the list", () => {
   // row at 500px, 20px tall, a 200px pane over 2000px of rows
@@ -47,12 +48,12 @@ test("a removal stands above the line that followed it, and its hunk opens on it
 
 test("an edit reads removed lines first, then the added ones, refined spans kept", () => {
   const f = file({
-    old: ["x = 1"],
-    new: ["x = 2"],
-    hunks: [{ i: 0, old: [1, 1], new: [1, 1], removed: [[[4, 5]]], added: [[[4, 5]]] }],
+    old: ["x = 1", "gone()"],
+    new: ["x = 2", "y = 3"],
+    hunks: [{ i: 0, old: [1, 2], new: [1, 2], removed: [[[4, 5]], null], added: [[[4, 5]], null] }],
   });
   const rows = codeRows(f);
-  assert.deepEqual(rows.map((r) => r.kind), ["del", "add"]);
+  assert.deepEqual(rows.map((r) => r.kind), ["del", "edit", "add"]);
   assert.deepEqual(rows[1].marks, [[4, 5]]);
 });
 
@@ -108,13 +109,29 @@ test("a line that only gained text reads once, its insertion marked", () => {
   assert.deepEqual(rows[1].marks, [[18, 29]]);
 });
 
-test("a line that also lost text stays a removed and an added line", () => {
+test("a line that also lost text reads once, the lost text where it stood", () => {
   const rows = codeRows(
     file({
       old: ["x = f(a)"],
       new: ["x = g(a, b)"],
-      hunks: [{ i: 0, old: [1, 1], new: [1, 1], removed: [[[4, 5]]], added: [[[4, 5], [6, 9]]] }],
+      hunks: [{ i: 0, old: [1, 1], new: [1, 1], removed: [[[4, 5]]], added: [[[4, 5], [7, 10]]] }],
     }),
   );
-  assert.deepEqual(rows.map((r) => r.kind), ["del", "add"]);
+  assert.deepEqual(rows.map((r) => r.kind), ["edit"]);
+  const row = rows[0] as Exclude<CodeRow, { kind: "del" }>;
+  assert.deepEqual(row.gone, [[4, "f"]]);
+  assert.deepEqual(
+    runs(row.text, null, row.marks, row.gone).map((r) => [r.text, !!r.changed, !!r.gone]),
+    [["x = ", false, false], ["f", false, true], ["g", true, false], ["(a", false, false], [", b", true, false], [")", false, false]],
+  );
+});
+
+test("lines the refiner left whole are diffed by character when most survived", () => {
+  const was = "    ``build_impeller_body`` runs it out to the hub outlet (``_back_to``).";
+  const now = "    ``build_impeller_body`` runs it out to the hub outlet (``back_to``).";
+  assert.deepEqual(byChars(was, now), { marks: [], gone: [[61, "_"]] });
+  const rows = codeRows(file({ old: [was], new: [now], hunks: [{ i: 0, old: [1, 1], new: [1, 1], removed: [null], added: [null] }] }));
+  assert.deepEqual(rows.map((r) => r.kind), ["edit"]);
+  // two lines that share little stay apart
+  assert.equal(byChars("return compute(a)", "raise ValueError('no')"), null);
 });
