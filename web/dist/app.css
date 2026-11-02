@@ -2,37 +2,16 @@
    Tokens first; `:theme` maps a terminal theme onto the same names (theme.ts). */
 
 @font-face {
-  font-family: "Literata";
-  src: url("fonts/literata-latin-wght-normal.woff2") format("woff2");
-  font-weight: 200 900;
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Literata";
-  src: url("fonts/literata-latin-wght-italic.woff2") format("woff2");
-  font-weight: 200 900;
-  font-style: italic;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Plex Mono";
-  src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Plex Mono";
-  src: url("fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Plex Mono";
-  src: url("fonts/ibm-plex-mono-latin-400-italic.woff2") format("woff2");
-  font-weight: 400;
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono-latin-wght-italic.woff2") format("woff2");
+  font-weight: 100 900;
   font-style: italic;
   font-display: swap;
 }
@@ -83,8 +62,8 @@
   --syn-parameter: #7b3d62;
   --syn-attribute: #8a4a12;
 
-  --serif: "Literata", "Iowan Old Style", "Charter", Georgia, serif;
-  --mono: "Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --mono: var(--text);
 
   /* one knob for every size: `:size` sets --ui (1 is the default) */
   --ui: 1;
@@ -191,7 +170,7 @@ html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--fg);
-  font: var(--fs-body)/1.5 var(--serif);
+  font: var(--fs-body)/1.5 var(--text);
   font-variant-numeric: lining-nums tabular-nums;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -199,7 +178,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; color: inherit; }
-code, .code-word { font-family: var(--mono); font-size: 0.9em; }
+code, .code-word { font-family: var(--mono); }
+.code-word { background: var(--raise); border-radius: 3px; padding: 0 0.2em; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
 kbd {
   font: 500 var(--fs-tiny) var(--mono);
@@ -338,7 +318,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
   margin: 6px 0 0; font-size: var(--fs-head); line-height: 1.22; font-weight: 520;
   letter-spacing: -0.012em; max-width: 34em; text-wrap: balance;
 }
-.headline .code-word { font-size: 0.82em; font-weight: 500; }
+.headline .code-word { font-weight: 500; }
 .lede { margin: 8px 0 0; color: var(--dim); max-width: 46em; }
 .lede p { margin: 2px 0; }
 .lede .detail { color: var(--fg); }
@@ -382,13 +362,13 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .l.commented .g::after { content: "✎"; }
 .fl {
   display: flex; gap: 10px; align-items: baseline; margin: 2px 16px 6px 10.5ch;
-  padding: 6px 12px; border-radius: 6px; font: var(--fs-small)/1.45 var(--serif); white-space: normal;
+  padding: 6px 12px; border-radius: 6px; font: var(--fs-small)/1.45 var(--text); white-space: normal;
 }
 .fl b { white-space: nowrap; font: 600 var(--fs-tiny) var(--mono); }
 .fl.verdict { background: var(--verdict-bg); }
 .fl.warn { background: var(--warn-bg); }
 .fl.note { background: var(--note-bg); }
-.cmt { margin: 2px 16px 6px 10.5ch; font: italic var(--fs-small)/1.45 var(--serif); color: var(--accent); white-space: normal; }
+.cmt { margin: 2px 16px 6px 10.5ch; font: italic var(--fs-small)/1.45 var(--text); color: var(--accent); white-space: normal; }
 
 .s-comment { color: var(--syn-comment); font-style: italic; }
 .s-keyword { color: var(--syn-keyword); }
@@ -538,7 +518,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .card { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; overflow: hidden; cursor: pointer; background: var(--bg); }
 .card.cur { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .card header { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; background: var(--surface); font: 600 var(--fs-tiny) var(--mono); }
-.card header .muted { font: var(--fs-small) var(--serif); color: var(--dim); }
+.card header .muted { font: var(--fs-small) var(--text); color: var(--dim); }
 .card .code { overflow: auto; }
 .sheet .src { font: var(--fs-code) var(--mono); }
 
@@ -559,14 +539,14 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .depmap .node { position: absolute; }
 .node .name, .node .at { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node .name { font: 600 var(--fs-tiny) var(--mono); }
-.node .at { font: var(--fs-tiny) var(--serif); color: var(--dim); }
+.node .at { font: var(--fs-tiny) var(--text); color: var(--dim); }
 .node .dot { position: absolute; top: 9px; right: 10px; }
 .node.reviewed { color: var(--reviewed); background: var(--bg); border-style: dashed; }
 .node.needed { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .node.strands { background: var(--verdict-bg); border-color: var(--verdict); }
 .node.root::before { content: ""; position: absolute; left: -1px; top: 8px; bottom: 8px; width: 4px; border-radius: 2px; background: var(--accent); }
 .node.picked { outline: 3px solid var(--focus); outline-offset: 2px; }
-.config td:first-child { font-family: var(--serif); font-size: var(--fs-small); white-space: normal; }
+.config td:first-child { font-family: var(--text); font-size: var(--fs-small); white-space: normal; }
 .config input:not([type]) {
   font: var(--fs-tiny) var(--mono); background: var(--bg); color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; width: 18ch;
