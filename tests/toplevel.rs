@@ -434,6 +434,100 @@ fn a_real_edit_is_never_called_formatting() {
 }
 
 #[test]
+fn an_exploded_signature_is_formatting() {
+    let out = one(
+        "s.py",
+        "def f(a: int, b: int) -> int:\n    return a\n",
+        "def f(\n    a: int, b: int\n) -> int:\n    return a\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert!(h.noise, "{h:?}");
+    assert_eq!(h.rationale, "formatting only");
+}
+
+#[test]
+fn a_joined_comprehension_is_formatting() {
+    let out = one(
+        "j.py",
+        "def f(xs):\n    d = {\n        x: 1 for x in xs\n    }\n    return d\n",
+        "def f(xs):\n    d = {x: 1 for x in xs}\n    return d\n",
+    );
+    assert!(out.files[0].hunks[0].noise);
+}
+
+#[test]
+fn a_magic_trailing_comma_is_formatting() {
+    let out = one(
+        "m.py",
+        "def f():\n    g(a, b)\n",
+        "def f():\n    g(\n        a,\n        b,\n    )\n",
+    );
+    assert!(out.files[0].hunks[0].noise);
+}
+
+#[test]
+fn a_trailing_comma_that_makes_a_tuple_is_not_formatting() {
+    let out = one(
+        "t.py",
+        "def f():\n    return (a)\n",
+        "def f():\n    return (a,)\n",
+    );
+    assert!(!out.files[0].hunks[0].noise);
+}
+
+#[test]
+fn a_python_line_reindented_into_a_block_is_not_formatting() {
+    let out = one(
+        "r.py",
+        "def f(c):\n    if c:\n        a()\n    b()\n",
+        "def f(c):\n    if c:\n        a()\n        b()\n",
+    );
+    assert!(!out.files[0].hunks[0].noise);
+}
+
+#[test]
+fn whitespace_inside_a_string_that_opens_above_the_hunk_is_its_value() {
+    let py = one(
+        "s.py",
+        "x = \"\"\"a\n  b\"\"\"\n",
+        "x = \"\"\"a\n      b\"\"\"\n",
+    );
+    assert!(!py.files[0].hunks[0].noise, "{:?}", py.files[0].hunks[0]);
+    let rs = one(
+        "s.rs",
+        "fn f() -> &'static str {\n    \"a\n  b\"\n}\n",
+        "fn f() -> &'static str {\n    \"a\n      b\"\n}\n",
+    );
+    assert!(!rs.files[0].hunks[0].noise, "{:?}", rs.files[0].hunks[0]);
+}
+
+#[test]
+fn a_rewrapped_comment_is_formatting() {
+    let out = one(
+        "c.py",
+        "def f():\n    # alpha beta gamma\n    return 1\n",
+        "def f():\n    # alpha beta\n    # gamma\n    return 1\n",
+    );
+    assert!(out.files[0].hunks[0].noise, "{:?}", out.files[0].hunks[0]);
+}
+
+#[test]
+fn a_rewrapped_markdown_paragraph_is_formatting() {
+    let out = one(
+        "a.md",
+        "# T\n\nalpha beta\ngamma delta\n",
+        "# T\n\nalpha\nbeta gamma delta\n",
+    );
+    assert!(out.files[0].hunks[0].noise, "{:?}", out.files[0].hunks[0]);
+}
+
+#[test]
+fn a_rewrap_in_a_file_without_a_grammar_is_formatting() {
+    let out = one("n.txt", "alpha beta\ngamma\n", "alpha\nbeta gamma\n");
+    assert!(out.files[0].hunks[0].noise);
+}
+
+#[test]
 fn a_rust_test_macro_names_its_test() {
     let out = one(
         "r.rs",
