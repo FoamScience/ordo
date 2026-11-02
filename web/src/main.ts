@@ -30,6 +30,14 @@ const token =
 sessionStorage.setItem("ordo.token", token);
 // the token stays in this tab's storage, not in its history or bookmarks
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+// a fresh link pasted into this tab changes only the hash, which reloads nothing
+window.addEventListener("hashchange", () => {
+  const fresh = new URLSearchParams(location.hash.slice(1)).get("t");
+  if (!fresh) return;
+  sessionStorage.setItem("ordo.token", fresh);
+  history.replaceState(null, "", location.pathname + location.search);
+  location.reload();
+});
 const api = new Api(token, rev);
 
 interface Search {
