@@ -1605,6 +1605,133 @@ fn a_one_token_edit_it_cannot_name_stays_an_edit() {
 }
 
 #[test]
+fn a_literal_value_change_names_the_key_and_both_values() {
+    for (path, old, new, want) in [
+        (
+            "a.py",
+            "import os\n\nTIMEOUT = 30  # seconds\n",
+            "import os\n\nTIMEOUT = 60  # seconds\n",
+            "changes TIMEOUT: 30 → 60",
+        ),
+        (
+            "a.py",
+            "import os\n\nDEBUG = False\n",
+            "import os\n\nDEBUG = True\n",
+            "changes DEBUG: False → True",
+        ),
+        (
+            "a.rs",
+            "use std::io;\npub const MAX: usize = 4096;\n",
+            "use std::io;\npub const MAX: usize = 8192;\n",
+            "changes MAX: 4096 → 8192",
+        ),
+        (
+            "a.js",
+            "import x from 'y';\nexport const GAP = 10;\n",
+            "import x from 'y';\nexport const GAP = 5;\n",
+            "changes GAP: 10 → 5",
+        ),
+        (
+            "c.yaml",
+            "server:\n  host: localhost\n  timeout: 30\n",
+            "server:\n  host: localhost\n  timeout: 60\n",
+            "changes timeout: 30 → 60",
+        ),
+        (
+            "c.yaml",
+            "server:\n  tls: true\n",
+            "server:\n  tls: false\n",
+            "changes tls: true → false",
+        ),
+        (
+            "Cargo.toml",
+            "[package]\nname = \"x\"\nversion = \"0.4.26\"  #:version\n",
+            "[package]\nname = \"x\"\nversion = \"0.4.27\"  #:version\n",
+            "changes version: \"0.4.26\" → \"0.4.27\"",
+        ),
+        (
+            "c.json",
+            "{\n  \"name\": \"x\",\n  \"retries\": 2\n}\n",
+            "{\n  \"name\": \"x\",\n  \"retries\": 3\n}\n",
+            "changes retries: 2 → 3",
+        ),
+        (
+            "Cargo.toml",
+            "[profile.release]\nlto = true\nopt-level = 3\n",
+            "[profile.release]\nlto = false\nopt-level = 3\n",
+            "changes lto: true → false",
+        ),
+        // a value holding double quotes keeps them readable
+        (
+            "a.py",
+            "import os\n\nGREETING = 'say \"hi\"'\n",
+            "import os\n\nGREETING = 'say \"bye\"'\n",
+            "changes GREETING: 'say \"hi\"' → 'say \"bye\"'",
+        ),
+        // a long value is clipped, not dropped
+        (
+            "a.py",
+            "import os\n\nGREETING = 'stress tests for streams and pipes'\n",
+            "import os\n\nGREETING = 'high-iteration stress tests for streams'\n",
+            "changes GREETING: \"stress tests for streams and…\" → \"high-iteration stress tests…\"",
+        ),
+    ] {
+        let rats = rationales(serde_json::json!({
+            "changes": [{ "path": path, "old": old, "new": new }]
+        }));
+        assert_eq!(rats, vec![want], "{path}: {old:?} -> {new:?}");
+    }
+}
+
+#[test]
+fn a_literal_that_is_not_the_whole_value_names_only_the_key() {
+    for (old, new, want) in [
+        // an argument inside the value, not the value
+        ("X = compute(3)\n", "X = compute(5)\n", "changes X"),
+        // an entry of a dict the name holds
+        ("X = {'t': 3}\n", "X = {'t': 5}\n", "changes X"),
+        // part of an expression
+        ("X = 3 == 3\n", "X = 3 == 5\n", "changes X"),
+        // what a lambda returns, not what the name holds
+        ("X = lambda: 3\n", "X = lambda: 5\n", "changes X"),
+        // the two values differ only past where they are clipped
+        (
+            "URL = 'https://github.com/nvm-sh/nvmrc-long-name.git'\n",
+            "URL = 'https://github.com/nvm-sh/nvmrc-long-name-2.git'\n",
+            "changes URL",
+        ),
+    ] {
+        let rats = rationales(serde_json::json!({
+            "changes": [{ "path": "a.py",
+                "old": format!("import os\n\n{old}"), "new": format!("import os\n\n{new}") }]
+        }));
+        assert_eq!(rats, vec![want], "{old:?} -> {new:?}");
+    }
+}
+
+#[test]
+fn a_boolean_literal_is_a_literal() {
+    let body = |line: &str| format!("def f():\n    a = 1\n    {line}\n    return a\n");
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.py", "old": body("x = True"), "new": body("x = False") }]
+    }));
+    assert_eq!(rats, vec!["changes True → False in f"]);
+    // an added boolean argument is still an argument
+    let body = |line: &str| format!("int f(void) {{\n  {line}\n  return 0;\n}}\n");
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.c", "old": body("g(a);"), "new": body("g(a, TRUE);") }]
+    }));
+    assert_eq!(rats, vec!["adds argument TRUE in f"]);
+    // a `boolean` type keyword is not a boolean literal
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.ts",
+            "old": "type X = {\n  a: boolean;\n  b: number;\n};\n",
+            "new": "type X = {\n  a: false;\n  b: number;\n};\n" }]
+    }));
+    assert_eq!(rats, vec!["edits X"]);
+}
+
+#[test]
 fn a_type_alias_or_typedef_is_a_type_definition() {
     let rats = rationales(serde_json::json!({
         "changes": [{ "path": "a.H",

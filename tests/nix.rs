@@ -36,7 +36,7 @@ fn a_changed_attribute_has_no_signature() {
         "{\n  name = \"b\";\n}\n",
     );
     let rationales: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
-    assert_eq!(rationales, vec!["changes name"]);
+    assert_eq!(rationales, vec!["changes name: \"a\" → \"b\""]);
 }
 
 #[test]

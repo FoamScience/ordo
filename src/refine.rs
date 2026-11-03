@@ -80,6 +80,8 @@ pub enum Role {
     Str,
     /// a number literal
     Num,
+    /// a boolean literal
+    Bool,
     /// the function a call calls
     Callee,
     /// inside a call's argument list
@@ -97,6 +99,10 @@ pub struct SingleChange {
     pub role: Role,
     pub old: String,
     pub new: String,
+    /// what the new run is the whole value of: the text left of the `=`, `:=`
+    /// or `:` in front of it, when only a closing quote, a `;` or `,` and a
+    /// comment follow it on its line
+    pub lhs: Option<String>,
 }
 
 /// A file parsed once, refined per hunk — parsing per hunk would re-walk the
@@ -215,10 +221,15 @@ impl Refiner {
                 _ => String::new(),
             }
         };
+        let new_line = &self.new_lines[new_range[0] - 1 + j];
         Some(SingleChange {
             role,
             old: text(&o, &self.old_lines[old_range[0] - 1 + i]),
-            new: text(&n, &self.new_lines[new_range[0] - 1 + j]),
+            new: text(&n, new_line),
+            lhs: n
+                .first()
+                .zip(n.last())
+                .and_then(|(f, l)| value_lhs(new_line, f.start, l.end)),
         })
     }
 
@@ -472,8 +483,39 @@ fn rows_of(r: [usize; 2], all: &[Vec<Token>]) -> Vec<Vec<Token>> {
         .collect()
 }
 
+const QUOTES: [char; 3] = ['"', '\'', '`'];
+
+/// What may follow a value on its line and still leave it the whole value.
+const COMMENT_OPENERS: [&str; 4] = ["#", "//", "/*", "--"];
+
+/// The text left of the assignment or key separator that chars `start..end`
+/// of `line` are the whole right-hand side of: `timeout` in `timeout: 30`,
+/// `pub const MAX: usize` in `pub const MAX: usize = 9; // cap`. `None` when
+/// anything but a comment follows, or no `=`, `:=` or `:` precedes, or the
+/// left side assigns too — `f(3)`, `x == 3`, `x += 3`, `{t: 3}`,
+/// `f = lambda: 3`.
+fn value_lhs(line: &str, start: usize, end: usize) -> Option<String> {
+    let after: String = line.chars().skip(end).collect();
+    let tail = after.trim_start_matches(QUOTES).trim_start();
+    let tail = tail.strip_prefix([';', ',']).unwrap_or(tail).trim_start();
+    if !tail.is_empty() && !COMMENT_OPENERS.iter().any(|c| tail.starts_with(c)) {
+        return None;
+    }
+    let before: String = line.chars().take(start).collect();
+    let head = before.trim_end().trim_end_matches(QUOTES).trim_end();
+    let lhs = head
+        .strip_suffix(":=")
+        .or_else(|| {
+            head.strip_suffix(['=', ':'])
+                .filter(|h| !h.ends_with(|c: char| "=!<>+-*/%&|^~?.:".contains(c)))
+        })?
+        .trim_end();
+    (!lhs.is_empty() && !lhs.contains('=')).then(|| lhs.to_string())
+}
+
 /// What a leaf is part of: the nearest string or number literal, call callee
-/// or argument list above it, else a bare name or anything else.
+/// or argument list above it, else a bare name, a boolean literal or anything
+/// else.
 fn role_of(leaf: Node) -> Role {
     let mut at = leaf;
     for depth in 0..6 {
@@ -520,8 +562,20 @@ fn role_of(leaf: Node) -> Role {
     }
     if lang::is_ident(leaf.kind()) {
         Role::Ident
+    } else if is_bool(leaf) {
+        Role::Bool
     } else {
         Role::Other
+    }
+}
+
+/// `true`/`false` in most grammars, yaml's scalar, toml's value — not a
+/// `boolean` type keyword, which is anonymous where it shares the name.
+fn is_bool(leaf: Node) -> bool {
+    match leaf.kind() {
+        "true" | "false" | "boolean_scalar" => true,
+        "boolean" => leaf.is_named(),
+        _ => false,
     }
 }
 

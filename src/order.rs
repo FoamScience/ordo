@@ -1334,6 +1334,7 @@ impl<'a> RatCtx<'a> {
     }
     // a file-scope hunk that touches module-level bindings: "changes STRING"
     // for a constant whose declaration line changed (an annotation, a value),
+    // "changes TIMEOUT: 30 → 60" when the value was a literal and is still one,
     // "adds X" for a new one. What the hunk did to a name, where "uses Final,
     // STRING" only listed the identifiers on the line.
     fn file_bind_phrase(&self, file: usize, s: &HunkSem) -> Option<String> {
@@ -1351,6 +1352,11 @@ impl<'a> RatCtx<'a> {
             };
             if !bucket.contains(&nm.as_str()) {
                 bucket.push(nm);
+            }
+        }
+        if added.is_empty() {
+            if let Some(p) = value_phrase(s, &changed) {
+                return Some(p);
             }
         }
         let frags: Vec<String> = [("adds", added), ("changes", changed)]
@@ -1685,11 +1691,14 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
         frags.push(format!("renames {}", name_list(&refs)));
     }
     frags.extend(src_frags(&v.moved, "moves", " ", "from"));
+    // an edit that only gave a key a new literal says what the value became
+    let valued = value_phrase(s, &v.edited);
+    let edited: &[&str] = if valued.is_some() { &[] } else { &v.edited };
     for (verb, items) in [
-        ("adds", &v.added),
+        ("adds", v.added.as_slice()),
         ("adds type", &v.added_types),
         ("adds body to", &v.bodied),
-        ("edits", &v.edited),
+        ("edits", edited),
     ] {
         if items.is_empty() {
             continue;
@@ -1702,6 +1711,7 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
         };
         frags.push(format!("{verb} {label}"));
     }
+    frags.extend(valued);
     // "changes signature of f" only for something that *has* a signature.
     // A value touched on its own declaration line — a cmake `set()`, a
     // make variable, a yaml key, a rust `const` — simply changes. The kind
@@ -1722,7 +1732,9 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
         frags.push(format!("changes {what} of {}", name_list(&sig)));
     }
     if !plain.is_empty() {
-        frags.push(format!("changes {}", name_list(&plain)));
+        frags.push(
+            value_phrase(s, &plain).unwrap_or_else(|| format!("changes {}", name_list(&plain))),
+        );
     }
     if !v.type_changed.is_empty() {
         frags.push(format!("changes type {}", name_list(&v.type_changed)));
@@ -2072,19 +2084,15 @@ fn single_phrase(c: &crate::refine::SingleChange, nm: &str) -> Option<String> {
         t.trim_matches(|ch: char| ch == ',' || ch.is_whitespace())
             .to_string()
     };
-    let unquote = |t: &str| {
-        t.trim_matches(|ch| matches!(ch, '"' | '\'' | '`'))
-            .to_string()
-    };
     Some(match c.role {
-        Role::Num if fits(&c.old) && fits(&c.new) => {
+        Role::Num | Role::Bool if fits(&c.old) && fits(&c.new) => {
             format!("changes {} → {} in {nm}", c.old, c.new)
         }
         Role::Str if fits(&c.old) && fits(&c.new) => {
             format!(
-                "changes \"{}\" → \"{}\" in {nm}",
-                unquote(&c.old),
-                unquote(&c.new)
+                "changes {} → {} in {nm}",
+                quoted(unquote(&c.old)),
+                quoted(unquote(&c.new))
             )
         }
         Role::Str if !c.old.is_empty() && !c.new.is_empty() => format!("changes a string in {nm}"),
@@ -2102,6 +2110,51 @@ fn single_phrase(c: &crate::refine::SingleChange, nm: &str) -> Option<String> {
         }
         _ => return None,
     })
+}
+
+/// `t` without the quotes around it: a quote is one only as half of a pair, so
+/// `say "hi"` keeps its own
+fn unquote(t: &str) -> &str {
+    for q in ['"', '\'', '`'] {
+        if let Some(inner) = t.strip_prefix(q).and_then(|r| r.strip_suffix(q)) {
+            return unquote(inner);
+        }
+    }
+    t
+}
+
+/// `t` in double quotes, or in single ones when only that keeps it unambiguous
+fn quoted(t: &str) -> String {
+    if t.contains('"') && !t.contains('\'') {
+        format!("'{t}'")
+    } else {
+        format!("\"{t}\"")
+    }
+}
+
+/// "changes TIMEOUT: 30 → 60": the one literal a small edit changed is the
+/// whole value `names`' only name is declared with. Each side is clipped, so
+/// a long string still shows how it starts.
+fn value_phrase(s: &HunkSem, names: &[&str]) -> Option<String> {
+    use crate::refine::Role;
+    let ([name], Some(c)) = (names, s.single.as_ref()) else {
+        return None;
+    };
+    let declares_it = c
+        .lhs
+        .as_deref()?
+        .split(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '_' | '-' | '$')))
+        .any(|w| w == bare_name(name));
+    if !declares_it || c.old.is_empty() || c.new.is_empty() {
+        return None;
+    }
+    let side = |t: &str| match c.role {
+        Role::Str => Some(quoted(&clip(unquote(t), SINGLE_QUOTE_MAX))),
+        Role::Num | Role::Bool => Some(clip(t, SINGLE_QUOTE_MAX)),
+        _ => None,
+    };
+    let (old, new) = (side(&c.old)?, side(&c.new)?);
+    (old != new).then(|| format!("changes {name}: {old} → {new}"))
 }
 
 // a direction and a size. A pure deletion of body lines (no tracked

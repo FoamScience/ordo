@@ -78,7 +78,10 @@ fn changed_key_has_no_signature() {
     let h = hs
         .iter()
         .find(|h| h.defines.contains(&"version".to_string()));
-    assert_eq!(h.map(|h| h.rationale.as_str()), Some("changes version"));
+    assert_eq!(
+        h.map(|h| h.rationale.as_str()),
+        Some("changes version: \"0.1.0\" → \"0.2.0\"")
+    );
 }
 
 #[test]
