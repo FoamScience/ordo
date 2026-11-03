@@ -8,10 +8,10 @@ import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
-import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
+import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
-import type { ActResult, FileData, Item, ItemFacts, Level, Review, Row } from "./types.ts";
+import type { ActResult, FileData, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
 
 type Pane = "list" | "code" | "why";
 const PANES: Pane[] = ["list", "code", "why"];
@@ -22,6 +22,8 @@ const SINCE: Record<string, [string, string]> = {
   moved: ["moved", "unchanged, but it reads in a different place now: its dependencies moved"],
 };
 const CHORD_TIMEOUT = 500;
+/** How long the finder waits for typing to pause before it asks, in ms. */
+const FIND_DEBOUNCE = 120;
 /** The gutter mark for each kind of code row; `~` is a line that only gained text. */
 const OP: Record<CodeRow["kind"], string> = { ctx: " ", add: "+", del: "-", edit: "~" };
 
@@ -1396,26 +1398,54 @@ function applySize(ui: number): void {
   document.documentElement.style.setProperty("--ui", String(ui));
 }
 
-type PaletteMode = "command" | "search";
+type PaletteMode = "command" | "search" | "hunk";
 let paletteMode: PaletteMode = "command";
 let paletteCur = 0;
 /** whether the arrows picked a candidate, which Enter then runs */
 let palettePicked = false;
+/** the finder's answer to what was last asked, null before any */
+let found: (Hits & { query: string }) | null = null;
+let findTimer = 0;
+let findSeq = 0;
 
 function openPalette(mode: PaletteMode, text = ""): void {
   paletteMode = mode;
   const form = $<HTMLFormElement>("#palette");
   form.hidden = false;
-  $("#palette label").textContent = mode === "command" ? ":" : "/";
+  $("#palette label").textContent = mode === "command" ? ":" : mode === "search" ? "/" : "s";
   const input = $<HTMLInputElement>("#palette-input");
   input.value = text;
   paletteCur = 0;
   palettePicked = false;
+  found = null;
   renderPalette();
   input.focus();
 }
 
+/** Asks the finder for the hunks `query` names; an older answer arriving late is dropped. */
+async function findHunks(query: string): Promise<void> {
+  clearTimeout(findTimer);
+  findTimer = 0;
+  const seq = ++findSeq;
+  if (!query.trim()) {
+    found = null;
+    return renderPalette();
+  }
+  try {
+    const out = await api.search(query);
+    if (seq !== findSeq) return;
+    found = { ...out, query };
+    paletteCur = 0;
+    renderPalette();
+  } catch (e) {
+    if (seq === findSeq) toast((e as Error).message, true);
+  }
+}
+
 function closePalette(): void {
+  clearTimeout(findTimer);
+  findTimer = 0;
+  findSeq++;
   $<HTMLFormElement>("#palette").hidden = true;
   (document.activeElement as HTMLElement | null)?.blur();
 }
@@ -1444,6 +1474,7 @@ function candidates(): string[] {
 
 function renderPalette(): void {
   const list = $("#palette-list");
+  if (paletteMode === "hunk") return renderFound(list);
   if (paletteMode !== "command" || !st.review) return replace(list);
   const all = [...st.review.commands, ...CLIENT_COMMANDS];
   replace(
@@ -1467,7 +1498,46 @@ function renderPalette(): void {
   );
 }
 
+function renderFound(list: HTMLElement): void {
+  if (!found) return replace(list);
+  if (!found.hits.length) return replace(list, h("li", { class: "none" }, h("span", null, "no hunk matches")));
+  replace(
+    list,
+    found.hits.map((hit, k) => {
+      const [at, name] = hitRow(hit);
+      return h(
+        "li",
+        {
+          class: k === paletteCur ? "hit cur" : "hit",
+          onmousedown: (e: Event) => {
+            e.preventDefault();
+            paletteCur = k;
+            runPalette();
+          },
+        },
+        h("b", null, at),
+        h("span", null, name),
+      );
+    }),
+  );
+  list.querySelector("li.cur")?.scrollIntoView({ block: "nearest" });
+}
+
+/** The hunk under the finder's cursor, once what was typed has been asked. */
+async function runFound(query: string): Promise<void> {
+  if (found?.query !== query) await findHunks(query);
+  const hit = found?.hits[paletteCur];
+  if (!hit) return;
+  if (found!.generation !== st.review?.generation) return toast("the review was read again; find once more", true);
+  jumpTo(hit.i);
+}
+
 async function runPalette(): Promise<void> {
+  if (paletteMode === "hunk") {
+    const query = $<HTMLInputElement>("#palette-input").value;
+    closePalette();
+    return runFound(query);
+  }
   const picked = palettePicked && candidates()[paletteCur];
   const value = picked || $<HTMLInputElement>("#palette-input").value;
   closePalette();
@@ -1552,6 +1622,8 @@ function run(action: string): void {
       return openPalette("command", "goto ");
     case "search":
       return openPalette("search");
+    case "find-hunk":
+      return openPalette("hunk");
     case "search-next":
       return searchStep(1);
     case "search-prev":
@@ -1759,6 +1831,14 @@ function paletteKey(e: KeyboardEvent): void {
   if (e.key === "Escape") {
     e.preventDefault();
     return closePalette();
+  }
+  if (paletteMode === "hunk") {
+    if (e.key !== "Tab" && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const n = found?.hits.length ?? 0;
+    if (!n) return;
+    paletteCur = (paletteCur + (e.key === "ArrowUp" ? n - 1 : 1)) % n;
+    return renderPalette();
   }
   if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
@@ -2150,6 +2230,12 @@ function wire(): void {
   $("#palette-input").addEventListener("input", () => {
     paletteCur = 0;
     palettePicked = false;
+    if (paletteMode === "hunk") {
+      clearTimeout(findTimer);
+      const query = $<HTMLInputElement>("#palette-input").value;
+      findTimer = window.setTimeout(() => findHunks(query), FIND_DEBOUNCE);
+      return;
+    }
     renderPalette();
   });
   $("#palette-input").addEventListener("blur", () => setTimeout(() => (form.hidden = true), 100));

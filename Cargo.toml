@@ -31,7 +31,7 @@ path = "src/lib.rs"
 [features]
 default = ["web"]
 # `ordo`: the reviewer, served to a browser from the same binary
-web = ["dep:tree-sitter-highlight", "dep:toml", "dep:tiny_http"]
+web = ["dep:tree-sitter-highlight", "dep:toml", "dep:tiny_http", "dep:bm25"]
 # experiment: static-embedding similarity between hunks (examples/m2v.rs only)
 m2v = ["dep:model2vec-rs"]
 
@@ -81,6 +81,8 @@ tree-sitter-html = "0.23"
 tree-sitter-svelte-ng = "1.0"
 # the reviewer's localhost server: synchronous, no async runtime
 tiny_http = { version = "0.12", default-features = false, optional = true }
+# the palette finder's hunk ranking (Okapi BM25), with ordo's own tokenizer
+bm25 = { version = "2.3.2", default-features = false, optional = true }
 model2vec-rs = { version = "0.4", default-features = false, features = ["onig"], optional = true }
 
 [build-dependencies]

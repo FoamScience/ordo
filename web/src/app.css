@@ -408,6 +408,9 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 #palette li span { color: var(--dim); }
 #palette li:hover { background: var(--raise); }
 #palette li.cur { background: var(--select-bg); }
+#palette li.hit { grid-template-columns: max-content 1fr; }
+#palette li.none { cursor: default; }
+#palette li.none:hover { background: none; }
 
 #toast {
   position: fixed; bottom: var(--space-lg); left: 50%; transform: translate(-50%, var(--space-xs));

@@ -2,7 +2,7 @@
 // the URL fragment, which the browser never sends anywhere, and goes back to
 // the server as a header (or a query parameter where a header cannot go).
 
-import type { ActResult, FileData, ItemFacts, Slot, Theme } from "./types.ts";
+import type { ActResult, FileData, Hits, ItemFacts, Slot, Theme } from "./types.ts";
 
 export class Api {
   readonly token: string;
@@ -34,6 +34,10 @@ export class Api {
 
   item(i: number): Promise<ItemFacts> {
     return this.get("/api/item", { i });
+  }
+
+  search(q: string): Promise<Hits> {
+    return this.get("/api/search", { q });
   }
 
   themes(): Promise<{ themes: Record<string, Theme>; chosen: string | null }> {

@@ -6,6 +6,7 @@
 //! browser renders `view::review` and posts back what the reader did. Nothing
 //! here decides what a hunk means.
 
+mod search;
 pub(super) mod view;
 
 use crate::keys::Action;
@@ -72,6 +73,8 @@ struct Slot {
     version: u64,
     /// bumped when a load lands: hunk indices from before it mean other hunks
     generation: u64,
+    /// the palette finder's, over the hunks of the review that last landed
+    index: Option<search::Index>,
     /// when a reader last did something here, for `--watch=auto`'s idle rule
     touched: Instant,
     marks_seen: Option<SystemTime>,
@@ -275,6 +278,7 @@ impl Hub {
                 rx: Some(rx),
                 version: 0,
                 generation: 0,
+                index: None,
                 touched: Instant::now(),
                 marks_seen: None,
                 stale_seen: None,
@@ -467,6 +471,18 @@ impl Hub {
                 };
                 self.item(req, &rev, i)
             }
+            "/api/search" => {
+                let text = q.get("q").cloned().unwrap_or_default();
+                let mut slots = lock(&self.slots);
+                let slot = slots.get_mut(&rev).expect("slot");
+                slot.touched = Instant::now();
+                let (Phase::Ready(app), Some(index)) = (&slot.phase, &slot.index) else {
+                    return fail(req, 409, "the review is still loading");
+                };
+                let out = view::search(app, slot.generation, &index.search(&text, search::TOP));
+                drop(slots);
+                json(req, out)
+            }
             "/api/act" => self.act(req, &rev, &body),
             _ => fail(req, 404, "no such endpoint"),
         }
@@ -600,7 +616,19 @@ impl Hub {
             "open-editor" => open_in_editor(app, &mut extra),
             "command" => {
                 let line = body.get("line_text").and_then(|v| v.as_str()).unwrap_or("");
-                command(app, line, &mut extra)
+                let order = |app: &App| -> Vec<(String, [usize; 2])> {
+                    app.items
+                        .iter()
+                        .map(|it| (it.path.clone(), it.new_range))
+                        .collect()
+                };
+                let was = order(app);
+                let done = command(app, line, &mut extra);
+                // `:strategy` puts the hunks in another order under the same indices
+                if order(app) != was {
+                    slot.index = Some(search::Index::of(app));
+                }
+                done
             }
             _ => Err(format!("unknown action '{op}'")),
         };
@@ -706,6 +734,7 @@ fn drain(slot: &mut Slot, rev: &str, events: &mut Vec<(String, &'static str, ser
             Ok(LoadMsg::Done(r)) => {
                 let app = slot.session.fresh_app(*r);
                 slot.marks_seen = app.marks_path.as_deref().and_then(modified);
+                slot.index = Some(search::Index::of(&app));
                 slot.phase = Phase::Ready(Box::new(app));
                 slot.generation += 1;
                 slot.rx = None;

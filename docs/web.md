@@ -195,6 +195,7 @@ again, maximise it.
 | fill the frame with the focused pane | `C-w z`, `C-w _` |  |
 | **search** | | |
 | open the text-search prompt | `/` | `C-f` |
+| find a hunk anywhere in the review by the words in it | `s` |  |
 | next occurrence of the symbol under the cursor | `*` | `C-F12` |
 | previous occurrence of the symbol under the cursor | `#` | `C-S-F12` |
 | cycle to the next match | `n` | `F3` |
@@ -219,6 +220,12 @@ again, maximise it.
 | **help** | | |
 | show this keybinding help | `?` | `F1` |
 <!-- ordo:end keys -->
+
+`s` finds a hunk anywhere in the review by the words in it: its path, the
+definition it sits in, the names it defines and the lines it changed. As you
+type, the palette lists the best twenty by BM25 over identifier pieces
+(`getBladeWire` is `get`, `blade`, `wire`), each as `path:line` and its name;
+Up and Down pick one, Enter reads it, and `C-o` comes back.
 
 `:` opens the command palette, with completion over command names and each
 command's own arguments; `:e <rev>` moves the tab to another revision, and
