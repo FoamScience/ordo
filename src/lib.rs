@@ -422,6 +422,7 @@ impl Passes<'_> {
             order_index: place.in_file,
             rationale: self.ordered.rationale[gi].clone(),
             noise: sem.noise,
+            extent: sem.extent,
             comment: f.comment[li],
             details: sem.details.clone(),
             notes: sem.notes.clone(),
@@ -2162,9 +2163,14 @@ fn mark_shape(
     // parsed only once some hunk could be formatting, and cached by `parse`
     // for the readers that follow
     let mut trees: Option<Option<(tree_sitter::Tree, tree_sitter::Tree)>> = None;
+    // tokenized only once some hunk needs its kept share, over every
+    // two-sided hunk's rows at once
+    let mut refiner: Option<Option<refine::Refiner>> = None;
     for (h, sem) in raw.iter().zip(sems) {
+        let shape = formatting_shape(h, old_lines, new_lines);
+        let blank = matches!(shape, Shape::Blank);
         let formatting = !degraded
-            && match formatting_shape(h, old_lines, new_lines) {
+            && match shape {
                 Shape::Blank => true,
                 Shape::Different => false,
                 Shape::SameText => match spec {
@@ -2184,6 +2190,55 @@ fn mark_shape(
                 },
             };
         sem.noise = generated || formatting;
+        sem.extent = (!degraded).then(|| {
+            let o = hunk_text(old_lines, h.old_range);
+            let n = hunk_text(new_lines, h.new_range);
+            let squeeze = |t: &str| t.split_whitespace().collect::<String>();
+            match (o, n) {
+                _ if blank => Extent::Whitespace,
+                (Some(o), Some(n)) if formatting => {
+                    if squeeze(&o) == squeeze(&n) {
+                        Extent::Whitespace
+                    } else {
+                        Extent::Formatting
+                    }
+                }
+                (Some(o), Some(n)) => {
+                    let kept = match spec.filter(|s| !s.prose) {
+                        Some(spec) => refiner
+                            .get_or_insert_with(|| {
+                                let rows = |side: fn(&RawHunk) -> [usize; 2]| -> Vec<usize> {
+                                    raw.iter()
+                                        .map(side)
+                                        .filter(|&[a, b]| a >= 1 && b >= a)
+                                        .flat_map(|[a, b]| a - 1..b)
+                                        .collect()
+                                };
+                                refine::Refiner::for_rows(
+                                    spec,
+                                    (old_src, new_src),
+                                    (&rows(|h| h.old_range), &rows(|h| h.new_range)),
+                                )
+                            })
+                            .as_ref()
+                            .map(|r| r.kept_share(h.old_range, h.new_range)),
+                        None => None,
+                    }
+                    .unwrap_or_else(|| {
+                        let words =
+                            |t: &str| t.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+                        refine::kept_of(&words(&o), &words(&n))
+                    });
+                    if kept >= EDITED_SHARE {
+                        Extent::Edited
+                    } else {
+                        Extent::Rewritten
+                    }
+                }
+                (None, _) => Extent::Added,
+                (_, None) => Extent::Removed,
+            }
+        });
         let [o0, o1] = h.old_range;
         sem.whole_old_file = !old_lines.is_empty() && o0 == 1 && o1 >= old_lines.len();
         let changed = changed_lines(h, old_lines, new_lines);
@@ -2191,6 +2246,10 @@ fn mark_shape(
         sem.directive = c_like.then(|| conditional_directive(&changed)).flatten();
     }
 }
+
+/// Below this share of its old leaves kept, a two-sided hunk is new text in
+/// place of old rather than the old text edited.
+const EDITED_SHARE: f32 = 0.5;
 
 /// Every non-blank changed line, on both sides, opens with `@`: a java
 /// annotation, a python or ts decorator. A multi-line one whose later lines do

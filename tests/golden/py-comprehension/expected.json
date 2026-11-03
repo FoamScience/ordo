@@ -35,7 +35,8 @@
           "group": "g0",
           "order_index": 0,
           "rationale": "adds import os",
-          "noise": true
+          "noise": true,
+          "extent": "added"
         },
         {
           "id": "h1",
@@ -59,6 +60,7 @@
           "group": "g1",
           "order_index": 1,
           "rationale": "adds helper, used below",
+          "extent": "added",
           "symbols": [
             {
               "name": "helper",
@@ -86,7 +88,8 @@
           ],
           "group": "g2",
           "order_index": 2,
-          "rationale": "uses helper, added above"
+          "rationale": "uses helper, added above",
+          "extent": "added"
         }
       ]
     }

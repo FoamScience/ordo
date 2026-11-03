@@ -57,6 +57,7 @@ pub struct HunkSem {
     pub is_type: bool,
     /// formatting-only / generated-file hunk — skippable for review (P12.2)
     pub noise: bool,
+    pub extent: Option<crate::model::Extent>,
     /// named members of the enclosing container this hunk touches, new side, as
     /// `(name, normalized text)` (P15) — compared against the old side to
     /// compose `details`
@@ -144,6 +145,7 @@ impl HunkSem {
             adds_enclosing: false,
             is_type: false,
             noise: false,
+            extent: None,
             members: vec![],
             details: vec![],
             touched: vec![],
@@ -469,6 +471,7 @@ impl Parsed<'_> {
             }),
             is_type: (r0..=r1).any(|r| self.c.type_rows.contains(&r)),
             noise: false,
+            extent: None,
             members: sorted_unique(
                 self.c
                     .member_rows

@@ -33,6 +33,7 @@
           "group": "g0",
           "order_index": 0,
           "rationale": "adds helper, used below",
+          "extent": "rewritten",
           "symbols": [
             {
               "name": "helper",
@@ -60,7 +61,8 @@
           ],
           "group": "g1",
           "order_index": 1,
-          "rationale": "uses helper, added above"
+          "rationale": "uses helper, added above",
+          "extent": "added"
         }
       ]
     }

@@ -470,6 +470,10 @@
                       "type": "boolean",
                       "description": "formatting-only or generated-file hunk, skippable for review; omitted when false"
                     },
+                    "extent": {
+                      "enum": ["whitespace", "formatting", "edited", "rewritten", "added", "removed"],
+                      "description": "how much of the hunk changed: layout only (whitespace, formatting), most of its old text kept (edited) or replaced (rewritten), or one side empty (added, removed); omitted on a degraded file"
+                    },
                     "comment": {
                       "type": "boolean",
                       "description": "every changed line is a comment or docstring; drives `only_comments` filtering; omitted when false"
