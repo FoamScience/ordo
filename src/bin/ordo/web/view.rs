@@ -164,6 +164,29 @@ pub(crate) fn review(app: &App) -> Value {
     })
 }
 
+/// The palette finder's answer, each hunk as its row names it: where it
+/// starts and the name it defines or sits in.
+pub(super) fn search(app: &App, generation: u64, hits: &[(usize, f32)]) -> Value {
+    let hits: Vec<Value> = hits
+        .iter()
+        .map(|&(i, score)| {
+            let it = &app.items[i];
+            let line = if it.new_range[1] >= it.new_range[0] {
+                it.new_range[0]
+            } else {
+                it.old_range[0]
+            };
+            let name = it
+                .symbols
+                .first()
+                .map(|s| &s.name)
+                .or(it.enclosing.as_ref());
+            json!({ "i": i, "path": it.path, "line": line, "name": name, "score": score })
+        })
+        .collect();
+    json!({ "generation": generation, "hits": hits })
+}
+
 /// The keymap as the browser reads it: each bind's keys by their labels, and
 /// its action by the name a config file uses.
 pub(crate) fn keys(km: &Keymap) -> Vec<Value> {

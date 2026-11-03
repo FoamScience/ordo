@@ -1,6 +1,6 @@
 // The `:` command line: what was typed, and what it could become.
 
-import type { Command } from "./types.ts";
+import type { Command, Hit } from "./types.ts";
 
 export function parseCommand(line: string): { name: string; arg: string } {
   const t = line.trim().replace(/^:/, "").trimStart();
@@ -26,4 +26,9 @@ export function complete(input: string, commands: Command[], args: Record<string
   const name = t.slice(0, sp);
   const typed = t.slice(sp + 1);
   return (args[name] ?? []).filter((a) => a.startsWith(typed)).map((a) => `${name} ${a}`);
+}
+
+/** A finder hit as its row reads: where the hunk starts, then what it defines or sits in. */
+export function hitRow(hit: Hit): [string, string] {
+  return [`${hit.path}:${hit.line}`, hit.name ?? ""];
 }

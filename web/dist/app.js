@@ -384,12 +384,12 @@ var require_diff_match_patch = __commonJS({
       var length = 1;
       while (true) {
         var pattern = text1.substring(text_length - length);
-        var found = text2.indexOf(pattern);
-        if (found == -1) {
+        var found2 = text2.indexOf(pattern);
+        if (found2 == -1) {
           return best;
         }
-        length += found;
-        if (found == 0 || text1.substring(text_length - length) == text2.substring(0, length)) {
+        length += found2;
+        if (found2 == 0 || text1.substring(text_length - length) == text2.substring(0, length)) {
           best = length;
           length++;
         }
@@ -1513,6 +1513,9 @@ var Api = class {
   }
   item(i) {
     return this.get("/api/item", { i });
+  }
+  search(q2) {
+    return this.get("/api/search", { q: q2 });
   }
   themes() {
     return this.get("/api/themes");
@@ -3944,6 +3947,9 @@ function complete(input, commands, args) {
   const typed = t.slice(sp + 1);
   return (args[name] ?? []).filter((a) => a.startsWith(typed)).map((a) => `${name} ${a}`);
 }
+function hitRow(hit) {
+  return [`${hit.path}:${hit.line}`, hit.name ?? ""];
+}
 
 // src/summary.ts
 function files(r) {
@@ -3996,9 +4002,9 @@ function flagged(r, levels) {
   const out = r.view.flatMap((i) => r.items[i].findings.filter((f) => levels.includes(f.level)).map((f) => ({ i, f })));
   return out.sort((a, b) => levels.indexOf(a.f.level) - levels.indexOf(b.f.level));
 }
-function byRule(found) {
+function byRule(found2) {
   const groups = /* @__PURE__ */ new Map();
-  for (const x of found) {
+  for (const x of found2) {
     const g = groups.get(x.f.name) ?? { name: x.f.name, level: x.f.level, said: [], at: [] };
     const line = x.f.message.split("\n")[0];
     if (!g.said.includes(line)) g.said.push(line);
@@ -4057,6 +4063,7 @@ var SINCE = {
   moved: ["moved", "unchanged, but it reads in a different place now: its dependencies moved"]
 };
 var CHORD_TIMEOUT = 500;
+var FIND_DEBOUNCE = 120;
 var OP = { ctx: " ", add: "+", del: "-", edit: "~" };
 var rev = new URLSearchParams(location.search).get("rev") ?? "HEAD";
 var token = new URLSearchParams(location.hash.slice(1)).get("t") ?? sessionStorage.getItem("ordo.token") ?? "";
@@ -4708,20 +4715,20 @@ async function showPeek(line, word, col, at2) {
   if (!r) return;
   const seq = ++peekSeq;
   const changed = r.view.filter((i) => i !== st2.sel && (r.items[i].symbols.includes(word) || r.items[i].enclosing === word));
-  let found = [];
+  let found2 = [];
   try {
     const out = await api.act({ op: "hover", brief: true, sel: st2.sel, generation: r.generation, line: line - 1, col });
-    found = out.popup?.lines ?? [];
+    found2 = out.popup?.lines ?? [];
   } catch {
   }
   if (seq !== peekSeq) return;
-  if (!found.length && !changed.length) return;
+  if (!found2.length && !changed.length) return;
   const shown = changed.slice(0, 3);
   const p = $("#peek");
   replace(
     p,
     h("header", null, word),
-    found.length ? h("pre", null, found.join("\n").trim()) : null,
+    found2.length ? h("pre", null, found2.join("\n").trim()) : null,
     changed.length ? h(
       "div",
       { class: "changed" },
@@ -5272,19 +5279,44 @@ function applySize(ui) {
 var paletteMode = "command";
 var paletteCur = 0;
 var palettePicked = false;
+var found = null;
+var findTimer = 0;
+var findSeq = 0;
 function openPalette(mode, text = "") {
   paletteMode = mode;
   const form = $("#palette");
   form.hidden = false;
-  $("#palette label").textContent = mode === "command" ? ":" : "/";
+  $("#palette label").textContent = mode === "command" ? ":" : mode === "search" ? "/" : "s";
   const input = $("#palette-input");
   input.value = text;
   paletteCur = 0;
   palettePicked = false;
+  found = null;
   renderPalette();
   input.focus();
 }
+async function findHunks(query) {
+  clearTimeout(findTimer);
+  findTimer = 0;
+  const seq = ++findSeq;
+  if (!query.trim()) {
+    found = null;
+    return renderPalette();
+  }
+  try {
+    const out = await api.search(query);
+    if (seq !== findSeq) return;
+    found = { ...out, query };
+    paletteCur = 0;
+    renderPalette();
+  } catch (e) {
+    if (seq === findSeq) toast(e.message, true);
+  }
+}
 function closePalette() {
+  clearTimeout(findTimer);
+  findTimer = 0;
+  findSeq++;
   $("#palette").hidden = true;
   document.activeElement?.blur();
 }
@@ -5310,6 +5342,7 @@ function candidates() {
 }
 function renderPalette() {
   const list = $("#palette-list");
+  if (paletteMode === "hunk") return renderFound(list);
   if (paletteMode !== "command" || !st2.review) return replace(list);
   const all = [...st2.review.commands, ...CLIENT_COMMANDS];
   replace(
@@ -5332,7 +5365,43 @@ function renderPalette() {
     })
   );
 }
+function renderFound(list) {
+  if (!found) return replace(list);
+  if (!found.hits.length) return replace(list, h("li", { class: "none" }, h("span", null, "no hunk matches")));
+  replace(
+    list,
+    found.hits.map((hit, k) => {
+      const [at2, name] = hitRow(hit);
+      return h(
+        "li",
+        {
+          class: k === paletteCur ? "hit cur" : "hit",
+          onmousedown: (e) => {
+            e.preventDefault();
+            paletteCur = k;
+            runPalette();
+          }
+        },
+        h("b", null, at2),
+        h("span", null, name)
+      );
+    })
+  );
+  list.querySelector("li.cur")?.scrollIntoView({ block: "nearest" });
+}
+async function runFound(query) {
+  if (found?.query !== query) await findHunks(query);
+  const hit = found?.hits[paletteCur];
+  if (!hit) return;
+  if (found.generation !== st2.review?.generation) return toast("the review was read again; find once more", true);
+  jumpTo(hit.i);
+}
 async function runPalette() {
+  if (paletteMode === "hunk") {
+    const query = $("#palette-input").value;
+    closePalette();
+    return runFound(query);
+  }
   const picked = palettePicked && candidates()[paletteCur];
   const value = picked || $("#palette-input").value;
   closePalette();
@@ -5407,6 +5476,8 @@ function run(action) {
       return openPalette("command", "goto ");
     case "search":
       return openPalette("search");
+    case "find-hunk":
+      return openPalette("hunk");
     case "search-next":
       return searchStep(1);
     case "search-prev":
@@ -5607,6 +5678,14 @@ function paletteKey(e) {
   if (e.key === "Escape") {
     e.preventDefault();
     return closePalette();
+  }
+  if (paletteMode === "hunk") {
+    if (e.key !== "Tab" && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const n = found?.hits.length ?? 0;
+    if (!n) return;
+    paletteCur = (paletteCur + (e.key === "ArrowUp" ? n - 1 : 1)) % n;
+    return renderPalette();
   }
   if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
@@ -5961,6 +6040,12 @@ function wire() {
   $("#palette-input").addEventListener("input", () => {
     paletteCur = 0;
     palettePicked = false;
+    if (paletteMode === "hunk") {
+      clearTimeout(findTimer);
+      const query = $("#palette-input").value;
+      findTimer = window.setTimeout(() => findHunks(query), FIND_DEBOUNCE);
+      return;
+    }
     renderPalette();
   });
   $("#palette-input").addEventListener("blur", () => setTimeout(() => form.hidden = true, 100));

@@ -1384,6 +1384,15 @@ body.zoom #panes > .pane:not(.zoomed) {
 #palette li.cur {
   background: var(--select-bg);
 }
+#palette li.hit {
+  grid-template-columns: max-content 1fr;
+}
+#palette li.none {
+  cursor: default;
+}
+#palette li.none:hover {
+  background: none;
+}
 #toast {
   position: fixed;
   bottom: var(--space-lg);

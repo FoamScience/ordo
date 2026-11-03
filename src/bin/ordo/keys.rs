@@ -64,6 +64,8 @@ pub(super) enum Action {
     Hover,
     /// `/` — open the text-search prompt
     SearchOpen,
+    /// `s` — find a hunk anywhere in the review by the words in it
+    FindHunk,
     /// `*` / `#` — jump to the next/previous tree-sitter occurrence of the
     /// symbol under the cursor
     SymbolNext,
@@ -281,6 +283,7 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (Some(ch('z')), ch('M'), Action::Fold(Fold::CloseAll)),
                 (None, ch('K'), Action::Hover),
                 (None, ch('/'), Action::SearchOpen),
+                (None, ch('s'), Action::FindHunk),
                 (None, ch('*'), Action::SymbolNext),
                 (None, ch('#'), Action::SymbolPrev),
                 (None, ch('n'), Action::SearchNext),
@@ -504,6 +507,7 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
             "code pane: show the symbol under the cursor and its history · why pane: preview the current dep line's target",
         ),
         Action::SearchOpen => (Category::Search, "open the text-search prompt"),
+        Action::FindHunk => (Category::Search, "find a hunk anywhere in the review by the words in it"),
         Action::SymbolNext => (Category::Search, "next occurrence of the symbol under the cursor"),
         Action::SymbolPrev => (Category::Search, "previous occurrence of the symbol under the cursor"),
         Action::SearchNext => (Category::Search, "cycle to the next match"),
@@ -566,6 +570,7 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("reload", Action::Reload),
     ("hover", Action::Hover),
     ("search", Action::SearchOpen),
+    ("find-hunk", Action::FindHunk),
     ("symbol-next", Action::SymbolNext),
     ("symbol-prev", Action::SymbolPrev),
     ("search-next", Action::SearchNext),

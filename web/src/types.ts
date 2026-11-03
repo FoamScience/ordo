@@ -162,6 +162,20 @@ export interface ItemFacts {
   comments: LineComment[];
 }
 
+/** One hunk the palette finder ranked, as its row names it. */
+export interface Hit {
+  i: number;
+  path: string;
+  line: number;
+  name: string | null;
+  score: number;
+}
+
+export interface Hits {
+  generation: number;
+  hits: Hit[];
+}
+
 export interface Popup {
   title: string;
   lines: string[];

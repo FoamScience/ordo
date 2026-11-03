@@ -48,6 +48,7 @@ ordo <rev>
        GET  /api/review?rev=…        view model (JSON)
        GET  /api/file?rev=…&path=…   one file, both sides, highlighted by role
        GET  /api/item?rev=…&i=…      the why pane's costlier facts for one hunk
+       GET  /api/search?rev=…&q=…    the palette finder: the hunks q names, by BM25
        POST /api/act?rev=…           mark, fold, reload, a served action, hover,
                                      settings, open-in-editor, a palette command
        GET  /api/events?rev=…        SSE: load progress, reload, marks changed
