@@ -1,10 +1,10 @@
 // ------------------------------------------------------ generated doc blocks
 
 use super::*;
-use crate::code_view::THEME_ROLES;
 use crate::commands::*;
 use crate::keys::*;
 use crate::rules::*;
+use crate::theme::*;
 use std::path::Path;
 
 /// Whether a `UPDATE_*` escape hatch is actually switched on. Testing
@@ -22,7 +22,7 @@ const FILES: &[&str] = &[
     "docs/languages.md",
     "docs/reviewing.md",
     "docs/rules.md",
-    "docs/tui.md",
+    "docs/web.md",
 ];
 
 /// Wraps a comma-separated list at `width` columns, so a regenerated list

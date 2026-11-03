@@ -1,12 +1,12 @@
 # Web reviewer — design
 
-**Status:** approved; the TUI is frozen while this is built (it keeps
-compiling and its tests stay green, but gets no new features).
+**Status:** built. The terminal reviewer it was designed beside has since
+been removed; `ordo <rev>` starts this one.
 **Problem:** a terminal grid is too tight for what a review needs to show
 side by side: a reading-order list, the code, and a why pane whose tables
 (what a hunk needs, what needs it, what breaks if it is rejected) get cut to
-"and 3 more". The web reviewer is a second first-party client of the engine,
-in the same binary, reading the same caches.
+"and 3 more". The web reviewer is a first-party client of the engine, in the
+same binary, reading the same caches.
 
 ## Goal / non-goals
 - **Goal:** `ordo web <rev> [<glob>...]` — the same revisions, filters,
@@ -38,8 +38,8 @@ Both clients benefit, so they go in before any web code.
 ## Shape
 
 ```
-ordo web <rev>
-  └─ review layer (shared with the TUI, ratatui-free)
+ordo <rev>
+  └─ review layer
        gather (git / GitButler) → ordo::run → items → overlays (SARIF, lcov,
        waves) → derived facts (delta, cascade, grouping, churn)
        persistence: marks, notes, comments, run snapshots (~/.cache/ordo)
@@ -53,23 +53,18 @@ ordo web <rev>
        GET  /api/events?rev=…        SSE: load progress, reload, marks changed
 ```
 
-- **Review layer.** The ratatui-free logic that is now in `src/bin/ordo`
-  moves into one module that both clients use: gathering, `Item`, marks,
+- **Review layer.** The logic in `src/bin/ordo`: gathering, `Item`, marks,
   notes, comments, waves, churn, SARIF/lcov placement, and the derived
-  strings. Highlighting produces **role names** (the twelve syntax roles),
-  never colours. The TUI resolves roles to colours itself, and the browser
-  maps them to CSS variables.
-  *As built:* the server holds the terminal's own `Session` and `App` per
-  revision, headless, and calls the same load, watch, command and drawing-text
-  functions. The ratatui types are still compiled in, but none of them reach
-  the browser; pulling them into a separate module is left for when a third
-  client needs it.
+  facts. Highlighting produces **role names** (the twelve syntax roles),
+  never colours; the browser maps them to CSS variables.
+  The server holds one `Session` and `App` per revision and calls the load,
+  watch and command functions directly.
 - **Transport.** `tiny_http` (synchronous, threads, no async runtime) sits
   behind a default-on `web` feature. Server-Sent Events carry the one-way
   pushes the client needs:
   - load progress;
   - `--watch` reloads;
-  - marks or notes changed by another client (the TUI, or a second tab).
+  - marks or notes changed by another tab or another `ordo`.
 - **Revisions.** The URL carries the rev (`/?rev=at`). One process caches
   several loaded revisions, so tabs can hold different ones, and `:e <rev>`
   switches without restarting.
@@ -79,7 +74,7 @@ ordo web <rev>
     must carry it.
   - The `Host` header is checked against DNS rebinding.
   - Marks, notes and comments are written atomically with read-merge-write,
-    so the TUI and several tabs never clobber each other.
+    so several tabs and processes never clobber each other.
 
 ## Client
 - **Build.** Vanilla TypeScript in `web/src`, bundled by esbuild through
@@ -116,10 +111,10 @@ ordo web <rev>
     as rules missing. Each finding shows its level, name, source and
     message, and jumps to its line.
 - **Themes.** The truecolor palettes ship as CSS-variable themes. The default
-  follows `prefers-color-scheme`. `tui.toml` `[theme]` overrides apply on
+  follows `prefers-color-scheme`. `ordo.toml` `[theme]` overrides apply on
   top.
-- **Keys.** The vim preset's defaults, `tui.toml` `[binds]`, and the mouse.
-- **Command palette (`:`).** Every TUI command except `:quickfix`.
+- **Keys.** The vim preset's defaults, `ordo.toml` `[binds]`, and the mouse.
+- **Command palette (`:`).** Every command `:help` lists.
 - **Opening the editor.** `ge` opens the file at the hunk, either through a
   configurable URL (default `vscode://file/{root}/{path}:{line}`) or by having the
   server spawn `$VISUAL`.
@@ -134,7 +129,7 @@ ordo web <rev>
 
 ## Phases
 1. Engine: formatting only; a root swallows its children.
-2. The shared review layer, with the TUI green.
+2. The review layer, separated from drawing.
 3. `ordo web`: server, view model, SSE, loading progress, cached revs.
 4. Client core: band, list, code, why, themes, keys.
 5. Parity: comments, notes, watch, waves, SARIF/coverage, dependency canvas,

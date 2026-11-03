@@ -40,8 +40,7 @@ fn run_cmd(bin: &str, args: &[&str]) -> String {
 /// Commands that failed, so a review that came back empty can say why.
 ///
 /// `run_cmd` returns an empty string on failure and always has: the load runs
-/// on a worker thread with the TUI already holding the terminal, so it cannot
-/// print, and threading a Result through twenty-odd call sites buys nothing
+/// on a worker thread with no one to print to, and threading a Result through twenty-odd call sites buys nothing
 /// the caller would act on differently. What was missing is that the failure
 /// left no trace at all, so a bad revision or an unreadable object arrived as
 /// "nothing to review". Collected here and drained into the empty-review

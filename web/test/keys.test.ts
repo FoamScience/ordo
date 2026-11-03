@@ -11,7 +11,7 @@ const ev = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shif
   ...mods,
 });
 
-test("a key is named the way tui.toml names it", () => {
+test("a key is named the way ordo.toml names it", () => {
   assert.equal(keyLabel(ev("j")), "j");
   assert.equal(keyLabel(ev("G", { shiftKey: true })), "G");
   assert.equal(keyLabel(ev("w", { ctrlKey: true })), "C-w");

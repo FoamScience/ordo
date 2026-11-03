@@ -1,5 +1,5 @@
-// ordo's themes as CSS variables. A role a theme leaves to the terminal
-// (null) keeps this page's own default for the light or dark base.
+// ordo's themes as CSS variables. A role a theme leaves unset (null) keeps
+// this page's own default for the light or dark base.
 
 import type { Api } from "./api.ts";
 import type { Theme } from "./types.ts";
@@ -11,7 +11,7 @@ export function cssVar(role: string): string | null {
   if (role.startsWith("syntax-")) return `--syn-${role.slice(7)}`;
   const own: Record<string, string> = { border: "--line", "border-focus": "--focus" };
   if (own[role]) return own[role];
-  return ["fg", "dim", "accent", "reviewed"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
+  return ["fg", "dim", "accent", "reviewed", "warn"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
 }
 
 /** Light or dark, from how bright the theme's text is. */
@@ -26,7 +26,7 @@ export function baseOf(theme: Theme): "light" | "dark" | null {
 export async function loadThemes(api: Api): Promise<void> {
   try {
     const t = await api.themes();
-    // the page has its own look; a terminal theme applies only when asked for
+    // the page has its own look; an ordo theme applies only when asked for
     themes = t.themes;
   } catch {
     themes = {};

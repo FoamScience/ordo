@@ -1,14 +1,12 @@
 //! What the browser is sent: the review as data it only has to lay out.
-//! Every sentence here comes from the same functions the terminal draws with.
 
 use super::{Phase, Slot};
-use crate::code_view::{apply_theme_colors, theme, theme_names, theme_role_color, THEME_ROLES};
 use crate::commands::COMMANDS;
-use crate::draw::{cascade, coverage, note_for, scope_line, top_level, unreviewed_deps};
+use crate::facts::{cascade, coverage, note_for, out_of_order, scope_line, top_level};
 use crate::highlight::{highlight_roles, RoleSpans};
-use crate::keys::{key_label, ACTION_NAMES};
+use crate::keys::{key_label, Keymap, ACTION_NAMES};
+use crate::theme::{apply_theme_colors, theme, theme_names, theme_role_color, Color, THEME_ROLES};
 use crate::*;
-use ratatui::style::Color;
 use serde_json::{json, Value};
 
 pub(super) fn slot(slot: &Slot) -> Value {
@@ -46,9 +44,9 @@ fn delta(d: Option<&Delta>) -> Value {
 
 /// The whole review, one entry per hunk plus the list's rows. The facts that
 /// cost more than a row should (the cascade, line churn) are `item`'s.
-pub(super) fn review(app: &App) -> Value {
+pub(crate) fn review(app: &App) -> Value {
     // a first run compares against nothing, and "everything is new" says
-    // nothing (the same rule `delta_line` keeps)
+    // nothing, so no hunk carries a delta then
     let first_run = app.deltas.iter().all(|d| *d == Delta::New);
     let items: Vec<Value> = app
         .items
@@ -87,7 +85,6 @@ pub(super) fn review(app: &App) -> Value {
                 "level": level(top_level(it)),
                 "uses_at": it.uses_at,
                 "executed": it.executed,
-                "cluster": it.cluster,
                 "wave": it.wave,
                 "reviewed": app.reviewed[i],
                 "delta": if first_run { Value::Null } else { delta(app.deltas.get(i)) },
@@ -160,14 +157,23 @@ pub(super) fn review(app: &App) -> Value {
         "root": root(),
         "editor": std::env::var("ORDO_WEB_EDITOR").ok(),
         "config": app.config.as_ref().map(config_view),
-        "keys": app.keys.binds.iter().filter_map(|(pre, key, action)| {
-            let name = ACTION_NAMES.iter().find(|(_, a)| a == action)?.0;
-            Some(json!({ "prefix": pre.map(key_label), "key": key_label(*key), "action": name }))
-        }).collect::<Vec<_>>(),
+        "keys": keys(&app.keys),
         "commands": COMMANDS.iter().map(|c| json!({
             "name": c.name, "args": c.args, "help": c.help,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// The keymap as the browser reads it: each bind's keys by their labels, and
+/// its action by the name a config file uses.
+pub(crate) fn keys(km: &Keymap) -> Vec<Value> {
+    km.binds
+        .iter()
+        .filter_map(|(pre, key, action)| {
+            let name = ACTION_NAMES.iter().find(|(_, a)| a == action)?.0;
+            Some(json!({ "prefix": pre.map(key_label), "key": key_label(*key), "action": name }))
+        })
+        .collect()
 }
 
 /// The rules that can fire in this file, by its language — what the findings
@@ -226,7 +232,7 @@ pub(super) fn item(app: &App, i: usize) -> Value {
     json!({
         "i": i,
         "cascade": cascade(app, i),
-        "out_of_order": if app.reviewed[i] { unreviewed_deps(app, i) } else { vec![] },
+        "out_of_order": out_of_order(app, i),
         "line_churn": line_churn,
         "comments": comments,
     })
@@ -305,31 +311,25 @@ pub(super) fn file(path: &str, text: Option<FileText>) -> Value {
 }
 
 pub(super) fn popup(p: &Popup) -> Value {
-    let lines: Vec<String> = p
-        .lines
-        .iter()
-        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-        .collect();
-    json!({ "title": p.title, "lines": lines })
+    json!({ "title": p.title, "lines": p.lines })
 }
 
 fn hex(c: Color) -> Value {
     match c {
         Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}").into(),
-        _ => Value::Null,
+        Color::Default => Value::Null,
     }
 }
 
 /// Every theme by name, each role's colour (or null where the theme leaves it
-/// to the terminal, which the browser's own default then decides), with
-/// `tui.toml`'s `[theme]` overrides on top — the same file the terminal reads.
+/// to the page's own default), with `ordo.toml`'s `[theme]` overrides on top.
 pub(super) fn themes() -> Value {
     let cfg = config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|t| parse_key_config(&t));
     let chosen = cfg.as_ref().and_then(|c| c.theme.clone());
     let mut out = serde_json::Map::new();
-    for name in theme_names().into_iter().filter(|n| n != "terminal") {
+    for name in theme_names() {
         let Some(t) = theme(&name) else { continue };
         let t = match &cfg {
             Some(c) => apply_theme_colors(t, &c.colors),

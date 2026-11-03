@@ -116,7 +116,7 @@ Three things decide what runs:
    includes, and the repo can silence one you include.
 3. **A name defined twice in one file is a problem**, not a silent last-wins.
 
-`--rules <preset-or-file>` layers one more source last. `:rules` in the TUI shows
+`--rules <preset-or-file>` layers one more source last. `:rules` in the reviewer shows
 where the active rules came from, what was replaced, what was disabled — a
 silenced rule looks exactly like a convention nobody breaks, so the silencing is
 never silent.

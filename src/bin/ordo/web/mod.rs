@@ -1,13 +1,14 @@
 // ------------------------------------------------------------------------ web
-//! `ordo web`: the reviewer in a browser, served from this binary.
+//! The reviewer in a browser, served from this binary.
 //!
 //! The server owns every review it has been asked for — one `Session` and its
-//! `App` per revision — and runs the same load, watch and command code the
-//! terminal reviewer runs. The browser renders `view::review` and posts back
-//! what the reader did. Nothing here decides what a hunk means.
+//! `App` per revision — and runs the load, watch and command code. The
+//! browser renders `view::review` and posts back what the reader did. Nothing
+//! here decides what a hunk means.
 
-mod view;
+pub(super) mod view;
 
+use crate::keys::Action;
 use crate::*;
 use std::io::Write;
 use std::path::Path;
@@ -50,7 +51,7 @@ fn asset(name: &str, built: &str) -> String {
         .unwrap_or_else(|| built.to_string())
 }
 
-/// What `ordo web` was asked for on top of a review's own settings.
+/// What the server was asked for on top of a review's own settings.
 pub(super) struct WebArgs {
     pub(super) port: u16,
     pub(super) open: bool,
@@ -62,7 +63,7 @@ enum Phase {
     Empty(String),
 }
 
-/// One revision's review, as `run` keeps it for the terminal.
+/// One revision's review.
 struct Slot {
     session: Session,
     phase: Phase,
@@ -384,7 +385,7 @@ impl Hub {
                             .flatten()
                     });
                 if !token.is_some_and(|t| same_secret(&t, &self.token)) {
-                    return fail(req, 401, "missing or wrong session token: open the URL `ordo web` printed when it started");
+                    return fail(req, 401, "missing or wrong session token: open the URL `ordo` printed when it started");
                 }
                 self.api(req, &path, &q);
             }
@@ -520,8 +521,8 @@ impl Hub {
         let op = body.get("op").and_then(|v| v.as_str()).unwrap_or("");
         let int = |k: &str| body.get(k).and_then(|v| v.as_u64()).map(|v| v as usize);
         if op == "reload" && matches!(slot.phase, Phase::Empty(_)) {
-            // the terminal quits on an empty review; a server stays, so the
-            // reader can ask again once there is something to read
+            // an empty review stays, so the reader can ask again once there
+            // is something to read
             slot.rx = Some(slot.session.spawn_load(slot.session.target.clone()));
             slot.phase = Phase::Loading("starting…".to_string());
             slot.version += 1;
@@ -574,30 +575,14 @@ impl Hub {
             }
             "action" => {
                 let name = body.get("action").and_then(|v| v.as_str()).unwrap_or("");
-                // the moves whose rule lives on this side: the finding cycle,
-                // folds and waves. Plain motion stays in the browser.
-                const SERVED: &[&str] = &[
-                    "finding-next",
-                    "finding-prev",
-                    "fold-toggle",
-                    "fold-open",
-                    "fold-close",
-                    "fold-open-all",
-                    "fold-close-all",
-                    "wave-next",
-                    "wave-prev",
-                ];
-                match crate::keys::action_by_name(name).filter(|_| SERVED.contains(&name)) {
-                    Some(a) => {
-                        app.focus = Pane::List;
-                        app.popup = None;
-                        apply_anywhere(app, a);
+                match crate::keys::action_by_name(name) {
+                    Some(a) if served(app, a) => {
                         if let Some(n) = app.notice.take() {
                             extra.insert("notice".into(), n.into());
                         }
                         Ok(())
                     }
-                    None => Err(format!("'{name}' is not an action the browser sends")),
+                    _ => Err(format!("'{name}' is not an action the browser sends")),
                 }
             }
             "hover" => {
@@ -674,6 +659,25 @@ impl Hub {
     }
 }
 
+/// The moves whose rule lives on this side: the finding cycle, folds and
+/// waves. Plain motion stays in the browser. False for any other action.
+fn served(app: &mut App, a: Action) -> bool {
+    // a served move closes the popup, which was about where the reviewer was
+    let popup = app.popup.take();
+    match a {
+        Action::FindingNext => finding_move(app, true),
+        Action::FindingPrev => finding_move(app, false),
+        Action::Fold(how) => fold(app, how),
+        Action::WaveNext => step_wave(app, true),
+        Action::WavePrev => step_wave(app, false),
+        _ => {
+            app.popup = popup;
+            return false;
+        }
+    }
+    true
+}
+
 /// The review as every tab reads it; the selection is each tab's own.
 fn fingerprint(app: &App) -> String {
     let mut v = view::review(app);
@@ -728,7 +732,7 @@ fn modified(p: &Path) -> Option<SystemTime> {
 }
 
 /// `--watch`, and marks written by another reviewer of this repository (a
-/// second tab is the same `App`; the terminal reviewer is not).
+/// second tab is the same `App`; a second server is not).
 fn watch(slot: &mut Slot, rev: &str, events: &mut Vec<(String, &'static str, serde_json::Value)>) {
     let Phase::Ready(app) = &mut slot.phase else {
         return;
@@ -773,8 +777,7 @@ fn watch(slot: &mut Slot, rev: &str, events: &mut Vec<(String, &'static str, ser
     }
 }
 
-/// `:config` from the browser: the same `ConfigUi` the terminal edits, driven
-/// by row rather than by cursor.
+/// `:config` from the browser: the `ConfigUi`, driven by row.
 fn config(app: &mut App, body: &serde_json::Value) -> Result<(), String> {
     let what = body.get("do").and_then(|v| v.as_str()).unwrap_or("");
     let row = body.get("row").and_then(|v| v.as_u64()).map(|v| v as usize);
@@ -808,8 +811,7 @@ fn config(app: &mut App, body: &serde_json::Value) -> Result<(), String> {
 
 /// `ge`: the hunk's file at its line, in the editor `$ORDO_WEB_EDITOR` names —
 /// a URL the browser opens (`{root}`, `{path}` and `{line}` filled in; the
-/// default is VS Code's), or `server`, to start `$VISUAL` from here the way
-/// the terminal's `ge` does.
+/// default is VS Code's), or `server`, to start `$VISUAL` from here.
 fn open_in_editor(
     app: &App,
     extra: &mut serde_json::Map<String, serde_json::Value>,
@@ -839,8 +841,8 @@ fn open_in_editor(
     Ok(())
 }
 
-/// A command from the palette, as the terminal's `:` bar runs it. The few
-/// that act on the terminal itself answer the browser instead.
+/// A command from the palette. The few that move the tab or reach its
+/// clipboard answer the browser instead.
 fn command(
     app: &mut App,
     line: &str,
@@ -849,10 +851,6 @@ fn command(
     let line = line.trim().trim_start_matches(':');
     let (name, arg) = crate::commands::parse_command_line(line);
     match name {
-        "q" => return Ok(()),
-        "quickfix" | "qf" | "vim-qfl" => {
-            return Err(":quickfix is the terminal reviewer's; the list is already here".into())
-        }
         "e" => {
             let rev = arg.trim();
             if rev.is_empty() {
@@ -875,12 +873,7 @@ fn command(
         }
         _ => {}
     }
-    match crate::commands::execute_command(app, line)? {
-        CommandOutcome::Reload(_, rev) => {
-            extra.insert("navigate".into(), rev.into());
-        }
-        CommandOutcome::Quit | CommandOutcome::None | CommandOutcome::OpenQuickfix(_) => {}
-    }
+    crate::commands::execute_command(app, line)?;
     if let Some(p) = app.popup.take() {
         extra.insert("popup".into(), view::popup(&p));
     }
