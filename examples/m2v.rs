@@ -22,6 +22,11 @@
 //! type and a path-only rule (docs if every hunk is markdown, test if every
 //! hunk is in a test file).
 //! `M2V_DUMP` gets one line per held-out commit.
+//!
+//! `M2V_MODE=search` tests retrieval within one repo, which takes the repo and
+//! language out of the comparison: a commit's subject finding its own hunks,
+//! against BM25. `M2V_MODEL` takes several dirs, comma-separated,
+//! scored side by side; `M2V_DUMP` gets each method's top three for a sample.
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -61,6 +66,16 @@ fn lines(text: &str, [start, count]: [usize; 2]) -> impl Iterator<Item = &str> {
 }
 
 fn reduce(model: &StaticModel, input: Input, embed_time: &mut Duration) -> (Run, Output) {
+    let (mut run, texts, out) = extract(input);
+    let t0 = Instant::now();
+    run.emb = model.encode(&texts);
+    *embed_time += t0.elapsed();
+    (run, out)
+}
+
+/// The engine's non-noise clustered hunks, each with the text the models embed:
+/// path, enclosing definition, defined and used names, then both sides' lines.
+fn extract(input: Input) -> (Run, Vec<String>, Output) {
     let sides: HashMap<String, (String, String)> = input
         .changes
         .iter()
@@ -105,18 +120,13 @@ fn reduce(model: &StaticModel, input: Input, embed_time: &mut Duration) -> (Run,
             texts.push(t);
         }
     }
-    let t0 = Instant::now();
-    let emb = model.encode(&texts);
-    *embed_time += t0.elapsed();
-    (
-        Run {
-            path,
-            label,
-            cluster,
-            emb,
-        },
-        out,
-    )
+    let run = Run {
+        path,
+        label,
+        cluster,
+        emb: vec![],
+    };
+    (run, texts, out)
 }
 
 fn cos(a: &[f32], b: &[f32]) -> f32 {
@@ -615,10 +625,392 @@ fn intent_mode(
     println!("embedding time {:.2}s", embed_time.as_secs_f64());
 }
 
+/// Lower-case word pieces of identifiers: split on anything not alphanumeric and
+/// on camelCase humps, dropping single characters and bare numbers.
+fn tokens(text: &str) -> Vec<String> {
+    let mut out = vec![];
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        let chars: Vec<char> = word.chars().collect();
+        let mut start = 0;
+        for i in 1..=chars.len() {
+            let cut = i == chars.len()
+                || (chars[i].is_uppercase()
+                    && (chars[i - 1].is_lowercase()
+                        || chars.get(i + 1).is_some_and(|c| c.is_lowercase())
+                            && chars[i - 1].is_uppercase()));
+            if cut {
+                let piece: String = chars[start..i].iter().collect::<String>().to_lowercase();
+                if piece.chars().count() > 1 && !piece.chars().all(|c| c.is_ascii_digit()) {
+                    out.push(piece);
+                }
+                start = i;
+            }
+        }
+    }
+    out
+}
+
+/// Okapi BM25 (k1 1.2, b 0.75) over token lists.
+struct Bm25 {
+    tf: Vec<HashMap<String, f32>>,
+    len: Vec<f32>,
+    avg: f32,
+    df: HashMap<String, f32>,
+}
+
+impl Bm25 {
+    fn new(docs: &[Vec<String>]) -> Self {
+        let mut df: HashMap<String, f32> = HashMap::new();
+        let tf: Vec<HashMap<String, f32>> = docs
+            .iter()
+            .map(|d| {
+                let mut m: HashMap<String, f32> = HashMap::new();
+                d.iter()
+                    .for_each(|t| *m.entry(t.clone()).or_default() += 1.0);
+                m.keys()
+                    .for_each(|t| *df.entry(t.clone()).or_default() += 1.0);
+                m
+            })
+            .collect();
+        let len: Vec<f32> = docs.iter().map(|d| d.len() as f32).collect();
+        let avg = len.iter().sum::<f32>() / len.len().max(1) as f32;
+        Bm25 { tf, len, avg, df }
+    }
+
+    /// Every document's score for the distinct terms of `query`.
+    fn scores(&self, query: &[String]) -> Vec<f32> {
+        let n = self.tf.len() as f32;
+        let mut terms: Vec<&String> = query.iter().collect();
+        terms.sort();
+        terms.dedup();
+        let idf: Vec<(&String, f32)> = terms
+            .into_iter()
+            .filter_map(|t| {
+                let df = *self.df.get(t)?;
+                Some((t, (1.0 + (n - df + 0.5) / (df + 0.5)).ln()))
+            })
+            .collect();
+        self.tf
+            .iter()
+            .zip(&self.len)
+            .map(|(tf, &len)| {
+                let norm = 1.2 * (0.25 + 0.75 * len / self.avg.max(1.0));
+                idf.iter()
+                    .filter_map(|&(t, w)| tf.get(t).map(|&f| w * f * 2.2 / (f + norm)))
+                    .sum()
+            })
+            .collect()
+    }
+}
+
+/// Reciprocal-rank fusion (k = 60) of two rankings over the same items.
+fn rrf(a: &[usize], b: &[usize]) -> Vec<f32> {
+    let mut s = vec![0.0; a.len().max(b.iter().max().map_or(0, |m| m + 1))];
+    for ranking in [a, b] {
+        for (r, &i) in ranking.iter().enumerate() {
+            s[i] += 1.0 / (61.0 + r as f32);
+        }
+    }
+    s
+}
+
+/// `items` by descending score; ties go to the lower `tie` key.
+fn ranked(items: &[usize], score: &[f32], tie: impl Fn(usize) -> usize) -> Vec<usize> {
+    let mut v = items.to_vec();
+    v.sort_by(|&a, &b| score[b].total_cmp(&score[a]).then(tie(a).cmp(&tie(b))));
+    v
+}
+
+/// Short display name of a model dir: the hub repo name when it is a hub cache path.
+fn model_name(dir: &str) -> String {
+    dir.split('/')
+        .find_map(|s| s.strip_prefix("models--"))
+        .and_then(|s| s.rsplit("--").next())
+        .unwrap_or(dir.trim_end_matches('/').rsplit('/').next().unwrap_or(dir))
+        .to_string()
+}
+
+const CONVENTIONAL: [&str; 13] = [
+    "feat", "fix", "refactor", "docs", "doc", "test", "tests", "perf", "chore", "build", "ci",
+    "style", "revert",
+];
+
+/// A subject without its conventional `type(scope)!:`, `[Tag]` or `ENH:` head,
+/// its trailing `(#123)` and its area head (`lib:`, `` `nvm ls`: ``), as
+/// (area, rest). The area is the conventional scope or the area head.
+fn split_subject(subject: &str) -> (Option<String>, &str) {
+    let mut s = subject.trim();
+    if let Some(r) = s.strip_suffix(')').and_then(|r| r.rsplit_once(" (#")) {
+        if r.1.chars().all(|c| c.is_ascii_digit()) {
+            s = r.0.trim_end();
+        }
+    }
+    if let Some(rest) = s.strip_prefix('[').and_then(|r| r.split_once(']')) {
+        s = rest.1.trim_start();
+    }
+    let Some((head, rest)) = s.split_once(": ") else {
+        return (None, s);
+    };
+    let (ty, scope) = match head.trim_end_matches('!').split_once('(') {
+        Some((t, sc)) => (t, Some(sc.trim_end_matches(')'))),
+        None => (head.trim_end_matches('!'), None),
+    };
+    if CONVENTIONAL.contains(&ty) {
+        return (scope.map(str::to_lowercase), rest);
+    }
+    let area = head.trim_matches('`');
+    if head.contains(' ') && !head.starts_with('`') || area.len() > 40 {
+        return (None, s);
+    }
+    if area.chars().all(|c| !c.is_lowercase()) {
+        return (None, rest);
+    }
+    (Some(area.to_lowercase()), rest)
+}
+
+/// One repo's newest non-merge commits that have at least one embedded hunk,
+/// newest first, with their hunks flattened across commits.
+struct History {
+    commits: Vec<Commit>,
+    hunks: Vec<Hunk>,
+}
+
+struct Hunk {
+    commit: usize,
+    label: String,
+    tokens: Vec<String>,
+    /// One per model.
+    emb: Vec<Vec<f32>>,
+}
+
+struct Commit {
+    sha: String,
+    subject: String,
+    hunks: std::ops::Range<usize>,
+}
+
+fn history(models: &[StaticModel], dir: &Path, repo: &Repo, embed_time: &mut Duration) -> History {
+    let max = repo.max_commits.to_string();
+    let log = git(
+        dir,
+        &[
+            "log",
+            "--no-merges",
+            "--format=%H%x1f%s%x1e",
+            "--max-count",
+            &max,
+            &repo.rev,
+        ],
+    );
+    let mut h = History {
+        commits: vec![],
+        hunks: vec![],
+    };
+    for rec in log.split('\x1e') {
+        let mut f = rec.trim_start_matches('\n').splitn(2, '\x1f');
+        let (Some(sha), Some(subject)) = (f.next(), f.next()) else {
+            continue;
+        };
+        let Some((_, input)) = commit_input(dir, sha) else {
+            continue;
+        };
+        let (run, texts, _) = extract(input);
+        if texts.is_empty() {
+            continue;
+        }
+        let t0 = Instant::now();
+        let embs: Vec<Vec<Vec<f32>>> = models.iter().map(|m| m.encode(&texts)).collect();
+        *embed_time += t0.elapsed();
+        let ci = h.commits.len();
+        let start = h.hunks.len();
+        for (i, t) in texts.iter().enumerate() {
+            let emb = embs.iter().map(|e| e[i].clone()).collect();
+            h.hunks.push(Hunk {
+                commit: ci,
+                label: run.label[i].clone(),
+                tokens: tokens(t),
+                emb,
+            });
+        }
+        h.commits.push(Commit {
+            sha: sha.to_string(),
+            subject: subject.to_string(),
+            hunks: start..h.hunks.len(),
+        });
+    }
+    h
+}
+
+/// Running sums of one method's per-query scores.
+#[derive(Default, Clone, Copy)]
+struct Score {
+    n: usize,
+    at_k: f64,
+    rr: f64,
+}
+
+impl Score {
+    /// Adds one query: `at_k` is the caller's recall or precision at its cutoff.
+    fn add(&mut self, ranking: &[usize], relevant: impl Fn(usize) -> bool, at_k: f64) {
+        self.n += 1;
+        self.at_k += at_k;
+        self.rr += ranking
+            .iter()
+            .position(|&i| relevant(i))
+            .map_or(0.0, |r| 1.0 / (r + 1) as f64);
+    }
+
+    fn merge(&mut self, o: &Score) {
+        self.n += o.n;
+        self.at_k += o.at_k;
+        self.rr += o.rr;
+    }
+
+    fn cell(&self) -> String {
+        let n = self.n.max(1) as f64;
+        format!("{:.3} {:.3}", self.at_k / n, self.rr / n)
+    }
+}
+
+/// Column widths: each method's name, at least wide enough for its two numbers.
+fn widths(methods: &[String]) -> Vec<usize> {
+    methods.iter().map(|m| m.len().max(11) + 2).collect()
+}
+
+fn header(methods: &[String], metric: &str) {
+    print!("{:<14}{:>6}{:>8}", "repo", "n", "pool");
+    for (m, w) in methods.iter().zip(widths(methods)) {
+        print!("{m:>w$}");
+    }
+    print!("\n{:<28}", "");
+    for w in widths(methods) {
+        print!("{:>w$}", format!("{metric} MRR"));
+    }
+    println!();
+}
+
+fn row(repo: &str, pool: usize, methods: &[String], scores: &[Score]) {
+    print!(
+        "{repo:<14}{:>6}{pool:>8}",
+        scores.first().map_or(0, |s| s.n)
+    );
+    for (s, w) in scores.iter().zip(widths(methods)) {
+        print!("{:>w$}", s.cell());
+    }
+    println!();
+}
+
+/// A deterministic sample of `k` queries: the lowest by sha, which is uniform.
+fn sample(queries: &[usize], commits: &[Commit], k: usize) -> Vec<usize> {
+    let mut v = queries.to_vec();
+    v.sort_by_key(|&q| &commits[q].sha);
+    v.truncate(k);
+    v
+}
+
+/// Search: the query is a commit's subject without its conventional head, the
+/// relevant hunks are that commit's own, and the pool is every hunk of the
+/// repo's window. BM25 over identifier tokens of the hunk text vs cosine to the
+/// embedded query, per model, plus their rank fusion.
+fn search_mode(
+    models: &[StaticModel],
+    names: &[String],
+    root: &Path,
+    repos: &[Repo],
+    mut dump: Option<&mut std::fs::File>,
+) {
+    use std::io::Write;
+    let mut methods = vec!["bm25".to_string()];
+    methods.extend(names.iter().cloned());
+    methods.extend(names.iter().map(|n| format!("rrf-{n}")));
+    header(&methods, " R@10");
+    let mut total = vec![Score::default(); methods.len()];
+    let (mut pool_total, mut embed_time) = (0, Duration::ZERO);
+    for repo in repos {
+        let h = history(models, &root.join(&repo.name), repo, &mut embed_time);
+        let docs: Vec<Vec<String>> = h.hunks.iter().map(|x| x.tokens.clone()).collect();
+        let bm25 = Bm25::new(&docs);
+        let all: Vec<usize> = (0..h.hunks.len()).collect();
+        let mut scores = vec![Score::default(); methods.len()];
+        let mut queries = vec![];
+        let mut rankings: HashMap<usize, Vec<Vec<usize>>> = HashMap::new();
+        for (ci, c) in h.commits.iter().enumerate() {
+            let query = split_subject(&c.subject).1;
+            let qt = tokens(query);
+            if qt.is_empty() {
+                continue;
+            }
+            let own = |i: usize| h.hunks[i].commit == ci;
+            // Ties go against the answer: a zero BM25 score is no evidence.
+            let order = |s: &[f32]| ranked(&all, s, |i| own(i) as usize);
+            let lexical = order(&bm25.scores(&qt));
+            let t0 = Instant::now();
+            let qe: Vec<Vec<f32>> = models
+                .iter()
+                .map(|m| m.encode(&[query.to_string()]).remove(0))
+                .collect();
+            embed_time += t0.elapsed();
+            let dense: Vec<Vec<usize>> = (0..models.len())
+                .map(|mi| {
+                    let s: Vec<f32> = h.hunks.iter().map(|x| cos(&qe[mi], &x.emb[mi])).collect();
+                    order(&s)
+                })
+                .collect();
+            let mut rs = vec![lexical.clone()];
+            rs.extend(dense.iter().cloned());
+            rs.extend(dense.iter().map(|d| order(&rrf(&lexical, d))));
+            let want = c.hunks.len().min(10) as f64;
+            for (s, r) in scores.iter_mut().zip(&rs) {
+                let hits = r.iter().take(10).filter(|&&i| own(i)).count() as f64;
+                s.add(r, own, hits / want);
+            }
+            queries.push(ci);
+            rankings.insert(ci, rs);
+        }
+        row(&repo.name, h.hunks.len(), &methods, &scores);
+        total.iter_mut().zip(&scores).for_each(|(t, s)| t.merge(s));
+        pool_total += h.hunks.len();
+        if let Some(f) = dump.as_mut() {
+            for q in sample(&queries, &h.commits, 2) {
+                let c = &h.commits[q];
+                let _ = writeln!(
+                    f,
+                    "## {} {} | query: {}\n   own hunks: {}",
+                    repo.name,
+                    &c.sha[..8],
+                    split_subject(&c.subject).1,
+                    h.hunks[c.hunks.clone()]
+                        .iter()
+                        .map(|x| x.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+                for (m, r) in methods.iter().zip(&rankings[&q]).take(1 + models.len()) {
+                    let _ = writeln!(f, "  [{m}]");
+                    for &i in r.iter().take(3) {
+                        let Hunk {
+                            commit: oc, label, ..
+                        } = &h.hunks[i];
+                        let mark = if *oc == q { "*" } else { " " };
+                        let _ = writeln!(f, "   {mark} {label}  <- {}", h.commits[*oc].subject);
+                    }
+                }
+            }
+        }
+    }
+    row("POOLED", pool_total, &methods, &total);
+    println!("embedding time {:.2}s", embed_time.as_secs_f64());
+}
+
 fn main() {
     let root = corpus_dir().expect("set ORDO_CORPUS to a populated corpus dir");
-    let model_dir = std::env::var("M2V_MODEL").expect("set M2V_MODEL to a model2vec model dir");
-    let model = StaticModel::from_pretrained(&model_dir, None, None, None).expect("load model");
+    let model_dirs = std::env::var("M2V_MODEL").expect("set M2V_MODEL to model2vec model dirs");
+    let model_dirs: Vec<&str> = model_dirs.split(',').collect();
+    let models: Vec<StaticModel> = model_dirs
+        .iter()
+        .map(|d| StaticModel::from_pretrained(d, None, None, None).expect("load model"))
+        .collect();
+    let (model_dir, model) = (model_dirs[0], &models[0]);
     let mut dump = Dump {
         out: std::env::var("M2V_DUMP")
             .ok()
@@ -645,9 +1037,14 @@ fn main() {
             fetched
         })
         .collect();
-    if std::env::var("M2V_MODE").as_deref() == Ok("intent") {
-        println!("model {model_dir} mode intent");
-        return intent_mode(&model, &root, &repos, dump.out.as_mut());
+    let names: Vec<String> = model_dirs.iter().map(|d| model_name(d)).collect();
+    match std::env::var("M2V_MODE").as_deref() {
+        Ok("intent") => {
+            println!("model {model_dir} mode intent");
+            return intent_mode(model, &root, &repos, dump.out.as_mut());
+        }
+        Ok("search") => return search_mode(&models, &names, &root, &repos, dump.out.as_mut()),
+        _ => {}
     }
     let mode = match std::env::var("M2V_MODE").as_deref() {
         Ok("cross") => Mode::Cross,
@@ -676,7 +1073,7 @@ fn main() {
     for repo in &repos {
         let dir = root.join(&repo.name);
         let tallies = sweep(
-            &model,
+            model,
             &repo.name,
             &dir,
             &repo.rev,
