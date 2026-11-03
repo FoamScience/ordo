@@ -42,8 +42,9 @@ export function withSymbols(rows: Row[], items: Item[]): { rows: ListRow[]; runO
 
 /**
  * What a row says. Alone, its sentence. Under a symbol heading, the first of
- * these that no neighbour shares: its sentence, unless that only repeats the
- * heading; the engine's detail; then the code it changes.
+ * these that no neighbour shares: its sentence without the heading's name,
+ * unless nothing but the verb is left; the engine's detail; then the code it
+ * changes.
  */
 export function rowText(it: Item, run: Item[] | null): { text: string; code: boolean } {
   if (!run) return { text: it.rationale, code: false };
@@ -51,11 +52,22 @@ export function rowText(it: Item, run: Item[] | null): { text: string; code: boo
     const v = pick(it);
     return v && run.filter((o) => pick(o) === v).length === 1 ? v : null;
   };
-  const name = aboutOf(it);
+  const name = aboutOf(it) ?? "";
   const sentence = alone((o) => o.rationale);
-  if (sentence && sentence !== `edits ${name}`) return { text: sentence, code: false };
+  const tail = new RegExp(`\\s+(?:to|in|of|from|on)\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+  const short = sentence?.replace(tail, "");
+  if (short && short !== `edits ${name}`) return { text: short, code: false };
   const detail = alone((o) => o.details[0]);
   if (detail) return { text: detail, code: false };
   if (it.gist) return { text: it.gist, code: true };
   return { text: it.details[0] ?? it.rationale, code: false };
+}
+
+/** A folded row of quiet hunks: one says its own sentence, several say what they are. */
+export function foldedText(items: Item[]): string {
+  if (items.length === 1) return items[0].rationale;
+  const imports = items.filter((it) => it.category === "import").length;
+  const rest = items.length - imports;
+  const parts = [imports && `${imports} import${imports === 1 ? "" : "s"}`, rest && `${rest} formatting or generated`].filter(Boolean);
+  return `${items.length} quiet hunks: ${parts.join(", ")}`;
 }

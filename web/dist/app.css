@@ -718,7 +718,6 @@ body.zoom #panes > .pane:not(.zoomed) {
 .r .ln {
   color: var(--faint);
   font-size: var(--fs-tiny);
-  margin-right: var(--space-xs);
 }
 .r .gist {
   color: var(--dim);

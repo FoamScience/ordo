@@ -94,8 +94,9 @@ interface Edit {
 /**
  * Removed lines that are an added line edited in place, paired in order. The
  * refiner's pairing and spans come first; a pair it left whole (a docstring
- * is one leaf, so its lines never pair) is diffed by character, and kept as
- * an edit only when most of the line survived.
+ * is one leaf, so its lines never pair), or marked with spans that do not
+ * line up (`errors,` added without the space after it), is diffed by
+ * character, and kept as an edit only when most of the line survived.
  */
 export function editsInPlace(f: FileData, hunks: FileData["hunks"]): { folded: Set<number>; edited: Map<number, Edit> } {
   const folded = new Set<number>();
@@ -109,7 +110,7 @@ export function editsInPlace(f: FileData, hunks: FileData["hunks"]): { folded: S
         if (edited.has(n)) continue;
         const add = h.added[n - h.new[0]];
         const newText = f.new[n - 1] ?? "";
-        const e = rm && add ? fromSpans(oldText, newText, rm, add) : !rm && !add ? byChars(oldText, newText) : null;
+        const e = (rm && add ? fromSpans(oldText, newText, rm, add) : null) ?? (!rm === !add ? byChars(oldText, newText) : null);
         if (e) {
           folded.add(o);
           edited.set(n, e);
@@ -173,7 +174,17 @@ export function byChars(oldText: string, newText: string): Edit | null {
       gone.push([col, text]);
     }
   }
-  return kept >= KEPT * Math.max([...oldText].length, [...newText].length) ? { marks, gone } : null;
+  if (kept < KEPT * Math.max([...oldText].length, [...newText].length)) return null;
+  // the space beside an inserted word is where the diff cut, not what changed
+  const chars = [...newText];
+  const trimmed = marks
+    .map(([a, b]): [number, number] => {
+      while (a < b && /\s/.test(chars[a])) a++;
+      while (b > a && /\s/.test(chars[b - 1])) b--;
+      return [a, b];
+    })
+    .filter(([a, b]) => b > a);
+  return { marks: trimmed, gone };
 }
 
 /** The row a hunk's reading starts on: its first removed line, else its first new one. */
