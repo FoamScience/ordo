@@ -14,6 +14,14 @@
 //!
 //!   ORDO_CORPUS=~/.cache/ordo-corpus M2V_MODEL=<model dir> \
 //!     cargo run --release --example m2v --features m2v [-- click,ripgrep,vue]
+//!
+//! `M2V_MODE=intent` asks instead whether a commit's mean hunk embedding
+//! predicts its conventional-commit type. Only commits whose subject carries
+//! one of `INTENTS` count. Each repo is held out in turn and scored by nearest
+//! class centroid (raw and repo-centred), against the training repos' majority
+//! type and a path-only rule (docs if every hunk is markdown, test if every
+//! hunk is in a test file).
+//! `M2V_DUMP` gets one line per held-out commit.
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -23,7 +31,7 @@ use ordo::model::{Input, Output};
 
 #[path = "../tests/common/mod.rs"]
 mod common;
-use common::{commit_input, corpus_dir, git, parse_manifest, range_input};
+use common::{commit_input, corpus_dir, git, parse_manifest, range_input, Repo};
 
 const THRESHOLDS: [f32; 6] = [0.95, 0.9, 0.85, 0.8, 0.75, 0.7];
 
@@ -335,17 +343,282 @@ fn sweep(
     tallies
 }
 
+/// Conventional-commit types the intent mode predicts. Matched lower-case only,
+/// so numpy-style `FIX:`/`DOC:` tags stay out; `doc` and `tests` fold in.
+const INTENTS: [&str; 7] = ["feat", "fix", "refactor", "docs", "test", "perf", "chore"];
+
+fn intent_named(name: &str) -> Option<usize> {
+    let name = match name {
+        "doc" => "docs",
+        "tests" => "test",
+        n => n,
+    };
+    INTENTS.iter().position(|&i| i == name)
+}
+
+fn intent_of(subject: &str) -> Option<usize> {
+    let head = subject.split_once(':')?.0;
+    intent_named(
+        head.split_once('(')
+            .map_or(head, |(t, _)| t)
+            .trim_end_matches('!'),
+    )
+}
+
+/// The path-only control's guess, when every hunk is in docs or in tests.
+fn path_hint(paths: &[String]) -> Option<usize> {
+    let docs = |p: &String| p.ends_with(".md") || p.ends_with(".markdown");
+    let test = |p: &String| {
+        p.to_lowercase()
+            .split(['/', '.', '_', '-'])
+            .any(|w| matches!(w, "test" | "tests" | "spec"))
+    };
+    if paths.iter().all(docs) {
+        intent_named("docs")
+    } else if paths.iter().all(test) {
+        intent_named("test")
+    } else {
+        None
+    }
+}
+
+fn mean<'a>(vs: impl Iterator<Item = &'a Vec<f32>>) -> Vec<f32> {
+    let (mut sum, mut n) = (Vec::<f32>::new(), 0);
+    for v in vs {
+        sum.resize(v.len(), 0.0);
+        sum.iter_mut().zip(v).for_each(|(s, x)| *s += x);
+        n += 1;
+    }
+    sum.iter_mut().for_each(|s| *s /= n.max(1) as f32);
+    sum
+}
+
+/// One labelled commit: its type, the mean of its hunk embeddings, and that
+/// mean less its repo's mean commit vector.
+struct Sample {
+    repo: usize,
+    label: usize,
+    hint: Option<usize>,
+    sha: String,
+    subject: String,
+    emb: Vec<f32>,
+    centred: Vec<f32>,
+}
+
+/// Every commit in `repos` with a conventional type and at least one embedded
+/// hunk, and per repo the typed commits dropped for having none.
+fn intent_samples(
+    model: &StaticModel,
+    root: &Path,
+    repos: &[Repo],
+    embed_time: &mut Duration,
+) -> (Vec<Sample>, Vec<usize>) {
+    let mut samples = vec![];
+    let mut skipped = vec![0; repos.len()];
+    for (ri, repo) in repos.iter().enumerate() {
+        let dir = root.join(&repo.name);
+        let max = repo.max_commits.to_string();
+        let log = git(
+            &dir,
+            &["log", "--format=%H %s", "--max-count", &max, &repo.rev],
+        );
+        for (sha, subject) in log.lines().filter_map(|l| l.split_once(' ')) {
+            let Some(label) = intent_of(subject) else {
+                continue;
+            };
+            let run = commit_input(&dir, sha).map(|(_, input)| reduce(model, input, embed_time).0);
+            let Some(run) = run.filter(|r| !r.emb.is_empty()) else {
+                skipped[ri] += 1;
+                continue;
+            };
+            samples.push(Sample {
+                repo: ri,
+                label,
+                hint: path_hint(&run.path),
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+                emb: mean(run.emb.iter()),
+                centred: vec![],
+            });
+        }
+    }
+    let repo_means: Vec<Vec<f32>> = (0..repos.len())
+        .map(|ri| mean(samples.iter().filter(|s| s.repo == ri).map(|s| &s.emb)))
+        .collect();
+    for s in &mut samples {
+        s.centred = s
+            .emb
+            .iter()
+            .zip(&repo_means[s.repo])
+            .map(|(x, m)| x - m)
+            .collect();
+    }
+    (samples, skipped)
+}
+
+/// Per-type F1 over (truth, prediction) pairs; None for a type absent from the
+/// truth, so every method's macro-F1 averages over the same types.
+fn f1s(pairs: &[(usize, usize)]) -> Vec<Option<f64>> {
+    (0..INTENTS.len())
+        .map(|c| {
+            let tp = pairs.iter().filter(|&&(t, p)| t == c && p == c).count();
+            let miss = pairs.iter().filter(|&&(t, p)| (t == c) != (p == c)).count();
+            pairs
+                .iter()
+                .any(|&(t, _)| t == c)
+                .then(|| 2.0 * tp as f64 / (2 * tp + miss) as f64)
+        })
+        .collect()
+}
+
+fn scores(pairs: &[(usize, usize)]) -> (f64, f64) {
+    let acc = pairs.iter().filter(|(t, p)| t == p).count() as f64 / pairs.len().max(1) as f64;
+    let f: Vec<f64> = f1s(pairs).into_iter().flatten().collect();
+    (acc, f.iter().sum::<f64>() / f.len().max(1) as f64)
+}
+
+fn score_row(repo: &str, n: usize, methods: &[Vec<(usize, usize)>]) {
+    print!("{repo:<14}{n:>5}");
+    for m in methods {
+        let (acc, f1) = scores(m);
+        print!("{acc:>10.3}{f1:>7.3}");
+    }
+    println!();
+}
+
+/// The class whose centroid is most cosine-similar to `v`, and that similarity.
+fn nearest(v: &[f32], centroids: &[(usize, Vec<f32>)]) -> (usize, f32) {
+    centroids
+        .iter()
+        .map(|(c, m)| (*c, cos(v, m)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap()
+}
+
+/// Methods scored per held-out repo: the training majority, the path rule, and
+/// nearest centroid on raw and on repo-centred commit vectors. Centring on the
+/// repo's own mean uses no labels and strips the language and project style
+/// that otherwise decide which centroid is nearest.
+const METHODS: [&str; 4] = ["maj", "path", "m2v", "m2v-c"];
+
+fn intent_mode(
+    model: &StaticModel,
+    root: &Path,
+    repos: &[Repo],
+    mut dump: Option<&mut std::fs::File>,
+) {
+    use std::io::Write;
+    let mut embed_time = Duration::ZERO;
+    let (samples, skipped) = intent_samples(model, root, repos, &mut embed_time);
+
+    print!("{:<14}{:>5}{:>6}", "repo", "n", "skip");
+    INTENTS.iter().for_each(|i| print!("{i:>9}"));
+    println!();
+    for (ri, repo) in repos.iter().enumerate() {
+        let mut count = [0; INTENTS.len()];
+        samples
+            .iter()
+            .filter(|s| s.repo == ri)
+            .for_each(|s| count[s.label] += 1);
+        print!(
+            "{:<14}{:>5}{:>6}",
+            repo.name,
+            count.iter().sum::<usize>(),
+            skipped[ri]
+        );
+        count.iter().for_each(|c| print!("{c:>9}"));
+        println!();
+    }
+
+    print!("\n{:<14}{:>5}", "held out", "n");
+    METHODS
+        .iter()
+        .for_each(|m| print!("{:>10}{:>7}", format!("{m} acc"), "F1"));
+    println!();
+    let mut pooled = vec![vec![]; METHODS.len()];
+    for (ri, repo) in repos.iter().enumerate() {
+        let (test, train): (Vec<&Sample>, Vec<&Sample>) =
+            samples.iter().partition(|s| s.repo == ri);
+        if test.is_empty() {
+            continue;
+        }
+        if train.is_empty() {
+            eprintln!(
+                "{}: no training commits in the other repos, not scored",
+                repo.name
+            );
+            continue;
+        }
+        let mut count = [0; INTENTS.len()];
+        train.iter().for_each(|s| count[s.label] += 1);
+        let majority = (0..INTENTS.len()).max_by_key(|&c| count[c]).unwrap();
+        let centroids = |vector: fn(&Sample) -> &Vec<f32>| -> Vec<(usize, Vec<f32>)> {
+            (0..INTENTS.len())
+                .filter(|&c| count[c] > 0)
+                .map(|c| {
+                    (
+                        c,
+                        mean(train.iter().filter(|s| s.label == c).map(|s| vector(s))),
+                    )
+                })
+                .collect()
+        };
+        let (raw_centroids, centred_centroids) = (centroids(|s| &s.emb), centroids(|s| &s.centred));
+        let mut fold = vec![vec![]; METHODS.len()];
+        for s in &test {
+            let (raw, raw_sim) = nearest(&s.emb, &raw_centroids);
+            let (cen, cen_sim) = nearest(&s.centred, &centred_centroids);
+            fold[0].push((s.label, majority));
+            fold[1].push((s.label, s.hint.unwrap_or(majority)));
+            fold[2].push((s.label, raw));
+            fold[3].push((s.label, cen));
+            if let Some(f) = dump.as_mut() {
+                let _ = writeln!(
+                    f,
+                    "{}\t{}\t{}\t{}\t{raw_sim:.3}\t{}\t{cen_sim:.3}\t{}",
+                    repo.name,
+                    &s.sha[..8],
+                    INTENTS[s.label],
+                    INTENTS[raw],
+                    INTENTS[cen],
+                    s.subject
+                );
+            }
+        }
+        score_row(&repo.name, test.len(), &fold);
+        pooled.iter_mut().zip(fold).for_each(|(p, f)| p.extend(f));
+    }
+    if pooled[0].is_empty() {
+        eprintln!("no repo had both typed commits and training commits elsewhere");
+        return;
+    }
+    score_row("POOLED", pooled[0].len(), &pooled);
+
+    for (mi, pairs) in pooled.iter().enumerate().skip(2) {
+        println!(
+            "\n{} confusion, pooled (rows truth, columns prediction)",
+            METHODS[mi]
+        );
+        print!("{:<10}", "");
+        INTENTS.iter().for_each(|i| print!("{i:>9}"));
+        println!("{:>9}", "F1");
+        let f1 = f1s(pairs);
+        for (t, name) in INTENTS.iter().enumerate() {
+            print!("{name:<10}");
+            for p in 0..INTENTS.len() {
+                let n = pairs.iter().filter(|&&pair| pair == (t, p)).count();
+                print!("{n:>9}");
+            }
+            println!("{:>9}", f1[t].map_or("-".into(), |f| format!("{f:.3}")));
+        }
+    }
+    println!("embedding time {:.2}s", embed_time.as_secs_f64());
+}
+
 fn main() {
     let root = corpus_dir().expect("set ORDO_CORPUS to a populated corpus dir");
     let model_dir = std::env::var("M2V_MODEL").expect("set M2V_MODEL to a model2vec model dir");
     let model = StaticModel::from_pretrained(&model_dir, None, None, None).expect("load model");
-    let mode = match std::env::var("M2V_MODE").as_deref() {
-        Ok("cross") => Mode::Cross,
-        Ok("mutual") => Mode::Mutual,
-        Ok("samefile") => Mode::SameFile,
-        Ok("file") => Mode::File,
-        _ => Mode::All,
-    };
     let mut dump = Dump {
         out: std::env::var("M2V_DUMP")
             .ok()
@@ -361,6 +634,28 @@ fn main() {
         .unwrap_or_else(|| "click,ripgrep,vue".into());
     let all = want == "all";
     let want: Vec<&str> = want.split(',').collect();
+    let repos: Vec<Repo> = parse_manifest()
+        .into_iter()
+        .filter(|r| all || want.contains(&r.name.as_str()))
+        .filter(|r| {
+            let fetched = root.join(&r.name).is_dir();
+            if !fetched {
+                eprintln!("{}: not fetched, skipped", r.name);
+            }
+            fetched
+        })
+        .collect();
+    if std::env::var("M2V_MODE").as_deref() == Ok("intent") {
+        println!("model {model_dir} mode intent");
+        return intent_mode(&model, &root, &repos, dump.out.as_mut());
+    }
+    let mode = match std::env::var("M2V_MODE").as_deref() {
+        Ok("cross") => Mode::Cross,
+        Ok("mutual") => Mode::Mutual,
+        Ok("samefile") => Mode::SameFile,
+        Ok("file") => Mode::File,
+        _ => Mode::All,
+    };
     println!(
         "model {model_dir} mode {}",
         std::env::var("M2V_MODE").unwrap_or_else(|_| "all".into())
@@ -378,15 +673,8 @@ fn main() {
     };
     let mut total = vec![Tally::default(); THRESHOLDS.len() + 1];
     let mut embed_time = Duration::ZERO;
-    for repo in parse_manifest()
-        .iter()
-        .filter(|r| all || want.contains(&r.name.as_str()))
-    {
+    for repo in &repos {
         let dir = root.join(&repo.name);
-        if !dir.is_dir() {
-            eprintln!("{}: not fetched, skipped", repo.name);
-            continue;
-        }
         let tallies = sweep(
             &model,
             &repo.name,
