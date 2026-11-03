@@ -715,6 +715,21 @@ body.zoom #panes > .pane:not(.zoomed) {
 .r.inrun {
   padding-left: calc(var(--rail) + var(--space-xl));
 }
+.r.inrun::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--rail) + var(--space-md) + var(--space-2xs));
+  top: 0;
+  bottom: 0;
+  width: var(--space-sm);
+  border-left: var(--rule-hair) solid var(--line);
+  background: linear-gradient(var(--line), var(--line)) left 50% / 100% var(--rule-hair) no-repeat;
+}
+.r.inrun.last::after {
+  bottom: 50%;
+  border-bottom: var(--rule-hair) solid var(--line);
+  background: none;
+}
 .r .ln {
   color: var(--faint);
   font-size: var(--fs-tiny);

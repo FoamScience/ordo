@@ -191,6 +191,14 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .symhead:hover { background: var(--raise); }
 .symhead.cur .code-word { text-decoration: underline; text-decoration-thickness: var(--rule-heavy); text-underline-offset: 0.2em; }
 .r.inrun { padding-left: calc(var(--rail) + var(--space-xl)); }
+/* a guide from the symbol heading down its rows, turning in at the last, so
+   the row after a run reads as its own */
+.r.inrun::after {
+  content: ""; position: absolute; left: calc(var(--rail) + var(--space-md) + var(--space-2xs)); top: 0; bottom: 0;
+  width: var(--space-sm); border-left: var(--rule-hair) solid var(--line);
+  background: linear-gradient(var(--line), var(--line)) left 50% / 100% var(--rule-hair) no-repeat;
+}
+.r.inrun.last::after { bottom: 50%; border-bottom: var(--rule-hair) solid var(--line); background: none; }
 .r .ln { color: var(--faint); font-size: var(--fs-tiny); }
 .r .gist { color: var(--dim); }
 .r .gist.removed { text-decoration: line-through; text-decoration-color: var(--faint); }
