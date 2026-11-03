@@ -23,9 +23,10 @@
 //! hunk is in a test file).
 //! `M2V_DUMP` gets one line per held-out commit.
 //!
-//! `M2V_MODE=search` tests retrieval within one repo, which takes the repo and
-//! language out of the comparison: a commit's subject finding its own hunks,
-//! against BM25. `M2V_MODEL` takes several dirs, comma-separated,
+//! `M2V_MODE=search` and `M2V_MODE=similar` test retrieval within one repo,
+//! which takes the repo and language out of the comparison: a commit's subject
+//! finding its own hunks, and a commit's diff finding related earlier commits,
+//! against lexical baselines. `M2V_MODEL` takes several dirs, comma-separated,
 //! scored side by side; `M2V_DUMP` gets each method's top three for a sample.
 use std::collections::HashMap;
 use std::path::Path;
@@ -45,6 +46,7 @@ const THRESHOLDS: [f32; 6] = [0.95, 0.9, 0.85, 0.8, 0.75, 0.7];
 struct Run {
     path: Vec<String>,
     label: Vec<String>,
+    enclosing: Vec<Option<String>>,
     cluster: Vec<usize>,
     emb: Vec<Vec<f32>>,
 }
@@ -91,7 +93,8 @@ fn extract(input: Input) -> (Run, Vec<String>, Output) {
         .enumerate()
         .flat_map(|(ci, c)| c.iter().map(move |id| (id.as_str(), ci)))
         .collect();
-    let (mut path, mut label, mut cluster, mut texts) = (vec![], vec![], vec![], vec![]);
+    let (mut path, mut label, mut enclosing, mut cluster, mut texts) =
+        (vec![], vec![], vec![], vec![], vec![]);
     for f in &out.files {
         let (old, new) = &sides[&f.path];
         for h in f.hunks.iter().filter(|h| !h.noise) {
@@ -116,6 +119,7 @@ fn extract(input: Input) -> (Run, Vec<String>, Output) {
                 h.new_range[0],
                 h.enclosing.as_deref().unwrap_or("-")
             ));
+            enclosing.push(h.enclosing.clone());
             cluster.push(ci);
             texts.push(t);
         }
@@ -123,6 +127,7 @@ fn extract(input: Input) -> (Run, Vec<String>, Output) {
     let run = Run {
         path,
         label,
+        enclosing,
         cluster,
         emb: vec![],
     };
@@ -786,7 +791,12 @@ struct Hunk {
 struct Commit {
     sha: String,
     subject: String,
+    body: String,
+    /// The merge that brought it in, so commits of one PR are never each other's answer.
+    merge: Option<usize>,
     hunks: std::ops::Range<usize>,
+    files: Vec<String>,
+    defs: Vec<String>,
 }
 
 fn history(models: &[StaticModel], dir: &Path, repo: &Repo, embed_time: &mut Duration) -> History {
@@ -796,19 +806,33 @@ fn history(models: &[StaticModel], dir: &Path, repo: &Repo, embed_time: &mut Dur
         &[
             "log",
             "--no-merges",
-            "--format=%H%x1f%s%x1e",
+            "--format=%H%x1f%s%x1f%b%x1e",
             "--max-count",
             &max,
             &repo.rev,
         ],
     );
+    let mut merge_of: HashMap<String, usize> = HashMap::new();
+    let oldest = log
+        .rsplit('\x1e')
+        .find_map(|r| r.trim().split('\x1f').next().filter(|s| !s.is_empty()));
+    let not_older = oldest.map(|o| format!("^{o}"));
+    let mut args = vec!["rev-list", "--merges", &repo.rev];
+    args.extend(not_older.as_deref());
+    let merges = git(dir, &args);
+    for (mi, m) in merges.lines().enumerate() {
+        let range = format!("{m}^1..{m}^2");
+        for sha in git(dir, &["rev-list", "--no-merges", &range]).lines() {
+            merge_of.entry(sha.to_string()).or_insert(mi);
+        }
+    }
     let mut h = History {
         commits: vec![],
         hunks: vec![],
     };
     for rec in log.split('\x1e') {
-        let mut f = rec.trim_start_matches('\n').splitn(2, '\x1f');
-        let (Some(sha), Some(subject)) = (f.next(), f.next()) else {
+        let mut f = rec.trim_start_matches('\n').splitn(3, '\x1f');
+        let (Some(sha), Some(subject), body) = (f.next(), f.next(), f.next()) else {
             continue;
         };
         let Some((_, input)) = commit_input(dir, sha) else {
@@ -832,10 +856,24 @@ fn history(models: &[StaticModel], dir: &Path, repo: &Repo, embed_time: &mut Dur
                 emb,
             });
         }
+        let mut files = run.path.clone();
+        files.dedup();
+        let mut defs: Vec<String> = run
+            .path
+            .iter()
+            .zip(&run.enclosing)
+            .filter_map(|(p, e)| e.as_ref().map(|e| format!("{p}::{e}")))
+            .collect();
+        defs.sort();
+        defs.dedup();
         h.commits.push(Commit {
             sha: sha.to_string(),
             subject: subject.to_string(),
+            body: body.unwrap_or("").to_string(),
+            merge: merge_of.get(sha).copied(),
             hunks: start..h.hunks.len(),
+            files,
+            defs,
         });
     }
     h
@@ -1002,6 +1040,194 @@ fn search_mode(
     println!("embedding time {:.2}s", embed_time.as_secs_f64());
 }
 
+/// Ground-truth proxies for "a similar earlier change".
+const PROXIES: [&str; 3] = ["def", "ref", "any"];
+
+/// Which proxies call `old` an answer for `new`: a shared enclosing definition;
+/// a shared subject area or issue reference; any of those or a revert/backport.
+fn truth(new: &Commit, old: &Commit) -> [bool; 3] {
+    let def = new.defs.iter().any(|d| old.defs.contains(d));
+    let refs = |s: &str| -> Vec<String> {
+        s.split('#')
+            .skip(1)
+            .map(|r| {
+                r.chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+            })
+            .filter(|r| !r.is_empty())
+            .collect()
+    };
+    let (na, oa) = (split_subject(&new.subject), split_subject(&old.subject));
+    let area = na.0.is_some() && na.0 == oa.0;
+    let shared_ref = refs(&new.subject)
+        .iter()
+        .any(|r| refs(&old.subject).contains(r));
+    let bare = |s: &str| {
+        let s = s.trim();
+        s.rsplit_once(" (#")
+            .filter(|(_, n)| n.trim_end_matches(')').chars().all(|c| c.is_ascii_digit()))
+            .map_or(s, |(h, _)| h)
+            .to_string()
+    };
+    let reverted = new
+        .subject
+        .strip_prefix("Revert \"")
+        .and_then(|r| r.rsplit_once('"'))
+        .is_some_and(|(r, _)| bare(r) == bare(&old.subject));
+    let cites = new.body.contains(&format!("reverts commit {}", old.sha))
+        || new
+            .body
+            .contains(&format!("cherry picked from commit {}", old.sha));
+    [
+        def,
+        area || shared_ref,
+        def || area || shared_ref || reverted || cites,
+    ]
+}
+
+/// Similar change: each commit ranks the repo's earlier commits, not counting
+/// any brought in by the same merge. Shared-file Jaccard and BM25 over the
+/// whole diff's tokens vs cosine of mean hunk embeddings, per model. Ties go to
+/// the more recent commit for every method.
+fn similar_mode(
+    models: &[StaticModel],
+    names: &[String],
+    root: &Path,
+    repos: &[Repo],
+    mut dump: Option<&mut std::fs::File>,
+) {
+    use std::io::Write;
+    let mut methods = vec!["file".to_string(), "bm25".to_string()];
+    methods.extend(names.iter().cloned());
+    methods.extend(names.iter().map(|n| format!("rrf-{n}")));
+    let mut out: Vec<Vec<(String, usize, Vec<Score>)>> = vec![vec![]; PROXIES.len()];
+    let mut embed_time = Duration::ZERO;
+    for repo in repos {
+        let h = history(models, &root.join(&repo.name), repo, &mut embed_time);
+        let n = h.commits.len();
+        let docs: Vec<Vec<String>> = h
+            .commits
+            .iter()
+            .map(|c| {
+                h.hunks[c.hunks.clone()]
+                    .iter()
+                    .flat_map(|x| x.tokens.clone())
+                    .collect()
+            })
+            .collect();
+        let bm25 = Bm25::new(&docs);
+        let vecs: Vec<Vec<Vec<f32>>> = (0..models.len())
+            .map(|mi| {
+                h.commits
+                    .iter()
+                    .map(|c| mean(h.hunks[c.hunks.clone()].iter().map(|x| &x.emb[mi])))
+                    .collect()
+            })
+            .collect();
+        let mut scores = vec![vec![Score::default(); methods.len()]; PROXIES.len()];
+        let mut queries = vec![];
+        let mut rankings: HashMap<usize, Vec<Vec<usize>>> = HashMap::new();
+        let mut reverts = 0;
+        for q in 0..n {
+            let c = &h.commits[q];
+            let cands: Vec<usize> = (q + 1..n)
+                .filter(|&j| c.merge.is_none() || h.commits[j].merge != c.merge)
+                .collect();
+            let truths: HashMap<usize, [bool; 3]> = cands
+                .iter()
+                .map(|&j| (j, truth(c, &h.commits[j])))
+                .collect();
+            if !truths.values().any(|t| t[2]) {
+                continue;
+            }
+            reverts += truths.values().any(|t| t[2] && !t[0] && !t[1]) as usize;
+            let mut full = vec![0.0f32; n];
+            let order = |s: &[f32]| ranked(&cands, s, |j| j);
+            for &j in &cands {
+                let o = &h.commits[j];
+                let inter = c.files.iter().filter(|f| o.files.contains(f)).count();
+                full[j] = inter as f32 / (c.files.len() + o.files.len() - inter) as f32;
+            }
+            let mut rs = vec![order(&full), order(&bm25.scores(&docs[q]))];
+            for v in &vecs {
+                let s: Vec<f32> = (0..n).map(|j| cos(&v[q], &v[j])).collect();
+                rs.push(order(&s));
+            }
+            for mi in 0..models.len() {
+                let fused = order(&rrf(&rs[1], &rs[2 + mi]));
+                rs.push(fused);
+            }
+            for (p, ps) in scores.iter_mut().enumerate() {
+                let rel = |j: usize| truths.get(&j).is_some_and(|t| t[p]);
+                if !cands.iter().any(|&j| rel(j)) {
+                    continue;
+                }
+                for (s, r) in ps.iter_mut().zip(&rs) {
+                    let hits = r.iter().take(5).filter(|&&j| rel(j)).count() as f64;
+                    s.add(r, rel, hits / 5.0);
+                }
+            }
+            queries.push(q);
+            rankings.insert(q, rs);
+        }
+        for (p, ps) in scores.into_iter().enumerate() {
+            out[p].push((repo.name.clone(), n, ps));
+        }
+        eprintln!(
+            "{}: {} commits, {reverts} queries answered only by a revert/backport",
+            repo.name, n
+        );
+        if let Some(f) = dump.as_mut() {
+            let files = |c: &Commit| {
+                c.files
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            for q in sample(&queries, &h.commits, 2) {
+                let c = &h.commits[q];
+                let _ = writeln!(
+                    f,
+                    "## {} {} | {}\n   files: {}",
+                    repo.name,
+                    &c.sha[..8],
+                    c.subject,
+                    files(c)
+                );
+                for (m, r) in methods.iter().zip(&rankings[&q]).take(2 + models.len()) {
+                    let _ = writeln!(f, "  [{m}]");
+                    for &j in r.iter().take(3) {
+                        let o = &h.commits[j];
+                        let t = truth(c, o);
+                        let mark: String = ["d", "r", "*"]
+                            .iter()
+                            .zip(t)
+                            .map(|(m, b)| if b { *m } else { "." })
+                            .collect();
+                        let _ = writeln!(f, "   {mark} {} | {}", o.subject, files(o));
+                    }
+                }
+            }
+        }
+    }
+    for (p, rows) in out.iter().enumerate() {
+        println!("\nproxy {}", PROXIES[p]);
+        header(&methods, "  P@5");
+        let mut total = vec![Score::default(); methods.len()];
+        let mut pool = 0;
+        for (name, n, ps) in rows {
+            row(name, *n, &methods, ps);
+            total.iter_mut().zip(ps).for_each(|(t, s)| t.merge(s));
+            pool += n;
+        }
+        row("POOLED", pool, &methods, &total);
+    }
+    println!("embedding time {:.2}s", embed_time.as_secs_f64());
+}
+
 fn main() {
     let root = corpus_dir().expect("set ORDO_CORPUS to a populated corpus dir");
     let model_dirs = std::env::var("M2V_MODEL").expect("set M2V_MODEL to model2vec model dirs");
@@ -1044,6 +1270,7 @@ fn main() {
             return intent_mode(model, &root, &repos, dump.out.as_mut());
         }
         Ok("search") => return search_mode(&models, &names, &root, &repos, dump.out.as_mut()),
+        Ok("similar") => return similar_mode(&models, &names, &root, &repos, dump.out.as_mut()),
         _ => {}
     }
     let mode = match std::env::var("M2V_MODE").as_deref() {
