@@ -179,6 +179,11 @@ git's meaning, `HEAD`.
 A branch label wins over git's reading of the same name, where a branch is
 only its tip commit — reviewing a branch means reviewing its commits.
 
+Either end of a range also takes these IDs: `int..at` or `int...at` runs from
+the git branch `int` to the tip of GitButler branch `at`, and a commit ID
+stands for that commit. There a branch is its tip, as in git, and git's
+reading of a name comes first.
+
 Generated and lock files (`Cargo.lock`, `package-lock.json`, `vendor/`,
 `node_modules/`, `.min.js`, …) are dropped before their blobs are read, and so
 is anything the repo's own `.gitattributes` declares — `linguist-generated` or

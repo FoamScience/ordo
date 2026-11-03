@@ -6076,6 +6076,23 @@ fn a_linked_worktrees_branch_and_commit_ids_resolve() {
     assert!(matches!(commit_target(&ws, "twxq"), Some(Target::Commit(c)) if c == "4c35259a"));
 }
 
+/// A range end by GitButler ID: a branch is its newest commit, a commit itself.
+#[test]
+fn a_range_end_takes_a_gitbutler_branch_or_commit_id() {
+    let ws = serde_json::json!({
+        "stacks": [{"branches": [
+            {"cliId": "pp", "name": "feat", "commits": [
+                {"cliId": "twxq", "changeId": "twxqvl", "commitId": "4c35259a"},
+                {"cliId": "lzmo", "changeId": "lzmoab", "commitId": "9e01aa77"}]},
+            {"cliId": "em", "name": "empty", "commits": []}]}],
+    });
+    assert_eq!(workspace_rev(&ws, "pp").as_deref(), Some("4c35259a"));
+    assert_eq!(workspace_rev(&ws, "feat").as_deref(), Some("4c35259a"));
+    assert_eq!(workspace_rev(&ws, "lzmo").as_deref(), Some("9e01aa77"));
+    assert_eq!(workspace_rev(&ws, "em"), None);
+    assert_eq!(workspace_rev(&ws, "nope"), None);
+}
+
 #[test]
 fn the_rules_report_counts_the_built_in_catalog_it_runs() {
     let r = report_from(vec![], &[]);

@@ -302,6 +302,19 @@ pub(super) fn commit_target(ws: &serde_json::Value, arg: &str) -> Option<Target>
     Some(Target::Commit(field(c, "commitId").to_string()))
 }
 
+/// One end of a range by its GitButler ID: a branch ID is that branch's tip,
+/// as a git branch name would be, and a commit ID is that commit.
+pub(super) fn workspace_rev(ws: &serde_json::Value, arg: &str) -> Option<String> {
+    if let Some(b) = branches(ws).find(|b| field(b, "cliId") == arg || field(b, "name") == arg) {
+        let tip = field(list(b, "commits").first()?, "commitId");
+        return (!tip.is_empty()).then(|| tip.to_string());
+    }
+    match commit_target(ws, arg)? {
+        Target::Commit(sha) => Some(sha),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum Target {
     Commit(String),
@@ -334,11 +347,19 @@ pub(super) fn resolve_range(arg: &str) -> Option<Target> {
     if is_uncommitted(base) {
         return None;
     }
+    // git first, so a range reads as git would; a GitButler ID only where git
+    // knows no such name, and the workspace is read once for both ends
+    let ws = std::cell::OnceCell::new();
     let rev = |s: &str| {
         let s = if s.is_empty() { "HEAD" } else { s };
         let sha = git(&["rev-parse", "--verify", "-q", &format!("{s}^{{commit}}")]);
-        let sha = sha.trim().to_string();
-        (!sha.is_empty()).then_some(sha)
+        let sha = sha.trim();
+        if !sha.is_empty() {
+            return Some(sha.to_string());
+        }
+        ws.get_or_init(workspace)
+            .as_ref()
+            .and_then(|ws| workspace_rev(ws, s))
     };
     if is_uncommitted(tip) {
         let base = rev(base)?;

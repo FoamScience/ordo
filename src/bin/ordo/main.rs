@@ -158,6 +158,7 @@ usage: ordo [<rev>] [<glob>...] [options]
             zz                           uncommitted work (`@` too, on GitButler repos)
             main...zz                    the branch so far, uncommitted included
             a branch or commit ID        from `but status`, on GitButler repos
+            int..at, int...at            a range to a GitButler branch's tip (either end)
             wave/2..wave/3               one agent turn, recorded by `ordo wave`
   <glob>  keep matching paths only; `!` excludes, `*` crosses `/`. Quote them.
 
