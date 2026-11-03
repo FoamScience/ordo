@@ -109,11 +109,16 @@ query = '''
 '''
 note = "[2.7] one `for` clause per comprehension — multiple `for`s or filter expressions read more clearly as a plain loop"
 
+# Every capture is a reported row, so only names are captured: the finding
+# sits on the assignment, not on the module's first line. A call's result is
+# state too, except the calls that bind a module, a logger or a type:
+# `FreeCAD = pytest.importorskip("FreeCAD")` is an import.
 [[rule]]
 name = "mutable-global-state"
 lang = "python"
 query = '''
-((module (expression_statement (assignment left: (identifier) @name right: [(list) (dictionary) (set) (call)]))) @a
- (#not-match? @name "^_?[A-Z][A-Z0-9_]*$"))
+((module (expression_statement (assignment left: (identifier) @name right: [(list) (dictionary) (set) (call function: (_) @fn)])))
+ (#not-match? @name "^_?[A-Z][A-Z0-9_]*$")
+ (#not-match? @fn "^(pytest\.importorskip|importlib\.import_module|logging\.getLogger|(typing\.)?(TypeVar|NewType|ParamSpec))$"))
 '''
 note = "[2.5] avoid mutable global state — a module-level constant (ALL_CAPS) is fine; a mutable module-level value should be internal (leading `_`) with access through a function, and the design reason belongs in a comment"
