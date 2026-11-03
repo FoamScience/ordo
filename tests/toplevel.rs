@@ -294,6 +294,58 @@ fn a_region_declares_nothing_and_seeds_no_edge() {
 }
 
 #[test]
+fn a_conditional_inside_a_function_belongs_to_the_function() {
+    // the same `#ifdef` in two functions must not pull their lines into one
+    // group of its own, apart from the rest of each function
+    let f = |name: &str, v: u8| {
+        format!(
+            "int {name}(int p)\n{{\n  int a = {v};\n  if(p)\n    a++;\n#ifdef NO_PROXY\n  a = {v};\n#endif\n  return a;\n}}\n"
+        )
+    };
+    let hunks = fixture::hunks(
+        "d.c",
+        &format!("{}\n{}", f("input", 1), f("output", 1)),
+        &format!("{}\n{}", f("input", 2), f("output", 2)),
+    );
+    let seen: Vec<_> = hunks
+        .iter()
+        .map(|h| (h.enclosing.as_deref(), h.enclosing_kind, h.group.as_str()))
+        .collect();
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    for (pair, name) in seen.chunks(2).zip(["input", "output"]) {
+        assert_eq!(pair[0].0, Some(name), "{seen:?}");
+        assert_eq!(pair[1].0, Some(name), "{seen:?}");
+        assert_eq!(pair[1].1, None, "{seen:?}");
+        assert_eq!(pair[0].2, pair[1].2, "{seen:?}");
+    }
+    assert_ne!(seen[0].2, seen[2].2, "{seen:?}");
+}
+
+#[test]
+fn a_conditional_around_whole_functions_stays_a_region_between_them() {
+    let src = |v: u8| {
+        format!(
+            "#ifdef USE_X\nint f(void)\n{{\n  return {v};\n}}\n\nint g = {v};\n\nint h(void)\n{{\n  return {v};\n}}\n#endif\n"
+        )
+    };
+    let hunks = fixture::hunks("x.c", &src(1), &src(2));
+    let seen: Vec<_> = hunks.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(seen, vec![Some("f"), Some("#ifdef USE_X"), Some("h")]);
+}
+
+#[test]
+fn a_cpp_conditional_is_a_region_in_a_namespace_but_not_in_a_class() {
+    let src = |v: u8| {
+        format!(
+            "namespace ns {{\n#ifdef USE_X\nint g = {v};\n#endif\nclass C {{\n  int a;\n#ifdef USE_X\n  int b = {v};\n#endif\n}};\n}}\n"
+        )
+    };
+    let hunks = fixture::hunks("x.cpp", &src(1), &src(2));
+    let seen: Vec<_> = hunks.iter().map(|h| h.enclosing.as_deref()).collect();
+    assert_eq!(seen, vec![Some("#ifdef USE_X"), Some("ns.C")]);
+}
+
+#[test]
 fn a_documents_preamble_is_a_region_of_its_own() {
     let out = one(
         "R.md",

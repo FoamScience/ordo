@@ -1559,20 +1559,9 @@ fn is_prototype(node: Node) -> bool {
 
 /// `is_prototype` for a declaration whose scope starts at `p` — its parent,
 /// or for a templated one the template's.
-fn prototype_under(node: Node, mut p: Option<Node>) -> bool {
-    // file scope, seen through the `#ifndef` guard and `#if` blocks a header
-    // wraps its prototypes in
-    loop {
-        match p.map(|n| n.kind()) {
-            Some(
-                "translation_unit"
-                | "namespace_definition"
-                | "declaration_list"
-                | "linkage_specification",
-            ) => break,
-            Some(k) if k.starts_with("preproc_") => p = p.and_then(|n| n.parent()),
-            _ => return false,
-        }
+fn prototype_under(node: Node, p: Option<Node>) -> bool {
+    if !at_namespace_scope(p) {
+        return false;
     }
     let mut d = node.child_by_field_name("declarator");
     while let Some(n) = d {
@@ -1586,6 +1575,23 @@ fn prototype_under(node: Node, mut p: Option<Node>) -> bool {
         });
     }
     false
+}
+
+/// Is a node whose parent is `p` at file or namespace scope? Seen through the
+/// `#ifndef` guard and `#if` blocks a header wraps its declarations in.
+fn at_namespace_scope(mut p: Option<Node>) -> bool {
+    loop {
+        match p.map(|n| n.kind()) {
+            Some(
+                "translation_unit"
+                | "namespace_definition"
+                | "declaration_list"
+                | "linkage_specification",
+            ) => return true,
+            Some(k) if k.starts_with("preproc_") => p = p.and_then(|n| n.parent()),
+            _ => return false,
+        }
+    }
 }
 
 fn is_misparsed_call(node: Node, spec: &LangSpec) -> bool {
@@ -1628,9 +1634,13 @@ fn region(text: String) -> Option<(String, ContainerKind)> {
 /// script's top-level `with` block or command line.
 fn code_region(node: Node, src: &[u8], top_level: bool) -> Option<(String, ContainerKind)> {
     match node.kind() {
+        // A conditional is a region only at file or namespace scope. Inside a
+        // function, a type or an initializer it is transparent: its lines
+        // belong to what holds it, not to every same-named conditional in the
+        // file.
         // `#ifdef X` and `#ifndef X` share a node kind; the directive token
         // itself says which, and a reviewer reads them very differently
-        "preproc_ifdef" if !opens_include_guard(node, src) => {
+        "preproc_ifdef" if at_namespace_scope(node.parent()) && !opens_include_guard(node, src) => {
             let name = node.child_by_field_name("name")?.utf8_text(src).ok()?;
             let name = tidy_ident(name);
             if name.is_empty() {
@@ -1645,7 +1655,7 @@ fn code_region(node: Node, src: &[u8], top_level: bool) -> Option<(String, Conta
         }
         // a condition is an expression, not an identifier: collapse runs of
         // whitespace but keep the single spaces that make it readable
-        "preproc_if" => {
+        "preproc_if" if at_namespace_scope(node.parent()) => {
             let cond = node.child_by_field_name("condition")?.utf8_text(src).ok()?;
             region(format!("#if {}", squeeze(cond)))
         }
