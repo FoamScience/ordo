@@ -1,6 +1,7 @@
-/* Graphite: neutral sheets, ink and rules in grey, blue only for the place you are
-   and what you act on. Values sit under the names `:theme` writes (theme.ts),
-   and Hallmark's roles point at them. */
+/* Catppuccin Mocha by default (catppuccin.com/palette): base, mantle and crust
+   for the grounds, its accents for state and code. A light terminal theme
+   (`:theme`) sets data-base="light" and gets the graphite sheet below. Values
+   sit under the names `:theme` writes (theme.ts). */
 
 @font-face {
   font-family: "Geist Mono";
@@ -18,50 +19,50 @@
 }
 
 :root {
-  color-scheme: light;
-  --bg: oklch(97.6% 0.002 90);
-  --surface: oklch(97.6% 0.002 90);
-  --raise: oklch(94.5% 0.003 250);
-  --well: oklch(96% 0.002 250);
-  --band-bg: oklch(93% 0.003 250);
-  --line: oklch(83% 0.004 250);
-  --line-2: oklch(90.5% 0.003 250);
-  --fg: oklch(24% 0.006 250);
-  --dim: oklch(40% 0.006 250);
-  --faint: oklch(50% 0.006 250);
-  --accent: oklch(48% 0.13 258);
-  --accent-2: oklch(41% 0.13 258);
-  --accent-ink: oklch(98% 0.002 250);
-  --focus: oklch(48% 0.13 258);
-  --select-bg: oklch(93% 0.03 255);
-  --reviewed: oklch(24% 0.006 250);
-  --reviewed-bg: oklch(94.5% 0.003 250);
-  --match-bg: oklch(91% 0.09 95);
-  --scrim: oklch(20% 0.005 250 / 0.35);
-  --verdict: oklch(47% 0.17 28);
-  --verdict-bg: oklch(95% 0.025 28);
-  --verdict-strong-bg: oklch(88% 0.06 28);
-  --warn: oklch(48% 0.1 70);
-  --warn-bg: oklch(95.5% 0.03 80);
-  --warn-strong-bg: oklch(88% 0.07 80);
-  --note-bg: oklch(94% 0.02 255);
-  --note-strong-bg: oklch(88% 0.04 255);
-  --add-bg: oklch(95% 0.03 160);
-  --add-strong-bg: oklch(87% 0.065 160);
-  --del-bg: oklch(95.5% 0.025 25);
-  --del-strong-bg: oklch(88% 0.055 25);
-  --syn-keyword: oklch(24% 0.006 250);
-  --syn-string: oklch(40% 0.006 250);
-  --syn-number: oklch(40% 0.006 250);
-  --syn-function: oklch(24% 0.006 250);
-  --syn-type: oklch(24% 0.006 250);
-  --syn-comment: oklch(50% 0.006 250);
-  --syn-property: oklch(24% 0.006 250);
-  --syn-operator: oklch(50% 0.006 250);
-  --syn-variable: oklch(24% 0.006 250);
-  --syn-builtin: oklch(24% 0.006 250);
-  --syn-parameter: oklch(40% 0.006 250);
-  --syn-attribute: oklch(40% 0.006 250);
+  color-scheme: dark;
+  --bg: #1e1e2e;
+  --surface: #1e1e2e;
+  --raise: #313244;
+  --well: #181825;
+  --band-bg: #11111b;
+  --line: #45475a;
+  --line-2: #313244;
+  --fg: #cdd6f4;
+  --dim: #bac2de;
+  --faint: #9399b2;
+  --accent: #89b4fa;
+  --accent-2: #b4befe;
+  --accent-ink: #11111b;
+  --focus: #b4befe;
+  --select-bg: #2e3550;
+  --reviewed: #a6e3a1;
+  --reviewed-bg: #26332d;
+  --match-bg: #4a4636;
+  --scrim: rgb(17 17 27 / 0.7);
+  --verdict: #f38ba8;
+  --verdict-bg: #3b2433;
+  --verdict-strong-bg: #5a2d42;
+  --warn: #fab387;
+  --warn-bg: #3a2e2a;
+  --warn-strong-bg: #57412f;
+  --note-bg: #2a2f4a;
+  --note-strong-bg: #3a4370;
+  --add-bg: #233532;
+  --add-strong-bg: #2f5040;
+  --del-bg: #3a2333;
+  --del-strong-bg: #5a2d44;
+  --syn-keyword: #cba6f7;
+  --syn-string: #a6e3a1;
+  --syn-number: #fab387;
+  --syn-function: #89b4fa;
+  --syn-type: #f9e2af;
+  --syn-comment: #9399b2;
+  --syn-property: #b4befe;
+  --syn-operator: #89dceb;
+  --syn-variable: #cdd6f4;
+  --syn-builtin: #f38ba8;
+  --syn-parameter: #eba0ac;
+  --syn-attribute: #f9e2af;
 
   /* Hallmark's roles, read from the names above */
   --color-paper: var(--bg);
@@ -109,100 +110,50 @@
   --pane-head: calc(40px * var(--ui));
 }
 
-/* night: charcoal; paper always takes the day sheet */
-@media screen and (prefers-color-scheme: dark) {
-  :root:not([data-base="light"]) {
-    color-scheme: dark;
-    --bg: oklch(19.5% 0.004 250);
-    --surface: oklch(19.5% 0.004 250);
-    --raise: oklch(25% 0.005 250);
-    --well: oklch(17% 0.004 250);
-    --band-bg: oklch(15.5% 0.004 250);
-    --line: oklch(37% 0.006 250);
-    --line-2: oklch(28% 0.005 250);
-    --fg: oklch(92% 0.003 250);
-    --dim: oklch(80% 0.005 250);
-    --faint: oklch(68% 0.006 250);
-    --accent: oklch(75% 0.11 258);
-    --accent-2: oklch(82% 0.09 258);
-    --accent-ink: oklch(18% 0.004 250);
-    --focus: oklch(75% 0.11 258);
-    --select-bg: oklch(30% 0.045 258);
-    --reviewed: oklch(92% 0.003 250);
-    --reviewed-bg: oklch(25% 0.005 250);
-    --match-bg: oklch(40% 0.07 95);
-    --scrim: oklch(8% 0.004 250 / 0.6);
-    --verdict: oklch(75% 0.13 25);
-    --verdict-bg: oklch(27% 0.05 25);
-    --verdict-strong-bg: oklch(35% 0.08 25);
-    --warn: oklch(82% 0.11 80);
-    --warn-bg: oklch(28% 0.04 80);
-    --warn-strong-bg: oklch(37% 0.06 80);
-    --note-bg: oklch(27% 0.03 258);
-    --note-strong-bg: oklch(35% 0.05 258);
-    --add-bg: oklch(26% 0.045 160);
-    --add-strong-bg: oklch(35% 0.07 160);
-    --del-bg: oklch(26% 0.045 20);
-    --del-strong-bg: oklch(35% 0.075 20);
-    --syn-keyword: oklch(92% 0.003 250);
-    --syn-string: oklch(80% 0.005 250);
-    --syn-number: oklch(80% 0.005 250);
-    --syn-function: oklch(92% 0.003 250);
-    --syn-type: oklch(92% 0.003 250);
-    --syn-comment: oklch(68% 0.006 250);
-    --syn-property: oklch(92% 0.003 250);
-    --syn-operator: oklch(68% 0.006 250);
-    --syn-variable: oklch(92% 0.003 250);
-    --syn-builtin: oklch(92% 0.003 250);
-    --syn-parameter: oklch(80% 0.005 250);
-    --syn-attribute: oklch(80% 0.005 250);
-  }
-}
-@media screen {
-  :root[data-base="dark"] {
-    color-scheme: dark;
-    --bg: oklch(19.5% 0.004 250);
-    --surface: oklch(19.5% 0.004 250);
-    --raise: oklch(25% 0.005 250);
-    --well: oklch(17% 0.004 250);
-    --band-bg: oklch(15.5% 0.004 250);
-    --line: oklch(37% 0.006 250);
-    --line-2: oklch(28% 0.005 250);
-    --fg: oklch(92% 0.003 250);
-    --dim: oklch(80% 0.005 250);
-    --faint: oklch(68% 0.006 250);
-    --accent: oklch(75% 0.11 258);
-    --accent-2: oklch(82% 0.09 258);
-    --accent-ink: oklch(18% 0.004 250);
-    --focus: oklch(75% 0.11 258);
-    --select-bg: oklch(30% 0.045 258);
-    --reviewed: oklch(92% 0.003 250);
-    --reviewed-bg: oklch(25% 0.005 250);
-    --match-bg: oklch(40% 0.07 95);
-    --scrim: oklch(8% 0.004 250 / 0.6);
-    --verdict: oklch(75% 0.13 25);
-    --verdict-bg: oklch(27% 0.05 25);
-    --verdict-strong-bg: oklch(35% 0.08 25);
-    --warn: oklch(82% 0.11 80);
-    --warn-bg: oklch(28% 0.04 80);
-    --warn-strong-bg: oklch(37% 0.06 80);
-    --note-bg: oklch(27% 0.03 258);
-    --note-strong-bg: oklch(35% 0.05 258);
-    --add-bg: oklch(26% 0.045 160);
-    --add-strong-bg: oklch(35% 0.07 160);
-    --del-bg: oklch(26% 0.045 20);
-    --del-strong-bg: oklch(35% 0.075 20);
-    --syn-keyword: oklch(92% 0.003 250);
-    --syn-string: oklch(80% 0.005 250);
-    --syn-number: oklch(80% 0.005 250);
-    --syn-function: oklch(92% 0.003 250);
-    --syn-type: oklch(92% 0.003 250);
-    --syn-comment: oklch(68% 0.006 250);
-    --syn-property: oklch(92% 0.003 250);
-    --syn-operator: oklch(68% 0.006 250);
-    --syn-variable: oklch(92% 0.003 250);
-    --syn-builtin: oklch(92% 0.003 250);
-    --syn-parameter: oklch(80% 0.005 250);
-    --syn-attribute: oklch(80% 0.005 250);
-  }
+/* graphite: the light sheet a light `:theme` lays its colours over */
+:root[data-base="light"] {
+  color-scheme: light;
+  --bg: oklch(97.6% 0.002 90);
+  --surface: oklch(97.6% 0.002 90);
+  --raise: oklch(94.5% 0.003 250);
+  --well: oklch(96% 0.002 250);
+  --band-bg: oklch(93% 0.003 250);
+  --line: oklch(83% 0.004 250);
+  --line-2: oklch(90.5% 0.003 250);
+  --fg: oklch(24% 0.006 250);
+  --dim: oklch(40% 0.006 250);
+  --faint: oklch(50% 0.006 250);
+  --accent: oklch(48% 0.13 258);
+  --accent-2: oklch(41% 0.13 258);
+  --accent-ink: oklch(98% 0.002 250);
+  --focus: oklch(48% 0.13 258);
+  --select-bg: oklch(93% 0.03 255);
+  --reviewed: oklch(24% 0.006 250);
+  --reviewed-bg: oklch(94.5% 0.003 250);
+  --match-bg: oklch(91% 0.09 95);
+  --scrim: oklch(20% 0.005 250 / 0.35);
+  --verdict: oklch(47% 0.17 28);
+  --verdict-bg: oklch(95% 0.025 28);
+  --verdict-strong-bg: oklch(88% 0.06 28);
+  --warn: oklch(48% 0.1 70);
+  --warn-bg: oklch(95.5% 0.03 80);
+  --warn-strong-bg: oklch(88% 0.07 80);
+  --note-bg: oklch(94% 0.02 255);
+  --note-strong-bg: oklch(88% 0.04 255);
+  --add-bg: oklch(95% 0.03 160);
+  --add-strong-bg: oklch(87% 0.065 160);
+  --del-bg: oklch(95.5% 0.025 25);
+  --del-strong-bg: oklch(88% 0.055 25);
+  --syn-keyword: oklch(24% 0.006 250);
+  --syn-string: oklch(40% 0.006 250);
+  --syn-number: oklch(40% 0.006 250);
+  --syn-function: oklch(24% 0.006 250);
+  --syn-type: oklch(24% 0.006 250);
+  --syn-comment: oklch(50% 0.006 250);
+  --syn-property: oklch(24% 0.006 250);
+  --syn-operator: oklch(50% 0.006 250);
+  --syn-variable: oklch(24% 0.006 250);
+  --syn-builtin: oklch(24% 0.006 250);
+  --syn-parameter: oklch(40% 0.006 250);
+  --syn-attribute: oklch(40% 0.006 250);
 }
