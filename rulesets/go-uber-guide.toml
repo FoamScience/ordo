@@ -118,7 +118,7 @@ name = "unnecessary-else"
 lang = "go"
 query = '''
 (if_statement
-  consequence: (block (return_statement) .)
+  consequence: (block (statement_list (return_statement) .))
   alternative: (block)) @if
 '''
 note = "[uber: Unnecessary Else] the if-branch already returns — drop the else and de-indent"
@@ -184,7 +184,7 @@ lang = "go"
 query = '''
 (function_declaration
   name: (identifier) @fn
-  body: (block (go_statement))
+  body: (block (statement_list (go_statement)))
   (#eq? @fn "init"))
 '''
 warn = "[uber: No goroutines in init()] a goroutine started in init() runs before main — nothing has had a chance to wait for it"

@@ -295,7 +295,7 @@ fn md_fence_languages(src: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut matches = cursor.matches(&query, tree.root_node(), src.as_bytes());
     while let Some(m) = matches.next() {
-        for cap in m.captures {
+        for cap in m.captures() {
             if let Ok(text) = cap.node.utf8_text(src.as_bytes()) {
                 if !names.iter().any(|n| n == text) {
                     names.push(text.to_string());
@@ -403,7 +403,7 @@ pub(super) fn highlight_roles(path: &str, src: &str) -> Option<Vec<RoleSpans>> {
 
         let mut hl = Highlighter::new();
         let events = hl
-            .highlight(cfg, src.as_bytes(), None, |name| {
+            .highlight(cfg, src.as_bytes(), None, None, |name| {
                 injected.iter().find(|(n, _)| n == name).map(|(_, c)| *c)
             })
             .ok()?;
