@@ -5,7 +5,11 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -2391,10 +2395,10 @@ function Zn(e) {
 }
 function et(e, n, t, r, o) {
   Array.isArray(n) || (n = [n]);
-  let i = (a) => {
+  let i = ((a) => {
     var l;
     return (l = e.isDirected() ? e.successors(a) : e.neighbors(a)) != null ? l : [];
-  }, s = {};
+  }), s = {};
   return n.forEach(function(a) {
     if (!e.hasNode(a)) throw new Error("Graph does not have node: " + a);
     o = Ae(e, a, t === "post", s, i, r, o);
@@ -2444,10 +2448,10 @@ function rt(e, n) {
   return r;
 }
 function ot(e, n, t, r) {
-  return it(e, n, t, r != null ? r : (o) => {
+  return it(e, n, t, r != null ? r : ((o) => {
     var i;
     return (i = e.outEdges(o)) != null ? i : [];
-  });
+  }));
 }
 function it(e, n, t, r) {
   if (t === void 0) return J(e, n, t, r);
