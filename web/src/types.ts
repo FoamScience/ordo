@@ -44,7 +44,6 @@ export interface Item {
   level: Level | null;
   uses_at: { name: string; rows: number[] }[];
   executed: [number, number] | null;
-  cluster: number | null;
   wave: number | null;
   reviewed: boolean;
   delta: Delta;

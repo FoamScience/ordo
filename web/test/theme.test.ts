@@ -7,6 +7,7 @@ test("ordo's theme roles land on this page's variables", () => {
   assert.equal(cssVar("border-focus"), "--focus");
   assert.equal(cssVar("verdict-strong-bg"), "--verdict-strong-bg");
   assert.equal(cssVar("fg"), "--fg");
+  assert.equal(cssVar("warn"), "--warn");
 });
 
 test("a theme with light text sits on a dark base", () => {

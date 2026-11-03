@@ -1,4 +1,4 @@
-//! `ordo web` end to end: a real binary serving a real repository, spoken to
+//! The reviewer end to end: a real binary serving a real repository, spoken to
 //! over a socket the way a browser would. Every cache and config path points
 //! into a scratch directory, so nothing the user has is read or written.
 //!
@@ -46,7 +46,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// A repository whose last commit adds a helper and its caller, then
-/// `ordo web HEAD` started inside it.
+/// `ordo HEAD` started inside it.
 fn serve(name: &str) -> Server {
     let home = std::env::temp_dir().join(format!("ordo-web-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
@@ -65,7 +65,7 @@ fn serve(name: &str) -> Server {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "use a helper"]);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ordo"))
-        .args(["web", "HEAD", "--no-open", "--no-catalog"])
+        .args(["HEAD", "--no-open", "--no-catalog"])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("XDG_CACHE_HOME", home.join("cache"))
@@ -75,7 +75,7 @@ fn serve(name: &str) -> Server {
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
-        .expect("ordo web");
+        .expect("ordo");
     let err = child.stderr.take().unwrap();
     let mut line = String::new();
     BufReader::new(err).read_line(&mut line).unwrap();
@@ -235,7 +235,7 @@ fn the_api_wants_the_session_token_and_this_server_as_host() {
 }
 
 #[test]
-fn the_review_reads_as_the_terminal_reads_it() {
+fn the_review_reads_as_its_snapshot() {
     let s = serve("review");
     let v = s.ready();
     // the stable part of the view model: what each hunk is, in reading order
@@ -350,7 +350,7 @@ fn a_hover_leaves_the_review_as_it_was() {
 }
 
 #[test]
-fn a_command_answers_with_what_the_terminal_would_have_shown() {
+fn a_command_answers_with_a_popup() {
     let s = serve("command");
     s.ready();
     let out = s.post(

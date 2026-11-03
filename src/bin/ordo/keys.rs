@@ -1,9 +1,7 @@
 // ----------------------------------------------------------------------- keys
-use crate::code_view::hex;
-use crate::code_view::THEME_ROLES;
-use ratatui::crossterm::event::KeyCode;
-use ratatui::crossterm::event::KeyModifiers;
-use ratatui::style::Color;
+use crate::theme::hex;
+use crate::theme::Color;
+use crate::theme::THEME_ROLES;
 
 /// The three panes, in focus-cycle order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -14,24 +12,6 @@ pub(super) enum Pane {
     /// the dependency canvas — only reachable while it is open, so the
     /// `Tab` cycle below leaves it out
     Deps,
-}
-
-impl Pane {
-    pub(super) fn next(self) -> Pane {
-        match self {
-            Pane::List => Pane::Code,
-            Pane::Code => Pane::Why,
-            // the canvas is entered by `gD` or `4`, never by cycling into it
-            Pane::Why | Pane::Deps => Pane::List,
-        }
-    }
-    pub(super) fn prev(self) -> Pane {
-        match self {
-            Pane::List => Pane::Why,
-            Pane::Code => Pane::List,
-            Pane::Why | Pane::Deps => Pane::Code,
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -80,9 +60,6 @@ pub(super) enum Action {
     FindingPrev,
     /// `r` — read the change again, keeping the place
     Reload,
-    /// `H` — how often these lines have changed before, and who last touched
-    /// them. Explicit because it shells out to `git log -L` (see `hunk_churn`)
-    Churn,
     /// symbol under the cursor, in a floating popup
     Hover,
     /// `/` — open the text-search prompt
@@ -94,10 +71,9 @@ pub(super) enum Action {
     /// `n` / `N` — cycle the currently active search (text or symbol)
     SearchNext,
     SearchPrev,
-    /// open the selected hunk's file in `$VISUAL`/`$EDITOR`, positioned at its
-    /// line — handled specially in `run` (it needs to suspend the terminal)
+    /// open the selected hunk's file in an editor, positioned at its line
     OpenEditor,
-    /// `?` / `F1` — open the generated keybinding-help popup
+    /// `?` / `F1` — open the keybinding help
     Help,
     /// `:` (vim), `C-Shift-P` (vscode) — open the command bar empty
     CommandOpen,
@@ -114,10 +90,6 @@ pub(super) enum Action {
     /// `za`/`zo`/`zc`/`zR`/`zM` (vim), `C-k C-l`/`C-k C-0`/`C-k C-j` (vscode) —
     /// fold the reading-order list by group
     Fold(Fold),
-    /// `zh`/`zl` (vim), shift-left/shift-right (vscode) — scroll the code
-    /// pane's horizontal window without moving the cursor
-    ScrollLeft,
-    ScrollRight,
     /// `gw`/`gW` (vim), `Alt-PageDown`/`Alt-PageUp` (vscode) — show only the
     /// next / previous wave, through all of them and back to everything
     WaveNext,
@@ -145,6 +117,53 @@ pub(super) enum Fold {
     CloseAll,
 }
 
+/// A key a keymap binds, by what it is rather than by any one way of reading it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum KeyCode {
+    Char(char),
+    F(u8),
+    Esc,
+    Enter,
+    Backspace,
+    Tab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+/// The modifiers held with a key, as a set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct KeyModifiers(u8);
+
+impl KeyModifiers {
+    pub(super) const NONE: KeyModifiers = KeyModifiers(0);
+    pub(super) const CONTROL: KeyModifiers = KeyModifiers(1);
+    pub(super) const SHIFT: KeyModifiers = KeyModifiers(2);
+    pub(super) const ALT: KeyModifiers = KeyModifiers(4);
+
+    pub(super) fn contains(self, other: KeyModifiers) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl std::ops::BitOr for KeyModifiers {
+    type Output = KeyModifiers;
+    fn bitor(self, other: KeyModifiers) -> KeyModifiers {
+        KeyModifiers(self.0 | other.0)
+    }
+}
+
+impl std::ops::BitOrAssign for KeyModifiers {
+    fn bitor_assign(&mut self, other: KeyModifiers) {
+        self.0 |= other.0;
+    }
+}
+
 pub(super) type Key = (KeyCode, KeyModifiers);
 /// An optional prefix key (for chords like `C-w C-w`), the key, and its action.
 type Bind = (Option<Key>, Key, Action);
@@ -162,59 +181,11 @@ fn ctrlk(c: KeyCode) -> Key {
     (c, KeyModifiers::CONTROL)
 }
 
-/// An uppercase char already carries its case, so SHIFT is dropped there to keep
-/// the tables independent of how a terminal reports it.
-pub(super) fn norm(code: KeyCode, mods: KeyModifiers) -> Key {
-    match code {
-        KeyCode::Char(_) => (code, mods.difference(KeyModifiers::SHIFT)),
-        _ => (code, mods),
-    }
-}
-
 #[derive(Clone)]
 pub(super) struct Keymap {
     pub(super) name: &'static str,
     pub(super) binds: Vec<Bind>,
 }
-
-pub(super) enum Resolve {
-    Act(Action),
-    /// The key opens a chord; hold it and wait for the next one.
-    Pending,
-    Miss,
-}
-
-impl Keymap {
-    pub(super) fn resolve(&self, pending: Option<Key>, key: Key) -> Resolve {
-        let find = |pre: Option<Key>| {
-            self.binds
-                .iter()
-                .find(|(p, k, _)| *p == pre && *k == key)
-                .map(|(_, _, a)| Resolve::Act(*a))
-        };
-        if let Some(p) = pending {
-            return find(Some(p)).unwrap_or(Resolve::Miss);
-        }
-        if self.binds.iter().any(|(p, _, _)| *p == Some(key)) {
-            return Resolve::Pending;
-        }
-        find(None).unwrap_or(Resolve::Miss)
-    }
-
-    /// What `key` does on its own, even when it also opens a chord — which
-    /// `resolve` holds as `Pending` instead
-    pub(super) fn bare(&self, key: Key) -> Option<Action> {
-        self.binds
-            .iter()
-            .find(|(p, k, _)| p.is_none() && *k == key)
-            .map(|(_, _, a)| *a)
-    }
-}
-
-/// How long a held prefix that is also a key of its own (`]` before `]f`)
-/// waits for the rest of a chord before doing its own job — vim's
-/// `timeoutlen`, shortened
-pub(super) const CHORD_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Every keymap `keymap` answers to. The list is the authority — a test asserts
 /// it and the function agree, so `:config` can offer presets without a second
@@ -249,10 +220,7 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (Some(ctrl('w')), ch('w'), Action::FocusNext),
                 (Some(ctrl('w')), ch('W'), Action::FocusPrev),
                 (Some(ctrl('w')), ch('p'), Action::FocusPrev),
-                // plain digits, because Ctrl-1/2/3 below are unsendable by
-                // xterm, gnome-terminal, Terminal.app and most tmux setups —
-                // only kitty-protocol terminals emit them. Pressing the digit
-                // of the pane already focused zooms it.
+                // pressing the digit of the pane already focused zooms it
                 (Some(ch('g')), ch('D'), Action::OpenDeps),
                 (None, ch('4'), Action::Focus(Pane::Deps)),
                 (None, ch('1'), Action::Focus(Pane::List)),
@@ -301,16 +269,11 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, ch(']'), Action::MarkNext),
                 (Some(ch(']')), ch('f'), Action::FindingNext),
                 (Some(ch('[')), ch('f'), Action::FindingPrev),
-                (None, ch('H'), Action::Churn),
                 (None, ch('v'), Action::SelectLines),
                 (None, ch('c'), Action::Comment),
                 (Some(ch('g')), ch('c'), Action::CommentNext),
                 (Some(ch('g')), ch('C'), Action::CommentPrev),
                 (None, ch('r'), Action::Reload),
-                // `z` prefix (vim's own convention for view-scrolling
-                // commands, e.g. zh/zl to scroll a `nowrap` window sideways)
-                (Some(ch('z')), ch('h'), Action::ScrollLeft),
-                (Some(ch('z')), ch('l'), Action::ScrollRight),
                 (Some(ch('z')), ch('a'), Action::Fold(Fold::Toggle)),
                 (Some(ch('z')), ch('o'), Action::Fold(Fold::Open)),
                 (Some(ch('z')), ch('c'), Action::Fold(Fold::Close)),
@@ -343,10 +306,7 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
             binds: vec![
                 (None, ctrl('q'), Action::Quit),
                 (None, plain(KeyCode::Esc), Action::Quit),
-                // F1 is vscode's own "show command palette / help" key;
-                // Ctrl+Shift+P (its other command-palette binding) is a
-                // three-key chord many terminals don't report cleanly, so F1
-                // alone is the more reliable analog for "show me the keys"
+                // F1 is vscode's own "show command palette / help" key
                 (None, plain(KeyCode::F(1)), Action::Help),
                 // vscode's own command-palette key; Ctrl+P ("Go to File") is
                 // free here (list navigation is Up/Down, not C-p/C-n) and
@@ -376,22 +336,7 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (None, ctrlk(KeyCode::Left), Action::WordPrev),
                 (None, plain(KeyCode::Home), Action::LineStart),
                 (None, plain(KeyCode::End), Action::LineEnd),
-                // shift-left/right is otherwise unused here (no text
-                // selection in this reviewer), so it's free for the
-                // horizontal-scroll pair vscode has no dedicated key for
-                (
-                    None,
-                    (KeyCode::Left, KeyModifiers::SHIFT),
-                    Action::ScrollLeft,
-                ),
-                (
-                    None,
-                    (KeyCode::Right, KeyModifiers::SHIFT),
-                    Action::ScrollRight,
-                ),
-                // vscode's own folding chords. `Ctrl+Shift+[` / `]` (its
-                // fold/unfold pair) can't be told apart from Esc by a terminal,
-                // so the `Ctrl+K` chords — which vscode also ships — are used.
+                // vscode's own `Ctrl+K` folding chords
                 (Some(ctrl('k')), ctrl('l'), Action::Fold(Fold::Toggle)),
                 (Some(ctrl('k')), ctrl('0'), Action::Fold(Fold::CloseAll)),
                 (Some(ctrl('k')), ctrl('j'), Action::Fold(Fold::OpenAll)),
@@ -449,7 +394,7 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
 
 // ------------------------------------------------------------------ key help
 
-/// Grouping for the generated `?`/`F1` help popup. `General` isn't among the
+/// Grouping for the generated key table. `General` isn't among the
 /// project owner's suggested categories (navigation/panes/search/review/
 /// editor/help) but earns its own row for `Quit`, which fits none of them.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -463,8 +408,9 @@ pub(super) enum Category {
     Help,
 }
 
+#[cfg(test)]
 impl Category {
-    /// the order the help popup and the docs list the categories in
+    /// the order the docs list the categories in
     pub(super) const ORDER: [Category; 7] = [
         Category::General,
         Category::Navigation,
@@ -476,6 +422,7 @@ impl Category {
     ];
 }
 
+#[cfg(test)]
 pub(super) fn category_label(c: Category) -> &'static str {
     match c {
         Category::General => "general",
@@ -542,23 +489,11 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
             "jump to the previous hunk with a finding, the most severe first",
         ),
         Action::Reload => (Category::Review, "read the change again, keeping your place"),
-        Action::Churn => (
-            Category::Review,
-            "how often these lines changed before, and who touched them last",
-        ),
         Action::Fold(Fold::Toggle) => (Category::Review, "fold/unfold the selected hunk's group"),
         Action::Fold(Fold::Open) => (Category::Review, "unfold the selected hunk's group"),
         Action::Fold(Fold::Close) => (Category::Review, "fold the selected hunk's group"),
         Action::Fold(Fold::OpenAll) => (Category::Review, "unfold every group"),
         Action::Fold(Fold::CloseAll) => (Category::Review, "fold every group"),
-        Action::ScrollLeft => (
-            Category::Navigation,
-            "scroll the code pane (or an open popup) left",
-        ),
-        Action::ScrollRight => (
-            Category::Navigation,
-            "scroll the code pane (or an open popup) right",
-        ),
         Action::WaveNext => (
             Category::Navigation,
             "show only the next wave (after the last, all of them again)",
@@ -629,7 +564,6 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("finding-next", Action::FindingNext),
     ("finding-prev", Action::FindingPrev),
     ("reload", Action::Reload),
-    ("churn", Action::Churn),
     ("hover", Action::Hover),
     ("search", Action::SearchOpen),
     ("symbol-next", Action::SymbolNext),
@@ -647,8 +581,6 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("fold-close", Action::Fold(Fold::Close)),
     ("fold-open-all", Action::Fold(Fold::OpenAll)),
     ("fold-close-all", Action::Fold(Fold::CloseAll)),
-    ("scroll-left", Action::ScrollLeft),
-    ("scroll-right", Action::ScrollRight),
     ("wave-next", Action::WaveNext),
     ("wave-prev", Action::WavePrev),
 ];
@@ -713,7 +645,7 @@ fn parse_bind_keys(text: &str) -> Option<(Option<Key>, Key)> {
 }
 
 /// The user's keymap overrides, read from
-/// `${XDG_CONFIG_HOME:-~/.config}/ordo/tui.toml`:
+/// `${XDG_CONFIG_HOME:-~/.config}/ordo/ordo.toml`:
 ///
 /// ```toml
 /// preset = "vim"        # which built-in preset to start from
@@ -922,7 +854,6 @@ pub(super) fn key_label(key: Key) -> String {
         KeyCode::End => "End".to_string(),
         KeyCode::PageUp => "PageUp".to_string(),
         KeyCode::PageDown => "PageDown".to_string(),
-        other => format!("{other:?}"),
     };
     format!("{prefix}{body}")
 }
@@ -939,6 +870,7 @@ pub(super) fn chord_setting(prefix: Option<Key>, key: Key) -> String {
 /// A bind's full chord: `gg`/`ge` (no space — vim's own convention for a
 /// plain-char chord) vs. `C-w C-w` (spaced — either half carries a modifier
 /// or a named key, and vim always writes those chords spaced).
+#[cfg(test)]
 pub(super) fn chord_label(prefix: Option<Key>, key: Key) -> String {
     let Some(p) = prefix else {
         return key_label(key);
@@ -949,68 +881,4 @@ pub(super) fn chord_label(prefix: Option<Key>, key: Key) -> String {
     } else {
         format!("{} {}", key_label(p), key_label(key))
     }
-}
-
-/// The `?`/`F1` help popup body: every bind in `keys`, grouped by category and
-/// collapsed onto one row per action (several keys can mean the same thing,
-/// e.g. `j` and `Down` both `Next`) — generated straight from `Keymap.binds`
-/// rather than hand-duplicated, so it cannot describe a key the table doesn't
-/// actually bind.
-pub(super) fn build_help(keys: &Keymap) -> Vec<String> {
-    struct Row {
-        category: Category,
-        desc: &'static str,
-        keys: Vec<String>,
-    }
-    let mut rows: Vec<Row> = vec![];
-    for &(prefix, key, action) in &keys.binds {
-        let (category, desc) = action_help(action);
-        let label = chord_label(prefix, key);
-        match rows
-            .iter_mut()
-            .find(|r| r.category == category && r.desc == desc)
-        {
-            Some(r) if !r.keys.contains(&label) => r.keys.push(label),
-            Some(_) => {}
-            None => rows.push(Row {
-                category,
-                desc,
-                keys: vec![label],
-            }),
-        }
-    }
-    let mut out = vec![];
-    for &cat in &Category::ORDER {
-        let group: Vec<&Row> = rows.iter().filter(|r| r.category == cat).collect();
-        if group.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(String::new());
-        }
-        out.push(category_label(cat).to_uppercase());
-        // At most three chords per row. The help is for discovery, and one
-        // action with four aliases (`Space, f, C-f, PageDown`) widened the key
-        // column for every other row in its section; the full set is in the
-        // generated table in docs/tui.md.
-        const SHOWN: usize = 3;
-        let label = |r: &Row| {
-            let mut l = r.keys[..r.keys.len().min(SHOWN)].join(", ");
-            if r.keys.len() > SHOWN {
-                l.push('…');
-            }
-            l
-        };
-        // the column is as wide as the widest chord in this section, not a
-        // fixed 16 that the longest row overflowed and fell out of line with
-        let w = group
-            .iter()
-            .map(|r| label(r).chars().count())
-            .max()
-            .unwrap_or(0);
-        for r in group {
-            out.push(format!("  {:<w$} {}", label(r), r.desc));
-        }
-    }
-    out
 }

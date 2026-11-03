@@ -7,7 +7,6 @@
 use crate::commands::review_comments;
 use crate::marks::note_key;
 use crate::App;
-use base64::Engine;
 use std::fmt::Write;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -85,25 +84,8 @@ pub(super) fn review_prompt(app: &App, all: bool) -> Option<String> {
     })
 }
 
-/// The escape that asks the terminal to put `text` on the system clipboard.
-/// Works over ssh and inside a multiplexer that passes it through, where
-/// no clipboard program on this machine would help.
-pub(super) fn osc52(text: &str) -> String {
-    format!(
-        "\x1b]52;c;{}\x07",
-        base64::engine::general_purpose::STANDARD.encode(text)
-    )
-}
-
-pub(super) fn yank(text: &str) -> Result<(), String> {
-    let mut out = std::io::stdout();
-    out.write_all(osc52(text).as_bytes())
-        .and_then(|()| out.flush())
-        .map_err(|e| format!("could not write to the terminal: {e}"))
-}
-
-/// Pipes `text` to the `ORDO_SEND` command. Its output is kept off the screen
-/// the review is drawn on; a failure comes back with its first stderr line.
+/// Pipes `text` to the `ORDO_SEND` command. Its output is kept out of the
+/// server's; a failure comes back with its first stderr line.
 pub(super) fn send(text: &str) -> Result<String, String> {
     let cmd = std::env::var(SEND_ENV)
         .ok()
@@ -128,7 +110,7 @@ pub(super) fn send(text: &str) -> Result<String, String> {
             _ => {}
         }
     }
-    // the review is drawn by this same thread: a command that never returns
+    // the review is locked while this runs: a command that never returns
     // must not freeze it
     let deadline = std::time::Instant::now() + SEND_TIMEOUT;
     let status = loop {

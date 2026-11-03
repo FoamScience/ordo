@@ -15,9 +15,8 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked
       - run: cargo test --locked
-      # the generated doc blocks, and every other check that lives in the
-      # `ordo` binary's test module, are behind the `tui` feature; without
-      # this step a docs/ or README drift ships green
+      # the library and the engine must build and pass without the `web`
+      # feature's server dependencies
       - run: cargo test --locked --no-default-features
       # the shipped rulesets are user-facing conventions; a rule that stops
       # firing looks exactly like a convention nobody breaks

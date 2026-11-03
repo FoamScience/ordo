@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 // bound on how many candidate commits per direction (earlier/later) get run
 // through the engine — a long-lived file's full history would otherwise stall
-// the UI on a single `K` press
+// a single hover
 const HISTORY_WINDOW: usize = 10;
 
 fn commit_list(args: &[&str]) -> Vec<String> {
@@ -352,10 +352,10 @@ fn history_lines_for(
     }
 }
 
-/// The `K` popup's history section: resolves the hovered def's identity, then
-/// its cross-commit history (cached per identity so a repeat `K` is instant).
-/// Computed synchronously on this keypress — no async restructure, kept fast
-/// by `HISTORY_WINDOW` and the single-file-per-commit engine calls.
+/// The hover popup's history section: resolves the hovered def's identity,
+/// then its cross-commit history (cached per identity so a repeat hover is
+/// instant). Computed synchronously within the request, kept fast by
+/// `HISTORY_WINDOW` and the single-file-per-commit engine calls.
 pub(super) fn history_lines(
     app: &mut App,
     path: &str,

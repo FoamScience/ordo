@@ -1,18 +1,14 @@
 // -------------------------------------------------------------------- reload
-//! What a reload keeps. Reading the change again — `:e`, `r`, or `--watch` —
-//! builds a fresh `App`; without this the reviewer lands back on the first
-//! hunk with every filter, search and jump gone. The selection is carried by
-//! hunk identity (its symbol and file, as the since-last-look snapshot keys
-//! it), everything positional relative to that hunk.
+//! What a reload keeps. Reading the change again — `r` or `--watch` — builds
+//! a fresh `App`; without this the reviewer lands back on the first hunk with
+//! every filter gone. The selection is carried by hunk identity (its symbol
+//! and file, as the since-last-look snapshot keys it).
 
 use crate::commands::run_strategy;
 use crate::commands::set_filters;
-use crate::keys::{Pane, ViewMode};
+use crate::keys::ViewMode;
 use crate::marks::snap_key;
-use crate::search::text_matches;
-use crate::{
-    auto_scroll, clamp_cursor, select, set_mode, App, Cursor, Item, PathGlobs, Search, SearchKind,
-};
+use crate::{select, set_mode, App, Item, PathGlobs};
 use ordo::model::{LedgerEntry, SymbolChange};
 
 /// A hunk named so it can be found in another load: its snapshot key and
@@ -67,10 +63,6 @@ pub(super) struct Place {
     /// where the selection sat in the reading order: the fallback when its
     /// hunk is gone, so the reviewer lands on what came next
     pos: usize,
-    /// scroll and cursor, relative to the hunk
-    scroll_by: i64,
-    cursor_by: (i64, usize),
-    focus: Pane,
     mode: ViewMode,
     comments_only: bool,
     show_all: bool,
@@ -78,22 +70,12 @@ pub(super) struct Place {
     only_wave: Option<usize>,
     strategy: String,
     show_groups: bool,
-    zoom: bool,
-    /// a text search is carried by its pattern; a symbol search is tied to
-    /// the tree under the old cursor and is not
-    search: Option<String>,
-    jumps: Vec<(HunkId, Cursor)>,
 }
 
 pub(super) fn place_of(app: &App) -> Place {
-    let it = &app.items[app.sel];
-    let top = it.new_range[0].saturating_sub(1) as i64;
     Place {
         sel: hunk_id(&app.items, app.sel),
         pos: app.view.iter().position(|&i| i == app.sel).unwrap_or(0),
-        scroll_by: app.scroll as i64 - auto_scroll(it) as i64,
-        cursor_by: (app.cursor.line as i64 - top, app.cursor.col),
-        focus: app.focus,
         mode: app.mode,
         comments_only: app.comments_only,
         show_all: app.show_all,
@@ -101,17 +83,6 @@ pub(super) fn place_of(app: &App) -> Place {
         only_wave: app.only_wave,
         strategy: app.strategy.clone(),
         show_groups: app.show_groups,
-        zoom: app.zoom,
-        search: app
-            .search
-            .as_ref()
-            .filter(|s| s.kind == SearchKind::Text)
-            .map(|s| s.pattern.clone()),
-        jumps: app
-            .jumps
-            .iter()
-            .map(|(i, c)| (hunk_id(&app.items, *i), *c))
-            .collect(),
     }
 }
 
@@ -141,35 +112,5 @@ pub(super) fn restore(app: &mut App, p: Place) {
         .filter(|i| app.view.contains(i))
         .unwrap_or_else(|| app.view[p.pos.min(app.view.len() - 1)]);
     select(app, to);
-    let it = &app.items[to];
-    app.scroll = (auto_scroll(it) as i64 + p.scroll_by).clamp(0, u16::MAX as i64) as u16;
-    if let Some((_, lines)) = app.sources.get(&it.path) {
-        let top = it.new_range[0].saturating_sub(1) as i64;
-        let line = (top + p.cursor_by.0).max(0) as usize;
-        app.cursor = clamp_cursor(
-            Cursor {
-                line,
-                col: p.cursor_by.1,
-            },
-            lines,
-        );
-        app.search = p.search.map(|pattern| Search {
-            kind: SearchKind::Text,
-            matches: text_matches(lines, &pattern),
-            pattern,
-            index: 0,
-        });
-    }
-    app.jumps = p
-        .jumps
-        .into_iter()
-        .filter_map(|(id, c)| Some((find_hunk(&app.items, &app.symbol_ledger, &id)?, c)))
-        .collect();
-    app.focus = if p.focus == Pane::Deps {
-        Pane::Code
-    } else {
-        p.focus
-    };
     app.show_groups = p.show_groups;
-    app.zoom = p.zoom;
 }

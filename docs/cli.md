@@ -1,7 +1,7 @@
 # CLI & schema v2
 
 The engine CLI (`ordo-engine`) and the frozen JSON contract every consumer
-speaks. For the interactive reviewer see [tui.md](tui.md).
+speaks. For the interactive reviewer see [web.md](web.md).
 
 
 ```sh

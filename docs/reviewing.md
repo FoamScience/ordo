@@ -234,10 +234,10 @@ lines' hash, never their text.
 When an agent wrote the change, the review goes back to it as one prompt:
 every note, anchored to the file and the new-side line range of its hunk, and
 every line comment on its own lines.
-`:yank` puts it on the clipboard through the terminal (OSC 52, so it works over
-ssh), `:send` pipes it to the command in `$ORDO_SEND`, and either one with
-`all` adds ordo's own notes and findings — the contract notes above, the catalog
-— for when you agree with them and would rather not retype them:
+`:yank` puts it on the clipboard, `:send` pipes it to the command in
+`$ORDO_SEND`, and either one with `all` adds ordo's own notes and findings —
+the contract notes above, the catalog — for when you agree with them and would
+rather not retype them:
 
 ```
 Review of HEAD~1..HEAD (2 points). Each is anchored to a file and a line range
@@ -262,21 +262,18 @@ filesystem.
 
 `r` reads the change again and keeps your place. The selected hunk is found
 again by its symbol and file — through a rename too, by the engine's ledger —
-or, when it is gone, the next one in the reading order takes its place. Scroll
-and cursor stay where they were relative to it, and the filters, the text
-search and the jump stack come along. The status line then says what moved:
-`reloaded · 2 changed · 1 reordered · 1 gone`. `:e` keeps your place the same
-way.
+or, when it is gone, the next one in the reading order takes its place, and
+the filters come along. The status line then says what moved:
+`reloaded · 2 changed · 1 reordered · 1 gone`.
 
-`--watch=auto` reloads by itself, but never while a prompt, a popup, the
-command bar or the config is open, nor within three seconds of a key. Two
-things are only ever reported:
+`--watch=auto` reloads by itself, but never while a popup or the config is
+open, nor within three seconds of a key. Two things are only ever reported:
 - **A commit** empties `zz` of what was committed. The status line says so,
   and suggests `:e main...zz`, which keeps the committed work in view.
 - **A rebase or branch switch** moves the base under the review, which a
   reload would silently re-anchor.
 
-`watch = "hint"` in `tui.toml` turns it on for every review; `:watch on`,
+`watch = "hint"` in `ordo.toml` turns it on for every review; `:watch on`,
 `off` and `auto` change it live. A committed revision cannot drift, so there
 it says `nothing to watch`.
 

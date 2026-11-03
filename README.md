@@ -46,8 +46,8 @@ it as such.
 - **Intra-line refinement** — when a removed and an added line are the same line
   edited, only the part that changed is highlighted, over grammar leaves rather
   than characters: adding a parameter reads as adding that parameter.
-- **A reviewer TUI** — `ordo`, a first-party client that shells to git and
-  renders the whole thing in the terminal.
+- **A reviewer** — `ordo`, a first-party client that shells to git and
+  serves the whole thing to a browser tab.
 
 ## Why the order is principled
 
@@ -83,9 +83,8 @@ build.
 ## Quickstart
 
 ```sh
-ordo HEAD                                   # review the last commit, in the terminal
+ordo HEAD                                   # review the last commit, in a browser tab
 ordo main...feature 'src/*'                 # a branch, Rust sources only
-ordo web main...feature                     # the same review, in a browser tab
 git diff | ordo-engine review               # the JSON contract, from a patch
 ordo-engine pack --json < input.json        # compact LLM-ready review context
 ```
@@ -102,8 +101,7 @@ other consumer speaks to. Neither is required by the other.
 | | |
 | --- | --- |
 | [`docs/cli.md`](docs/cli.md) | `ordo-engine`, schema v2, the `enclosing_kind` table, the library API |
-| [`docs/tui.md`](docs/tui.md) | the reviewer: revisions, filters, keybindings, command bar, themes |
-| [`docs/web.md`](docs/web.md) | the browser reviewer: `ordo web`, the status band, safety, building the client |
+| [`docs/web.md`](docs/web.md) | the reviewer: revisions, filters, keybindings, commands, themes, safety, building the client |
 | [`docs/reviewing.md`](docs/reviewing.md) | the detail layer, rationale patterns, advisories, the change ledger |
 | [`docs/rules.md`](docs/rules.md) | conventions as data — conditions, limits, queries, shipped rulesets |
 | [`docs/languages.md`](docs/languages.md) | every supported language and the shape it is read in |

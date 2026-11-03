@@ -1,26 +1,25 @@
 // --------------------------------------------------------------------- tests
 
 use super::*;
-use crate::code_view::*;
 use crate::commands::*;
 use crate::comments::*;
 use crate::config::*;
-use crate::draw::*;
 use crate::editor::*;
+use crate::facts::*;
 use crate::findings::*;
 use crate::git::*;
 use crate::handoff::*;
 use crate::highlight::*;
 use crate::history::*;
+use crate::hover::*;
 use crate::keys::*;
 use crate::marks::*;
 use crate::rules::*;
-use crate::search::*;
+use crate::theme::*;
 use crate::watch::*;
 use ordo::model::HunkOut;
 use ordo::model::Options;
 use ordo::model::Strategy;
-use ratatui::style::Color;
 use std::path::Path;
 use tree_sitter::Parser;
 use tree_sitter::Point;
@@ -33,17 +32,16 @@ fn lines(s: &[&str]) -> Vec<String> {
 
 #[test]
 fn markdown_block_structure_is_highlighted() {
-    let syn = Theme::terminal("dark", false).syn;
     let src = "# Title\n\n- item\n\n```rust\nfn f() {}\n```\n";
-    let h = highlight_file("f.md", src, &syn).unwrap();
-    // heading marker, list marker and fence delimiters all get a
-    // non-default colour (the terminal theme's `Reset` is the default).
+    let h = highlight_roles("f.md", src).unwrap();
+    // heading marker, list marker and fence delimiters all get a role other
+    // than the default one, `Variable`.
     let heading_marker = h[0].iter().find(|(t, _)| t == "#").unwrap();
-    assert_ne!(heading_marker.1, Color::Reset);
+    assert_ne!(heading_marker.1, Role::Variable);
     let list_marker = h[2].iter().find(|(t, _)| t.starts_with('-')).unwrap();
-    assert_ne!(list_marker.1, Color::Reset);
+    assert_ne!(list_marker.1, Role::Variable);
     let fence_open = h[4].iter().find(|(t, _)| t == "```").unwrap();
-    assert_ne!(fence_open.1, Color::Reset);
+    assert_ne!(fence_open.1, Role::Variable);
 }
 
 /// A failed command used to leave no trace at all, so an unreadable object
@@ -224,83 +222,6 @@ fn a_review_comment_tints_its_row_by_level_like_any_finding() {
     assert_eq!(top_level(&items[0]), Some(ordo::model::Level::Warn));
 }
 
-fn finding(level: ordo::model::Level) -> ordo::model::Finding {
-    ordo::model::Finding {
-        source: ordo::model::FindingSource::Catalog,
-        name: "n".to_string(),
-        message: "m".to_string(),
-        level,
-        row: None,
-        original_level: None,
-    }
-}
-
-fn row_text(line: &Line) -> String {
-    line.spans.iter().map(|s| s.content.as_ref()).collect()
-}
-
-#[test]
-fn a_list_row_is_its_symbol_rationale_and_line_number() {
-    let mut app = test_app(0);
-    app.items[0].new_range = [12, 14];
-    let line = hunk_row(&app, &[0], "run", "adds run", false, false, 40);
-    let text = row_text(&line);
-    assert_eq!(text.chars().count(), 40, "{text:?}");
-    assert!(text.starts_with(" run        adds run"), "{text:?}");
-    assert!(text.ends_with("   12 "), "{text:?}");
-    // a long rationale is cut, never pushed past the line number
-    let long = "x".repeat(80);
-    let text = row_text(&hunk_row(
-        &app,
-        &[0],
-        "a_very_long_name",
-        &long,
-        false,
-        false,
-        40,
-    ));
-    assert_eq!(text.chars().count(), 40, "{text:?}");
-    assert!(text.contains("a_very_lo… "), "{text:?}");
-    assert!(text.ends_with("…   12 "), "{text:?}");
-}
-
-#[test]
-fn a_rows_state_is_its_background() {
-    use ordo::model::Level;
-    let mut app = test_app(0);
-    let t = app.theme;
-    let bg = |app: &App, selected: bool| {
-        hunk_row(app, &[0], "", "x", false, selected, 30).spans[0]
-            .style
-            .bg
-    };
-    let num_bg = |app: &App| {
-        hunk_row(app, &[0], "", "x", false, false, 30)
-            .spans
-            .last()
-            .unwrap()
-            .style
-            .bg
-    };
-    assert_eq!(bg(&app, false), Some(Color::Reset), "nothing to say");
-    assert_eq!(bg(&app, true), Some(t.select_bg));
-
-    app.items[0].findings = vec![finding(Level::Note), finding(Level::Verdict)];
-    assert_eq!(bg(&app, false), Some(t.verdict_bg), "the top level wins");
-    assert_eq!(
-        bg(&app, true),
-        Some(t.verdict_strong_bg),
-        "selected: its own strong shade"
-    );
-
-    // reviewed outranks the findings, but the line-number cell keeps the level
-    app.reviewed[0] = true;
-    assert_eq!(bg(&app, false), Some(t.reviewed_bg));
-    assert_eq!(num_bg(&app), Some(t.verdict_strong_bg));
-    app.items[0].findings.clear();
-    assert_eq!(num_bg(&app), Some(t.reviewed_bg), "no level to keep");
-}
-
 #[test]
 fn a_finding_outside_every_hunk_is_counted_not_dropped() {
     let mut items = vec![test_item("src/a.py")];
@@ -417,167 +338,6 @@ fn audit_accounts_for_findings_that_landed_outside_the_change() {
     );
 }
 
-fn card(needs: bool) -> Card {
-    Card {
-        idx: 0,
-        needs,
-        label: "x".to_string(),
-    }
-}
-
-/// A hunk of `n` rows, for the layout tests — the real `extent` reads it
-/// off the item.
-fn rows(n: u16) -> impl Fn(usize) -> u16 {
-    move |_| n
-}
-
-fn layout(body: Rect, cards: &[Card]) -> CanvasLayout {
-    canvas_layout(body, cards, 0, &rows(6), Zoom::Off)
-}
-
-/// The fan's defining property: neither side crosses the centre line.
-#[test]
-fn no_card_crosses_the_centre() {
-    let body = Rect::new(0, 0, 140, 40);
-    let cards: Vec<Card> = vec![card(true), card(true), card(false), card(false)];
-    let l = layout(body, &cards);
-    assert!(l.fanned);
-    let centre = l.area.x + l.area.width / 2;
-    for (c, r) in cards.iter().zip(l.cards.iter()) {
-        if c.needs {
-            assert!(r.x + r.width <= centre, "a `needs` card crossed: {r:?}");
-        } else {
-            assert!(r.x >= centre, "a `needed by` card crossed: {r:?}");
-        }
-    }
-}
-
-/// Each later card on a side steps outward, which is what makes it a fan
-/// rather than two columns.
-#[test]
-fn later_cards_step_outward() {
-    let body = Rect::new(0, 0, 140, 40);
-    let cards: Vec<Card> = vec![card(true), card(true), card(false), card(false)];
-    let l = layout(body, &cards);
-    assert!(l.cards[1].x < l.cards[0].x, "left side steps left");
-    assert!(l.cards[3].x > l.cards[2].x, "right side steps right");
-}
-
-/// A direction keeps its half whether or not the other has anything in it.
-///
-/// These used to centre when one side was empty. That made a hunk with
-/// only callers look like a different view rather than the same one with
-/// an empty left half, and left the reader guessing which side they were
-/// reading.
-#[test]
-fn an_empty_side_still_keeps_its_half() {
-    let body = Rect::new(0, 0, 140, 40);
-    for needs in [true, false] {
-        let l = layout(body, &[card(needs), card(needs)]);
-        let centre = l.area.x + l.area.width / 2;
-        for r in &l.cards {
-            if needs {
-                assert!(
-                    r.x + r.width <= centre,
-                    "a lone `needs` side must stay left: {r:?}"
-                );
-            } else {
-                assert!(
-                    r.x >= centre,
-                    "a lone `needed by` side must stay right: {r:?}"
-                );
-            }
-        }
-    }
-}
-
-/// Below the split threshold each half is too narrow for code, so the
-/// cards stack in one column — the same fallback the panes get.
-#[test]
-fn a_narrow_canvas_stacks_instead_of_fanning() {
-    let body = Rect::new(0, 0, SPLIT_COLS - 1, 40);
-    let l = layout(body, &[card(true), card(false)]);
-    assert!(!l.fanned);
-    assert_eq!(l.cards[0].x, l.cards[1].x, "stacked cards share a column");
-}
-
-/// The layout is a pure function of the size, so it can be asserted without
-/// a terminal — which is the point of having pulled it out of `draw`.
-#[test]
-fn a_zoomed_layout_shows_exactly_one_pane() {
-    let body = Rect::new(0, 0, 140, 40);
-    for focus in [Pane::List, Pane::Code, Pane::Why] {
-        let p = pane_rects(body, focus, true, 1);
-        let shown = [p.list, p.code, p.why]
-            .iter()
-            .filter(|r| r.is_some())
-            .count();
-        assert_eq!(shown, 1, "{focus:?} zoomed");
-    }
-}
-
-/// Below the split width the three panes stack full width: the list a third
-/// of the body, the why pane sized as beside the code, the code between them.
-#[test]
-fn a_narrow_terminal_stacks_the_panes() {
-    let narrow = Rect::new(0, 0, 90, 37);
-    let p = pane_rects(narrow, Pane::Code, false, 1);
-    let (list, code, why) = (p.list.unwrap(), p.code.unwrap(), p.why.unwrap());
-    assert!([list, code, why].iter().all(|r| r.width == 90 && r.x == 0));
-    assert_eq!((list.y, list.height), (0, 12));
-    assert_eq!(
-        (why.height, why.bottom()),
-        (37 / 4, 37),
-        "why floored as when wide"
-    );
-    assert_eq!(
-        (code.y, code.bottom()),
-        (12, why.y),
-        "the header bands keep them apart"
-    );
-    // down to the least height ordo draws at, nothing collapses or overlaps
-    for h in [9, 16, 24] {
-        let body = Rect::new(0, 0, SPLIT_COLS - 1, h);
-        let p = pane_rects(body, Pane::List, false, 30);
-        let (list, code, why) = (p.list.unwrap(), p.code.unwrap(), p.why.unwrap());
-        assert!(
-            list.height > 1 && code.height > 1 && why.height > 1,
-            "{h}: {list:?} {code:?} {why:?}"
-        );
-        assert!(list.bottom() <= code.y && code.bottom() <= why.y, "{h}");
-        assert_eq!(why.bottom(), h, "{h}");
-    }
-    // an explicit zoom still fills the frame
-    let z = pane_rects(narrow, Pane::Why, true, 1);
-    assert_eq!((z.list, z.code, z.why), (None, None, Some(narrow)));
-}
-
-#[test]
-fn a_wide_terminal_keeps_the_list_beside_the_code() {
-    let wide = Rect::new(0, 0, SPLIT_COLS, 40);
-    let p = pane_rects(wide, Pane::Code, false, 1);
-    let (list, code, why) = (p.list.unwrap(), p.code.unwrap(), p.why.unwrap());
-    assert_eq!((list.x, list.y, list.height), (0, 0, 40));
-    assert_eq!((code.x, code.y), (list.right() + 1, 0));
-    assert_eq!((why.x, why.y, why.bottom()), (code.x, code.bottom(), 40));
-}
-
-#[test]
-fn the_why_pane_is_sized_to_its_content_between_a_floor_and_a_cap() {
-    let body = Rect::new(0, 0, 140, 40);
-    // one fact: still a quarter of the column, so its two columns have room
-    let small = pane_rects(body, Pane::Code, false, 1).why.unwrap();
-    assert_eq!(small.height, body.height / 4);
-
-    // more rows than the floor: header plus every row
-    let big = pane_rects(body, Pane::Code, false, 12).why.unwrap();
-    assert_eq!(big.height, 13);
-
-    // and it cannot eat the code pane
-    let huge = pane_rects(body, Pane::Code, false, 400).why.unwrap();
-    assert_eq!(huge.height, body.height * 2 / 5, "capped at 40%");
-}
-
 /// Every language the engine resolves is either painted here or listed as
 /// deliberately unpainted. The two tables were separate copies of the same
 /// extension map and had drifted by three entries — `.C`, `.H` and `.zsh`
@@ -617,41 +377,37 @@ fn the_extensions_the_duplicate_table_dropped_are_painted() {
 
 #[test]
 fn markdown_inline_emphasis_is_highlighted() {
-    let syn = Theme::terminal("dark", false).syn;
     let src = "plain and *emphasised* text\n";
-    let h = highlight_file("f.md", src, &syn).unwrap();
+    let h = highlight_roles("f.md", src).unwrap();
     let word = h[0].iter().find(|(t, _)| t == "emphasised").unwrap();
-    assert_eq!(word.1, syn.keyword);
+    assert_eq!(word.1, Role::Keyword);
 }
 
 #[test]
 fn markdown_fenced_rust_uses_rust_grammar() {
-    let syn = Theme::terminal("dark", false).syn;
     let src = "```rust\nfn add() {\n    let x = 1;\n}\n```\n";
-    let h = highlight_file("f.md", src, &syn).unwrap();
+    let h = highlight_roles("f.md", src).unwrap();
     let fn_kw = h[1].iter().find(|(t, _)| t == "fn").unwrap();
-    assert_eq!(fn_kw.1, syn.keyword);
+    assert_eq!(fn_kw.1, Role::Keyword);
     let let_kw = h[2].iter().find(|(t, _)| t == "let").unwrap();
-    assert_eq!(let_kw.1, syn.keyword);
+    assert_eq!(let_kw.1, Role::Keyword);
 }
 
 #[test]
 fn markdown_fence_in_unsupported_language_does_not_panic() {
-    let syn = Theme::terminal("dark", false).syn;
     let src = "```console\n$ echo hi\nhi\n```\n";
-    let h = highlight_file("f.md", src, &syn).unwrap();
+    let h = highlight_roles("f.md", src).unwrap();
     assert_eq!(h.len(), src.lines().count() + 1);
 }
 
 #[test]
 fn non_markdown_file_highlighting_is_unaffected() {
-    let syn = Theme::terminal("dark", false).syn;
     let src = "fn add(a: i32) -> i32 {\n    a\n}\n";
-    let h = highlight_file("f.rs", src, &syn).unwrap();
+    let h = highlight_roles("f.rs", src).unwrap();
     let fn_kw = h[0].iter().find(|(t, _)| t == "fn").unwrap();
-    assert_eq!(fn_kw.1, syn.keyword);
+    assert_eq!(fn_kw.1, Role::Keyword);
     let ty = h[0].iter().find(|(t, _)| t == "i32").unwrap();
-    assert_eq!(ty.1, syn.type_);
+    assert_eq!(ty.1, Role::Type);
 }
 
 // ---- background-load progress messages ----
@@ -672,42 +428,7 @@ fn read_progress_is_one_based() {
     );
 }
 
-#[test]
-fn highlight_progress_is_one_based() {
-    assert_eq!(highlight_progress(0, 27), "highlighting (1/27)");
-    assert_eq!(highlight_progress(7, 27), "highlighting (8/27)");
-}
-
-// ---- cursor column/line arithmetic ----
-
-#[test]
-fn move_col_clamps_within_line() {
-    let ls = lines(&["abc"]);
-    let c = Cursor { line: 0, col: 0 };
-    assert_eq!(move_col(c, &ls, -1), Cursor { line: 0, col: 0 });
-    assert_eq!(move_col(c, &ls, 1), Cursor { line: 0, col: 1 });
-    assert_eq!(
-        move_col(Cursor { line: 0, col: 2 }, &ls, 5),
-        Cursor { line: 0, col: 2 }
-    );
-}
-
-#[test]
-fn move_line_clamps_and_carries_column() {
-    let ls = lines(&["hello", "hi", ""]);
-    let c = Cursor { line: 0, col: 4 };
-    assert_eq!(move_line(c, &ls, 1), Cursor { line: 1, col: 1 }); // "hi" only has col 0/1
-    assert_eq!(move_line(c, &ls, 2), Cursor { line: 2, col: 0 }); // empty line -> col 0
-    assert_eq!(move_line(c, &ls, -5), Cursor { line: 0, col: 4 });
-}
-
-#[test]
-fn line_start_end() {
-    let ls = lines(&["abcdef"]);
-    let c = Cursor { line: 0, col: 3 };
-    assert_eq!(line_start(c, &ls), Cursor { line: 0, col: 0 });
-    assert_eq!(line_end(c, &ls), Cursor { line: 0, col: 5 });
-}
+// ---- cursor clamping ----
 
 #[test]
 fn clamp_cursor_handles_shrunk_or_empty_files() {
@@ -720,86 +441,6 @@ fn clamp_cursor_handles_shrunk_or_empty_files() {
         clamp_cursor(Cursor { line: 0, col: 0 }, &[]),
         Cursor { line: 0, col: 0 }
     );
-}
-
-// ---- word motion ----
-
-#[test]
-fn word_next_skips_word_then_whitespace() {
-    let ls = lines(&["foo bar  baz"]);
-    let c = Cursor { line: 0, col: 0 };
-    let c = word_next(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 4 }); // "bar"
-    let c = word_next(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 9 }); // "baz"
-    let c = word_next(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 11 }); // no next word: last char of buffer
-}
-
-#[test]
-fn word_next_crosses_lines() {
-    let ls = lines(&["foo", "bar"]);
-    let c = word_next(Cursor { line: 0, col: 0 }, &ls);
-    assert_eq!(c, Cursor { line: 1, col: 0 });
-}
-
-#[test]
-fn word_prev_mirrors_word_next() {
-    let ls = lines(&["foo bar  baz"]);
-    let c = word_prev(Cursor { line: 0, col: 9 }, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 4 });
-    let c = word_prev(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 0 });
-    let c = word_prev(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 0 });
-}
-
-#[test]
-fn word_end_lands_on_last_char_of_word() {
-    let ls = lines(&["foo bar"]);
-    let c = word_end(Cursor { line: 0, col: 0 }, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 2 }); // end of "foo"
-    let c = word_end(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 6 }); // end of "bar"
-}
-
-#[test]
-fn word_motion_treats_punctuation_as_its_own_run() {
-    let ls = lines(&["foo(bar)"]);
-    let c = word_next(Cursor { line: 0, col: 0 }, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 3 }); // "("
-    let c = word_next(c, &ls);
-    assert_eq!(c, Cursor { line: 0, col: 4 }); // "bar"
-}
-
-// ---- paragraph motion ----
-
-#[test]
-fn para_next_prev_find_blank_lines() {
-    let ls = lines(&["a", "b", "", "c", "d"]);
-    assert_eq!(
-        para_next(Cursor { line: 0, col: 0 }, &ls),
-        Cursor { line: 2, col: 0 }
-    );
-    assert_eq!(
-        para_prev(Cursor { line: 4, col: 0 }, &ls),
-        Cursor { line: 2, col: 0 }
-    );
-    assert_eq!(
-        para_prev(Cursor { line: 0, col: 0 }, &ls),
-        Cursor { line: 0, col: 0 }
-    );
-}
-
-// ---- scroll-follow clamping ----
-
-#[test]
-fn follow_scroll_keeps_cursor_in_view() {
-    assert_eq!(follow_scroll(5, 0, 10), 0); // already visible
-    assert_eq!(follow_scroll(0, 5, 10), 0); // scrolled past top -> jump up
-    assert_eq!(follow_scroll(20, 5, 10), 11); // scrolled past bottom -> jump down
-    assert_eq!(follow_scroll(9, 0, 10), 0); // last visible row stays put
-    assert_eq!(follow_scroll(10, 0, 10), 1); // one past the last visible row
 }
 
 // ---- byte/char column conversion ----
@@ -884,101 +525,6 @@ fn c_function_definition_name_comes_from_declarator() {
     assert_eq!(def.kind(), "function_definition");
     assert_eq!(signature(def, src), "int square(int x)");
     assert_eq!(doc_for("f.c", def, src).as_deref(), Some("// squares x"));
-}
-
-// ---- search: symbol occurrences vs. text search ----
-
-#[test]
-fn byte_to_char_col_is_the_inverse_of_char_byte() {
-    let line = "héllo";
-    for col in 0..line.chars().count() {
-        assert_eq!(byte_to_char_col(line, char_byte(line, col)), col);
-    }
-}
-
-// A real case from a test corpus: a local `may_refine` bound once and used
-// twice, alongside `may_refine_camber_span` (which contains `may_refine`
-// as a substring) appearing 4 times. Symbol-occurrence search must find
-// exactly the 3 identifier nodes named `may_refine` and none of the 4
-// longer-named ones; text search, by contrast, matches the substring
-// everywhere it appears — including inside the longer name.
-#[test]
-fn symbol_occurrences_ignore_substring_matches() {
-    let src = "def refine(may_refine_camber_span):\n\
-               \x20   may_refine = may_refine_camber_span > 0\n\
-               \x20   if may_refine:\n\
-               \x20       return may_refine_camber_span\n\
-               \x20   return may_refine or may_refine_camber_span\n";
-    let lines: Vec<String> = src.lines().map(str::to_string).collect();
-    let tree = parse(tree_sitter_python::LANGUAGE.into(), src);
-    let root = tree.root_node();
-
-    let matches = symbol_matches(root, "may_refine", src, &lines);
-    assert_eq!(matches.len(), 3); // 1 binding + 2 uses
-    for &(line, s, e) in &matches {
-        assert_eq!(&lines[line][s..e], "may_refine");
-    }
-
-    let long_matches = symbol_matches(root, "may_refine_camber_span", src, &lines);
-    assert_eq!(long_matches.len(), 4);
-}
-
-#[test]
-fn text_search_matches_substrings_unlike_symbol_search() {
-    let src = "def refine(may_refine_camber_span):\n\
-               \x20   may_refine = may_refine_camber_span > 0\n\
-               \x20   if may_refine:\n\
-               \x20       return may_refine_camber_span\n\
-               \x20   return may_refine or may_refine_camber_span\n";
-    let lines: Vec<String> = src.lines().map(str::to_string).collect();
-    // every occurrence of the literal substring, standalone or embedded —
-    // 3 standalone `may_refine` + 4 embedded in `may_refine_camber_span`
-    let matches = text_matches(&lines, "may_refine");
-    assert_eq!(matches.len(), 7);
-}
-
-#[test]
-fn text_matches_empty_pattern_finds_nothing() {
-    let lines = lines(&["abc"]);
-    assert!(text_matches(&lines, "").is_empty());
-}
-
-// ---- next/previous match: seeking and wrap-around ----
-
-#[test]
-fn cycle_index_wraps_both_directions() {
-    assert_eq!(cycle_index(0, 3, 1), 1);
-    assert_eq!(cycle_index(2, 3, 1), 0); // wraps forward
-    assert_eq!(cycle_index(0, 3, -1), 2); // wraps backward
-    assert_eq!(cycle_index(0, 0, 1), 0); // empty: no panic, degenerate 0
-}
-
-#[test]
-fn seek_forward_wraps_when_nothing_ahead() {
-    let matches = vec![(0, 0, 3), (2, 0, 3)];
-    let cursor = Cursor { line: 5, col: 0 };
-    assert_eq!(seek_forward(&matches, cursor, true), Some(0));
-    // strict (non-inclusive) seek skips a match starting exactly at cursor
-    let cursor = Cursor { line: 0, col: 0 };
-    assert_eq!(seek_forward(&matches, cursor, false), Some(1));
-    assert_eq!(seek_forward(&matches, cursor, true), Some(0));
-}
-
-#[test]
-fn seek_backward_wraps_when_nothing_behind() {
-    let matches = vec![(0, 0, 3), (2, 0, 3)];
-    let cursor = Cursor { line: 0, col: 0 };
-    assert_eq!(seek_backward(&matches, cursor, false), Some(1)); // wraps to last
-    let cursor = Cursor { line: 2, col: 0 };
-    assert_eq!(seek_backward(&matches, cursor, true), Some(1));
-    assert_eq!(seek_backward(&matches, cursor, false), Some(0));
-}
-
-#[test]
-fn search_seek_on_empty_matches_returns_none() {
-    let cursor = Cursor { line: 0, col: 0 };
-    assert_eq!(seek_forward(&[], cursor, true), None);
-    assert_eq!(seek_backward(&[], cursor, false), None);
 }
 
 // ---- cross-commit history: identity, windowing, labeling ----
@@ -1174,122 +720,11 @@ fn chord_label_renders_known_chords() {
     assert_eq!(chord_label(None, ch('q')), "q");
 }
 
-// ---- generated keybinding help ----
-
-#[test]
-fn help_text_is_generated_from_the_bind_table() {
-    let km = keymap("vim").unwrap();
-    let help = build_help(&km);
-    // `Hover` is bound to `K` in vim's own bind table (see `keymap`) — if
-    // that binding ever changes, this row (built from the table, not
-    // hand-copied) changes with it, and this assertion breaks.
-    let (_, desc) = action_help(Action::Hover);
-    let row = help
-        .iter()
-        .find(|l| l.contains(desc))
-        .expect("hover row present");
-    assert!(row.contains('K'), "expected the hover row to list K: {row}");
-}
-
-#[test]
-fn help_collapses_multiple_keys_bound_to_the_same_action() {
-    let km = keymap("vim").unwrap();
-    let help = build_help(&km);
-    // `Next` is bound to both `j` and `Down` — one row, both keys.
-    let (_, desc) = action_help(Action::Next);
-    let row = help
-        .iter()
-        .find(|l| l.contains(desc))
-        .expect("next row present");
-    assert!(
-        row.contains('j') && row.contains("Down"),
-        "expected both keys on one row: {row}"
-    );
-}
-
-#[test]
-fn help_covers_both_presets_without_panicking() {
-    for name in ["vim", "vscode"] {
-        let km = keymap(name).unwrap();
-        let help = build_help(&km);
-        assert!(!help.is_empty());
-    }
-}
-
-#[test]
-fn excerpt_numbers_lines_and_uses_highlight_segments_when_present() {
-    let lines: Vec<String> = vec!["fn a() {}".into(), "let x = 1;".into(), "done".into()];
-    // no grammar: falls back to raw text, still gutter-numbered
-    let plainly = excerpt(&lines, None, 2, 3, &Theme::terminal("dark", false));
-    assert_eq!(plainly.len(), 2);
-    let first: String = plainly[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect();
-    assert_eq!(first, "    2 let x = 1;");
-
-    // with highlights: the segments are used, each carrying its own colour
-    let hl: Vec<LineSpans> = vec![
-        vec![],
-        vec![
-            ("let ".to_string(), Color::Magenta),
-            ("x = 1;".to_string(), Color::Reset),
-        ],
-        vec![],
-    ];
-    let lit = excerpt(&lines, Some(&hl), 2, 2, &Theme::terminal("dark", false));
-    assert_eq!(lit.len(), 1);
-    assert_eq!(lit[0].spans.len(), 3, "gutter + two coloured segments");
-    assert_eq!(lit[0].spans[1].style.fg, Some(Color::Magenta));
-}
-
-#[test]
-fn popup_width_measures_the_widest_line_across_its_spans() {
-    let lines = vec![
-        Line::from("short"),
-        Line::from(vec![Span::raw("12345"), Span::raw("67890")]),
-        Line::from("mid"),
-    ];
-    assert_eq!(popup_width(&lines), 10, "spans on one line sum");
-    assert_eq!(popup_width(&[]), 0);
-}
-
-#[test]
-fn excerpt_stops_at_the_end_of_the_file() {
-    let lines: Vec<String> = vec!["only".into()];
-    assert_eq!(
-        excerpt(&lines, None, 1, 9, &Theme::terminal("dark", false)).len(),
-        1
-    );
-    assert!(excerpt(&lines, None, 5, 9, &Theme::terminal("dark", false)).is_empty());
-}
-
-#[test]
-fn vim_takes_arrows_after_a_window_chord() {
-    // vim accepts arrows wherever it accepts hjkl; a reviewer who reaches
-    // for C-w Right should land where C-w l lands
-    let km = keymap("vim").unwrap();
-    let w = Some(ctrl('w'));
-    for (key, want) in [
-        (plain(KeyCode::Left), Pane::List),
-        (plain(KeyCode::Right), Pane::Code),
-        (plain(KeyCode::Up), Pane::Code),
-        (plain(KeyCode::Down), Pane::Why),
-    ] {
-        assert!(
-            matches!(km.resolve(w, key), Resolve::Act(Action::Focus(p)) if p == want),
-            "{}",
-            chord_label(w, key)
-        );
-    }
-    // and the chord still has to be opened first
-    assert!(matches!(km.resolve(None, ctrl('w')), Resolve::Pending));
-}
+// ---- keymap tables ----
 
 #[test]
 fn no_preset_binds_the_same_chord_twice() {
-    // `Keymap::resolve` takes the first match, so a duplicate (prefix, key)
+    // a key resolves to its first match, so a duplicate (prefix, key)
     // is silently shadowed rather than rejected — the second binding just
     // never fires. These tables have been edited by many separate changes,
     // so the invariant is worth asserting rather than assuming.
@@ -1325,134 +760,6 @@ fn every_bound_action_has_a_help_entry() {
     }
 }
 
-// ---- :quickfix ----
-
-fn qf_hunk(
-    filename: &str,
-    lnum: usize,
-    kind: Option<char>,
-    cluster: Option<&str>,
-    text: &str,
-) -> QfHunk {
-    QfHunk {
-        filename: filename.to_string(),
-        lnum,
-        kind,
-        cluster: cluster.map(str::to_string),
-        text: text.to_string(),
-    }
-}
-
-#[test]
-fn quickfix_script_has_one_item_line_per_hunk_in_order() {
-    let hunks = vec![
-        qf_hunk("a.rs", 10, None, None, "first"),
-        qf_hunk("b.rs", 20, Some('W'), Some("cluster 1"), "second"),
-    ];
-    let script = quickfix_script("HEAD", "comprehension", &hunks);
-    assert!(script.contains("'nr': '$',"));
-    let first = script.find("'filename': 'a.rs'").unwrap();
-    let second = script.find("'filename': 'b.rs'").unwrap();
-    assert!(first < second, "items must appear in the given order");
-    assert!(script.contains("'lnum': 10"));
-    assert!(script.contains("'lnum': 20"));
-}
-
-#[test]
-fn quickfix_script_doubles_apostrophes_and_keeps_unicode_verbatim() {
-    let hunks = vec![qf_hunk("a.rs", 1, None, None, "don't lose → this ⚠")];
-    let script = quickfix_script("HEAD", "comprehension", &hunks);
-    assert!(script.contains("don''t lose → this ⚠"));
-}
-
-#[test]
-fn quickfix_script_never_sets_vims_module_key() {
-    // vim renders `module` instead of the filename in the quickfix window,
-    // so setting it would hide the path a reviewer navigates by
-    let script = quickfix_script(
-        "HEAD",
-        "comprehension",
-        &[
-            qf_hunk("src/lib.rs", 12, None, Some("c2"), "wires it through"),
-            qf_hunk("src/lang.rs", 75, None, None, "adds xonsh"),
-        ],
-    );
-    assert!(!script.contains("'module'"), "{script}");
-    assert!(script.contains("'filename': 'src/lib.rs'"), "{script}");
-}
-
-#[test]
-fn quickfix_script_prefixes_the_cluster_onto_the_text() {
-    let script = quickfix_script(
-        "HEAD",
-        "comprehension",
-        &[qf_hunk(
-            "src/lib.rs",
-            12,
-            None,
-            Some("c2"),
-            "wires it through",
-        )],
-    );
-    assert!(
-        script.contains("'text': '[c2] wires it through'"),
-        "{script}"
-    );
-}
-
-#[test]
-fn quickfix_script_leaves_an_unclustered_text_alone() {
-    let hunks = vec![qf_hunk("a.rs", 1, None, None, "plain")];
-    let script = quickfix_script("HEAD", "comprehension", &hunks);
-    assert!(script.contains("'text': 'plain'"), "{script}");
-}
-
-#[test]
-fn quickfix_script_titles_by_distinct_cluster_count() {
-    let hunks = vec![
-        qf_hunk("a.rs", 1, None, Some("c1"), "one"),
-        qf_hunk("b.rs", 2, None, Some("c2"), "two"),
-        qf_hunk("c.rs", 3, None, Some("c2"), "three"),
-    ];
-    let script = quickfix_script("HEAD", "comprehension", &hunks);
-    assert!(script.contains("3 hunks, 2 clusters"), "{script}");
-}
-
-#[test]
-fn quickfix_script_on_an_empty_export_still_produces_a_valid_call() {
-    let script = quickfix_script("HEAD", "comprehension", &[]);
-    assert!(script.contains("'nr': '$',"));
-    assert!(script.contains("'items': ["));
-    assert!(script.trim_end().ends_with("]})"));
-    // no item line was emitted
-    assert!(!script.contains("'filename'"));
-}
-
-#[test]
-fn qf_kind_warn_beats_reviewed_and_neither_is_empty() {
-    assert_eq!(qf_kind(true, false), Some('W'));
-    assert_eq!(qf_kind(false, true), Some('I'));
-    assert_eq!(qf_kind(true, true), Some('W'));
-    assert_eq!(qf_kind(false, false), None);
-}
-
-#[test]
-fn is_vim_family_matches_vim_and_neovim_by_basename_only() {
-    for prog in ["vim", "nvim", "/usr/bin/nvim", "vi", "gvim", "mvim"] {
-        assert!(
-            is_vim_family(&[prog.to_string()]),
-            "{prog} should be vim-family"
-        );
-    }
-    for prog in ["code", "emacs", "hx", "subl"] {
-        assert!(
-            !is_vim_family(&[prog.to_string()]),
-            "{prog} should not be vim-family"
-        );
-    }
-    assert!(!is_vim_family(&[]));
-}
-
 // ---- command mode: line parsing ----
 
 #[test]
@@ -1467,147 +774,7 @@ fn parse_command_line_splits_name_and_argument() {
     assert_eq!(parse_command_line(""), ("", ""));
 }
 
-// ---- command mode: the completion matcher ----
-
-#[test]
-fn complete_prefers_a_prefix_match_over_a_substring_one() {
-    let candidates = lines(&["comprehension", "defs-first", "file"]);
-    // "f" prefixes "file" but is also a substring of "defs-first" — the
-    // prefix match must win outright, not just sort first
-    assert_eq!(complete("f", &candidates), vec!["file".to_string()]);
-}
-
-#[test]
-fn complete_falls_back_to_substring_when_no_prefix_matches() {
-    let candidates = lines(&["comprehension", "defs-first", "file"]);
-    // "first" isn't a prefix of anything, but is a substring of "defs-first"
-    assert_eq!(
-        complete("first", &candidates),
-        vec!["defs-first".to_string()]
-    );
-}
-
-#[test]
-fn complete_is_case_insensitive() {
-    let candidates = lines(&["vim", "vscode"]);
-    assert_eq!(complete("VS", &candidates), vec!["vscode".to_string()]);
-}
-
-#[test]
-fn complete_empty_input_lists_everything_unfiltered() {
-    let candidates = lines(&["vim", "vscode"]);
-    assert_eq!(complete("", &candidates), candidates);
-}
-
-#[test]
-fn complete_no_match_yields_an_empty_menu() {
-    let candidates = lines(&["vim", "vscode"]);
-    assert!(complete("zzz", &candidates).is_empty());
-}
-
-// ---- command mode: argument completion per command ----
-
-#[test]
-fn command_completions_lists_command_names_before_any_space() {
-    let got = command_completions("str", &[], &[], &[]);
-    assert_eq!(got, vec!["strategy".to_string()]);
-}
-
-#[test]
-fn command_completions_lists_strategy_names() {
-    let got = command_completions("strategy ", &[], &[], &[]);
-    assert_eq!(
-        got,
-        vec![
-            "comprehension".to_string(),
-            "defs-first".to_string(),
-            "file".to_string()
-        ]
-    );
-}
-
-#[test]
-fn command_completions_lists_goto_paths_and_filter_dirs_from_their_own_pools() {
-    let goto_paths = lines(&["src/a.rs", "src/b.rs"]);
-    let filter_dirs = lines(&["src", "tests"]);
-    assert_eq!(
-        command_completions("goto ", &goto_paths, &filter_dirs, &[]),
-        goto_paths
-    );
-    assert_eq!(
-        command_completions("filter ", &goto_paths, &filter_dirs, &[]),
-        filter_dirs
-    );
-}
-
-#[test]
-fn command_completions_narrows_the_argument_by_its_own_partial_word() {
-    let goto_paths = lines(&["src/a.rs", "src/b.rs"]);
-    assert_eq!(
-        command_completions("goto src/b", &goto_paths, &[], &[]),
-        vec!["src/b.rs".to_string()]
-    );
-}
-
-#[test]
-fn command_completions_is_empty_for_a_no_argument_command() {
-    assert!(command_completions("q ", &[], &[], &[]).is_empty());
-    assert!(command_completions("only-comments ", &[], &[], &[]).is_empty());
-}
-
-#[test]
-fn apply_completion_replaces_the_word_being_completed_and_adds_a_trailing_space() {
-    assert_eq!(apply_completion("str", "strategy"), "strategy ");
-    assert_eq!(
-        apply_completion("strategy defs", "defs-first"),
-        "strategy defs-first "
-    );
-}
-
-#[test]
-fn dir_prefix_and_distinct_sorted_derive_stable_glob_candidates() {
-    assert_eq!(dir_prefix("src/bin/ordo.rs"), Some("src/bin"));
-    assert_eq!(dir_prefix("Cargo.toml"), None);
-    let got = distinct_sorted(["src/b.rs", "src/a.rs", "src/a.rs"].into_iter());
-    assert_eq!(got, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
-}
-
 // ---- command mode: `:help` generated from the command table ----
-
-#[test]
-fn completing_a_command_name_shows_its_help_sentence_beside_it() {
-    let names = command_names();
-    let (head, help) = command_menu_row("strategy", true, &names, 120);
-    assert!(head.starts_with("strategy <"), "{head:?}");
-    let strategy = COMMANDS.iter().find(|c| c.name == "strategy").unwrap();
-    assert_eq!(
-        help.as_deref(),
-        Some(format!("  — {}", strategy.help).as_str())
-    );
-    // every name pads to the same column, so the sentences line up
-    let (h1, _) = command_menu_row("q", true, &names, 120);
-    assert_eq!(h1.chars().count(), head.chars().count());
-}
-
-#[test]
-fn a_narrow_menu_cuts_the_sentence_and_a_very_narrow_one_drops_it() {
-    let names = command_names();
-    let (_, help) = command_menu_row("strategy", true, &names, 60);
-    let help = help.unwrap();
-    assert!(help.ends_with('…'), "{help:?}");
-    assert!(help.chars().count() <= 60);
-    let (_, none) = command_menu_row("strategy", true, &names, 20);
-    assert!(none.is_none());
-}
-
-#[test]
-fn argument_candidates_carry_no_sentence() {
-    let pool = vec!["vim".to_string(), "vscode".to_string()];
-    assert_eq!(
-        command_menu_row("vim", false, &pool, 120),
-        ("vim".to_string(), None)
-    );
-}
 
 #[test]
 fn command_help_is_generated_from_the_command_table() {
@@ -1754,17 +921,12 @@ fn compute_view_applies_only_comments_show_all_and_glob_independently() {
 
 #[test]
 fn set_filters_clamps_selection_off_a_hunk_that_falls_out_of_view() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items = vec![test_item("a.rs"), test_item("b.rs"), test_item("c.rs")];
     app.view = vec![0, 1, 2];
     app.reviewed = vec![false, false, false];
     app.sel = 1; // b.rs — about to be filtered out
-    app.popup = Some(Popup {
-        title: "x".to_string(),
-        lines: vec![],
-        scroll: 0,
-        hscroll: 0,
-    });
+    app.popup = Some(Popup::new("x", vec![]));
 
     let globs = build_globs(&["a.rs".to_string()]).unwrap();
     set_filters(
@@ -1783,7 +945,7 @@ fn set_filters_clamps_selection_off_a_hunk_that_falls_out_of_view() {
 
 #[test]
 fn set_filters_rejects_a_combination_that_would_empty_the_view() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items = vec![test_item("a.rs")];
     app.view = vec![0];
     app.reviewed = vec![false];
@@ -1803,46 +965,10 @@ fn set_filters_rejects_a_combination_that_would_empty_the_view() {
 }
 
 #[test]
-fn view_pos_and_first_last_visible_read_the_view_not_the_raw_item_list() {
+fn view_pos_reads_the_view_not_the_raw_item_list() {
     assert_eq!(view_pos(&[3, 5, 8], 5), 1);
     assert_eq!(view_pos(&[3, 5, 8], 99), 0); // not found: degrades to 0
-    let mut app = test_app(0);
-    app.view = vec![3, 5, 8];
-    assert_eq!(first_visible(&app), 3);
-    assert_eq!(last_visible(&app), 8);
 }
-
-// ---- horizontal scroll: cursor-follow ----
-
-#[test]
-fn follow_hscroll_keeps_cursor_in_view() {
-    assert_eq!(follow_hscroll(5, 0, 10), 0); // already visible: no movement
-    assert_eq!(follow_hscroll(15, 0, 10), 6); // right of the window: scrolls right
-    assert_eq!(follow_hscroll(2, 6, 10), 2); // left of the window: scrolls back
-}
-
-// ---- horizontal scroll: span slicing ----
-
-#[test]
-fn slice_range_crops_by_char_column_not_byte() {
-    // "héllo world" — é is 2 bytes, so a byte-based slice would misalign
-    // every column after it.
-    let spans = vec![Span::styled("héllo world".to_string(), Style::default())];
-    let sliced = slice_range(spans, 1, 3);
-    let text: String = sliced.iter().map(|s| s.content.to_string()).collect();
-    assert_eq!(text, "éll");
-}
-
-#[test]
-fn slice_range_drops_content_outside_the_window() {
-    let spans = vec![Span::styled("hello".to_string(), Style::default())];
-    assert!(slice_range(spans.clone(), 10, 5).is_empty());
-    let sliced = slice_range(spans, 0, 2);
-    let text: String = sliced.iter().map(|s| s.content.to_string()).collect();
-    assert_eq!(text, "he");
-}
-
-// ---- horizontal scroll: the gutter stays fixed ----
 
 fn test_item(path: &str) -> Item {
     Item {
@@ -1865,7 +991,6 @@ fn test_item(path: &str) -> Item {
         findings: vec![],
         executed: None,
         refined: ordo::refine::Refined::default(),
-        cluster: None,
         wave: None,
     }
 }
@@ -1878,447 +1003,6 @@ fn edge(label: &str, target: Option<usize>) -> EdgeRef {
         // defines", which is what makes the target a dependency
         dependency: label.starts_with('←'),
     }
-}
-
-#[test]
-fn code_view_marks_only_the_rows_uses_at_names() {
-    let mut it = test_item("f.rs");
-    it.uses_at = vec![ordo::model::UseSite {
-        name: "x".to_string(),
-        rows: vec![1, 3],
-    }];
-    let mut sources: Sources = HashMap::new();
-    sources.insert(
-        "f.rs".to_string(),
-        (
-            vec![],
-            (1..=3).map(|i| format!("line {i}")).collect::<Vec<_>>(),
-        ),
-    );
-    let (rows, _, _) = code_view(
-        &it,
-        &sources,
-        &HashMap::new(),
-        40,
-        0,
-        None,
-        &[],
-        None,
-        &theme("dark").unwrap(),
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &[],
-    );
-    // the marker rides the gutter's last column, so the code never shifts
-    let marks: Vec<String> = rows
-        .iter()
-        .map(|l| l.spans[2].content.to_string())
-        .collect();
-    assert_eq!(
-        marks,
-        vec![MARK.to_string(), " ".to_string(), MARK.to_string()]
-    );
-    let widths: Vec<usize> = rows
-        .iter()
-        .map(|l| l.spans[..3].iter().map(|s| s.content.chars().count()).sum())
-        .collect();
-    assert_eq!(widths, vec![GUTTER_W; 3]);
-}
-
-#[test]
-fn mark_move_steps_between_use_sites_and_stops_at_the_ends() {
-    let mut app = test_app(0);
-    app.items = vec![test_item("f.rs")];
-    app.items[0].uses_at = vec![ordo::model::UseSite {
-        name: "x".to_string(),
-        // 1-based rows; the cursor is 0-based, so these are lines 1 and 4
-        rows: vec![2, 5],
-    }];
-    app.sources.insert(
-        "f.rs".to_string(),
-        (
-            vec![],
-            (1..=8).map(|i| format!("line {i}")).collect::<Vec<_>>(),
-        ),
-    );
-    app.cursor = Cursor { line: 0, col: 3 };
-    mark_move(&mut app, true);
-    assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
-    mark_move(&mut app, true);
-    assert_eq!(app.cursor, Cursor { line: 4, col: 0 });
-    // nothing further on: the cursor stays rather than wrapping
-    mark_move(&mut app, true);
-    assert_eq!(app.cursor, Cursor { line: 4, col: 0 });
-    mark_move(&mut app, false);
-    assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
-    mark_move(&mut app, false);
-    assert_eq!(app.cursor, Cursor { line: 1, col: 0 });
-}
-
-fn four_lines() -> Sources {
-    let mut sources: Sources = HashMap::new();
-    sources.insert(
-        "f.rs".to_string(),
-        (
-            vec![],
-            (1..=4).map(|i| format!("line {i}")).collect::<Vec<_>>(),
-        ),
-    );
-    sources
-}
-
-/// A finding anchored at a row reads under it, the hardest-pressing first, on
-/// its level's tint the full width and without a line number; the rows after
-/// it keep their numbers, and the cursor still lands on its source line.
-#[test]
-fn a_finding_with_a_row_draws_a_tinted_line_under_that_row() {
-    use ordo::model::Level;
-    let mut it = test_item("f.rs");
-    it.new_range = [2, 3];
-    let mut warn = finding(Level::Warn);
-    warn.row = Some(2);
-    let mut verdict = finding(Level::Verdict);
-    verdict.row = Some(2);
-    verdict.name = "assert-validation".to_string();
-    verdict.message = "stripped under -O\nsecond line".to_string();
-    it.findings = vec![warn, verdict];
-    let t = theme("dark").unwrap();
-    let (rows, _, total) = code_view(
-        &it,
-        &four_lines(),
-        &HashMap::new(),
-        60,
-        0,
-        Some(Cursor { line: 2, col: 0 }),
-        &[],
-        None,
-        &t,
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &it.findings,
-    );
-    assert_eq!(total, 6);
-    let second: Vec<String> = rows
-        .iter()
-        .map(|l| l.spans[1].content.trim().to_string())
-        .collect();
-    assert_eq!(second, ["1", "2", "verdict", "warn", "3", "4"]);
-    assert_eq!(
-        row_text(&rows[2]).trim_end(),
-        format!(
-            "{} verdict  assert-validation  stripped under -O",
-            " ".repeat(GUTTER_W)
-        )
-    );
-    for (r, level) in [(2, Level::Verdict), (3, Level::Warn)] {
-        let width: usize = rows[r]
-            .spans
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum();
-        assert_eq!(width, 60, "row {r} is tinted the full width");
-        assert!(rows[r].spans.iter().all(|s| {
-            s.style.bg == Some(t.level_bg(level, false))
-                || s.style.bg == Some(t.level_bg(level, true))
-        }));
-    }
-    let reversed: Vec<usize> = (0..rows.len())
-        .filter(|&r| {
-            rows[r].spans.iter().any(|s| {
-                s.style
-                    .add_modifier
-                    .contains(ratatui::style::Modifier::REVERSED)
-            })
-        })
-        .collect();
-    assert_eq!(reversed, [4], "the cursor is on line 3, past the findings");
-    assert_eq!(view_row(&it, 1), 1, "a row's own findings come after it");
-    assert_eq!(view_row(&it, 2), 4);
-}
-
-/// A finding about the hunk as a whole has no row to sit under, so it stays in
-/// the why pane and the code is laid out as if it were not there.
-#[test]
-fn a_finding_without_a_row_draws_nothing_inline() {
-    let mut it = test_item("f.rs");
-    it.findings = vec![finding(ordo::model::Level::Verdict)];
-    let (rows, _, total) = code_view(
-        &it,
-        &four_lines(),
-        &HashMap::new(),
-        60,
-        0,
-        None,
-        &[],
-        None,
-        &theme("dark").unwrap(),
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &it.findings,
-    );
-    assert_eq!((rows.len(), total), (4, 4));
-    assert_eq!(view_row(&it, 3), 3);
-}
-
-/// The scroll follows the cursor's view row, not its source line: two finding
-/// lines above the cursor push it two rows further down the pane.
-#[test]
-fn the_code_scroll_follows_the_cursor_past_finding_lines() {
-    let mut app = test_app(0);
-    app.items = vec![test_item("f.rs")];
-    let mut f = finding(ordo::model::Level::Warn);
-    f.row = Some(1);
-    app.items[0].findings = vec![f.clone(), f];
-    app.sources = four_lines();
-    app.focus = Pane::Code;
-    app.code_height = 3;
-    app.cursor = Cursor { line: 0, col: 0 };
-    step(&mut app, 1);
-    step(&mut app, 1);
-    assert_eq!(app.cursor.line, 2);
-    // line 3 is view row 4: the rows 2..=4 are on screen
-    assert_eq!(app.scroll, 2);
-}
-
-#[test]
-fn code_view_horizontal_scroll_keeps_gutter_fixed_and_handles_multibyte() {
-    let it = test_item("f.rs");
-    // a multi-byte line, long enough to be clipped on the right at a
-    // narrow width
-    let line = "let héllo_world = 1234567890abcdef;".to_string();
-    let mut sources: Sources = HashMap::new();
-    sources.insert("f.rs".to_string(), (vec![], vec![line]));
-    let highlights: Highlights = HashMap::new();
-    // width = gutter (6) + 10 cols of code
-    let (unscrolled, right_clip_0, _) = code_view(
-        &it,
-        &sources,
-        &highlights,
-        16,
-        0,
-        None,
-        &[],
-        None,
-        &theme("dark").unwrap(),
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &[],
-    );
-    let (scrolled, right_clip_5, _) = code_view(
-        &it,
-        &sources,
-        &highlights,
-        16,
-        5,
-        None,
-        &[],
-        None,
-        &theme("dark").unwrap(),
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &[],
-    );
-    assert_eq!(unscrolled.len(), 1);
-    assert_eq!(scrolled.len(), 1);
-    // the sign-bar, line number and use-site marker (the row's first three
-    // spans) never move, regardless of horizontal scroll
-    let gutter = |line: &Line<'static>| -> Vec<String> {
-        line.spans
-            .iter()
-            .take(3)
-            .map(|s| s.content.to_string())
-            .collect()
-    };
-    assert_eq!(gutter(&unscrolled[0]), gutter(&scrolled[0]));
-    // but the code past the gutter does shift with hscroll
-    let rest = |line: &Line<'static>| -> String {
-        line.spans[3..]
-            .iter()
-            .map(|s| s.content.to_string())
-            .collect()
-    };
-    assert_ne!(rest(&unscrolled[0]), rest(&scrolled[0]));
-    // both directions were clipped at this width, so both report it
-    assert!(right_clip_0);
-    assert!(right_clip_5);
-}
-
-#[test]
-fn code_view_tints_only_the_refined_span_of_a_paired_line() {
-    let old = "fn f(a: A) {}".to_string();
-    let new = "fn f(a: A, b: B) {}".to_string();
-    let mut it = test_item("f.rs");
-    it.old_range = [1, 1];
-    it.new_range = [1, 1];
-    let mut sources: Sources = HashMap::new();
-    sources.insert("f.rs".to_string(), (vec![old.clone()], vec![new.clone()]));
-    let mut items = vec![it];
-    refine_items(&mut items, &sources);
-    let it = &items[0];
-    assert_eq!(
-        it.refined.added[0],
-        Some(vec![(9, 15)]),
-        "expected only `, b: B` to be refined"
-    );
-
-    let theme = theme("dark").unwrap();
-    let (rows, _, _) = code_view(
-        it,
-        &sources,
-        &HashMap::new(),
-        60,
-        0,
-        None,
-        &[],
-        None,
-        &theme,
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &[],
-    );
-    // the added row is the one carrying the add tint (the removed row
-    // comes first, on the del tint)
-    let added = rows.last().expect("an added row");
-    // walk the row char by char: the strong tint covers `, b: B` and
-    // nothing else
-    let mut strong = String::new();
-    for span in &added.spans {
-        if span.style.bg == Some(theme.add_strong_bg) {
-            strong.push_str(&span.content);
-        }
-    }
-    assert_eq!(strong, ", b: B");
-}
-
-#[test]
-fn code_view_tints_a_whole_unpaired_line() {
-    // nothing in common with the removed line, so no span is singled out
-    let mut it = test_item("f.rs");
-    it.old_range = [1, 1];
-    it.new_range = [1, 1];
-    let mut sources: Sources = HashMap::new();
-    sources.insert(
-        "f.rs".to_string(),
-        (
-            vec!["use std::io;".to_string()],
-            vec!["fn totally(different: X) {}".to_string()],
-        ),
-    );
-    let mut items = vec![it];
-    refine_items(&mut items, &sources);
-    assert_eq!(items[0].refined.added[0], None);
-
-    let theme = theme("dark").unwrap();
-    let (rows, _, _) = code_view(
-        &items[0],
-        &sources,
-        &HashMap::new(),
-        60,
-        0,
-        None,
-        &[],
-        None,
-        &theme,
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &[],
-    );
-    let added = rows.last().unwrap();
-    assert!(
-        added
-            .spans
-            .iter()
-            .all(|s| s.style.bg != Some(theme.add_strong_bg)),
-        "an unpaired line must not be partially tinted"
-    );
-}
-
-#[test]
-fn code_view_reports_no_clipping_when_the_line_fits() {
-    let it = test_item("f.rs");
-    let mut sources: Sources = HashMap::new();
-    sources.insert("f.rs".to_string(), (vec![], vec!["short".to_string()]));
-    let highlights: Highlights = HashMap::new();
-    let (_, right_clip, _) = code_view(
-        &it,
-        &sources,
-        &highlights,
-        40,
-        0,
-        None,
-        &[],
-        None,
-        &theme("dark").unwrap(),
-        0,
-        usize::MAX,
-        &LineMarks::default(),
-        &[],
-    );
-    assert!(!right_clip);
-}
-
-/// The viewport slice must be exactly the window it replaces: whatever
-/// `code_view` builds for `(start, rows)` has to equal that range of the
-/// full view, and `total` has to stay the full view's length whatever
-/// window is asked for. The removed block shifts every row after it, so
-/// this is checked with the deletion mid-file and again at EOF.
-#[test]
-fn code_view_window_matches_the_same_slice_of_the_whole_view() {
-    let theme = theme("dark").unwrap();
-    let old: Vec<String> = (1..=4).map(|i| format!("gone {i}")).collect();
-    let new: Vec<String> = (1..=30).map(|i| format!("fn line_{i}() {{}}")).collect();
-
-    for (label, new_range) in [("mid-file", [10, 12]), ("at EOF", [31, 33])] {
-        let mut it = test_item("f.rs");
-        it.old_range = [1, 4];
-        it.new_range = new_range;
-        let mut sources: Sources = HashMap::new();
-        sources.insert("f.rs".to_string(), (old.clone(), new.clone()));
-        let highlights: Highlights = HashMap::new();
-
-        let call = |start: usize, rows: usize| {
-            code_view(
-                &it,
-                &sources,
-                &highlights,
-                60,
-                0,
-                None,
-                &[],
-                None,
-                &theme,
-                start,
-                rows,
-                &LineMarks::default(),
-                &[],
-            )
-        };
-        let (full, clip_full, total) = call(0, usize::MAX);
-        assert_eq!(total, new.len() + old.len(), "{label}: total row count");
-        assert_eq!(full.len(), total, "{label}: unwindowed view is complete");
-
-        for start in 0..total {
-            let (win, clip, t) = call(start, 7);
-            assert_eq!(t, total, "{label}: total is window-independent");
-            assert_eq!(clip, clip_full, "{label}: clipping is window-independent");
-            let want = &full[start..(start + 7).min(total)];
-            assert_eq!(win.len(), want.len(), "{label}: window length at {start}");
-            for (a, b) in win.iter().zip(want) {
-                assert_eq!(spans_of(a), spans_of(b), "{label}: row {start} content");
-            }
-        }
-    }
-}
-
-fn spans_of(l: &Line<'static>) -> Vec<String> {
-    l.spans.iter().map(|s| s.content.to_string()).collect()
 }
 
 // ---- def→use edges: target resolution ----
@@ -2381,309 +1065,6 @@ fn build_items_resolves_edge_targets_within_the_review_and_flags_ones_outside_it
     assert!(items[0].edges.iter().any(|e| e.target.is_none()));
 }
 
-// ---- position stack ----
-
-#[test]
-fn stack_pop_on_an_empty_stack_is_a_no_op() {
-    let mut stack: Vec<(usize, Cursor)> = vec![];
-    assert_eq!(stack_pop_valid(&mut stack, 10), None);
-    assert!(stack.is_empty());
-}
-
-#[test]
-fn stack_push_then_pop_returns_you_to_the_pushed_position() {
-    let mut stack: Vec<(usize, Cursor)> = vec![];
-    let pos = (2, Cursor { line: 5, col: 1 });
-    stack_push(&mut stack, pos);
-    assert_eq!(stack_pop_valid(&mut stack, 10), Some(pos));
-    assert!(stack.is_empty());
-}
-
-#[test]
-fn stack_push_is_bounded_dropping_the_oldest_entry_first() {
-    let mut stack: Vec<(usize, Cursor)> = vec![];
-    for i in 0..JUMP_STACK_CAP + 10 {
-        stack_push(&mut stack, (i, Cursor { line: i, col: 0 }));
-    }
-    assert_eq!(stack.len(), JUMP_STACK_CAP);
-    // the oldest 10 pushes were dropped to keep the cap
-    assert_eq!(stack.first().unwrap().0, 10);
-    assert_eq!(stack.last().unwrap().0, JUMP_STACK_CAP + 9);
-}
-
-#[test]
-fn stack_pop_valid_skips_an_entry_whose_index_no_longer_resolves() {
-    // "99" is stale (out of range for a 5-item review) and sits on top —
-    // it must be skipped, not returned, and the stack must not panic.
-    let mut stack = vec![
-        (0, Cursor { line: 1, col: 1 }),
-        (99, Cursor { line: 0, col: 0 }),
-    ];
-    assert_eq!(
-        stack_pop_valid(&mut stack, 5),
-        Some((0, Cursor { line: 1, col: 1 }))
-    );
-    assert!(stack.is_empty());
-}
-
-// ---- why pane: dep-line resolution and cursor ----
-
-/// the kind of every edge row `why_rows` produced, in order
-fn edge_kinds(rows: &[WhyRow]) -> Vec<&WhyKind> {
-    rows.iter()
-        .map(|r| &r.kind)
-        .filter(|k| matches!(k, WhyKind::Edge(_)))
-        .collect()
-}
-
-#[test]
-fn why_rows_marks_edge_lines_and_carries_their_target() {
-    let mut it = test_item("a.rs");
-    it.edges = vec![
-        edge("→ a.rs:L10   uses it", Some(3)),
-        edge("→ b.rs:L1   calls it", None),
-    ];
-    // target 3 must be in `view` to resolve — same as being part of the
-    // review at all; a 4-item view (0..=3) covers it here
-    let rows = why_rows(
-        &it,
-        &[0, 1, 2, 3],
-        &Theme::terminal("dark", false),
-        &WhyContext::default(),
-    );
-    let edges = edge_kinds(&rows);
-    assert!(matches!(edges[0], WhyKind::Edge(Some(3))));
-    assert!(matches!(edges[1], WhyKind::Edge(None)));
-}
-
-#[test]
-fn why_rows_treats_a_filtered_out_target_as_not_part_of_the_review() {
-    let mut it = test_item("a.rs");
-    it.edges = vec![edge("→ a.rs:L10   uses it", Some(3))];
-    // target 3 exists (it's a valid item index) but isn't in `view`
-    let rows = why_rows(
-        &it,
-        &[0, 1, 2],
-        &Theme::terminal("dark", false),
-        &WhyContext::default(),
-    );
-    let edges = edge_kinds(&rows);
-    assert!(matches!(edges[0], WhyKind::Edge(None)));
-}
-
-/// The canvas must fill the frame it is given without ever letting the two
-/// sides collide. `CARD_W` was a flat 42 whatever the terminal, which on a
-/// wide screen clustered every card around the centre with a third of the
-/// screen empty either side and still clipped code at 40 columns.
-#[test]
-fn canvas_cards_grow_with_the_frame_and_never_cross_the_centre() {
-    let cards = |needs: usize, needed: usize| -> Vec<Card> {
-        (0..needs)
-            .map(|i| Card {
-                idx: i,
-                needs: true,
-                label: "l".into(),
-            })
-            .chain((0..needed).map(|i| Card {
-                idx: 100 + i,
-                needs: false,
-                label: "r".into(),
-            }))
-            .collect()
-    };
-    // `canvas_layout` insets by 2, so the frame must be SPLIT_COLS + 2
-    // before the fan engages
-    for width in [SPLIT_COLS + 2, 100, 120, 140, 180, 200, 240, 400] {
-        for (n, m) in [(1usize, 1usize), (3, 2), (5, 5)] {
-            let cs = cards(n, m);
-            let body = Rect {
-                x: 0,
-                y: 0,
-                width,
-                height: 44,
-            };
-            let l = canvas_layout(body, &cs, 0, &rows(6), Zoom::Off);
-            assert!(l.fanned, "{width} is above SPLIT_COLS");
-            let centre = l.area.x + l.area.width / 2;
-            let right_edge = l.area.x + l.area.width;
-            for (card, r) in cs.iter().zip(&l.cards) {
-                assert!(r.width >= CARD_W_MIN, "{width}: card too narrow {r:?}");
-                if card.needs {
-                    assert!(
-                        r.x + r.width <= centre + 1,
-                        "{width}/{n}x{m}: a needs card crosses the centre: {r:?}"
-                    );
-                } else {
-                    assert!(
-                        r.x >= centre,
-                        "{width}/{n}x{m}: a needed-by card crosses back: {r:?}"
-                    );
-                }
-                assert!(
-                    r.x + r.width <= right_edge,
-                    "{width}: card past the frame {r:?}"
-                );
-            }
-        }
-    }
-}
-
-/// A wide frame must actually be used, not centred on with empty margins.
-/// Each side gets half, less what the fan's outward steps take.
-#[test]
-fn a_wide_frame_widens_the_cards() {
-    let narrow = layout(Rect::new(0, 0, 100, 40), &[card(true), card(false)]);
-    let wide = layout(Rect::new(0, 0, 240, 40), &[card(true), card(false)]);
-    assert!(
-        wide.cards[0].width > narrow.cards[0].width,
-        "a wider frame must widen the cards: {} vs {}",
-        wide.cards[0].width,
-        narrow.cards[0].width
-    );
-    // one card on a side takes that side whole, bar the gutter
-    let half = wide.area.width / 2;
-    assert!(
-        wide.cards[0].width + 4 >= half,
-        "a lone card should fill its half: {} of {half}",
-        wide.cards[0].width
-    );
-}
-
-/// The anchor is the hunk being read: it spans the canvas and grows to the
-/// hunk's own height rather than showing a fixed three lines of it.
-#[test]
-fn the_anchor_covers_its_hunk() {
-    let body = Rect::new(0, 0, 200, 50);
-    let short = canvas_layout(body, &[card(true)], 0, &rows(2), Zoom::Off);
-    let tall = canvas_layout(body, &[card(true)], 0, &rows(30), Zoom::Off);
-    assert!(
-        tall.anchor.height > short.anchor.height,
-        "a longer hunk gets a taller anchor"
-    );
-    assert_eq!(short.anchor.height, 2 + 2, "a short hunk is not padded out");
-    assert!(
-        tall.anchor.height <= max_anchor_h(tall.area.height),
-        "but never past half the canvas, or no card fits under it"
-    );
-    assert!(
-        short.anchor.width + 2 >= short.area.width,
-        "the anchor spans the canvas: {} of {}",
-        short.anchor.width,
-        short.area.width
-    );
-    assert!(
-        short.anchor.width >= 80,
-        "at least 80 columns when the frame allows: {}",
-        short.anchor.width
-    );
-}
-
-/// `4` again on the anchor: it fills the canvas and every card goes.
-#[test]
-fn zooming_the_anchor_fills_the_canvas() {
-    let body = Rect::new(0, 0, 140, 40);
-    let cards = vec![card(true), card(false)];
-    let l = canvas_layout(body, &cards, 0, &rows(6), Zoom::Anchor);
-    assert!(l.zoomed);
-    assert_eq!(l.anchor.x, l.area.x + 1);
-    assert_eq!(l.anchor.y, l.area.y + 1);
-    assert_eq!(l.anchor.width, l.area.width - 2);
-    assert_eq!(l.anchor.height, l.area.height - 2);
-    assert!(l.cards.iter().all(|r| r.height == 0), "{:?}", l.cards);
-}
-
-/// `4` again on a side card: it takes its whole half, top to bottom, the
-/// anchor moves across, its siblings go and the other side stays put.
-#[test]
-fn zooming_a_side_card_takes_its_half_and_moves_the_anchor_across() {
-    let body = Rect::new(0, 0, 140, 40);
-    let cards = vec![card(true), card(true), card(false), card(false)];
-    let plain = canvas_layout(body, &cards, 0, &rows(6), Zoom::Off);
-    let centre = plain.area.x + plain.area.width / 2;
-    // an even width is where the right half used to run one column over
-    assert_eq!(plain.area.width % 2, 0);
-    for (i, needs) in [(0, true), (3, false)] {
-        let l = canvas_layout(body, &cards, 0, &rows(6), Zoom::Card(i));
-        assert!(l.zoomed);
-        let r = l.cards[i];
-        assert_eq!(r.y, l.area.y + 1);
-        assert_eq!(r.height, l.area.height - 2);
-        let inner_end = l.area.x + l.area.width - 1;
-        for (what, b) in [("card", r), ("anchor", l.anchor)] {
-            assert!(b.x > l.area.x, "{what} inside the left border: {b:?}");
-            assert!(
-                b.x + b.width <= inner_end,
-                "{what} inside the right border: {b:?}"
-            );
-        }
-        if needs {
-            assert!(r.x + r.width <= centre, "needs card stays left: {r:?}");
-            assert!(l.anchor.x >= centre, "anchor moves right: {:?}", l.anchor);
-        } else {
-            assert!(r.x >= centre, "needed-by card stays right: {r:?}");
-            assert!(
-                l.anchor.x + l.anchor.width <= centre,
-                "anchor moves left: {:?}",
-                l.anchor
-            );
-        }
-        assert_eq!(l.anchor.height, plain.anchor.height);
-        for (j, c) in cards.iter().enumerate() {
-            if j == i {
-                continue;
-            }
-            if c.needs == needs {
-                assert_eq!(l.cards[j].height, 0, "sibling {j} is hidden");
-            } else {
-                assert_eq!(l.cards[j], plain.cards[j], "the other side keeps its fan");
-            }
-        }
-    }
-}
-
-/// Below the split threshold there is no half to take: a side card's zoom
-/// leaves the stacked layout alone, and only the anchor can fill the frame.
-#[test]
-fn a_side_card_zoom_needs_the_width_to_fan() {
-    let body = Rect::new(0, 0, SPLIT_COLS + 1, 40);
-    let cards = vec![card(true), card(false)];
-    let plain = canvas_layout(body, &cards, 0, &rows(6), Zoom::Off);
-    assert!(!plain.fanned);
-    let l = canvas_layout(body, &cards, 0, &rows(6), Zoom::Card(0));
-    assert!(!l.zoomed);
-    assert_eq!(l.cards, plain.cards);
-    assert_eq!(l.anchor, plain.anchor);
-    assert!(canvas_layout(body, &cards, 0, &rows(6), Zoom::Anchor).zoomed);
-}
-
-/// Cards share the height under the rule rather than taking a fixed slice,
-/// so a lone card on a side gets the whole column.
-#[test]
-fn cards_share_the_height_they_are_given() {
-    let body = Rect::new(0, 0, 200, 50);
-    let one = canvas_layout(body, &[card(true)], 0, &rows(30), Zoom::Off);
-    let four = canvas_layout(
-        body,
-        &[card(true), card(true), card(true), card(true)],
-        0,
-        &rows(30),
-        Zoom::Off,
-    );
-    assert!(
-        one.cards[0].height > four.cards[0].height,
-        "one card takes more room than one of four: {} vs {}",
-        one.cards[0].height,
-        four.cards[0].height
-    );
-    for r in &four.cards {
-        assert!(r.height >= CARD_H_MIN, "never below the floor: {r:?}");
-        assert!(
-            r.height <= CARD_ROWS as u16 + 2,
-            "never past a glance: {r:?}"
-        );
-    }
-}
-
 /// `catalog = false` in a rules file has to reach the engine, and a rules
 /// file that says nothing must leave the catalog alone.
 #[test]
@@ -2735,7 +1116,7 @@ fn one_name_twice_is_a_mistake_only_when_the_languages_meet() {
 /// them but cannot change them is a list, not a config.
 #[test]
 fn a_text_setting_can_be_typed_into() {
-    let app = test_app(0);
+    let app = test_app();
     let mut ui = ConfigUi::open(&app);
     let at = ui
         .rows
@@ -2785,14 +1166,14 @@ fn writing_lands_in_the_files_the_sections_name() {
     let dir = std::env::temp_dir().join(format!("ordo-cfg-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("ordo")).expect("temp config dir");
-    std::fs::write(dir.join("ordo/tui.toml"), "# my notes\npreset = \"vim\"\n")
-        .expect("seed tui.toml");
+    std::fs::write(dir.join("ordo/ordo.toml"), "# my notes\npreset = \"vim\"\n")
+        .expect("seed ordo.toml");
     std::fs::write(dir.join("ordo/rules.toml"), "# my rules\n").expect("seed rules.toml");
     // SAFETY: single-threaded test, and the value is read through
     // `config_path` on this thread only
     unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
 
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.config = Some(ConfigUi::open(&app));
     let at = {
         let c = app.config.as_ref().unwrap();
@@ -2811,9 +1192,9 @@ fn writing_lands_in_the_files_the_sections_name() {
         rules.contains("# my rules"),
         "the reviewer's own note survived"
     );
-    let tui = std::fs::read_to_string(dir.join("ordo/tui.toml")).expect("tui.toml");
+    let settings = std::fs::read_to_string(dir.join("ordo/ordo.toml")).expect("ordo.toml");
     assert_eq!(
-        tui, "# my notes\npreset = \"vim\"\n",
+        settings, "# my notes\npreset = \"vim\"\n",
         "untouched by a rules change"
     );
     assert!(!app.config.as_ref().unwrap().dirty, "written means clean");
@@ -2824,7 +1205,7 @@ fn writing_lands_in_the_files_the_sections_name() {
 /// every setting; materialising all of them would bury a one-line change.
 #[test]
 fn only_the_changed_settings_are_written() {
-    let app = test_app(0);
+    let app = test_app();
     let mut ui = ConfigUi::open(&app);
     assert!(ui.changed().is_empty(), "nothing changed yet");
 
@@ -2898,7 +1279,7 @@ fn upsert_keeps_the_rest_of_the_file() {
 /// `x` cycled vim to vscode and `w` stopped writing.
 #[test]
 fn the_config_view_does_not_lose_its_keys_when_the_preset_changes() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.config = Some(ConfigUi::open(&app));
     let at = |app: &App, key: &str| {
         let c = app.config.as_ref().unwrap();
@@ -2931,7 +1312,7 @@ fn the_config_view_does_not_lose_its_keys_when_the_preset_changes() {
 /// UI exists for: nobody wants to press Space fourteen times.
 #[test]
 fn a_catalog_section_carries_its_rules() {
-    let mut ui = ConfigUi::open(&test_app(0));
+    let mut ui = ConfigUi::open(&test_app());
     let sections = ordo::catalog::sections();
     let first = &sections[0];
     let at = |ui: &ConfigUi, key: &str| {
@@ -2969,7 +1350,7 @@ fn a_catalog_section_carries_its_rules() {
 /// in `:config` without anyone editing a second list.
 #[test]
 fn the_config_schema_is_generated_from_the_live_tables() {
-    let app = test_app(0);
+    let app = test_app();
     let schema = config_schema(&app);
     let titles: Vec<&str> = schema.iter().map(|s| s.title.as_str()).collect();
     assert_eq!(
@@ -3118,91 +1499,6 @@ fn a_commit_review_follows_the_new_side_and_an_uncommitted_one_the_old() {
     assert_eq!((q.rows, q.drop_leading_rev), ([10, 20], false));
 }
 
-/// The churn row's wording, which is the whole user-visible surface of
-/// `H`: a count a reviewer reads at a glance, and an honest "at least"
-/// once the window caps it.
-#[test]
-fn the_churn_row_says_how_often_and_who_last() {
-    let mut app = test_app(0);
-    let key = |app: &App| {
-        let it = &app.items[0];
-        (it.path.clone(), it.new_range[0], it.new_range[1])
-    };
-    // never asked: no row at all, rather than a row saying nothing
-    assert_eq!(churn_line(&app, 0), None);
-
-    let k = key(&app);
-    let put = |app: &mut App, c: Option<Churn>| {
-        app.churn_cache.insert(k.clone(), c);
-    };
-    let last = || Some(("Ada".to_string(), "2026-09-01".to_string()));
-
-    put(
-        &mut app,
-        Some(Churn {
-            commits: 0,
-            capped: false,
-            last: None,
-        }),
-    );
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("these lines have not changed before")
-    );
-
-    put(
-        &mut app,
-        Some(Churn {
-            commits: 1,
-            capped: false,
-            last: last(),
-        }),
-    );
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("these lines changed once before — last 2026-09-01 by Ada")
-    );
-
-    put(
-        &mut app,
-        Some(Churn {
-            commits: 9,
-            capped: false,
-            last: last(),
-        }),
-    );
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("these lines changed 9 times before — last 2026-09-01 by Ada")
-    );
-
-    // capped: the count is a floor, and must not be stated as exact
-    put(
-        &mut app,
-        Some(Churn {
-            commits: CHURN_WINDOW,
-            capped: true,
-            last: last(),
-        }),
-    );
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some(
-            &format!(
-                "these lines changed at least {CHURN_WINDOW} times before — last 2026-09-01 by Ada"
-            )[..]
-        )
-    );
-
-    // asked and unavailable says so; a key that silently does nothing
-    // reads as broken
-    put(&mut app, None);
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("churn: unavailable (no commit to review from)")
-    );
-}
-
 /// A sweeping change must not pay for a signal nobody triages by. One
 /// `rev-list` per file is ~9ms, which is nothing for a normal review and
 /// seconds for a mass rename.
@@ -3218,66 +1514,7 @@ fn the_eager_churn_pass_gives_up_on_a_sweeping_change() {
     assert_eq!(calls.get(), 0, "and does not shell out even once");
 }
 
-/// Two resolutions of the same signal: the file's recent churn is counted
-/// at load and always shown; `H` replaces it with the hunk's own lines.
-/// The specific answer must win wherever both exist.
-#[test]
-fn the_hunk_answer_replaces_the_file_answer_once_asked_for() {
-    let mut app = test_app(0);
-    let it = &app.items[0];
-    let path = it.path.clone();
-    let key = (path.clone(), it.new_range[0], it.new_range[1]);
-
-    // nothing known at all: no row
-    assert_eq!(churn_line(&app, 0), None);
-
-    // a file nothing has touched in the window says nothing, rather than
-    // spending a row on "0 times"
-    app.file_churn.insert(path.clone(), 0);
-    assert_eq!(churn_line(&app, 0), None);
-
-    app.file_churn.insert(path.clone(), 1);
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("this file changed once in the last 6 months")
-    );
-    app.file_churn.insert(path.clone(), 14);
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("this file changed 14 times in the last 6 months")
-    );
-
-    // `H` answers for these lines specifically, and that wins
-    app.churn_cache.insert(
-        key,
-        Some(Churn {
-            commits: 2,
-            capped: false,
-            last: Some(("Ada".to_string(), "2026-09-01".to_string())),
-        }),
-    );
-    assert_eq!(
-        churn_line(&app, 0).as_deref(),
-        Some("these lines changed 2 times before — last 2026-09-01 by Ada")
-    );
-}
-
-/// `H` must never shell out twice for the same hunk, and must record the
-/// unavailable case so it is not retried on every keypress.
-#[test]
-fn asking_for_churn_without_a_review_commit_is_recorded_not_retried() {
-    let mut app = test_app(0);
-    app.review_sha = None;
-    fill_churn(&mut app);
-    let it = &app.items[0];
-    let k = (it.path.clone(), it.new_range[0], it.new_range[1]);
-    assert_eq!(app.churn_cache.get(&k), Some(&None));
-    assert_eq!(app.churn_cache.len(), 1);
-    fill_churn(&mut app);
-    assert_eq!(app.churn_cache.len(), 1);
-}
-
-fn test_app(why_len: usize) -> App {
+fn test_app() -> App {
     App {
         items: vec![test_item("a.rs")],
         changes: vec![],
@@ -3288,27 +1525,12 @@ fn test_app(why_len: usize) -> App {
         show_all: true,
         path_filter: None,
         only_wave: None,
-        command: None,
         sel: 0,
-        scroll: 0,
-        hscroll: 0,
-        why_scroll: 0,
-        why_sel: 0,
-        code_len: 0,
-        why_len,
-        code_height: 10,
-        why_height: 5,
-        code_width: 10,
-        focus: Pane::Why,
         keys: keymap("vim").unwrap(),
-        pending: None,
         sources: HashMap::new(),
-        highlights: HashMap::new(),
         cursor: Cursor { line: 0, col: 0 },
         popup: None,
         trees: HashMap::new(),
-        prompt: None,
-        search: None,
         review_sha: None,
         subject: None,
         uncommitted: false,
@@ -3320,14 +1542,11 @@ fn test_app(why_len: usize) -> App {
         levels: Default::default(),
         includes: vec![],
         config: None,
-        jumps: vec![],
         rev: "HEAD".to_string(),
         marks_path: None,
         marks: HashMap::new(),
         theme: theme("dark").unwrap(),
         show_groups: false,
-        zoom: false,
-        canvas: None,
         groups: HashMap::new(),
         group_reasons: HashMap::new(),
         mode: ViewMode::Hunks,
@@ -3349,13 +1568,12 @@ fn test_app(why_len: usize) -> App {
         rules: vec![],
         strategy: "comprehension".to_string(),
         rules_report: vec![],
-        max_col: HashMap::new(),
     }
 }
 
 #[test]
 fn the_list_defaults_to_symbols_and_mode_switches_it_back() {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
     app.items[0].ledger = Some(0);
     let led = vec![ordo::model::LedgerEntry {
@@ -3392,7 +1610,7 @@ fn the_list_defaults_to_symbols_and_mode_switches_it_back() {
 
 #[test]
 fn switching_mode_drops_fold_state_keyed_to_the_old_one() {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![grouped_item("a.rs", "g0")];
     app.collapsed.insert("g0".to_string());
     set_mode(&mut app, ViewMode::Ledger, &[]);
@@ -3409,7 +1627,7 @@ fn item_with_symbol(path: &str, name: &str) -> Item {
 
 /// Two items where 1 uses what 0 defines: `1 ← 0`.
 fn dependent_pair() -> App {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![test_item("a.py"), test_item("b.py")];
     app.items[1].edges = vec![edge("← a.py:L1   def→use: f", Some(0))];
     app.items[0].edges = vec![edge("→ b.py:L1   def→use: f", Some(1))];
@@ -3425,7 +1643,7 @@ fn snaps_of(app: &App, sources: &Sources) -> HashMap<String, Snap> {
 
 /// 0 defines what 1 uses; 1 defines what 2 uses. Rejecting 0 strands both.
 fn dependency_chain() -> App {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![test_item("a.py"), test_item("b.py"), test_item("c.py")];
     app.items[1].edges = vec![edge("← a.py:L1   def→use: f", Some(0))];
     app.items[2].edges = vec![edge("← b.py:L1   def→use: g", Some(1))];
@@ -3436,7 +1654,7 @@ fn dependency_chain() -> App {
 
 #[test]
 fn a_draft_rule_states_the_hunk_it_came_from() {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![item_with_symbol("a.py", "fetch")];
     app.items[0].notes = vec!["7 params".to_string()];
     let d = draft_rule(&app, 0).join("\n");
@@ -3450,7 +1668,7 @@ fn a_draft_rule_states_the_hunk_it_came_from() {
 
 #[test]
 fn a_draft_turns_each_structural_note_into_its_limit() {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![item_with_symbol("a.py", "f")];
     app.items[0].notes = vec![
         "large definition (120 lines)".to_string(),
@@ -3463,7 +1681,7 @@ fn a_draft_turns_each_structural_note_into_its_limit() {
 
 #[test]
 fn a_draft_from_a_hunk_with_no_symbol_says_it_is_broad() {
-    let mut app = test_app(1);
+    let mut app = test_app();
     app.items = vec![test_item("a.py")];
     let d = draft_rule(&app, 0).join("\n");
     assert!(!d.contains("kind = ["), "{d}");
@@ -3497,10 +1715,10 @@ fn a_cascade_ignores_hunks_filtered_out_of_the_view() {
 }
 
 #[test]
-fn a_leaf_strands_nothing_and_says_nothing() {
+fn a_leaf_strands_nothing() {
     let app = dependency_chain();
-    assert!(cascade_line(&app, 2).is_none());
-    assert!(cascade_line(&app, 0).is_some());
+    assert!(cascade(&app, 2).is_empty());
+    assert!(!cascade(&app, 0).is_empty());
 }
 
 #[test]
@@ -3539,16 +1757,6 @@ fn a_hunk_with_no_previous_snapshot_is_new() {
 }
 
 #[test]
-fn a_first_run_says_nothing_rather_than_calling_everything_new() {
-    let mut app = dependent_pair();
-    app.deltas = vec![Delta::New, Delta::New];
-    assert!(delta_line(&app, 0).is_none());
-    // but once there is a real comparison, New is worth saying
-    app.deltas = vec![Delta::New, Delta::Same];
-    assert!(delta_line(&app, 0).is_some());
-}
-
-#[test]
 fn a_changed_dependency_set_counts_as_moved() {
     let app = dependent_pair();
     let sources = Sources::new();
@@ -3565,9 +1773,9 @@ fn a_changed_dependency_set_counts_as_moved() {
 fn approving_a_use_before_its_definition_is_reported() {
     let mut app = dependent_pair();
     app.reviewed[1] = true; // the caller, not the callee
-    let out = out_of_order_labels(&app, 1);
+    let out = unreviewed_deps(&app, 1);
     assert_eq!(out.len(), 1, "{out:?}");
-    assert!(out[0].starts_with("a.py:"), "{out:?}");
+    assert_eq!(app.items[out[0]].path, "a.py", "{out:?}");
 }
 
 #[test]
@@ -3575,15 +1783,126 @@ fn reviewing_the_definition_first_says_nothing() {
     let mut app = dependent_pair();
     app.reviewed[0] = true;
     app.reviewed[1] = true;
-    assert!(out_of_order_labels(&app, 1).is_empty());
+    assert!(unreviewed_deps(&app, 1).is_empty());
+}
+
+/// The binds as `view::keys` sends them: (prefix, key, action name).
+fn sent_binds(preset: &str) -> Vec<(Option<String>, String, String)> {
+    crate::web::view::keys(&keymap(preset).unwrap())
+        .into_iter()
+        .map(|b| {
+            (
+                b["prefix"].as_str().map(str::to_string),
+                b["key"].as_str().unwrap().to_string(),
+                b["action"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn sends(
+    binds: &[(Option<String>, String, String)],
+    prefix: Option<&str>,
+    key: &str,
+) -> Option<String> {
+    binds
+        .iter()
+        .find(|(p, k, _)| p.as_deref() == prefix && k == key)
+        .map(|(_, _, a)| a.clone())
+}
+
+/// `]` opens the `]f` chord yet still names its own action, which the browser
+/// runs when no chord follows.
+#[test]
+fn a_bracket_is_both_a_chord_prefix_and_a_key() {
+    let vim = sent_binds("vim");
+    assert_eq!(sends(&vim, Some("]"), "f").as_deref(), Some("finding-next"));
+    assert_eq!(sends(&vim, Some("["), "f").as_deref(), Some("finding-prev"));
+    assert_eq!(sends(&vim, None, "]").as_deref(), Some("mark-next"));
+    assert_eq!(sends(&vim, None, "[").as_deref(), Some("mark-prev"));
+    assert_eq!(sends(&vim, Some("]"), "j"), None);
+    let vs = sent_binds("vscode");
+    assert_eq!(sends(&vs, None, "F8").as_deref(), Some("finding-next"));
+    assert_eq!(sends(&vs, None, "S-F8").as_deref(), Some("finding-prev"));
 }
 
 #[test]
-fn an_unreviewed_hunk_is_not_out_of_order() {
-    // the warning is about the order things were approved in, not about
-    // work still to do
-    let app = dependent_pair();
-    assert!(out_of_order_labels(&app, 1).is_empty());
+fn vim_takes_arrows_after_a_window_chord() {
+    // vim accepts arrows wherever it accepts hjkl; a reviewer who reaches
+    // for C-w Right should land where C-w l lands
+    let vim = sent_binds("vim");
+    for (arrow, letter, want) in [
+        ("Left", "h", "focus-list"),
+        ("Right", "l", "focus-code"),
+        ("Up", "k", "focus-code"),
+        ("Down", "j", "focus-why"),
+    ] {
+        assert_eq!(
+            sends(&vim, Some("C-w"), arrow).as_deref(),
+            Some(want),
+            "{arrow}"
+        );
+        assert_eq!(
+            sends(&vim, Some("C-w"), letter).as_deref(),
+            Some(want),
+            "{letter}"
+        );
+    }
+}
+
+/// One wave in view: a dep into another wave still reaches the browser with
+/// that hunk's wave and mark, so the dep line can say which and follow it.
+#[test]
+fn a_dep_into_another_wave_is_labelled_and_followed_across() {
+    let mut app = test_app();
+    app.items = vec![test_item("a.rs"), test_item("b.rs")];
+    app.items[0].wave = Some(2);
+    app.items[1].wave = Some(1);
+    app.items[0].edges = vec![edge("← b.rs:L1   uses it", Some(1))];
+    app.view = vec![0, 1];
+    app.reviewed = vec![false, true];
+    set_filters(&mut app, false, true, None, Some(2)).unwrap();
+    let r = crate::web::view::review(&app);
+    assert_eq!(r["view"], serde_json::json!([0]));
+    assert_eq!(r["only_wave"], 2);
+    let target = r["items"][0]["edges"][0]["target"].as_u64().unwrap() as usize;
+    assert_eq!(target, 1);
+    assert_eq!(r["items"][target]["wave"], 1);
+    assert_eq!(r["items"][target]["reviewed"], true);
+}
+
+/// A finding whose level `rules.toml` moved carries the level it was written
+/// with, so the browser can say which way it moved.
+#[test]
+fn a_moved_level_names_where_it_came_from() {
+    use ordo::model::Level;
+    let mut app = test_app();
+    let mut lowered = finding(Level::Note);
+    lowered.original_level = Some(Level::Warn);
+    let mut raised = finding(Level::Verdict);
+    raised.original_level = Some(Level::Warn);
+    app.items[0].findings = vec![lowered, raised, finding(Level::Note)];
+    let r = crate::web::view::review(&app);
+    let f = &r["items"][0]["findings"];
+    assert_eq!(
+        (&f[0]["level"], &f[0]["original_level"]),
+        (&"note".into(), &"warn".into())
+    );
+    assert_eq!(
+        (&f[1]["level"], &f[1]["original_level"]),
+        (&"verdict".into(), &"warn".into())
+    );
+    assert!(f[2].get("original_level").is_none(), "{f}");
+    assert_eq!(r["items"][0]["level"], "verdict");
+}
+
+#[test]
+fn an_unreviewed_hunk_is_never_out_of_order() {
+    let mut app = dependent_pair();
+    assert!(out_of_order(&app, 1).is_empty(), "nothing approved yet");
+    app.reviewed[1] = true;
+    assert_eq!(out_of_order(&app, 1), unreviewed_deps(&app, 1));
+    assert_eq!(out_of_order(&app, 1).len(), 1);
 }
 
 #[test]
@@ -3661,19 +1980,6 @@ fn notes_round_trip_through_the_cache_file() {
 fn a_missing_note_file_is_not_an_error() {
     let missing = std::env::temp_dir().join("ordo-notes-does-not-exist.json");
     assert!(load_notes(&missing).is_empty());
-}
-
-#[test]
-fn why_cursor_move_clamps_at_both_ends() {
-    let mut app = test_app(3); // 3 logical why-pane lines: indices 0..=2
-    why_cursor_move(&mut app, -1);
-    assert_eq!(app.why_sel, 0, "can't move above the first line");
-    why_cursor_move(&mut app, 1);
-    assert_eq!(app.why_sel, 1);
-    why_cursor_move(&mut app, 10);
-    assert_eq!(app.why_sel, 2, "clamps at the last line");
-    why_cursor_move(&mut app, 10);
-    assert_eq!(app.why_sel, 2, "stays clamped past the last line");
 }
 
 // ---- reviewed-mark persistence ----
@@ -4414,7 +2720,7 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
 /// session, and `w` writes only the names that changed into `[levels]`.
 #[test]
 fn a_level_row_changes_the_session_and_writes_to_the_levels_table() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.levels = [("magic-number".to_string(), ordo::model::Level::Verdict)].into();
     app.config = Some(ConfigUi::open(&app));
     let at = |app: &App, key: &str| {
@@ -4603,29 +2909,25 @@ fn every_generated_binding_names_a_real_action() {
 // ---- theming ----
 
 #[test]
-fn every_theme_name_resolves_and_truecolor_themes_leave_nothing_to_the_terminal() {
+fn every_theme_name_resolves_and_truecolor_themes_leave_nothing_to_the_page() {
     for name in theme_names() {
         let t = theme(&name).expect(&name);
         assert_eq!(t.name, name, "a theme must know its own name");
-        if ["terminal", "dark", "light"].contains(&name.as_str()) {
-            // the promise of a terminal theme: text follows the terminal
-            assert_eq!(t.fg, Color::Reset, "{name}");
+        if ["dark", "light"].contains(&name.as_str()) {
+            // the promise of a plain theme: text follows the page
+            assert_eq!(t.fg, Color::Default, "{name}");
             continue;
         }
-        // a truecolor theme names everything; a stray Reset would show up
-        // as one element mysteriously following the terminal instead
+        // a truecolor theme names everything; a stray Default would show up
+        // as one element mysteriously following the page instead
         let roles: Vec<(&str, Color)> = vec![
             ("fg", t.fg),
             ("dim", t.dim),
             ("border", t.border),
             ("border_focus", t.border_focus),
             ("accent", t.accent),
-            ("category", t.category),
-            ("mark", t.mark),
             ("reviewed", t.reviewed),
             ("warn", t.warn),
-            ("add_fg", t.add_fg),
-            ("del_fg", t.del_fg),
             ("add_bg", t.add_bg),
             ("del_bg", t.del_bg),
             ("add_strong_bg", t.add_strong_bg),
@@ -4739,12 +3041,8 @@ fn every_documented_theme_role_actually_changes_the_theme() {
             got.border,
             got.border_focus,
             got.accent,
-            got.category,
-            got.mark,
             got.reviewed,
             got.warn,
-            got.add_fg,
-            got.del_fg,
             got.add_bg,
             got.del_bg,
             got.add_strong_bg,
@@ -4805,7 +3103,7 @@ fn a_config_can_name_a_theme_and_override_its_roles() {
 #[test]
 fn a_bad_theme_line_is_reported_by_number_and_skipped() {
     let cfg = parse_key_config(
-        "[theme]\nnmae = \"nord\"\nborder-focus = \"redish\"\nmark = \"#ffcc00\"\n",
+        "[theme]\nnmae = \"nord\"\nborder-focus = \"redish\"\nwarn = \"#ffcc00\"\n",
     );
     assert_eq!(cfg.problems.len(), 2, "{:?}", cfg.problems);
     assert!(cfg.problems[0].contains("line 2"), "{:?}", cfg.problems);
@@ -4818,15 +3116,15 @@ fn a_hash_opens_a_comment_only_outside_quotes() {
     // every palette value starts with `#`; cutting at the first one
     // regardless would eat the whole theme section
     assert_eq!(
-        strip_comment("mark = \"#ffcc00\"  # the ⚠ colour"),
-        "mark = \"#ffcc00\"  "
+        strip_comment("warn = \"#ffcc00\"  # the warning colour"),
+        "warn = \"#ffcc00\"  "
     );
     assert_eq!(strip_comment("# whole line"), "");
     assert_eq!(strip_comment("preset = \"vim\""), "preset = \"vim\"");
 
-    let cfg = parse_key_config("[theme]\nmark = \"#ffcc00\"  # trailing\n");
+    let cfg = parse_key_config("[theme]\nwarn = \"#ffcc00\"  # trailing\n");
     assert!(cfg.problems.is_empty(), "{:?}", cfg.problems);
-    assert_eq!(cfg.colors[0].0, "mark");
+    assert_eq!(cfg.colors[0].0, "warn");
     assert!(colors_eq(cfg.colors[0].1, Color::Rgb(0xff, 0xcc, 0)));
 }
 
@@ -4837,38 +3135,6 @@ fn an_unknown_section_is_reported_rather_than_silently_ignored() {
         cfg.problems[0].contains("unknown section"),
         "{:?}",
         cfg.problems
-    );
-}
-
-/// Syntax colours are baked into the highlight cache at load time, so a
-/// theme swap that only sets `app.theme` leaves the code pane painted in
-/// the old palette. `:config` is now the only way to swap one.
-#[test]
-fn a_theme_change_in_config_re_highlights_what_is_on_screen() {
-    let mut app = test_app(0);
-    app.sources.insert(
-        "a.rs".to_string(),
-        (vec![], vec!["fn main() {}".to_string()]),
-    );
-    // a stale cache entry: re-highlighting is what refills it
-    app.highlights.insert("a.rs".to_string(), vec![]);
-    app.config = Some(ConfigUi::open(&app));
-
-    let at = {
-        let c = app.config.as_ref().unwrap();
-        c.rows
-            .iter()
-            .position(|&(i, j)| c.sections[i].fields[j].key == "theme")
-            .expect("theme setting")
-    };
-    app.config.as_mut().unwrap().sel = at;
-    let before = app.theme.name;
-    config_toggle(&mut app);
-
-    assert_ne!(app.theme.name, before, "cycling picks another theme");
-    assert!(
-        !app.highlights["a.rs"].is_empty(),
-        "the stale highlight cache was not rebuilt for the new palette"
     );
 }
 
@@ -4896,12 +3162,12 @@ fn re_running_the_current_strategy_keeps_the_group_reasons() {
         consumers: vec![],
     };
     let out = ordo::run(input);
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.changes = changes;
     app.items = build_items(&out);
     app.view = (0..app.items.len()).collect();
     app.reviewed = vec![false; app.items.len()];
-    // the TUI holds the same content split into lines; the review must not
+    // the app holds the same content split into lines; the review must not
     // be rebuilt out of it (that is the bug), so it is here to prove it is
     // not what `:strategy` reads
     app.sources = app
@@ -4937,7 +3203,7 @@ fn re_running_the_current_strategy_keeps_the_group_reasons() {
 /// the reviewer's own overrides away either.
 #[test]
 fn config_keeps_role_overrides_across_a_theme_swap_and_applies_an_edit() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     let red = Color::Rgb(0xff, 0, 0);
     app.theme = apply_theme_colors(theme("dark").unwrap(), &[("accent".to_string(), red)]);
     app.config = Some(ConfigUi::open(&app));
@@ -5102,18 +3368,8 @@ fn a_folded_group_is_one_row_holding_its_hunks() {
 }
 
 #[test]
-fn the_selection_inside_a_fold_lands_on_the_fold_row() {
-    let (items, groups) = grouped_trio();
-    let collapsed: HashSet<String> = ["g0".to_string()].into_iter().collect();
-    let rows = display_rows(&[0, 1, 2], &items, &groups, true, &collapsed);
-    assert_eq!(display_row_of(&rows, 0), 1);
-    assert_eq!(display_row_of(&rows, 1), 1);
-    assert_eq!(display_row_of(&rows, 2), 3);
-}
-
-#[test]
 fn folding_keeps_the_selection_on_the_fold() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items = vec![
         grouped_item("a.rs", "g0"),
         grouped_item("a.rs", "g0"),
@@ -5144,7 +3400,7 @@ fn folding_keeps_the_selection_on_the_fold() {
 
 #[test]
 fn folding_turns_group_headers_on_because_that_is_what_was_meant() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items = vec![grouped_item("a.rs", "g0")];
     app.view = vec![0];
     app.reviewed = vec![false];
@@ -5166,27 +3422,8 @@ fn with_groups_off_every_row_names_its_own_symbol_and_nothing_folds() {
 }
 
 #[test]
-fn display_row_of_never_lands_the_selection_on_structure() {
-    let (items, groups) = grouped_trio();
-    let view = vec![0, 1, 2];
-    for show_groups in [true, false] {
-        let rows = display_rows(&view, &items, &groups, show_groups, &HashSet::new());
-        for &i in &view {
-            let row = display_row_of(&rows, i);
-            assert!(
-                matches!(rows[row], DisplayRow::Item(j, _) if j == i),
-                "hunk {i} landed on row {row}"
-            );
-        }
-    }
-    let rows = display_rows(&view, &items, &groups, true, &HashSet::new());
-    let at: Vec<usize> = view.iter().map(|&i| display_row_of(&rows, i)).collect();
-    assert_eq!(at, vec![1, 2, 4], "one band per file run");
-}
-
-#[test]
 fn imports_fold_by_default_in_either_mode_and_groups_name_their_symbol() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     let mut import = grouped_item("a.rs", "gi");
     import.cat = ordo::model::Category::Import;
     let mut defined = grouped_item("a.rs", "gd");
@@ -5227,58 +3464,6 @@ fn imports_fold_by_default_in_either_mode_and_groups_name_their_symbol() {
     assert!(app.collapsed.contains("gi"));
     assert_eq!(app.groups["gd"], "run");
     assert_eq!(app.groups["gt"], "");
-}
-
-// ---- `:e` — reload carry-forward ----
-
-#[test]
-fn carry_across_reload_keeps_keymap_and_theme() {
-    let mut app = test_app(0);
-    app.keys = keymap("vscode").unwrap();
-    app.theme = theme("light").unwrap();
-    let (keys, carried) = carry_across_reload(&app);
-    assert_eq!(keys.name, "vscode");
-    assert_eq!(carried.name, "light");
-    assert!(colors_eq(carried.add_bg, theme("light").unwrap().add_bg));
-}
-
-#[test]
-fn e_command_rejects_an_empty_argument() {
-    let mut app = test_app(0);
-    match execute_command(&mut app, "e") {
-        Err(msg) => assert!(msg.contains("usage")),
-        Ok(_) => panic!("expected an error for a missing rev argument"),
-    }
-}
-
-#[test]
-fn e_command_rejects_an_unresolvable_revision() {
-    let mut app = test_app(0);
-    match execute_command(&mut app, "e not-a-real-rev-xyzzy-12345") {
-        Err(msg) => assert!(msg.contains("not-a-real-rev-xyzzy-12345")),
-        Ok(_) => panic!("expected an error for an unresolvable rev"),
-    }
-}
-
-#[test]
-fn e_command_resolves_head_to_a_reload_outcome() {
-    // relies on the test binary running inside the ordo git checkout,
-    // same assumption `resolve`'s own callers make
-    let mut app = test_app(0);
-    match execute_command(&mut app, "e HEAD") {
-        Ok(CommandOutcome::Reload(_, rev)) => assert_eq!(rev, "HEAD"),
-        other => panic!("expected a Reload outcome, got {}", other.is_ok()),
-    }
-}
-
-#[test]
-fn arg_candidates_e_offers_the_given_rev_pool() {
-    let revs = lines(&["zz", "HEAD", "main"]);
-    assert_eq!(arg_candidates("e", &[], &[], &revs), revs);
-    assert_eq!(
-        command_completions("e H", &[], &[], &revs),
-        vec!["HEAD".to_string()]
-    );
 }
 
 // ---- `<base>..zz` / `<base>...zz` parsing (relies on the test binary
@@ -5403,7 +3588,7 @@ fn consumers_in_a_rules_file_resolve_beside_it() {
 /// ordo's own notes and findings only when asked for with `all`.
 #[test]
 fn the_review_prompt_anchors_notes_and_adds_ordo_only_with_all() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items[0].new_range = [12, 18];
     app.items[0].symbols = vec![sym("fetch", "function_definition", None)];
     app.items[0].notes = vec!["fetch became async; 1 call never awaits it".to_string()];
@@ -5438,11 +3623,6 @@ fn the_review_prompt_anchors_notes_and_adds_ordo_only_with_all() {
         ),
         "{waved}"
     );
-}
-
-#[test]
-fn osc52_wraps_the_text_as_base64() {
-    assert_eq!(osc52("hi"), "\x1b]52;c;aGk=\x07");
 }
 
 /// `:send` pipes the prompt to `$ORDO_SEND`, a failing command says why, and
@@ -5487,7 +3667,7 @@ fn a_line_comment_follows_its_lines_and_goes_stale_when_they_change() {
 /// it, and no text deletes it.
 #[test]
 fn comment_adds_replaces_and_deletes_on_the_selection() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.sources.insert(
         "a.rs".to_string(),
         (vec![], lines_of("fn a() {}\nfn b() {}\nfn c() {}\n")),
@@ -5513,38 +3693,21 @@ fn comment_adds_replaces_and_deletes_on_the_selection() {
     );
 }
 
-/// `gc` walks the review's comments in file and line order, selecting the
-/// hunk that holds each and putting the cursor on it.
-#[test]
-fn comment_next_jumps_across_files_in_order() {
-    let mut app = test_app(0);
-    app.items = vec![test_item("a.rs"), test_item("b.rs")];
-    app.items[0].new_range = [1, 3];
-    app.items[1].new_range = [5, 9];
-    app.view = vec![0, 1];
-    app.reviewed = vec![false, false];
-    let text = lines_of("1\n2\n3\n4\n5\n6\n7\n8\n9\n");
-    app.sources
-        .insert("a.rs".to_string(), (vec![], text.clone()));
-    app.sources
-        .insert("b.rs".to_string(), (vec![], text.clone()));
-    app.comments = vec![
-        LineComment::new("b.rs", 7, 7, "second", &text),
-        LineComment::new("a.rs", 3, 3, "first", &text),
-    ];
-    app.cursor = Cursor { line: 0, col: 0 };
-    comment_move(&mut app, true);
-    assert_eq!((app.sel, app.cursor.line), (0, 2));
-    comment_move(&mut app, true);
-    assert_eq!((app.sel, app.cursor.line), (1, 6));
-    comment_move(&mut app, false);
-    assert_eq!((app.sel, app.cursor.line), (0, 2));
+/// Five hunks: warn, none, verdict, verdict, note — in that view order.
+fn finding(level: ordo::model::Level) -> ordo::model::Finding {
+    ordo::model::Finding {
+        source: ordo::model::FindingSource::Rule,
+        name: "r".to_string(),
+        message: "m".to_string(),
+        level,
+        row: None,
+        original_level: None,
+    }
 }
 
-/// Five hunks: warn, none, verdict, verdict, note — in that view order.
 fn findings_app() -> App {
     use ordo::model::Level;
-    let mut app = test_app(0);
+    let mut app = test_app();
     let levels = [
         Some(Level::Warn),
         None,
@@ -5557,14 +3720,7 @@ fn findings_app() -> App {
         .enumerate()
         .map(|(n, level)| {
             let mut it = test_item(&format!("{n}.rs"));
-            it.findings.extend(level.map(|level| ordo::model::Finding {
-                source: ordo::model::FindingSource::Rule,
-                name: "r".to_string(),
-                message: "m".to_string(),
-                level,
-                row: None,
-                original_level: None,
-            }));
+            it.findings.extend(level.map(finding));
             it
         })
         .collect();
@@ -5626,67 +3782,9 @@ fn finding_jump_with_no_findings_says_so_and_stays() {
     assert_eq!(app.notice.as_deref(), Some("no findings in view"));
 }
 
-/// `]` opens the `]f` chord yet still names its own action, which the
-/// key loop runs when no chord follows.
-#[test]
-fn a_bracket_is_both_a_chord_prefix_and_a_key() {
-    let km = keymap("vim").unwrap();
-    assert!(matches!(km.resolve(None, ch(']')), Resolve::Pending));
-    assert!(matches!(
-        km.resolve(Some(ch(']')), ch('f')),
-        Resolve::Act(Action::FindingNext)
-    ));
-    assert!(matches!(
-        km.resolve(Some(ch('[')), ch('f')),
-        Resolve::Act(Action::FindingPrev)
-    ));
-    assert!(matches!(km.resolve(Some(ch(']')), ch('j')), Resolve::Miss));
-    assert_eq!(km.bare(ch(']')), Some(Action::MarkNext));
-    assert_eq!(km.bare(ch('[')), Some(Action::MarkPrev));
-    assert_eq!(km.bare(ch('g')), None);
-    let vs = keymap("vscode").unwrap();
-    assert!(matches!(
-        vs.resolve(None, plain(KeyCode::F(8))),
-        Resolve::Act(Action::FindingNext)
-    ));
-    assert!(matches!(
-        vs.resolve(None, (KeyCode::F(8), KeyModifiers::SHIFT)),
-        Resolve::Act(Action::FindingPrev)
-    ));
-}
-
-/// The paging keys scroll the selected dependency card through its file,
-/// stop at the file's end, and moving to another card starts it at its hunk.
-#[test]
-fn a_canvas_card_scrolls_and_resets_on_moving() {
-    let mut app = test_app(0);
-    app.items = vec![test_item("a.rs"), test_item("b.rs")];
-    app.items[1].new_range = [3, 4];
-    app.items[0].edges = vec![EdgeRef {
-        label: "b".to_string(),
-        target: Some(1),
-        dependency: true,
-    }];
-    app.view = vec![0, 1];
-    app.reviewed = vec![false, false];
-    let text: Vec<String> = (1..=40).map(|i| i.to_string()).collect();
-    app.sources.insert("b.rs".to_string(), (vec![], text));
-    open_deps(&mut app);
-    scroll_card(&mut app, 10);
-    assert_eq!(app.canvas.as_ref().unwrap().scroll, 10);
-    scroll_card(&mut app, 1000);
-    assert_eq!(
-        app.canvas.as_ref().unwrap().scroll,
-        37,
-        "no further than the last line"
-    );
-    move_card(&mut app, -1);
-    assert_eq!(app.canvas.as_ref().unwrap().scroll, 0);
-}
-
 /// A review of `names`, one hunk per symbol in `f.py`, ten lines apart.
 fn review_of(names: &[&str]) -> App {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items = names
         .iter()
         .enumerate()
@@ -5704,30 +3802,15 @@ fn review_of(names: &[&str]) -> App {
     app
 }
 
-/// Reloading keeps the reviewer on the same hunk when others arrive around it,
-/// with the cursor and scroll where they were relative to it.
+/// Reloading keeps the reviewer on the same hunk when others arrive around it.
 #[test]
-fn a_reload_keeps_the_selected_hunk_and_the_place_in_it() {
+fn a_reload_keeps_the_selected_hunk() {
     let mut old = review_of(&["a", "b", "c"]);
     select(&mut old, 1);
-    old.cursor = Cursor { line: 12, col: 3 };
-    old.scroll = auto_scroll(&old.items[1]) + 2;
-    old.jumps = vec![(2, Cursor { line: 0, col: 0 })];
     let place = place_of(&old);
     let mut new = review_of(&["a", "new", "b", "c"]);
     restore(&mut new, place);
     assert_eq!(new.items[new.sel].symbols[0].name, "b");
-    assert_eq!(
-        new.cursor,
-        Cursor { line: 22, col: 3 },
-        "two lines into b, as before"
-    );
-    assert_eq!(new.scroll, auto_scroll(&new.items[new.sel]) + 2);
-    assert_eq!(new.jumps.len(), 1);
-    assert_eq!(
-        new.items[new.jumps[0].0].symbols[0].name, "c",
-        "the jump follows its hunk"
-    );
 }
 
 /// A hunk that is gone leaves the reviewer on what now sits where it was.
@@ -5762,25 +3845,15 @@ fn a_reload_follows_a_renamed_symbol() {
     assert_eq!(new.items[new.sel].symbols[0].name, "load");
 }
 
-/// Filters and a text search survive a reload; a filter that would now leave
-/// nothing is dropped rather than leaving an empty review.
+/// Filters survive a reload.
 #[test]
-fn a_reload_keeps_filters_and_the_text_search() {
+fn a_reload_keeps_filters() {
     let mut old = review_of(&["a", "b"]);
-    old.search = Some(Search {
-        kind: SearchKind::Text,
-        pattern: "line 1".to_string(),
-        matches: vec![],
-        index: 0,
-    });
     old.show_all = false;
     let place = place_of(&old);
     let mut new = review_of(&["a", "b"]);
     restore(&mut new, place);
     assert!(!new.show_all);
-    let s = new.search.as_ref().expect("search carried");
-    assert_eq!(s.pattern, "line 1");
-    assert!(!s.matches.is_empty(), "and run again on the new text");
 }
 
 /// `--watch=auto` reloads only when stale, idle, and nothing is open.
@@ -5832,6 +3905,40 @@ fn watch_flags_parse_and_a_bad_debounce_is_refused() {
     assert_eq!(raw.debounce_ms.as_deref(), Some("500"));
     assert!(flag_loop(argv(&["zz", "--watch=sometimes"])).is_err());
     assert!(flag_loop(argv(&["zz", "--watch-debounce=soon"])).is_err());
+}
+
+/// `ordo <rev>` serves the review, and `ordo web <rev>` is the same command:
+/// the server's own flags read on either.
+#[test]
+fn web_is_an_alias_and_the_server_flags_need_no_alias() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    for args in [
+        &["zz", "--port", "4780", "--no-open"][..],
+        &["web", "zz", "--port", "4780", "--no-open"],
+    ] {
+        let raw = flag_loop(argv(args)).ok().unwrap();
+        assert_eq!(raw.rev.as_deref(), Some("zz"), "{args:?}");
+        assert_eq!(raw.port.as_deref(), Some("4780"), "{args:?}");
+        assert!(raw.no_open, "{args:?}");
+    }
+    assert!(flag_loop(argv(&["zz", "--port", "many"])).is_err());
+}
+
+#[test]
+fn no_revision_means_head_with_or_without_the_alias() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    for args in [&[][..], &["web"], &["--no-open"], &["web", "--no-open"]] {
+        let parsed = parse_argv(argv(args)).ok().unwrap();
+        assert_eq!(parsed.rev, "HEAD", "{args:?}");
+    }
+}
+
+#[test]
+fn an_unknown_flag_is_refused_with_or_without_the_alias() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(flag_loop(argv(&["--bogus"])).err(), Some(2));
+    assert_eq!(flag_loop(argv(&["web", "--bogus"])).err(), Some(2));
+    assert_eq!(flag_loop(argv(&["web", "zz", "--bogus"])).err(), Some(2));
 }
 
 #[test]
@@ -5897,35 +4004,17 @@ fn the_uncommitted_area_of_a_plain_git_repository() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// One wave in view: a dep line into another wave says which, and whether it
-/// is reviewed; `gd` switches to that wave and `C-o` switches back.
+/// One wave in view: the other waves' hunks are hidden, and accounted for.
 #[test]
-fn a_dep_into_another_wave_is_labelled_and_followed_across() {
-    let mut app = test_app(0);
+fn one_wave_in_view_accounts_for_the_others() {
+    let mut app = test_app();
     app.items = vec![test_item("a.rs"), test_item("b.rs")];
     app.items[0].wave = Some(2);
     app.items[1].wave = Some(1);
-    app.items[0].edges = vec![edge("← b.rs:L1   uses it", Some(1))];
     app.view = vec![0, 1];
     app.reviewed = vec![false, true];
     set_filters(&mut app, false, true, None, Some(2)).unwrap();
     assert_eq!(app.view, vec![0]);
-    let rows = why_content(&app);
-    let dep = rows
-        .iter()
-        .position(|r| matches!(r.kind, WhyKind::Edge(_)))
-        .unwrap();
-    assert!(
-        rows[dep].text.ends_with("· wave 1, reviewed"),
-        "{}",
-        rows[dep].text
-    );
-    assert!(matches!(rows[dep].kind, WhyKind::Edge(Some(1))));
-    app.why_sel = dep;
-    jump_to_edge(&mut app);
-    assert_eq!((app.sel, app.only_wave), (1, Some(1)));
-    jump_back(&mut app);
-    assert_eq!((app.sel, app.only_wave), (0, Some(2)));
     let hidden = hidden_breakdown(&app.items, false, true, None, Some(2));
     assert_eq!((hidden.wave, hidden.unaccounted), (1, 0));
 }
@@ -5934,7 +4023,7 @@ fn a_dep_into_another_wave_is_labelled_and_followed_across() {
 /// line names the wave with what it was asked.
 #[test]
 fn stepping_through_waves_cycles_back_to_all_of_them() {
-    let mut app = test_app(0);
+    let mut app = test_app();
     app.items = vec![test_item("a.rs"), test_item("b.rs"), test_item("c.rs")];
     app.items[0].wave = Some(1);
     app.items[1].wave = Some(3);
@@ -5959,104 +4048,6 @@ fn stepping_through_waves_cycles_back_to_all_of_them() {
     step_wave(&mut app, false);
     assert_eq!(app.only_wave, Some(3));
     assert_eq!(app.notice.as_deref(), Some("wave 3 · asked: add retry"));
-}
-
-/// A why-pane fact wraps at spaces and its continuation lines leave room for
-/// the indent the caller puts under its label; a word wider than the room
-/// keeps its own line rather than being split.
-#[test]
-fn a_fact_wraps_at_spaces_under_its_own_indent() {
-    assert_eq!(
-        hang("this file changed 2 times in the last 6 months", 20, 20),
-        ["this file changed 2", "times in the last 6", "months"]
-    );
-    assert_eq!(hang("short", 20, 20), ["short"]);
-    assert_eq!(
-        hang("a averyveryverylongword b", 6, 6),
-        ["a", "averyveryverylongword", "b"]
-    );
-}
-
-/// A finding whose level `rules.toml` moved says so next to its source, in
-/// the direction it was moved.
-#[test]
-fn a_moved_level_names_where_it_came_from() {
-    let theme = theme("dark").unwrap();
-    let mut it = test_item("a.rs");
-    let mut lowered = finding(ordo::model::Level::Note);
-    lowered.original_level = Some(ordo::model::Level::Warn);
-    let mut raised = finding(ordo::model::Level::Verdict);
-    raised.original_level = Some(ordo::model::Level::Warn);
-    it.findings = vec![lowered, raised];
-    let text: Vec<String> = finding_lines(&it, &theme, 80)
-        .iter()
-        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-        .collect();
-    assert!(
-        text[0].ends_with("catalog, raised from warn in rules.toml"),
-        "{text:?}"
-    );
-    assert!(
-        text.iter()
-            .any(|l| l.ends_with("catalog, lowered from warn in rules.toml")),
-        "{text:?}"
-    );
-}
-
-/// An OSC colour reply scales whatever digit count the terminal used to eight
-/// bits a channel, with either terminator, and a reply that isn't one is
-/// nothing rather than a guess.
-#[test]
-fn an_osc_colour_reply_reads_as_rgb() {
-    assert_eq!(osc_rgb("]11;rgb:1e1e/1e1e/2e2e\x07"), Some(0x1e1e2e));
-    assert_eq!(osc_rgb("]4;1;rgb:ff/00/80\x1b"), Some(0xff0080));
-    assert_eq!(osc_rgb("]10;rgb:f/0/8\x07"), Some(0xff0088));
-    assert_eq!(osc_rgb("]11;rgb:1e1e/1e1e\x07"), None);
-    assert_eq!(osc_rgb("[0n"), None);
-}
-
-/// With no terminal to ask — as in a test — `terminal` is still a theme, with
-/// `dark`'s tints under its own name.
-#[test]
-fn an_unanswered_terminal_theme_falls_back_to_darks_tints() {
-    let t = theme("terminal").unwrap();
-    assert_eq!(t.name, "terminal");
-    assert_eq!(t.verdict_bg, theme("dark").unwrap().verdict_bg);
-    assert_eq!(theme_names()[0], "terminal");
-}
-
-/// A terminal that answered gets tints mixed from its own colours toward its
-/// own background: text still follows the terminal, the tints sit next to its
-/// background rather than `dark`'s, and a light background flips to `light`.
-#[test]
-fn an_answered_terminal_tints_from_its_own_palette() {
-    // gruvbox dark: bg, fg, then ANSI red, green, yellow, blue, magenta, cyan
-    let dark = TermColors {
-        bg: 0x282828,
-        fg: 0xebdbb2,
-        ansi: [0xcc241d, 0x98971a, 0xd79921, 0x458588, 0xb16286, 0x689d6a],
-    };
-    let t = Theme::sensed(dark);
-    assert_eq!(t.name, "terminal");
-    assert_eq!(t.fg, Color::Reset);
-    assert_ne!(t.verdict_bg, theme("dark").unwrap().verdict_bg);
-    let Color::Rgb(r, g, b) = t.verdict_bg else {
-        panic!("a sensed tint is truecolor");
-    };
-    // a quiet tint stays near the background it was mixed toward
-    assert!(
-        [r, g, b].iter().all(|c| (0x18..0x60).contains(c)),
-        "{r:x}{g:x}{b:x}"
-    );
-    let light = Theme::sensed(TermColors {
-        bg: 0xfbf1c7,
-        fg: 0x3c3836,
-        ..dark
-    });
-    let Color::Rgb(r, g, b) = light.note_bg else {
-        panic!("a sensed tint is truecolor");
-    };
-    assert!([r, g, b].iter().all(|c| *c > 0xb0), "{r:x}{g:x}{b:x}");
 }
 
 /// GitButler 0.23 lists linked worktrees beside the stacks; their branch and

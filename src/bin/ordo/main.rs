@@ -1,12 +1,26 @@
-//! ordo — a terminal reviewer that is a pure client of the ordo engine.
-//! It owns git (shells out for a commit's blobs), calls `ordo::run`, and renders
-//! the change in comprehension order: the full file with the changed hunk
-//! highlighted in context, plus rationale, advisories and def→use edges. The
-//! engine stays git-free; gated behind the `tui` feature so the default build
-//! never pulls a UI stack.
-use crate::code_view::apply_theme_colors;
-use crate::keys::build_help;
+//! ordo — a reviewer that is a pure client of the ordo engine, served to a
+//! browser. It owns git (shells out for a commit's blobs), calls `ordo::run`,
+//! and serves the change in comprehension order: the full file with the
+//! changed hunk in context, plus rationale, advisories and def→use edges. The
+//! engine stays git-free; gated behind the `web` feature so
+//! `--no-default-features` builds the engine alone.
+use crate::config::config_commit_edit;
+use crate::config::config_path;
+use crate::config::config_toggle;
+use crate::config::config_write;
+use crate::config::write_init_config;
+use crate::config::ConfigUi;
+use crate::keys::apply_key_config;
 use crate::keys::keymap;
+use crate::keys::parse_key_config;
+use crate::keys::Fold;
+use crate::keys::KeyConfig;
+use crate::keys::Keymap;
+use crate::keys::ViewMode;
+use crate::theme::apply_theme_colors;
+use crate::theme::theme;
+use crate::theme::theme_names;
+use crate::theme::Theme;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,43 +28,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::code_view::hover;
-use crate::code_view::sense_terminal;
-use crate::code_view::theme;
-use crate::code_view::theme_names;
-use crate::code_view::view_row;
-use crate::code_view::Syntax;
-use crate::code_view::Theme;
-use crate::commands::carry_across_reload;
-use crate::commands::comment_lines;
-use crate::commands::handle_command_key;
-use crate::commands::open_command_bar;
-use crate::commands::review_comments;
 use crate::commands::step_wave;
-use crate::commands::CommandOutcome;
 use crate::comments::comments_file_path;
 use crate::comments::load_comments;
 use crate::comments::LineComment;
-use crate::config::config_commit_edit;
-use crate::config::config_path;
-use crate::config::config_toggle;
-use crate::config::config_write;
-use crate::config::move_config;
-use crate::config::write_init_config;
-use crate::config::ConfigUi;
-use crate::draw::close_deps;
-use crate::draw::draw;
-use crate::draw::jump_back;
-use crate::draw::jump_to_card;
-use crate::draw::jump_to_edge;
-use crate::draw::move_card;
-use crate::draw::open_deps;
-use crate::draw::preview_edge;
-use crate::draw::scroll_card;
-use crate::draw::set_geometry;
-use crate::draw::zoom_card;
-use crate::editor::open_editor;
-use crate::editor::open_quickfix_editor;
 use crate::findings::parse_lcov;
 use crate::findings::place_coverage;
 use crate::findings::place_findings;
@@ -67,25 +48,11 @@ use crate::git::note_command_failure;
 use crate::git::resolve;
 use crate::git::review_commit_sha;
 use crate::git::Target;
-use crate::highlight::highlight_file;
-use crate::highlight::Highlights;
 use crate::history::churn_query;
 use crate::history::file_churn;
 use crate::history::hunk_churn;
 use crate::history::Churn;
-use crate::keys::apply_key_config;
-use crate::keys::norm;
-use crate::keys::parse_key_config;
-use crate::keys::plain;
-use crate::keys::Action;
-use crate::keys::Fold;
-use crate::keys::Key;
-use crate::keys::KeyConfig;
-use crate::keys::Keymap;
-use crate::keys::Pane;
-use crate::keys::Resolve;
-use crate::keys::ViewMode;
-use crate::keys::CHORD_TIMEOUT;
+use crate::hover::hover;
 use crate::marks::compare_runs;
 use crate::marks::load_marks;
 use crate::marks::load_notes;
@@ -105,52 +72,41 @@ use crate::marks::Delta;
 use crate::reload::{place_of, restore, Place};
 use crate::rules::load_rules_report;
 use crate::rules::RuleSet;
-use crate::search::accept_search;
-use crate::search::cancel_search;
-use crate::search::cycle_search;
-use crate::search::symbol_search;
 use crate::watch::{Drift, Fingerprint, Stale, WatchMode};
 use ordo::model::{Change, Input, Output, Symbol};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Paragraph};
-use ratatui::Frame;
 use tree_sitter::Tree;
-mod code_view;
 mod commands;
 mod comments;
 mod config;
 mod consumers;
-mod draw;
 mod editor;
+mod facts;
 mod findings;
 mod git;
 mod handoff;
-mod help;
 mod highlight;
 mod history;
+mod hover;
 mod keys;
 mod marks;
 mod reload;
 mod rules;
-mod search;
+mod theme;
 mod watch;
 mod waves;
-#[cfg(feature = "web")]
 mod web;
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-const PAGE: u16 = 15;
 
 const USAGE: &str = "\
 ordo — review a change in reading order: definitions before their uses.
 
 usage: ordo [<rev>] [<glob>...] [options]
-       ordo web [<rev>] [<glob>...] [options] [--port <n>] [--no-open]
        ordo wave [-m <message>] | --list | --clear
        ordo help [<topic>]
+
+  Serves the review to a browser on this machine and opens a tab on it.
+  `ordo web ...` is the same command.
 
   <rev>   what to review (default HEAD)
             HEAD~2, a sha, a tag         one commit
@@ -170,6 +126,8 @@ examples:
   ordo --sarif out.sarif main...feat     analyzer findings on their hunks
 
 options:
+  --port <n>              the localhost port (default: any free one)
+  --no-open               print the URL, do not open a browser
   --watch[=hint|auto]     flag the review stale when files change; auto reloads
   --watch-debounce <ms>   quiet time before a change counts (default 1500)
   --sarif <file>          attach SARIF 2.1.0 findings to hunks (repeatable)
@@ -178,18 +136,11 @@ options:
   --no-catalog            skip the built-in construct catalog
   --all                   keep generated and lock files
   --only-comments         only comment and docstring hunks
-  --keys <vim|vscode>     key preset (default vim, or $ORDO_TUI_KEYS)
-  --theme <name>          palette (default terminal, or $ORDO_TUI_THEME)
-  --init-config [--force] write tui.toml with the current keys and theme
-  --json                  print the engine input for <rev> and exit, no TUI
-  --port <n>              `ordo web`: the localhost port (default: any free one)
-  --no-open               `ordo web`: print the URL, do not open a browser
+  --keys <vim|vscode>     key preset (default vim, or $ORDO_KEYS)
+  --theme <name>          palette (default dark, or $ORDO_THEME)
+  --init-config [--force] write ordo.toml with the current keys and theme
+  --json                  print the engine input for <rev> and exit
   -V, --version
-
-keys (vim; vscode: F1 lists its own):
-  j/k move · 1/2/3 focus a pane · x mark reviewed · q quit
-  gD dependency canvas · gd follow a dep · C-o back · / search · c comment
-  r reload · : command bar (:help lists commands) · ? every key
 ";
 
 // A path filter's compiled matcher: an optional include set (empty/absent
@@ -412,7 +363,7 @@ fn build_globs(pats: &[String]) -> Result<PathGlobs, String> {
 struct ParsedArgs {
     rev: String,
     keys: Keymap,
-    /// whether a docs-only hunk sorts after the code (tui.toml `docs_last`)
+    /// whether a docs-only hunk sorts after the code (ordo.toml `docs_last`)
     docs_last: bool,
     filter: Filter,
     only_comments: bool,
@@ -422,15 +373,13 @@ struct ParsedArgs {
     coverage: Vec<String>,
     /// `--no-catalog`: run only the caller's own rules this once
     no_catalog: bool,
-    /// `--watch[=hint|auto]`, else tui.toml `watch`
+    /// `--watch[=hint|auto]`, else ordo.toml `watch`
     watch: WatchMode,
     debounce: Duration,
     /// `--json`: print the engine input and exit, for scripts that want ordo's
-    /// revision and path handling without the TUI
+    /// revision and path handling without the reviewer
     json: bool,
-    /// `ordo web`: serve the review to a browser instead of the terminal
-    #[cfg(feature = "web")]
-    web: Option<web::WebArgs>,
+    web: web::WebArgs,
 }
 
 /// The user-facing documentation, embedded in the binary so `ordo help
@@ -450,13 +399,8 @@ const TOPICS: &[(&str, &str, &str)] = &[
         include_str!("../../../docs/cli.md"),
     ),
     (
-        "tui",
-        "this reviewer: revisions, filters, keys, command bar, themes",
-        include_str!("../../../docs/tui.md"),
-    ),
-    (
         "web",
-        "the browser reviewer: ordo web, the band, safety, the client build",
+        "this reviewer: revisions, filters, keys, commands, themes, safety",
         include_str!("../../../docs/web.md"),
     ),
     (
@@ -529,17 +473,7 @@ fn help_topic(topic: Option<&str>) -> i32 {
     };
     match TOPICS.iter().find(|(name, _, _)| *name == topic) {
         Some((_, _, body)) => {
-            use std::io::IsTerminal;
-            let painted = std::io::stdout().is_terminal().then(|| {
-                let t = std::env::var("ORDO_TUI_THEME")
-                    .ok()
-                    .and_then(|n| theme(&n))
-                    .or_else(|| theme("dark"))
-                    .expect("the dark theme");
-                let columns = ratatui::crossterm::terminal::size().map_or(100, |(w, _)| w as usize);
-                help::render_markdown(body, &t.syn, t.dim, columns)
-            });
-            page_out(painted.as_deref().unwrap_or(body));
+            page_out(body);
             0
         }
         None => {
@@ -563,9 +497,7 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|t| parse_key_config(&t));
     let (keys, preset) = resolve_keymap(cfg.as_ref(), raw.preset, raw.preset_given)?;
-    // a browser paints its own colours, so the terminal is not asked for its
-    let (theme, theme_name) =
-        resolve_theme(cfg.as_ref(), raw.theme_name, raw.theme_given, !raw.web)?;
+    let (theme, theme_name) = resolve_theme(cfg.as_ref(), raw.theme_name, raw.theme_given)?;
     if raw.want_init {
         // `--init-config` is a whole run of its own: nothing is reviewed, and
         // the exit code is the write's own (`Err(0)` on success, as `--help`
@@ -573,7 +505,7 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
         write_init_config(&preset, &theme_name, raw.force)?;
         return Err(0);
     }
-    // `--json` prints what was gathered, before rules, overlays or the TUI
+    // `--json` prints what was gathered, before rules, overlays or the server
     // exist; a flag for any of those would be quietly dropped
     if raw.json {
         let unused = [
@@ -623,15 +555,14 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
             .and_then(|v| v.parse().ok())
             .map_or(watch::DEBOUNCE, Duration::from_millis),
         json: raw.json,
-        #[cfg(feature = "web")]
-        web: raw.web.then(|| web::WebArgs {
+        web: web::WebArgs {
             port: raw
                 .port
                 .as_deref()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(0),
             open: !raw.no_open,
-        }),
+        },
     })
 }
 
@@ -657,7 +588,6 @@ struct RawArgs {
     /// as written: checked once the flags are all read
     debounce_ms: Option<String>,
     json: bool,
-    web: bool,
     port: Option<String>,
     no_open: bool,
 }
@@ -682,10 +612,10 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         skip_generated: true,
         no_catalog: false,
         only_comments: false,
-        preset_given: std::env::var("ORDO_TUI_KEYS").is_ok(),
-        preset: std::env::var("ORDO_TUI_KEYS").unwrap_or_else(|_| "vim".to_string()),
-        theme_given: std::env::var("ORDO_TUI_THEME").is_ok(),
-        theme_name: std::env::var("ORDO_TUI_THEME").unwrap_or_else(|_| "terminal".to_string()),
+        preset_given: std::env::var("ORDO_KEYS").is_ok(),
+        preset: std::env::var("ORDO_KEYS").unwrap_or_else(|_| "vim".to_string()),
+        theme_given: std::env::var("ORDO_THEME").is_ok(),
+        theme_name: std::env::var("ORDO_THEME").unwrap_or_else(|_| "dark".to_string()),
         extra_rules: vec![],
         sarif: vec![],
         coverage: vec![],
@@ -694,7 +624,6 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         watch: None,
         debounce_ms: None,
         json: false,
-        web: false,
         port: None,
         no_open: false,
     };
@@ -708,10 +637,10 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             return Err(waves::cli(&argv[1..]));
         }
     }
-    let web = argv.first().is_some_and(|a| a == "web");
-    raw.web = web;
+    // `ordo web ...` is the same command
+    let alias = argv.first().is_some_and(|a| a == "web");
     let mut pending: Option<Pending> = None;
-    for a in argv.into_iter().skip(usize::from(web)) {
+    for a in argv.into_iter().skip(usize::from(alias)) {
         if let Some(p) = pending.take() {
             raw.take_value(p, a);
             continue;
@@ -723,8 +652,8 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             "--sarif" => pending = Some(Pending::Sarif),
             "--coverage" => pending = Some(Pending::Coverage),
             "--watch-debounce" => pending = Some(Pending::Debounce),
-            "--port" if raw.web => pending = Some(Pending::Port),
-            "--no-open" if raw.web => raw.no_open = true,
+            "--port" => pending = Some(Pending::Port),
+            "--no-open" => raw.no_open = true,
             s if s.starts_with("--watch-debounce=") => raw.take_value(
                 Pending::Debounce,
                 s["--watch-debounce=".len()..].to_string(),
@@ -797,10 +726,6 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             eprintln!("ordo: --port wants a number from 0 to 65535\n\n{USAGE}");
             Err(2)
         }
-        _ if raw.web && !cfg!(feature = "web") => {
-            eprintln!("ordo: this build has no web reviewer (built without the `web` feature)");
-            Err(2)
-        }
         _ if raw
             .debounce_ms
             .as_ref()
@@ -851,7 +776,7 @@ fn resolve_keymap(
     let keys = match cfg {
         Some(c) => {
             for p in &c.problems {
-                eprintln!("ordo: tui.toml: {p}");
+                eprintln!("ordo: ordo.toml: {p}");
             }
             apply_key_config(keys, c)
         }
@@ -867,15 +792,11 @@ fn resolve_theme(
     cfg: Option<&KeyConfig>,
     theme_name: String,
     theme_given: bool,
-    sense: bool,
 ) -> Result<(Theme, String), i32> {
     let theme_name = match (cfg, theme_given) {
         (Some(c), false) => c.theme.clone().unwrap_or(theme_name),
         _ => theme_name,
     };
-    if theme_name == "terminal" && sense {
-        sense_terminal();
-    }
     let Some(theme) = theme(&theme_name) else {
         eprintln!(
             "ordo: unknown theme '{theme_name}' (want: {})",
@@ -899,14 +820,10 @@ fn plural(n: usize) -> &'static str {
 }
 
 // one-based "(i/total)" progress messages for the load stages that iterate
-// per item — pulled out of `gather_range`/`gather_uncommitted`/`load` so the
-// counter arithmetic and wording are unit-testable without a worker thread
+// per item — pulled out of `gather_range`/`gather_uncommitted` so the counter
+// arithmetic and wording are unit-testable without a worker thread
 fn read_progress(path: &str, i: usize, total: usize) -> String {
     format!("reading {path} ({}/{total})", i + 1)
-}
-
-fn highlight_progress(i: usize, total: usize) -> String {
-    format!("highlighting ({}/{total})", i + 1)
 }
 
 fn main() -> std::io::Result<()> {
@@ -924,7 +841,6 @@ fn main() -> std::io::Result<()> {
         watch,
         debounce,
         json,
-        #[cfg(feature = "web")]
         web,
     } = match parse_args() {
         Ok(v) => v,
@@ -941,7 +857,7 @@ fn main() -> std::io::Result<()> {
         println!("{}", input_json(&gather_input(target, &filter, &|_| {})));
         return Ok(());
     }
-    // the single commit the `K` popup's history section reviews from — a
+    // the single commit the hover's history section reviews from — a
     // range's tip, or HEAD standing in for the uncommitted area (`zz`)
     let review_sha = review_commit_sha(&target);
     let uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
@@ -979,23 +895,18 @@ fn main() -> std::io::Result<()> {
         waves_checked: std::time::Instant::now(),
     };
     session.count_waves();
-    #[cfg(feature = "web")]
-    if let Some(w) = web {
-        return web::serve(session, w);
-    }
-    run(session)
+    web::serve(session, web)
 }
 
-/// What the worker thread reports back over the channel while `gather`,
-/// `highlight_file` and `ordo::run` do their work off the draw loop.
+/// What the worker thread reports back over the channel while `gather` and
+/// `ordo::run` do their work.
 enum LoadMsg {
     /// one line of progress, replacing whatever was shown before
     Progress(String),
-    /// `build_items` came back empty — the message `main` used to print
-    /// before taking the screen
+    /// `build_items` came back empty — what to say instead of a review
     Empty(String),
-    /// boxed, like `State::Ready` — keeps `LoadMsg` itself small regardless of
-    /// how much a load result carries
+    /// boxed, which keeps `LoadMsg` itself small regardless of how much a load
+    /// result carries
     Done(Box<LoadResult>),
 }
 
@@ -1013,14 +924,9 @@ struct LoadResult {
     view: Vec<usize>,
     comments_only: bool,
     sources: Sources,
-    highlights: Highlights,
-    /// the same timing line `main` used to print before init, now printed
-    /// after `ratatui::restore()` so it still lands on the shell's
-    /// scrollback
-    timing: String,
     /// `reviewed[i]` set from a persisted mark whose key matches item `i`
-    /// (see `mark_key`) — loading is here, off the draw loop, alongside
-    /// the rest of the load work
+    /// (see `mark_key`) — loading is here, on the worker, alongside the
+    /// rest of the load work
     reviewed: Vec<bool>,
     /// where a toggle gets persisted; `None` when the repo root or the
     /// cache directory couldn't be resolved, in which case marks just
@@ -1060,8 +966,8 @@ fn group_reasons(out: &Output) -> HashMap<String, String> {
         .collect()
 }
 
-/// Everything `gather`/`highlight_file`/`ordo::run` need, run off the draw
-/// loop. `ordo::run` itself can `eprintln!` when a change is degraded to
+/// Everything `gather`/`ordo::run` need, run on a worker thread.
+/// `ordo::run` itself can `eprintln!` when a change is degraded to
 /// positional order — unreachable here, since every `Change` this file
 /// builds always sets `new` (see `gather_range`/`gather_uncommitted`), which
 /// is the one branch in `build_change` that never degrades.
@@ -1075,9 +981,6 @@ struct LoadSpec {
     filter: Filter,
     only_comments: bool,
     rev: String,
-    /// highlighting happens on the worker, off the draw loop, so it needs the
-    /// theme's syntax colours rather than re-highlighting on every redraw
-    syn: Syntax,
     /// the reviewer's own rules (user + repo) plus the catalog switch,
     /// collected by `main`
     rules: RuleSet,
@@ -1108,7 +1011,6 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         filter,
         only_comments,
         rev,
-        syn,
         rules,
         sarif,
         coverage,
@@ -1125,17 +1027,11 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         Target::WorktreeRange(base) => Some((base.clone(), None)),
         Target::Commit(_) | Target::Uncommitted => None,
     };
-    let t = std::time::Instant::now();
     let input = gather_input(target, &filter, &progress);
     // `only_comments` becomes the starting state of the live `:only-comments`
     // filter (see `compute_view`) rather than an engine option — the engine
     // always sees every hunk, so toggling it back off has something to show.
-    let (read_ms, files) = (t.elapsed().as_millis(), input.changes.len());
-    let t = std::time::Instant::now();
     let sources = split_sources(&input);
-    let highlights = highlight_all(&input.changes, &syn, &progress);
-    let (hl_ms, hl_files) = (t.elapsed().as_millis(), highlights.len());
-    let t = std::time::Instant::now();
     progress("ordering…".to_string());
     let mut input = input;
     let root = git(&["rev-parse", "--show-toplevel"]);
@@ -1180,24 +1076,10 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         p.dedup();
         p
     };
-    let churn_t = std::time::Instant::now();
     let churn_by_file = match &churn_sha {
         Some(sha) => file_churn(sha, &churn_paths, &progress),
         None => HashMap::new(),
     };
-    let (churn_ms, churn_files) = (churn_t.elapsed().as_millis(), churn_by_file.len());
-    let timing = format!(
-        "ordo: read {files} file{} in {read_ms}ms · highlighted {hl_files} in {hl_ms}ms · \
-         counted churn for {churn_files} file{} in {churn_ms}ms · \
-         ordered {} hunks into {} groups, {} cluster{} in {}ms",
-        plural(files),
-        plural(churn_files),
-        items.len(),
-        out.groups.len(),
-        out.clusters.len(),
-        plural(out.clusters.len()),
-        t.elapsed().as_millis(),
-    );
     // reviewed-mark persistence: repo-scoped, best-effort — an unresolved
     // repo root or cache dir just means this session's marks live only in
     // memory (see `marks_file_path`/`load_marks`)
@@ -1251,8 +1133,6 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         view,
         comments_only: only_comments,
         sources,
-        highlights,
-        timing,
         reviewed,
         marks_path,
         marks,
@@ -1286,23 +1166,6 @@ fn split_sources(input: &Input) -> Sources {
             )
         })
         .collect()
-}
-
-/// syntax highlight each new file once, up front (indexed by path)
-fn highlight_all(changes: &[Change], syn: &Syntax, progress: &dyn Fn(String)) -> Highlights {
-    let candidates: Vec<(&str, &str)> = changes
-        .iter()
-        .filter_map(|c| Some((c.path.as_str(), c.new.as_deref()?)))
-        .collect();
-    let total = candidates.len();
-    let mut highlights: Highlights = HashMap::new();
-    for (i, (path, new)) in candidates.iter().enumerate() {
-        progress(highlight_progress(i, total));
-        if let Some(h) = highlight_file(path, new, syn) {
-            highlights.insert(path.to_string(), h);
-        }
-    }
-    highlights
 }
 
 /// the engine records what it dropped and why; fold it into the same ledger
@@ -1444,10 +1307,6 @@ struct Item {
     /// and only those char spans changed; `None` means it renders whole. Empty
     /// when the file has no grammar or the hunk was too large to refine.
     refined: ordo::refine::Refined,
-    /// this hunk's 1-based position in `out.clusters` (P12.3's independent
-    /// change parts) — `None` when the whole review is one cluster, so
-    /// `:quickfix` has no cluster worth naming.
-    cluster: Option<usize>,
     /// the wave that last changed this hunk's lines (see `waves::hunk_wave`);
     /// `None` outside a review of waves
     wave: Option<usize>,
@@ -1482,103 +1341,21 @@ struct ParsedFile {
     src: String,
 }
 
-/// The floating symbol-hover popup over the code pane: kind/signature/doc,
-/// then (when the definition resolves) a cross-commit history section.
-/// The dependency canvas: the selected hunk at top centre, everything it needs
-/// fanning out to the left and everything that needs it to the right.
-///
-/// Holds only what the layout cannot re-derive — which hunk it was opened on,
-/// which card is selected, and how far the fan is scrolled. The cards
-/// themselves are rebuilt from `Item.edges` every frame, so a reload cannot
-/// leave a stale copy on screen.
-struct Canvas {
-    /// the item the canvas was opened on
-    anchor: usize,
-    /// index into the flattened card list (left side first, then right);
-    /// `None` is the anchor itself, one step above the first card
-    sel: Option<usize>,
-    /// the selected card fills the frame: the anchor whole, a side card its
-    /// own half (see `canvas_layout`)
-    zoomed: bool,
-    /// how far the selected card is scrolled past the top of its hunk; a
-    /// card shows a few rows, and the rest of the hunk is reached this way
-    scroll: usize,
-}
-
-/// One card: a hunk this one depends on, or one that depends on it.
-struct Card {
-    /// item index the card shows
-    idx: usize,
-    /// `Needs` on the left, `NeededBy` on the right
-    needs: bool,
-    label: String,
-}
-
+/// A floating popup: the symbol hover's kind/signature/doc and, when the
+/// definition resolves, a cross-commit history section — or what a command
+/// had to say.
 struct Popup {
     title: String,
-    /// styled, so a popup can carry syntax-highlighted code (the dep preview)
-    /// rather than only prose
-    lines: Vec<Line<'static>>,
-    /// vertical scroll offset, so a popup taller than the terminal (the help
-    /// popup, most likely) is reachable rather than just clipped
-    scroll: u16,
-    /// horizontal offset — popups do not wrap, matching the code pane, so a
-    /// long line is reached by scrolling rather than reflowed
-    hscroll: u16,
+    lines: Vec<String>,
 }
 
 impl Popup {
-    /// A popup at the top, unscrolled — the common case; a popup that opens
-    /// pre-scrolled builds the struct directly.
-    fn new(title: impl Into<String>, lines: Vec<Line<'static>>) -> Popup {
+    fn new(title: impl Into<String>, lines: Vec<String>) -> Popup {
         Popup {
             title: title.into(),
             lines,
-            scroll: 0,
-            hscroll: 0,
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SearchKind {
-    Text,
-    Symbol,
-}
-
-/// An active `/`, `*`, or `#` search over the code pane's current file.
-/// `matches` are (line, start_col, end_col) char ranges in document order;
-/// `index` is the current one — `n`/`N` cycle through them, wrapping.
-struct Search {
-    kind: SearchKind,
-    pattern: String,
-    matches: Vec<(usize, usize, usize)>,
-    index: usize,
-}
-
-/// The `/` search prompt: keystrokes build `text` instead of running normal
-/// actions (see `run`'s prompt branch). `anchor` is the cursor position to
-/// restore on `Esc`.
-struct Prompt {
-    text: String,
-    anchor: Cursor,
-}
-
-/// The `:` command bar: keystrokes build `text` instead of running normal
-/// actions (see `run`'s command branch and `handle_command_key`), same
-/// interception scheme as `Prompt`. `candidates` is the current completion
-/// menu (command names, then — once `text` has a space — that command's own
-/// argument candidates); `selected` is which of them is highlighted, `None`
-/// when the user hasn't cycled to one yet.
-struct CommandBar {
-    text: String,
-    candidates: Vec<String>,
-    selected: Option<usize>,
-    /// `:e`'s ref pool (`rev_completions()`), fetched at most once per opened
-    /// bar and reused for every later keystroke in the same session — see
-    /// `recompute_candidates`. `None` until first needed; a fresh bar always
-    /// starts `None` so a branch created since the last session is picked up.
-    rev_cache: Option<Vec<String>>,
 }
 
 struct App {
@@ -1601,34 +1378,8 @@ struct App {
     path_filter: Option<(String, PathGlobs)>,
     /// `:only-wave` — show only the hunks one wave changed
     only_wave: Option<usize>,
-    /// the open command bar, if any — see `CommandBar`
-    command: Option<CommandBar>,
     sel: usize,
-    scroll: u16,
-    /// horizontal scroll offset into the code pane's code column (the sign
-    /// bar and line-number gutter never scroll) — column units, char-indexed
-    hscroll: u16,
-    why_scroll: u16,
-    /// the why pane's selected-line cursor (an index into its logical lines,
-    /// same units as `why_len`) — moved by `Next`/`Prev` when the why pane has
-    /// focus, mirroring the code pane's `cursor`
-    why_sel: usize,
-    /// rendered line counts, filled in by `draw`, so the scroll actions can clamp
-    code_len: usize,
-    why_len: usize,
-    /// code pane's visible row count, filled in by `draw`, so cursor motions can
-    /// scroll to keep the cursor in view
-    code_height: u16,
-    /// why pane's visible row count, filled in by `draw`, so `why_sel` motions
-    /// can scroll to keep it in view (mirrors `code_height`)
-    why_height: u16,
-    /// code pane's visible code-column width (pane width minus the sign bar
-    /// and gutter), filled in by `draw`, so cursor motions can horizontally
-    /// scroll to keep the cursor in view
-    code_width: u16,
-    focus: Pane,
     keys: Keymap,
-    pending: Option<Key>,
     /// whether a docs-only hunk sorts after the code it describes; a `:config`
     /// setting, so a re-order has to be told about it
     docs_last: bool,
@@ -1638,12 +1389,9 @@ struct App {
     /// size of the change under review
     changes: Vec<Change>,
     sources: Sources,
-    highlights: Highlights,
     cursor: Cursor,
     popup: Option<Popup>,
     trees: HashMap<String, ParsedFile>,
-    prompt: Option<Prompt>,
-    search: Option<Search>,
     /// the commit the history section is relative to; None when it couldn't
     /// be resolved (history is then reported unavailable rather than guessed)
     review_sha: Option<String>,
@@ -1652,7 +1400,7 @@ struct App {
     subject: Option<String>,
     /// true when reviewing the uncommitted area (`zz`) or a `base..zz` /
     /// `base...zz` worktree range — there the worktree file IS the new
-    /// content, so `ge`/C-o's line number is always exact; for a commit or
+    /// content, so `ge`'s line number is always exact; for a commit or
     /// commit range it may not be (see `edit_target`)
     uncommitted: bool,
     /// history-section lines, cached per (path, name, kind, scope) so
@@ -1680,9 +1428,6 @@ struct App {
     /// cheap half of the signal: always shown, and `H` refines the selected
     /// hunk to its exact lines.
     file_churn: HashMap<String, usize>,
-    /// positions `JumpToEdge` jumped from, most-recent last; `JumpBack` pops
-    /// one. Bounded by `JUMP_STACK_CAP`.
-    jumps: Vec<(usize, Cursor)>,
     /// the reviewed rev string, as typed — part of a persisted mark's key
     /// (see `mark_key`)
     rev: String,
@@ -1691,18 +1436,13 @@ struct App {
     marks_path: Option<PathBuf>,
     /// in-memory mirror of the mark file, kept in sync on every toggle
     marks: HashMap<u64, u64>,
-    /// the five diff/selection background colours — `--theme`/`$ORDO_TUI_THEME`,
-    /// carried across an `:e` reload since it's a display preference, not
+    /// the palette `:config` shows and edits — `--theme`/`$ORDO_THEME`,
+    /// carried across a reload since it's a display preference, not
     /// something indexed to the reviewed revision
     theme: Theme,
     /// `:group` — show a non-selectable group-reason header before each run
     /// of the reading-order list that shares a group id
     show_groups: bool,
-    /// the focused pane fills the frame; a narrow terminal stacks the panes
-    /// rather than zooming (see `SPLIT_COLS`)
-    zoom: bool,
-    /// the dependency canvas, when open (see `Canvas`)
-    canvas: Option<Canvas>,
     /// bucket key -> the symbol its group's first row shows, empty for
     /// top-level code. What the keys *are* depends on `mode`: group ids in
     /// hunk mode, `L<n>` ledger keys in ledger mode (see `set_mode`).
@@ -1730,7 +1470,7 @@ struct App {
     watch: WatchMode,
     /// the working tree no longer matches this review (see `watch`)
     stale: Option<Stale>,
-    /// one line for the status bar until the next key: what a reload changed
+    /// one line for the reader: what a reload or a command changed
     notice: Option<String>,
     /// `r` or `:watch`: read the review again, keeping the place
     reload_requested: bool,
@@ -1751,57 +1491,8 @@ struct App {
     rules: Vec<ordo::model::Rule>,
     /// the ordering strategy the current `items`/`view` were built with
     /// (`"comprehension"`, `"defs-first"`, `"file"`) — set by `:strategy`,
-    /// otherwise the engine's own default; carried into `:quickfix`'s
-    /// exported `context.strategy` so a `:cnext` session in the editor knows
-    /// what order it's walking.
+    /// otherwise the engine's own default
     strategy: String,
-    /// per-path longest-line cache, so `draw`'s `hscroll` clamp doesn't rescan
-    /// the whole file every frame — filled in lazily, keyed by `Item::path`
-    max_col: HashMap<String, usize>,
-}
-
-/// Bound on the position stack `JumpToEdge`/`JumpBack` maintain — generous
-/// (vim's own default `'jumps'` is 100) without growing unbounded across a
-/// long review session.
-const JUMP_STACK_CAP: usize = 50;
-
-/// Push a position, dropping the oldest entry first if the stack is already
-/// at `JUMP_STACK_CAP`.
-fn stack_push(stack: &mut Vec<(usize, Cursor)>, pos: (usize, Cursor)) {
-    if stack.len() >= JUMP_STACK_CAP {
-        stack.remove(0);
-    }
-    stack.push(pos);
-}
-
-/// Pop the most recent position whose item index still resolves against
-/// `n_items` — skipping (never panicking on) any entry pointing at a hunk
-/// index that's since gone out of range, so the stack survives even a jump to
-/// a hunk that later becomes unreachable. `None` on an empty (or exhausted)
-/// stack.
-fn stack_pop_valid(stack: &mut Vec<(usize, Cursor)>, n_items: usize) -> Option<(usize, Cursor)> {
-    while let Some(pos) = stack.pop() {
-        if pos.0 < n_items {
-            return Some(pos);
-        }
-    }
-    None
-}
-
-/// The header a ledger entry shows in the list — the same sentence `pack`
-/// prints, minus the location the row already carries.
-fn ledger_label(e: &ordo::model::LedgerEntry) -> String {
-    let change = format!("{:?}", e.change).to_lowercase();
-    let from = match e.from.as_deref() {
-        Some(f) => format!(" from {f}"),
-        None => String::new(),
-    };
-    let fan = match e.used_by.len() {
-        0 => String::new(),
-        1 => ", used by 1 hunk".to_string(),
-        n => format!(", used by {n} hunks"),
-    };
-    format!("{} — {change}{from}{fan}", e.name)
 }
 
 fn build_items(out: &Output) -> Vec<Item> {
@@ -1826,18 +1517,6 @@ fn build_items(out: &Output) -> Vec<Item> {
         .enumerate()
         .map(|(i, o)| (o.hunk.as_str(), i))
         .collect();
-    // hunk id -> 1-based cluster number, only when there's more than one
-    // cluster to distinguish — a single cluster covering everything isn't
-    // worth tagging every item with.
-    let cluster_of: HashMap<&str, usize> = if out.clusters.len() > 1 {
-        out.clusters
-            .iter()
-            .enumerate()
-            .flat_map(|(i, ids)| ids.iter().map(move |id| (id.as_str(), i + 1)))
-            .collect()
-    } else {
-        HashMap::new()
-    };
     out.order
         .iter()
         .filter_map(|o| {
@@ -1876,7 +1555,6 @@ fn build_items(out: &Output) -> Vec<Item> {
                 uses_at: h.uses_at.clone(),
                 executed: None,
                 refined: ordo::refine::Refined::default(),
-                cluster: cluster_of.get(h.id.as_str()).copied(),
                 wave: None,
             })
         })
@@ -2210,23 +1888,6 @@ fn fold(app: &mut App, how: Fold) {
     }
 }
 
-/// The row `display_rows` gave the hunk `sel`: its own, or the fold hiding
-/// it, the way vim highlights the fold line the cursor is inside.
-fn display_row_of(rows: &[DisplayRow], sel: usize) -> usize {
-    rows.iter()
-        .position(|r| match r {
-            DisplayRow::Item(i, _) => *i == sel,
-            DisplayRow::Folded(hidden) => hidden.contains(&sel),
-            DisplayRow::File(..) | DisplayRow::Gap => false,
-        })
-        .unwrap_or(0)
-}
-
-// position the code view so the hunk sits a few lines below the top
-fn auto_scroll(it: &Item) -> u16 {
-    view_row(it, start_cursor(it).line).saturating_sub(3) as u16
-}
-
 // where a freshly-selected hunk puts the cursor: its first changed new line
 fn start_cursor(it: &Item) -> Cursor {
     Cursor {
@@ -2242,8 +1903,6 @@ fn cursor_for(it: &Item, sources: &Sources) -> Cursor {
     }
 }
 
-// ------------------------------------------------------------------ cursor motion
-
 // the last valid column on a line — 0 for an empty line, otherwise its last char
 fn col_max(line: &str) -> usize {
     line.chars().count().saturating_sub(1)
@@ -2258,213 +1917,10 @@ fn clamp_cursor(mut c: Cursor, lines: &[String]) -> Cursor {
     c
 }
 
-fn move_col(c: Cursor, lines: &[String], delta: isize) -> Cursor {
-    let max = col_max(&lines[c.line]);
-    let col = (c.col as isize + delta).clamp(0, max as isize) as usize;
-    Cursor { line: c.line, col }
-}
-
-fn move_line(c: Cursor, lines: &[String], delta: isize) -> Cursor {
-    let last = lines.len() - 1;
-    let line = (c.line as isize + delta).clamp(0, last as isize) as usize;
-    Cursor {
-        line,
-        col: c.col.min(col_max(&lines[line])),
-    }
-}
-
-fn line_start(c: Cursor, _lines: &[String]) -> Cursor {
-    Cursor {
-        line: c.line,
-        col: 0,
-    }
-}
-
-fn line_end(c: Cursor, lines: &[String]) -> Cursor {
-    Cursor {
-        line: c.line,
-        col: col_max(&lines[c.line]),
-    }
-}
-
-// { / } — nearest blank line, vim-style paragraph motion
-fn para_prev(c: Cursor, lines: &[String]) -> Cursor {
-    if c.line == 0 {
-        return Cursor { line: 0, col: 0 };
-    }
-    let mut i = c.line - 1;
-    while i > 0 && !lines[i].trim().is_empty() {
-        i -= 1;
-    }
-    Cursor { line: i, col: 0 }
-}
-
-fn para_next(c: Cursor, lines: &[String]) -> Cursor {
-    let mut i = c.line + 1;
-    while i < lines.len() && !lines[i].trim().is_empty() {
-        i += 1;
-    }
-    Cursor {
-        line: i.min(lines.len() - 1),
-        col: 0,
-    }
-}
-
-// word motion (w/b/e) is expressed over a single flattened char index — the
-// file's lines joined by '\n' — so a word run crossing a line boundary is just
-// a class transition, the same as one crossing whitespace mid-line.
-fn word_class(c: char) -> u8 {
-    if c.is_whitespace() {
-        0
-    } else if c.is_alphanumeric() || c == '_' {
-        1
-    } else {
-        2
-    }
-}
-
-fn joined_chars(lines: &[String]) -> Vec<char> {
-    let mut v = vec![];
-    for (i, l) in lines.iter().enumerate() {
-        v.extend(l.chars());
-        if i + 1 < lines.len() {
-            v.push('\n');
-        }
-    }
-    v
-}
-
-fn to_index(lines: &[String], c: Cursor) -> usize {
-    let mut idx = 0;
-    for l in &lines[..c.line] {
-        idx += l.chars().count() + 1;
-    }
-    idx + c.col
-}
-
-fn from_index(lines: &[String], mut idx: usize) -> Cursor {
-    for (i, l) in lines.iter().enumerate() {
-        let len = l.chars().count();
-        if idx <= len {
-            return Cursor { line: i, col: idx };
-        }
-        idx -= len + 1;
-    }
-    let last = lines.len() - 1;
-    Cursor {
-        line: last,
-        col: lines[last].chars().count(),
-    }
-}
-
-fn word_next(c: Cursor, lines: &[String]) -> Cursor {
-    let chars = joined_chars(lines);
-    if chars.is_empty() {
-        return Cursor { line: 0, col: 0 };
-    }
-    let mut i = to_index(lines, c).min(chars.len() - 1);
-    let cls = word_class(chars[i]);
-    if cls != 0 {
-        while i + 1 < chars.len() && word_class(chars[i + 1]) == cls {
-            i += 1;
-        }
-    }
-    while i + 1 < chars.len() && word_class(chars[i + 1]) == 0 {
-        i += 1;
-    }
-    from_index(lines, (i + 1).min(chars.len() - 1))
-}
-
-fn word_prev(c: Cursor, lines: &[String]) -> Cursor {
-    let chars = joined_chars(lines);
-    if chars.is_empty() {
-        return Cursor { line: 0, col: 0 };
-    }
-    let mut i = to_index(lines, c).min(chars.len() - 1);
-    if i == 0 {
-        return Cursor { line: 0, col: 0 };
-    }
-    i -= 1;
-    while i > 0 && word_class(chars[i]) == 0 {
-        i -= 1;
-    }
-    let cls = word_class(chars[i]);
-    while i > 0 && word_class(chars[i - 1]) == cls {
-        i -= 1;
-    }
-    from_index(lines, i)
-}
-
-fn word_end(c: Cursor, lines: &[String]) -> Cursor {
-    let chars = joined_chars(lines);
-    if chars.is_empty() {
-        return Cursor { line: 0, col: 0 };
-    }
-    let mut i = to_index(lines, c).min(chars.len() - 1);
-    if i + 1 >= chars.len() {
-        return from_index(lines, i);
-    }
-    i += 1;
-    while i < chars.len() && word_class(chars[i]) == 0 {
-        i += 1;
-    }
-    if i >= chars.len() {
-        return from_index(lines, chars.len() - 1);
-    }
-    let cls = word_class(chars[i]);
-    while i + 1 < chars.len() && word_class(chars[i + 1]) == cls {
-        i += 1;
-    }
-    from_index(lines, i)
-}
-
-// keep `line` inside [scroll, scroll + height) by moving `scroll` the minimum
-// amount necessary — the same rule any scrolling editor follows
-fn follow_scroll(line: usize, scroll: u16, height: u16) -> u16 {
-    let h = height.max(1) as usize;
-    let s = scroll as usize;
-    if line < s {
-        line as u16
-    } else if line >= s + h {
-        (line + 1 - h) as u16
-    } else {
-        scroll
-    }
-}
-
-// horizontal counterpart of `follow_scroll` — same rule, over columns and a
-// pane's visible code-column width instead of rows and its visible height
-fn follow_hscroll(col: usize, hscroll: u16, width: u16) -> u16 {
-    follow_scroll(col, hscroll, width)
-}
-
-/// While loading: just a status line under the pane border, same idiom as
-/// the review panes. Nothing else can be drawn yet — no items, no sources.
-/// The screen before the review arrives. It used the terminal's own colours and
-/// square borders while every pane that follows is themed and rounded, so the
-/// app visibly changed shape the moment it finished loading.
-fn draw_loading(f: &mut Frame, rev: &str, status: &str, theme: &Theme) {
-    let area = f.area();
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border))
-        .title(Span::styled(
-            format!(" {rev} — loading… "),
-            Style::default().fg(theme.dim),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    let p = Paragraph::new(Text::from(vec![Line::from(Span::styled(
-        status.to_string(),
-        Style::default().fg(theme.fg),
-    ))]));
-    f.render_widget(p, inner);
-}
-
 /// One pass of `--watch`: take in whatever the watcher has seen, and say
 /// whether to read the review again now — asked for with `r`, or `auto` with
-/// the tree settled and the reviewer neither typing nor inside a prompt, a
-/// popup or the command bar. A moved base is shown and never followed.
+/// the tree settled and the reviewer idle (see `auto_reload_now`). A moved
+/// base is shown and never followed.
 fn watch_tick(session: &mut Session, app: &mut App, idle: Duration) -> bool {
     if std::mem::take(&mut app.reload_requested) {
         return true;
@@ -2494,8 +1950,7 @@ fn watch_tick(session: &mut Session, app: &mut App, idle: Duration) -> bool {
 }
 
 /// `--watch=auto`'s one rule: the tree settled into something worth reading,
-/// and the reviewer is neither typing nor inside a prompt, a popup, the
-/// command bar (where comments are written) or the config.
+/// and the reviewer is neither looking at a popup nor inside the config.
 fn auto_reload_now(app: &App, idle: Duration) -> bool {
     app.watch == WatchMode::Auto
         && matches!(
@@ -2504,8 +1959,6 @@ fn auto_reload_now(app: &App, idle: Duration) -> bool {
         )
         && idle >= watch::IDLE
         && app.popup.is_none()
-        && app.command.is_none()
-        && app.prompt.is_none()
         && app.config.is_none()
 }
 
@@ -2528,11 +1981,6 @@ fn reload_summary(app: &App) -> String {
     } else {
         format!("reloaded · {}", parts.join(" · "))
     }
-}
-
-enum State {
-    Loading(String),
-    Ready(Box<App>),
 }
 
 struct Session {
@@ -2580,7 +2028,6 @@ impl Session {
             filter: self.base_filter.clone(),
             only_comments: self.only_comments,
             rev: self.rev.clone(),
-            syn: self.theme.syn,
             rules: self.rules.clone(),
             sarif: self.sarif.clone(),
             coverage: self.coverage.clone(),
@@ -2589,15 +2036,13 @@ impl Session {
         rx
     }
 
-    /// `:e`, `r`, or `--watch`: read `target` again into a fresh `App`. The
-    /// reviewer's place — selection by hunk identity, scroll, cursor, search,
-    /// filters, the jump stack — rides along as a `Place` and is restored once
-    /// the new review is built (see `reload`); the keymap and theme are carried
-    /// as they are. Reviewed marks come back from the on-disk cache keyed by
-    /// the new rev, not from `app.marks`. An open popup is not carried: it was
-    /// about the old review.
+    /// `r` or `--watch`: read `target` again into a fresh `App`. The
+    /// reviewer's place — selection by hunk identity, filters, the mode —
+    /// rides along as a `Place` and is restored once the new review is built
+    /// (see `reload`); the keymap and theme are carried as they are. Reviewed
+    /// marks come back from the on-disk cache keyed by the new rev, not from
+    /// `app.marks`. An open popup is not carried: it was about the old review.
     fn reload(&mut self, app: &App, target: Target, new_rev: String) -> mpsc::Receiver<LoadMsg> {
-        let (carried_keys, carried_theme) = carry_across_reload(app);
         self.carry = Some(place_of(app));
         self.watch = app.watch;
         self.target = target.clone();
@@ -2605,8 +2050,8 @@ impl Session {
         self.uncommitted = matches!(target, Target::Uncommitted | Target::WorktreeRange(_));
         self.rev = new_rev;
         self.count_waves();
-        self.keys = Some(carried_keys);
-        self.theme = carried_theme;
+        self.keys = Some(app.keys.clone());
+        self.theme = app.theme;
         self.spawn_load(target)
     }
 
@@ -2658,8 +2103,6 @@ impl Session {
             view,
             comments_only,
             sources,
-            highlights,
-            timing: _,
             reviewed,
             marks_path,
             marks,
@@ -2677,7 +2120,6 @@ impl Session {
         } = r;
         self.drift = fingerprint.map(Drift::new).unwrap_or_default();
         let sel0 = view[0];
-        let scroll = auto_scroll(&items[sel0]);
         let cursor = cursor_for(&items[sel0], &sources);
         let mut fresh = App {
             reviewed,
@@ -2689,30 +2131,15 @@ impl Session {
             show_all: true,
             path_filter: None,
             only_wave: None,
-            command: None,
             sel: sel0,
-            scroll,
-            hscroll: 0,
-            why_scroll: 0,
-            why_sel: 0,
-            code_len: 0,
-            why_len: 0,
-            code_height: 10,
-            why_height: 10,
-            code_width: 10,
-            focus: Pane::List,
             keys: self
                 .keys
                 .take()
                 .expect("keys is set again before every reload back into Loading"),
-            pending: None,
             sources,
-            highlights,
             cursor,
             popup: None,
             trees: HashMap::new(),
-            prompt: None,
-            search: None,
             review_sha: self.review_sha.clone(),
             subject: match &self.target {
                 Target::Commit(sha) => {
@@ -2725,14 +2152,11 @@ impl Session {
             history_cache: HashMap::new(),
             churn_cache: HashMap::new(),
             file_churn,
-            jumps: Vec::new(),
             rev: self.rev.clone(),
             marks_path,
             marks,
             theme: self.theme,
             show_groups: false,
-            zoom: false,
-            canvas: None,
             group_reasons: groups.clone(),
             groups,
             mode: ViewMode::default(),
@@ -2759,7 +2183,6 @@ impl Session {
             config: None,
             strategy: "comprehension".to_string(),
             rules_report: self.rules_report.clone(),
-            max_col: HashMap::new(),
         };
         // the list is a list of *symbols* by default; `:mode` switches it
         // back to hunks
@@ -2775,510 +2198,6 @@ impl Session {
     }
 }
 
-/// A key while `:config` is open, which owns its keys rather than going
-/// through the keymap: its hints have to be true whatever preset is loaded,
-/// and changing the preset is one of the settings — going through the map
-/// would rebind the view mid-edit. True when the key was the config's.
-fn config_key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool {
-    let Some(c) = app.config.as_mut() else {
-        return false;
-    };
-    if let Some(text) = c.editing.as_mut() {
-        match (code, mods) {
-            (KeyCode::Enter, _) => config_commit_edit(app),
-            (KeyCode::Esc, _) => c.editing = None,
-            (KeyCode::Backspace, _) => {
-                text.pop();
-            }
-            (KeyCode::Char(ch), m) if !m.contains(KeyModifiers::CONTROL) => text.push(ch),
-            _ => {}
-        }
-        return true;
-    }
-    match (code, mods) {
-        (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => app.config = None,
-        (KeyCode::Down, _) | (KeyCode::Char('j'), _) => move_config(app, 1),
-        (KeyCode::Up, _) | (KeyCode::Char('k'), _) => move_config(app, -1),
-        (KeyCode::PageDown, _) => move_config(app, PAGE as isize),
-        (KeyCode::PageUp, _) => move_config(app, -(PAGE as isize)),
-        // `g`/`G` as well as Home/End: the rest of the app answers to them
-        // and the fingers do not re-learn
-        (KeyCode::Home, _) | (KeyCode::Char('g'), _) => move_config(app, isize::MIN / 2),
-        (KeyCode::End, _) | (KeyCode::Char('G'), _) => move_config(app, isize::MAX / 2),
-        (KeyCode::Char(' '), _) | (KeyCode::Enter, _) => config_toggle(app),
-        (KeyCode::Char('w'), _) => config_write(app),
-        _ => {}
-    }
-    true
-}
-
-/// A key while the search prompt is open: every key edits the prompt instead
-/// of running an action, so chords (C-w C-w, gg) can't leak in. True when the
-/// prompt took it.
-fn prompt_key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool {
-    if app.prompt.is_none() {
-        return false;
-    }
-    match (code, mods) {
-        (KeyCode::Enter, _) => accept_search(app),
-        (KeyCode::Esc, _) => cancel_search(app),
-        (KeyCode::Backspace, _) => {
-            if let Some(p) = app.prompt.as_mut() {
-                p.text.pop();
-            }
-        }
-        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-            if let Some(p) = app.prompt.as_mut() {
-                p.text.push(c);
-            }
-        }
-        _ => {}
-    }
-    true
-}
-
-/// A key against the loaded review, after the modal owners (config, prompt,
-/// command bar) had their say. True means quit.
-fn review_key(
-    app: &mut App,
-    code: KeyCode,
-    mods: KeyModifiers,
-    terminal: &mut ratatui::DefaultTerminal,
-) -> bool {
-    let key = norm(code, mods);
-    let held = app.pending.take();
-    match app.keys.resolve(held, key) {
-        Resolve::Pending => app.pending = Some(key),
-        Resolve::Act(a) => return run_action(app, a, terminal),
-        // a prefix that is also a key of its own (`]` before `]f`) does its
-        // own job when no chord follows, and the key after it is read afresh —
-        // unless that is Esc, which only drops the chord
-        Resolve::Miss => match held.and_then(|p| app.keys.bare(p)) {
-            Some(a) if key != plain(KeyCode::Esc) => {
-                return run_action(app, a, terminal) || review_key(app, code, mods, terminal);
-            }
-            _ => {}
-        },
-    }
-    false
-}
-
-/// A resolved action against the loaded review. True means quit.
-fn run_action(app: &mut App, a: Action, terminal: &mut ratatui::DefaultTerminal) -> bool {
-    // handled here rather than in `apply`: it must leave the alternate
-    // screen for the editor and come back
-    if a == Action::OpenEditor {
-        open_editor(app, terminal);
-        return false;
-    }
-    // Paging and scrolling need the pane heights, which only the
-    // renderer used to know — so a key pressed before the first draw
-    // used the placeholder 10, and every key after a resize used the
-    // previous frame's size. Both are computed here, from the same
-    // function the renderer uses.
-    if let Ok(size) = terminal.size() {
-        set_geometry(app, Rect::new(0, 0, size.width, size.height));
-    }
-    apply(app, a)
-}
-
-/// Take the screen first, then load off the draw loop: a background thread
-/// runs `gather`/`highlight_file`/`ordo::run` and reports progress over
-/// `LoadMsg`, while this loop keeps drawing and polling input so `q`/`Esc`
-/// (or `C-q`/`Esc`) abort a slow load without waiting for the worker. A
-/// custom panic hook restores the terminal first even if the worker (or a
-/// later draw) panics, so a broken terminal never outlives the crash.
-/// What a review session keeps across reloads: the launch-time inputs a
-/// fresh worker needs, and the display preferences that outlive one review.
-#[allow(clippy::too_many_arguments)]
-fn run(mut session: Session) -> std::io::Result<()> {
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        ratatui::restore();
-        prev_hook(info);
-    }));
-
-    let mut terminal = ratatui::init();
-    let mut rx = session.spawn_load(session.target.clone());
-    let mut last_key = std::time::Instant::now();
-    let mut state = State::Loading("starting…".to_string());
-    let mut timing: Option<String> = None;
-    let mut post_msg: Option<String> = None;
-    // Nothing on screen changes on its own once the review is up, so a frame is
-    // only worth painting after something moved: a worker message, or an event.
-    // Without this the 50ms poll below doubles as a 20fps repaint of a review
-    // nobody is touching.
-    let mut dirty = true;
-    let result: std::io::Result<()> = 'outer: loop {
-        if let Some(msg) = drain_worker(&rx, &mut session, &mut state, &mut timing, &mut dirty) {
-            post_msg = Some(msg);
-            break 'outer Ok(());
-        }
-        if let State::Ready(app) = &mut state {
-            let was = app.stale.clone();
-            let go = watch_tick(&mut session, app, last_key.elapsed());
-            dirty |= app.stale != was;
-            if go {
-                dirty = true;
-                let (target, rev) = (session.target.clone(), session.rev.clone());
-                // `wave/last` names a different wave once another is recorded
-                let target = match session.waves_seen {
-                    Some(_) => resolve(&rev).unwrap_or(target),
-                    None => target,
-                };
-                rx = session.reload(app, target, rev.clone());
-                state = State::Loading(format!("reading {rev} again…"));
-                continue;
-            }
-        }
-
-        if dirty {
-            if let Err(e) = terminal.draw(|f| match &mut state {
-                State::Loading(status) => draw_loading(f, &session.rev, status, &session.theme),
-                State::Ready(app) => draw(f, app, &session.rev),
-            }) {
-                break 'outer Err(e);
-            }
-            dirty = false;
-        }
-
-        match event::poll(Duration::from_millis(50)) {
-            Ok(true) => {}
-            Ok(false) => {
-                if let State::Ready(app) = &mut state {
-                    let held = app
-                        .pending
-                        .filter(|_| last_key.elapsed() >= CHORD_TIMEOUT)
-                        .and_then(|p| app.keys.bare(p));
-                    if let Some(a) = held {
-                        app.pending = None;
-                        dirty = true;
-                        if run_action(app, a, &mut terminal) {
-                            break 'outer Ok(());
-                        }
-                    }
-                }
-                continue;
-            }
-            Err(e) => break 'outer Err(e),
-        }
-        // Any event at all — a key, but also a resize the next frame has to
-        // relayout for — means the screen is stale.
-        dirty = true;
-        let k = match event::read() {
-            Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => k,
-            Ok(_) => continue,
-            Err(e) => break 'outer Err(e),
-        };
-        last_key = std::time::Instant::now();
-        if let State::Ready(app) = &mut state {
-            app.notice = None;
-        }
-        let app = match &mut state {
-            State::Loading(_) => {
-                let keys = session
-                    .keys
-                    .as_ref()
-                    .expect("keys not yet taken while Loading");
-                if let Resolve::Act(Action::Quit) = keys.resolve(None, norm(k.code, k.modifiers)) {
-                    break 'outer Ok(());
-                }
-                continue;
-            }
-            State::Ready(app) => app,
-        };
-        if config_key(app, k.code, k.modifiers) || prompt_key(app, k.code, k.modifiers) {
-            continue;
-        }
-        // the `:` command bar intercepts every key the same way the prompt
-        // does, instead of resolving through the keymap
-        if app.command.is_some() {
-            match handle_command_key(app, k.code, k.modifiers) {
-                CommandOutcome::Quit => break 'outer Ok(()),
-                CommandOutcome::None => {}
-                CommandOutcome::OpenQuickfix(path) => {
-                    open_quickfix_editor(app, &mut terminal, &path);
-                }
-                CommandOutcome::Reload(target, new_rev) => {
-                    rx = session.reload(app, target, new_rev.clone());
-                    state = State::Loading(format!("switching to {new_rev}…"));
-                }
-            }
-            continue;
-        }
-        if review_key(app, k.code, k.modifiers, &mut terminal) {
-            break 'outer Ok(());
-        }
-    };
-    ratatui::restore();
-    result?;
-    // The TUI takes the alternate screen, so whichever of these applies
-    // stays on the shell's scrollback and is what's left on screen after
-    // quitting — the same visible behaviour as printing it before init.
-    if let Some(msg) = post_msg {
-        eprintln!("{msg}");
-    } else if let Some(t) = timing {
-        eprintln!("{t}");
-    }
-    Ok(())
-}
-
-/// Every message the worker has queued. `Some(msg)` ends the session before
-/// a review is up: an empty change set, or a worker that dropped its sender
-/// without a Done/Empty — only possible if it panicked; abort rather than spin.
-fn drain_worker(
-    rx: &mpsc::Receiver<LoadMsg>,
-    session: &mut Session,
-    state: &mut State,
-    timing: &mut Option<String>,
-    dirty: &mut bool,
-) -> Option<String> {
-    loop {
-        match rx.try_recv() {
-            Ok(LoadMsg::Progress(s)) => {
-                *dirty = true;
-                if let State::Loading(status) = state {
-                    *status = s;
-                }
-            }
-            Ok(LoadMsg::Empty(msg)) => return Some(msg),
-            Ok(LoadMsg::Done(r)) => {
-                *dirty = true;
-                let mut r = *r;
-                *timing = Some(std::mem::take(&mut r.timing));
-                *state = State::Ready(Box::new(session.fresh_app(r)));
-            }
-            Err(mpsc::TryRecvError::Empty) => return None,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                return matches!(state, State::Loading(_))
-                    .then(|| "ordo: loading failed unexpectedly".to_string());
-            }
-        }
-    }
-}
-
-/// Run one action against the focused pane; true means quit.
-fn apply(app: &mut App, a: Action) -> bool {
-    if app.popup.is_some() {
-        apply_in_popup(app, a);
-        return false;
-    }
-    if app.canvas.is_some() && app.focus == Pane::Deps {
-        apply_on_canvas(app, a);
-        return false;
-    }
-    if app.focus == Pane::Code && apply_in_code(app, a) {
-        return false;
-    }
-    apply_anywhere(app, a)
-}
-
-/// An open popup consumes input itself: Esc/q dismiss it (without quitting),
-/// Next/Prev/PageUp/PageDown scroll its own body rather than the pane
-/// underneath, and everything else is a no-op while it's up.
-fn apply_in_popup(app: &mut App, a: Action) {
-    match a {
-        Action::Quit => app.popup = None,
-        Action::Next => popup_scroll(app, 1),
-        Action::Prev => popup_scroll(app, -1),
-        Action::PageDown => popup_scroll(app, PAGE as isize),
-        Action::PageUp => popup_scroll(app, -(PAGE as isize)),
-        Action::ScrollLeft => popup_hscroll(app, -1),
-        Action::ScrollRight => popup_hscroll(app, 1),
-        _ => {}
-    }
-}
-
-/// The canvas is a floating view with its own selection: j/k move between
-/// cards (k from the first reaches the hunk itself), Enter goes to one, `4`
-/// again or the zoom key fills the frame with it, Esc closes. Anything else
-/// is a no-op rather than leaking through to the pane underneath.
-fn apply_on_canvas(app: &mut App, a: Action) {
-    match a {
-        Action::Quit => close_deps(app),
-        Action::Next => move_card(app, 1),
-        Action::Prev => move_card(app, -1),
-        Action::First => move_card(app, isize::MIN / 2),
-        Action::Last => move_card(app, isize::MAX / 2),
-        Action::JumpToEdge => jump_to_card(app),
-        Action::HalfDown => scroll_card(app, (PAGE / 2) as isize),
-        Action::HalfUp => scroll_card(app, -((PAGE / 2) as isize)),
-        Action::PageDown => scroll_card(app, PAGE as isize),
-        Action::PageUp => scroll_card(app, -(PAGE as isize)),
-        // the same digit that opened it, or the zoom key: more of the
-        // selected card, the way the same digit zooms any other pane
-        Action::Focus(Pane::Deps) | Action::Zoom => zoom_card(app),
-        Action::Focus(p) => {
-            close_deps(app);
-            app.focus = p;
-        }
-        _ => {}
-    }
-}
-
-/// The actions that only mean something with the code pane focused: cursor
-/// motion, search, horizontal scroll. `false` for any other action.
-fn apply_in_code(app: &mut App, a: Action) -> bool {
-    match a {
-        Action::CursorLeft => cursor_move(app, |c, lines| move_col(c, lines, -1)),
-        Action::CursorRight => cursor_move(app, |c, lines| move_col(c, lines, 1)),
-        Action::WordNext => cursor_move(app, word_next),
-        Action::WordPrev => cursor_move(app, word_prev),
-        Action::WordEnd => cursor_move(app, word_end),
-        Action::ParaPrev => cursor_move(app, para_prev),
-        Action::ParaNext => cursor_move(app, para_next),
-        Action::MarkPrev => mark_move(app, false),
-        Action::MarkNext => mark_move(app, true),
-        Action::SelectLines => {
-            app.selection = match app.selection {
-                Some(_) => None,
-                None => Some(app.cursor.line),
-            }
-        }
-        Action::SearchOpen => {
-            app.prompt = Some(Prompt {
-                text: String::new(),
-                anchor: app.cursor,
-            });
-        }
-        Action::SymbolNext => symbol_search(app, true),
-        Action::SymbolPrev => symbol_search(app, false),
-        Action::SearchNext => cycle_search(app, 1),
-        Action::SearchPrev => cycle_search(app, -1),
-        Action::ScrollLeft => {
-            app.hscroll = app.hscroll.saturating_sub(1);
-        }
-        Action::ScrollRight => {
-            app.hscroll = app.hscroll.saturating_add(1);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// Every other action, whichever pane has focus; `true` means quit.
-fn apply_anywhere(app: &mut App, a: Action) -> bool {
-    match a {
-        // an active search is showing state too: clear its highlights first,
-        // the way dismissing a popup does, so Esc after a search doesn't end
-        // the review session
-        Action::Quit if app.search.is_some() => app.search = None,
-        // a selection is dropped before anything is quit
-        Action::Quit if app.selection.is_some() => app.selection = None,
-        Action::Quit => return true,
-        // asking for the pane you are already in means "give me more of it"
-        // `4` addresses the canvas whether or not it exists yet, so it opens
-        // one rather than focusing a view that is not there
-        Action::Focus(Pane::Deps) => open_deps(app),
-        Action::Focus(p) if app.focus == p => app.zoom = !app.zoom,
-        Action::Focus(p) => app.focus = p,
-        Action::Zoom => app.zoom = !app.zoom,
-        Action::OpenDeps => open_deps(app),
-        Action::FocusNext => app.focus = app.focus.next(),
-        Action::FocusPrev => app.focus = app.focus.prev(),
-        Action::ToggleReviewed => {
-            let i = app.sel;
-            app.reviewed[i] = !app.reviewed[i];
-            if let Err(e) = persist_mark(app, i) {
-                app.notice = Some(e);
-            }
-            let pos = view_pos(&app.view, i);
-            if pos + 1 < app.view.len() {
-                select(app, app.view[pos + 1]);
-            }
-        }
-        Action::Next => step(app, 1),
-        Action::Prev => step(app, -1),
-        Action::PageDown => page(app, PAGE as isize),
-        Action::PageUp => page(app, -(PAGE as isize)),
-        Action::HalfDown => page(app, (PAGE / 2) as isize),
-        Action::HalfUp => page(app, -((PAGE / 2) as isize)),
-        Action::First => match app.focus {
-            Pane::List => select(app, first_visible(app)),
-            Pane::Code => app.scroll = 0,
-            Pane::Why | Pane::Deps => app.why_scroll = 0,
-        },
-        Action::Last => match app.focus {
-            Pane::List => select(app, last_visible(app)),
-            Pane::Code => app.scroll = last_line(app.code_len),
-            Pane::Why | Pane::Deps => app.why_scroll = last_line(app.why_len),
-        },
-        // column line-end motion: cursor in the code pane, list/why fall back
-        // to `First`/`Last`'s meaning so vscode's Home/End still works there
-        Action::LineStart => match app.focus {
-            Pane::List => select(app, first_visible(app)),
-            Pane::Code => cursor_move(app, line_start),
-            Pane::Why | Pane::Deps => app.why_scroll = 0,
-        },
-        Action::LineEnd => match app.focus {
-            Pane::List => select(app, last_visible(app)),
-            Pane::Code => cursor_move(app, line_end),
-            Pane::Why | Pane::Deps => app.why_scroll = last_line(app.why_len),
-        },
-        Action::Churn => fill_churn(app),
-        // `K`/`F12` dispatches on the focused pane rather than adding a
-        // second key: the code pane's symbol hover and the why pane's dep
-        // preview are the same "show me more about what's under the cursor"
-        // gesture, just aimed at a different cursor.
-        Action::Hover => match app.focus {
-            Pane::Code => hover(app, false),
-            Pane::Why | Pane::Deps => preview_edge(app),
-            Pane::List => {}
-        },
-        Action::Fold(how) => fold(app, how),
-        // `apply_in_code` handles these when the code pane has focus; they
-        // mean nothing anywhere else
-        Action::CursorLeft
-        | Action::CursorRight
-        | Action::WordNext
-        | Action::WordPrev
-        | Action::WordEnd
-        | Action::ParaPrev
-        | Action::ParaNext
-        | Action::MarkPrev
-        | Action::MarkNext
-        | Action::SelectLines
-        | Action::SearchOpen
-        | Action::SymbolNext
-        | Action::SymbolPrev
-        | Action::SearchNext
-        | Action::SearchPrev
-        | Action::ScrollLeft
-        | Action::ScrollRight => {}
-        Action::Help => {
-            app.popup = Some(Popup::new(
-                format!("keybindings — {}", app.keys.name),
-                build_help(&app.keys).into_iter().map(prose).collect(),
-            ));
-        }
-        Action::CommandOpen => open_command_bar(app, String::new()),
-        Action::Comment => {
-            let (start, end) = comment_lines(app);
-            let path = &app.items[app.sel].path;
-            let have = app
-                .comments
-                .iter()
-                .find(|c| c.path == *path && (c.start, c.end) == (start, end))
-                .map_or(String::new(), |c| c.text.clone());
-            open_command_bar(app, format!("comment {have}"));
-        }
-        Action::Reload => app.reload_requested = true,
-        Action::WaveNext => step_wave(app, true),
-        Action::WavePrev => step_wave(app, false),
-        Action::CommentNext => comment_move(app, true),
-        Action::CommentPrev => comment_move(app, false),
-        Action::FindingNext => finding_move(app, true),
-        Action::FindingPrev => finding_move(app, false),
-        Action::CommandGoto => open_command_bar(app, "goto ".to_string()),
-        // intercepted in `run` before it reaches here (needs the terminal)
-        Action::OpenEditor => {}
-        Action::JumpToEdge if app.focus == Pane::Why => jump_to_edge(app),
-        Action::JumpToEdge => {} // only meaningful with the why pane focused
-        Action::JumpBack => jump_back(app),
-    }
-    false
-}
-
 /// Writes a toggle to the mark cache immediately — not only on quit — so a
 /// panic or a killed terminal never loses the session's marks. A no-op when
 /// the item's content isn't loaded or `marks_path` never resolved (see
@@ -3288,7 +2207,7 @@ fn persist_mark(app: &mut App, i: usize) -> Result<(), String> {
     let Some(key) = mark_key(&app.rev, &app.items[i], &app.sources) else {
         return Ok(());
     };
-    // another reviewer of this repository — a browser tab, a second terminal —
+    // another reviewer of this repository — another tab, a second server —
     // may have written since this one loaded: merge into what is on disk
     // rather than writing this session's copy over it
     let want = app.reviewed[i];
@@ -3322,125 +2241,6 @@ fn sync_marks(app: &mut App) -> bool {
         }
     }
     app.reviewed != before
-}
-
-/// Popup body line with no styling — most popups are prose.
-fn prose(s: impl Into<String>) -> Line<'static> {
-    Line::from(s.into())
-}
-
-/// Widest popup body line, in characters — what `hscroll` clamps against.
-fn popup_width(lines: &[Line<'static>]) -> usize {
-    lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.chars().count())
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-// scroll the open popup's body sideways by `by` columns, clamped to its content
-fn popup_hscroll(app: &mut App, by: isize) {
-    if let Some(p) = app.popup.as_mut() {
-        let max = last_line(popup_width(&p.lines)) as isize;
-        p.hscroll = (p.hscroll as isize + by).clamp(0, max.max(0)) as u16;
-    }
-}
-
-// scroll the open popup's body by `by` lines, clamped to its content
-fn popup_scroll(app: &mut App, by: isize) {
-    if let Some(p) = app.popup.as_mut() {
-        p.scroll = (p.scroll as isize + by).clamp(0, last_line(p.lines.len()) as isize) as u16;
-    }
-}
-
-/// Fill `churn_cache` for the selected hunk, so the why pane can show how
-/// often these lines have changed before.
-///
-/// On demand, never during load: `git log -L` costs ~0.2s on a large file (see
-/// `hunk_churn`). Cached per (path, range), so a second `H` on the same hunk
-/// is instant and a repeat costs nothing.
-fn fill_churn(app: &mut App) {
-    let it = &app.items[app.sel];
-    let key = (it.path.clone(), it.new_range[0], it.new_range[1]);
-    if app.churn_cache.contains_key(&key) {
-        return;
-    }
-    let query = churn_query(it, app.uncommitted);
-    let churn = app
-        .review_sha
-        .clone()
-        .map(|sha| hunk_churn(&sha, &it.path, &query));
-    app.churn_cache.insert(key, churn);
-}
-
-/// Step the cursor to the next (or previous) row `uses_at` marks — the same
-/// rows the code gutter glyphs. Nothing marked, or nothing left in that
-/// direction, leaves the cursor where it is.
-fn mark_move(app: &mut App, forward: bool) {
-    let mut rows: Vec<usize> = app.items[app.sel]
-        .uses_at
-        .iter()
-        .flat_map(|u| u.rows.iter().map(|r| r.saturating_sub(1)))
-        .collect();
-    rows.sort_unstable();
-    rows.dedup();
-    let here = app.cursor.line;
-    let target = if forward {
-        rows.into_iter().find(|&r| r > here)
-    } else {
-        rows.into_iter().rev().find(|&r| r < here)
-    };
-    if let Some(line) = target {
-        cursor_move(app, move |_, _| Cursor { line, col: 0 });
-    }
-}
-
-/// `gc` / `gC` — the next or previous line comment in this review, in file
-/// and line order: selects a hunk of its file (the one holding the line, or
-/// the nearest) and puts the code cursor on it.
-fn comment_move(app: &mut App, forward: bool) {
-    let here = (app.items[app.sel].path.clone(), app.cursor.line + 1);
-    let all: Vec<(String, usize)> = review_comments(app)
-        .into_iter()
-        .map(|c| (c.path.clone(), c.start))
-        .collect();
-    let target = if forward {
-        all.into_iter().find(|c| *c > here)
-    } else {
-        all.into_iter().rev().find(|c| *c < here)
-    };
-    let Some((path, line)) = target else {
-        return;
-    };
-    let hunk = app
-        .view
-        .iter()
-        .copied()
-        .filter(|&i| app.items[i].path == path)
-        .min_by_key(|&i| {
-            let [a, b] = app.items[i].new_range;
-            if a <= line && line <= b {
-                0
-            } else {
-                a.abs_diff(line).min(b.abs_diff(line))
-            }
-        });
-    let Some(i) = hunk else {
-        return;
-    };
-    if i != app.sel {
-        select(app, i);
-    }
-    app.focus = Pane::Code;
-    cursor_move(app, move |_, _| Cursor {
-        line: line - 1,
-        col: 0,
-    });
 }
 
 /// `]f` / `[f` — the next or previous hunk on screen carrying a finding, in
@@ -3483,45 +2283,6 @@ fn finding_move(app: &mut App, forward: bool) {
     select(app, view[cycle[to].1]);
 }
 
-/// Move the code cursor with `f`, clamp it to the file, and scroll to follow.
-/// No-op when the selected item's file content isn't loaded.
-fn cursor_move(app: &mut App, f: impl FnOnce(Cursor, &[String]) -> Cursor) {
-    let Some((_, lines)) = app.sources.get(&app.items[app.sel].path) else {
-        return;
-    };
-    if lines.is_empty() {
-        return;
-    }
-    app.cursor = clamp_cursor(f(app.cursor, lines), lines);
-    app.scroll = follow_scroll(
-        view_row(&app.items[app.sel], app.cursor.line),
-        app.scroll,
-        app.code_height,
-    );
-    app.hscroll = follow_hscroll(app.cursor.col, app.hscroll, app.code_width);
-}
-
-fn last_line(len: usize) -> u16 {
-    len.saturating_sub(1).min(u16::MAX as usize) as u16
-}
-
-/// One-line motion: moves the selection in the list, the cursor in the code
-/// pane (scroll follows), scrolls the why pane.
-fn step(app: &mut App, by: isize) {
-    match app.focus {
-        Pane::List => {
-            // fold-aware: a hunk inside a folded group is not on screen, so
-            // j/k step over it rather than selecting something invisible
-            let view = folded_view(app);
-            let pos = view_pos(&view, app.sel);
-            let to = (pos as isize + by).clamp(0, view.len() as isize - 1) as usize;
-            select(app, view[to]);
-        }
-        Pane::Code | Pane::Deps => cursor_move(app, |c, lines| move_line(c, lines, by)),
-        Pane::Why => why_cursor_move(app, by),
-    }
-}
-
 /// The list-pane position of `sel` within `view` — 0 when it isn't found
 /// (shouldn't happen: `set_filters`/`select` keep `sel` in `view`, but a
 /// missing position degrading to the top is safer than panicking).
@@ -3529,54 +2290,13 @@ fn view_pos(view: &[usize], sel: usize) -> usize {
     view.iter().position(|&i| i == sel).unwrap_or(0)
 }
 
-/// The first/last currently visible item — `view` is never empty once
-/// loading finishes (`set_filters` rejects any change that would empty it).
-fn first_visible(app: &App) -> usize {
-    folded_view(app)[0]
-}
-fn last_visible(app: &App) -> usize {
-    *folded_view(app).last().expect("view is never empty")
-}
-
-/// Move the why pane's line cursor by `by`, clamp to its content, and scroll
-/// to follow — the why-pane counterpart of `cursor_move`.
-fn why_cursor_move(app: &mut App, by: isize) {
-    app.why_sel = scrolled(app.why_sel as u16, by, app.why_len) as usize;
-    app.why_scroll = follow_scroll(app.why_sel, app.why_scroll, app.why_height);
-}
-
-/// Paging drives the code pane even when the list has focus — list rows are one
-/// line each, so paging them is useless while the code is what needs scrolling.
-fn page(app: &mut App, by: isize) {
-    match app.focus {
-        Pane::Why | Pane::Deps => app.why_scroll = scrolled(app.why_scroll, by, app.why_len),
-        _ => app.scroll = scrolled(app.scroll, by, app.code_len),
-    }
-}
-
-fn scrolled(cur: u16, by: isize, len: usize) -> u16 {
-    (cur as isize + by).clamp(0, last_line(len) as isize) as u16
-}
-
 fn select(app: &mut App, to: usize) {
     app.sel = to;
     app.selection = None;
-    app.scroll = auto_scroll(&app.items[to]);
-    app.hscroll = 0;
-    app.why_scroll = 0;
-    app.why_sel = 0;
     app.cursor = cursor_for(&app.items[to], &app.sources);
     app.popup = None; // a new hunk invalidates whatever the popup was showing
-                      // match positions are per-file line/col — a different hunk (possibly a
-                      // different file entirely) invalidates them, so re-anchor by dropping the
-                      // search rather than trying to remap it
-    app.search = None;
 }
 
-// The TUI can't be driven headless (`ratatui::init()` needs a real tty), so
-// what's testable here is factored into small pure functions above — cursor
-// arithmetic, scroll-follow clamping, and symbol/signature/docstring
-// extraction — and exercised directly.
 #[cfg(test)]
 mod tests;
 

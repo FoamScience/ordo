@@ -1,15 +1,15 @@
 // ------------------------------------------------------------ reviewing rules
-use crate::code_view::theme;
-use crate::code_view::theme_names;
-use crate::code_view::theme_role_color;
-use crate::code_view::THEME_ROLES;
 use crate::config::config_path;
 use crate::keys::action_help;
 use crate::keys::chord_setting;
 use crate::keys::keymap;
 use crate::keys::ACTION_NAMES;
+use crate::theme::theme;
+use crate::theme::theme_names;
+use crate::theme::theme_role_color;
+use crate::theme::Color;
+use crate::theme::THEME_ROLES;
 use ordo::model::Level;
-use ratatui::style::Color;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -740,9 +740,9 @@ pub(super) fn init_config(preset: &str, theme_name: &str) -> String {
     ] {
         let _ = writeln!(out, "{line}");
     }
-    // a terminal theme leaves some roles to the terminal's own palette: there
-    // is no honest hex to print for those, and printing a placeholder would
-    // mean this file stops being valid the moment someone uncomments it
+    // a plain theme leaves some roles to the page's own colours: there is no
+    // honest hex to print for those, and printing a placeholder would mean
+    // this file stops being valid the moment someone uncomments it
     let inherited: Vec<&str> = THEME_ROLES
         .iter()
         .filter(|r| !matches!(theme_role_color(&t, r), Color::Rgb(..)))
@@ -751,7 +751,7 @@ pub(super) fn init_config(preset: &str, theme_name: &str) -> String {
     if !inherited.is_empty() {
         let _ = writeln!(
             out,
-            "# These follow the terminal's own palette on this theme, so they have no\n             # default to show — set any of them to a colour to take it over:\n             #   {}",
+            "# These follow the page's own colours on this theme, so they have no\n             # default to show — set any of them to a colour to take it over:\n             #   {}",
             inherited.join(", ")
         );
     }

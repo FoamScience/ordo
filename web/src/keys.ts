@@ -1,6 +1,5 @@
-// Keys as the terminal reviewer names them (`j`, `C-w`, `S-F3`, `Space`), so
-// the binds ordo sends — its preset plus tui.toml's [binds] — apply here as
-// written.
+// Keys as ordo names them (`j`, `C-w`, `S-F3`, `Space`), so the binds it
+// sends — its preset plus ordo.toml's [binds] — apply here as written.
 
 import type { Bind } from "./types.ts";
 

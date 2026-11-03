@@ -477,7 +477,7 @@ pub enum ContainerKind {
 impl ContainerKind {
     /// Every variant, `Definition` first — it is the omitted case, and the only
     /// kind that is a symbol. The rest follow the enum's own order. Anything
-    /// that enumerates container kinds (the published schema, the TUI's
+    /// that enumerates container kinds (the published schema, the reviewer's
     /// `:config` help) reads this, so a new variant cannot be added to one and
     /// forgotten in the other.
     pub const ALL: &'static [ContainerKind] = &[

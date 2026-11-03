@@ -4008,7 +4008,7 @@ function cssVar(role) {
   if (role.startsWith("syntax-")) return `--syn-${role.slice(7)}`;
   const own = { border: "--line", "border-focus": "--focus" };
   if (own[role]) return own[role];
-  return ["fg", "dim", "accent", "reviewed"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
+  return ["fg", "dim", "accent", "reviewed", "warn"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
 }
 function baseOf(theme) {
   const fg = theme["fg"];

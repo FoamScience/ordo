@@ -1,7 +1,4 @@
 // ------------------------------------------------------------------- highlight
-use crate::code_view::Role;
-use crate::code_view::Syntax;
-use ratatui::style::Color;
 use std::collections::HashMap;
 use tree_sitter::Parser;
 use tree_sitter::Query;
@@ -10,6 +7,45 @@ use tree_sitter::StreamingIterator;
 use tree_sitter_highlight::HighlightConfiguration;
 use tree_sitter_highlight::HighlightEvent;
 use tree_sitter_highlight::Highlighter;
+
+/// What a highlight capture *means*. A theme colours these twelve roles rather
+/// than the twenty-six capture names `HL` maps onto them, so adding a grammar's
+/// capture never means touching every theme.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Role {
+    Comment,
+    Keyword,
+    Str,
+    Number,
+    Function,
+    Type,
+    Property,
+    Operator,
+    Variable,
+    Builtin,
+    Param,
+    Attribute,
+}
+
+impl Role {
+    /// The role as its theme key names it, less the `syntax-` prefix.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Role::Comment => "comment",
+            Role::Keyword => "keyword",
+            Role::Str => "string",
+            Role::Number => "number",
+            Role::Function => "function",
+            Role::Type => "type",
+            Role::Property => "property",
+            Role::Operator => "operator",
+            Role::Variable => "variable",
+            Role::Builtin => "builtin",
+            Role::Param => "parameter",
+            Role::Attribute => "attribute",
+        }
+    }
+}
 
 // tree-sitter highlight capture names we color, with their fg. The `Highlight`
 // index a walk yields is the position of the matched name in this list.
@@ -51,9 +87,6 @@ const HL: &[(&str, Role)] = &[
     ("variable.builtin", Role::Builtin),
     ("variable.parameter", Role::Param),
 ];
-
-pub(super) type LineSpans = Vec<(String, Color)>;
-pub(super) type Highlights = HashMap<String, Vec<LineSpans>>;
 
 /// The grammar and highlights query for a path.
 ///
@@ -310,9 +343,8 @@ thread_local! {
     // depends on the (language, query, injection-query) triple — not on which
     // file it's for. Cache by the query text, which is a fixed string per
     // grammar (see `highlight_spec`/`md_block_query`), so a run touching many
-    // files of one language compiles that language's query once. Lives on the
-    // loader worker thread that calls `highlight_file`, so a plain
-    // `thread_local!` needs no locking.
+    // files of one language compiles that language's query once. Per thread,
+    // so a plain `thread_local!` needs no locking.
     static HL_CFG_CACHE: std::cell::RefCell<HashMap<String, HighlightConfiguration>> = std::cell::RefCell::new(HashMap::new());
 }
 
@@ -343,19 +375,9 @@ fn ensure_hl_cfg(
 
 pub(super) type RoleSpans = Vec<(String, Role)>;
 
-// Syntax-highlight `src` into per-line colored segments. None when the language
-// is unsupported or the grammar/query fails to build → caller renders plain.
-pub(super) fn highlight_file(path: &str, src: &str, syn: &Syntax) -> Option<Vec<LineSpans>> {
-    Some(
-        highlight_roles(path, src)?
-            .into_iter()
-            .map(|line| line.into_iter().map(|(t, r)| (t, syn.of(r))).collect())
-            .collect(),
-    )
-}
-
-/// Per-line segments tagged with what they mean rather than a colour, for a
-/// client that paints with its own palette (the web reviewer's CSS).
+/// Per-line segments tagged with what they mean rather than a colour, for the
+/// page to paint with its own palette. `None` when the language is unsupported
+/// or the grammar/query fails to build.
 pub(super) fn highlight_roles(path: &str, src: &str) -> Option<Vec<RoleSpans>> {
     let (language, query) = highlight_spec(path)?;
     let names: Vec<&str> = HL.iter().map(|(n, _)| *n).collect();

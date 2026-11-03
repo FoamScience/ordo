@@ -1,5 +1,6 @@
 ; The engine is pure: no filesystem, no process, no environment. A client
-; (ordo-tui) owns git and config; the engine takes Input and returns Output.
+; (the `ordo` reviewer) owns git and config; the engine takes Input and
+; returns Output.
 ; Breaking this makes `ordo order --json` stop being a function of its
 ; arguments, and makes the corpus suite stop meaning anything.
 ((scoped_identifier path: (identifier) @root) (#any-of? @root "fs" "env"))

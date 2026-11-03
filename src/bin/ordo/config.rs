@@ -1,13 +1,5 @@
 // ------------------------------------------------------------------ config UI
-use crate::code_view::apply_theme_colors;
-use crate::code_view::theme;
-use crate::code_view::theme_names;
-use crate::code_view::theme_role_color;
-use crate::code_view::Theme;
-use crate::code_view::THEME_ROLES;
 use crate::commands::run_strategy;
-use crate::draw::centred;
-use crate::highlight::highlight_file;
 use crate::keys::action_help;
 use crate::keys::chord_setting;
 use crate::keys::keymap;
@@ -18,21 +10,15 @@ use crate::marks::write_atomic;
 use crate::rules::init_config;
 use crate::rules::user_rules_path;
 use crate::rules::PRESETS;
+use crate::theme::apply_theme_colors;
+use crate::theme::theme;
+use crate::theme::theme_names;
+use crate::theme::theme_role_color;
+use crate::theme::Color;
+use crate::theme::THEME_ROLES;
 use crate::App;
 use crate::Popup;
 use ordo::model::Level;
-use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::text::Text;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -46,7 +32,7 @@ pub(super) enum FieldKind {
     Flag(bool),
     /// one of a fixed set — Space cycles
     Choice { at: usize, options: Vec<String> },
-    /// free text (a colour, a key binding) — Enter opens it in the command bar
+    /// free text (a colour, a key binding), typed in
     Text(String),
 }
 
@@ -81,7 +67,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
     // directory there is no such file, and saying so beats printing a bare
     // name that implies one — the writer would silently skip it
     let unresolved = "(no config directory — $XDG_CONFIG_HOME or $HOME unset)";
-    let tui = config_path()
+    let settings = config_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| unresolved.to_string());
     let rules_file = user_rules_path()
@@ -97,7 +83,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
     };
     out.push(ConfigSection {
         title: "general".to_string(),
-        file: tui.clone(),
+        file: settings.clone(),
         fields: vec![
             ConfigField {
                 key: "preset".to_string(),
@@ -198,7 +184,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
     let bare = theme(app.theme.name);
     out.push(ConfigSection {
         title: "theme roles".to_string(),
-        file: tui.clone(),
+        file: settings.clone(),
         fields: THEME_ROLES
             .iter()
             .map(|role| {
@@ -221,7 +207,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
 
     out.push(ConfigSection {
         title: "keys".to_string(),
-        file: tui,
+        file: settings,
         fields: app
             .keys
             .binds
@@ -259,7 +245,6 @@ pub(super) struct ConfigUi {
     /// (section, field) for every navigable row, in display order
     pub(super) rows: Vec<(usize, usize)>,
     pub(super) sel: usize,
-    scroll: u16,
     /// something changed and has not been written
     pub(super) dirty: bool,
     /// the text being typed into the selected field; `None` unless editing.
@@ -281,7 +266,6 @@ impl ConfigUi {
             sections,
             rows,
             sel: 0,
-            scroll: 0,
             dirty: false,
             editing: None,
         }
@@ -312,8 +296,8 @@ impl ConfigUi {
         self.sections.get_mut(i)?.fields.get_mut(j)
     }
 
-    /// Space on the selected row: flip a flag, cycle a choice. Text fields are
-    /// edited through the command bar instead, which already does text.
+    /// Change the selected row: flip a flag, cycle a choice. A text field opens
+    /// for editing instead.
     ///
     /// A section's switch carries its rules with it — turning off "the C++
     /// constructs" is the gesture, not fourteen of them — and a rule turned off
@@ -514,38 +498,11 @@ pub(super) fn config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("ordo").join("tui.toml"))
+    Some(base.join("ordo").join("ordo.toml"))
 }
 
-// ------------------------------------------------------------ config screen
-
-/// Move `:config`'s selection, clamped.
-pub(super) fn move_config(app: &mut App, by: isize) {
-    let Some(c) = app.config.as_mut() else { return };
-    if c.rows.is_empty() {
-        return;
-    }
-    let last = c.rows.len() as isize - 1;
-    c.sel = (c.sel as isize).saturating_add(by).clamp(0, last) as usize;
-}
-
-/// Space on the selected setting. A rule or catalog change re-runs the engine,
+/// Change the selected setting. A rule or catalog change re-runs the engine,
 /// because what the reviewer is looking at is the answer to those settings.
-/// Swap the palette. Syntax colours are baked into the highlight cache at load
-/// time, so what is already on screen has to be highlighted again.
-fn swap_theme(app: &mut App, t: Theme) {
-    app.theme = t;
-    let paths: Vec<String> = app.highlights.keys().cloned().collect();
-    for path in paths {
-        let Some((_, nl)) = app.sources.get(&path) else {
-            continue;
-        };
-        if let Some(h) = highlight_file(&path, &nl.join("\n"), &app.theme.syn) {
-            app.highlights.insert(path, h);
-        }
-    }
-}
-
 pub(super) fn config_toggle(app: &mut App) {
     let Some(c) = app.config.as_mut() else { return };
     if !c.toggle() {
@@ -586,7 +543,7 @@ pub(super) fn config_toggle(app: &mut App) {
     }
 }
 
-/// Accept the row being typed into, and repaint if it was a colour.
+/// Accept the row being typed into, and take it in if it was a colour.
 pub(super) fn config_commit_edit(app: &mut App) {
     if let Some(c) = app.config.as_mut() {
         c.commit_edit();
@@ -595,8 +552,8 @@ pub(super) fn config_commit_edit(app: &mut App) {
 }
 
 /// The palette the config screen currently describes — the chosen theme with
-/// the filled-in role rows on top — applied if it isn't what's on screen.
-/// Both a theme swap and a single edited colour arrive here.
+/// the filled-in role rows on top. Both a theme swap and a single edited
+/// colour arrive here.
 fn config_apply_theme(app: &mut App) {
     let Some(c) = app.config.as_ref() else { return };
     let (name, _) = config_general(c);
@@ -613,15 +570,7 @@ fn config_apply_theme(app: &mut App) {
         })
         .collect();
     let Some(base) = theme(&name) else { return };
-    let next = apply_theme_colors(base, &colors);
-    // re-highlighting every open file is not free: only a real difference
-    if next.name != app.theme.name
-        || THEME_ROLES
-            .iter()
-            .any(|r| theme_role_color(&next, r) != theme_role_color(&app.theme, r))
-    {
-        swap_theme(app, next);
-    }
+    app.theme = apply_theme_colors(base, &colors);
 }
 
 /// The catalog switch and the `disable` list the current UI state implies.
@@ -698,13 +647,10 @@ pub(super) fn config_write(app: &mut App) {
     } else {
         ("config NOT written", failed)
     };
-    app.popup = Some(Popup::new(
-        title,
-        lines.into_iter().map(Line::from).collect(),
-    ));
+    app.popup = Some(Popup::new(title, lines));
 }
 
-/// a setting that lives in the rules file rather than `tui.toml`
+/// a setting that lives in the rules file rather than `ordo.toml`
 fn touches_rules(key: &str) -> bool {
     key == "catalog"
         || key.starts_with("disable:")
@@ -724,7 +670,7 @@ fn existing_text(path: &Path) -> Result<String, String> {
     }
 }
 
-/// a changed field as the (section, key, value) `tui.toml` spells it
+/// a changed field as the (section, key, value) `ordo.toml` spells it
 fn toml_setting(f: &ConfigField) -> (Option<&'static str>, String, String) {
     let (section, key) = match f.key.split_once('.') {
         Some(("theme", k)) => (Some("theme"), k.to_string()),
@@ -825,107 +771,4 @@ fn config_general(c: &ConfigUi) -> (String, String) {
             .unwrap_or_default()
     };
     (pick("theme"), pick("preset"))
-}
-
-/// Render `:config` over the panes: a section at a time, current value on the
-/// right, the file each section writes to in its header.
-pub(super) fn draw_config(f: &mut Frame, app: &App, body: Rect) {
-    let Some(c) = app.config.as_ref() else { return };
-    let theme = &app.theme;
-    let area = centred(body, 96, body.height.saturating_sub(4));
-    f.render_widget(Clear, area);
-    let title = format!(
-        " config{} — {} ",
-        if c.dirty { " ·" } else { "" },
-        if c.editing.is_some() {
-            "typing · Enter accept · Esc cancel"
-        } else {
-            "Space change · w write · Esc close"
-        }
-    );
-    // the selected setting's own sentence, on the bottom border: a list of
-    // names is not a config UI if nothing says what they do
-    let help = c
-        .field(c.sel)
-        .map(|f| f.help.clone())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_default();
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_focus))
-        .title(Span::styled(title, Style::default().fg(theme.border_focus)))
-        .title_bottom(Span::styled(
-            if help.is_empty() {
-                String::new()
-            } else {
-                format!(" {help} ")
-            },
-            Style::default().fg(theme.dim),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let width = inner.width as usize;
-    let mut lines: Vec<Line<'static>> = vec![];
-    let mut row_of_sel = 0usize;
-    for (i, sec) in c.sections.iter().enumerate() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", sec.title),
-                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("→ {}", sec.file), Style::default().fg(theme.dim)),
-        ]));
-        for (j, field) in sec.fields.iter().enumerate() {
-            let at = c.rows.iter().position(|&r| r == (i, j)).unwrap_or(0);
-            if at == c.sel {
-                row_of_sel = lines.len();
-            }
-            let value = match &field.kind {
-                FieldKind::Flag(true) => "on".to_string(),
-                FieldKind::Flag(false) => "off".to_string(),
-                FieldKind::Choice { at, options } => options.get(*at).cloned().unwrap_or_default(),
-                // an empty text field is not the same as one that follows the
-                // terminal; say which
-                FieldKind::Text(t) if t.is_empty() && field.key.starts_with("theme.") => {
-                    "(terminal)".to_string()
-                }
-                FieldKind::Text(t) if t.is_empty() => "(unset)".to_string(),
-                FieldKind::Text(t) => t.clone(),
-            };
-            let editing = at == c.sel && c.editing.is_some();
-            let value = match &c.editing {
-                Some(buf) if editing => format!("{buf}▏"),
-                _ => value,
-            };
-            let off = matches!(field.kind, FieldKind::Flag(false));
-            let pad = width.saturating_sub(field.label.chars().count() + value.chars().count() + 3);
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{}{} ", if at == c.sel { "▸ " } else { "  " }, field.label),
-                    Style::default().fg(if at == c.sel {
-                        theme.border_focus
-                    } else {
-                        theme.fg
-                    }),
-                ),
-                Span::styled(" ".repeat(pad), Style::default()),
-                Span::styled(
-                    value,
-                    Style::default().fg(if off { theme.dim } else { theme.accent }),
-                ),
-            ]));
-        }
-        lines.push(Line::from(""));
-    }
-    // keep the selected row on screen without a scrollbar to maintain
-    let h = inner.height.max(1) as usize;
-    let top = row_of_sel
-        .saturating_sub(h / 2)
-        .min(lines.len().saturating_sub(h));
-    f.render_widget(
-        Paragraph::new(Text::from(lines)).scroll((top as u16, 0)),
-        inner,
-    );
-    let _ = c.scroll;
 }

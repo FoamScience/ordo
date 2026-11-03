@@ -12,12 +12,13 @@ repository = "https://github.com/FoamScience/ordo"
 name = "ordo-engine"
 path = "src/main.rs"
 
-# The reviewer — `ordo`. A first-party client of the engine that shells to git
-# and reads config; on by default, `--no-default-features` builds the engine alone.
+# The reviewer — `ordo`. A first-party client of the engine that shells to git,
+# reads config and serves the review to a browser; on by default,
+# `--no-default-features` builds the engine alone.
 [[bin]]
 name = "ordo"
 path = "src/bin/ordo/main.rs"
-required-features = ["tui"]
+required-features = ["web"]
 
 [[bench]]
 name = "corpus"
@@ -28,10 +29,9 @@ name = "ordo"
 path = "src/lib.rs"
 
 [features]
-default = ["tui", "web"]
-tui = ["dep:ratatui", "dep:tree-sitter-highlight", "dep:toml", "dep:base64", "dep:xterm-query"]
-# `ordo web`: the reviewer in a browser, served from the same binary
-web = ["tui", "dep:tiny_http"]
+default = ["web"]
+# `ordo`: the reviewer, served to a browser from the same binary
+web = ["dep:tree-sitter-highlight", "dep:toml", "dep:tiny_http"]
 # experiment: static-embedding similarity between hunks (examples/m2v.rs only)
 m2v = ["dep:model2vec-rs"]
 
@@ -60,13 +60,10 @@ tree-sitter-java = "0.23"
 tree-sitter-lua = "0.5.0"
 tree-sitter-md = "0.5.3"
 diffy = "0.5.0"
-ratatui = { version = "0.30", optional = true }
 tree-sitter-highlight = { version = "0.25", optional = true }
 tree-sitter-toml-ng = "0.7"
 # rules-file parsing (the `ordo` reviewer only, see model::Rule)
 toml = { version = "1", optional = true }
-# `:yank` reaches the clipboard through the terminal (OSC 52), which wants base64
-base64 = { version = "0.23", optional = true }
 tree-sitter-json = "0.24"
 tree-sitter-yaml = "0.7"
 tree-sitter-jinja = "0.13"
@@ -82,10 +79,7 @@ tree-sitter-scss = "1.0"
 tree-sitter-rst = "0.2"
 tree-sitter-html = "0.23"
 tree-sitter-svelte-ng = "1.0"
-# the default theme's tints are mixed from the terminal's own colours, asked for
-# over OSC 10/11/4 (the `ordo` reviewer only)
-xterm-query = { version = "0.6.1", optional = true }
-# `ordo web`'s localhost server: synchronous, no async runtime
+# the reviewer's localhost server: synchronous, no async runtime
 tiny_http = { version = "0.12", default-features = false, optional = true }
 model2vec-rs = { version = "0.4", default-features = false, features = ["onig"], optional = true }
 

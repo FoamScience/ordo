@@ -18,7 +18,7 @@ repository, a config file or a terminal lives in the client.
 | **B — contract** | B1 contract + input | `src/model.rs`, `schema/v2.json`, `src/main.rs`, `src/patch.rs` |
 | | B2 rules + rulesets | `src/rules.rs`, `src/catalog.rs`, `rulesets/`, `scripts/ruleset-check.py` |
 | **C — client** | C1 data layer | `src/bin/ordo/main.rs` (args, load), `src/bin/ordo/findings.rs`, `src/bin/ordo/git.rs`, `src/bin/ordo/consumers.rs`, `src/bin/ordo/marks.rs` |
-| | C2 UI layer | `src/bin/ordo/main.rs` (app state, event loop), `src/bin/ordo/keys.rs`, `src/bin/ordo/rules.rs`, `src/bin/ordo/config.rs`, `src/bin/ordo/highlight.rs`, `src/bin/ordo/code_view.rs`, `src/bin/ordo/history.rs`, `src/bin/ordo/search.rs`, `src/bin/ordo/editor.rs`, `src/bin/ordo/draw.rs`, `src/bin/ordo/commands.rs`, plus `src/refine.rs` |
+| | C2 review layer | `src/bin/ordo/main.rs` (app state), `src/bin/ordo/keys.rs`, `src/bin/ordo/rules.rs`, `src/bin/ordo/config.rs`, `src/bin/ordo/highlight.rs`, `src/bin/ordo/theme.rs`, `src/bin/ordo/hover.rs`, `src/bin/ordo/history.rs`, `src/bin/ordo/editor.rs`, `src/bin/ordo/facts.rs`, `src/bin/ordo/commands.rs`, plus `src/refine.rs` |
 | | C3 web reviewer | `src/bin/ordo/web/` (server, view model), `web/src/` (the browser client), `web/dist/` (its committed bundle) |
 | **D — supporting** | D1 test + corpus | `tests/`, `benches/`, `corpus/`, `.github/workflows/ci.yml` |
 | | D2 docs system | `docs/`, the generated blocks in `src/bin/ordo/docs.rs` |
@@ -26,11 +26,10 @@ repository, a config file or a terminal lives in the client.
 Out of scope: `target/`, `packaging/`, `assets/`.
 
 The client is one binary crate under `src/bin/ordo/`: `src/bin/ordo/main.rs` holds the
-arguments, the loader, the app state and the event loop, and each `mod` file
+arguments, the loader and the app state, and each `mod` file
 is one concern with a `// ---- name` banner at its top (a module with
 submodules is a directory, and `src/bin/ordo/web/mod.rs` carries its banner). The web
-reviewer (`ordo web`) is a second front end over the same `Session` and `App`:
-it renders in a browser what the terminal draws, and adds no review logic of
+layer serves the `Session` and `App` to a browser, and adds no review logic of
 its own. The module files are
 the addressable unit — an earlier version of this map cited line ranges in a
 single 15k-line file and they were stale within a fortnight.
@@ -41,7 +40,7 @@ single 15k-line file and they were stale within a fortnight.
 main.rs ─────────────────┐
                          ├──> lib.rs ──> extract.rs ──> lang.rs ──> grammars/
 bin/ordo.rs (client) ────┘       │                          ▲
-  git, config, terminal          ├──> order.rs              │
+  git, config, server            ├──> order.rs              │
                                  ├──> rules.rs ─────────────┘
                                  │      ▲
                                  │      └── catalog.rs ──> catalog.generated.json

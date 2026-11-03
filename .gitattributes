@@ -1,5 +1,5 @@
 # Lock files are resolver output, not code. `linguist-generated=true` collapses
-# them in GitHub's diff view and drops them from ordo-tui's review (`--all` keeps
+# them in GitHub's diff view and drops them from ordo's review (`--all` keeps
 # them). Listed across ecosystems, not just this repo's, so the file stays useful
 # as the sample it is referenced as in the README.
 
@@ -47,5 +47,5 @@ docs/cli.md             ordo-generated=true
 docs/languages.md       ordo-generated=true
 docs/reviewing.md       ordo-generated=true
 docs/rules.md           ordo-generated=true
-docs/tui.md             ordo-generated=true
+docs/web.md             ordo-generated=true
 docs/*.md               linguist-documentation=true
