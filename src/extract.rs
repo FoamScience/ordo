@@ -1337,7 +1337,7 @@ fn binding_container(node: Node, src: &[u8], spec: &LangSpec, stack: &[String]) 
     if end_row(node, spec) <= node.start_position().row {
         return None;
     }
-    let ident = binding_idents(node, node.kind()).into_iter().next()?;
+    let ident = binding_idents(node, node.kind(), src).into_iter().next()?;
     ident
         .utf8_text(src)
         .ok()
@@ -2747,7 +2747,7 @@ impl<'a> Walker<'a> {
 // their tree-sitter node id and exclude that exact occurrence from a later
 // use-search. One field per grammar (verified against node-types.json);
 // unlisted kinds yield nothing rather than guessing.
-fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
+fn binding_idents<'t>(node: Node<'t>, kind: &str, src: &[u8]) -> Vec<Node<'t>> {
     let field = match kind {
         // xonsh `$FOO = …`: `left` is an `env_variable` wrapping the plain
         // identifier, so the bound name matches a use of `$FOO` elsewhere
@@ -2787,21 +2787,67 @@ fn binding_idents<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
         _ => return vec![],
     };
     match node.child_by_field_name(field) {
+        Some(target) if kind == "let_declaration" => rust_pattern_idents(target, src),
         Some(target) => target_idents(target),
         None => vec![],
+    }
+}
+
+// The names a rust pattern binds. A variant or struct path (`Some(x)`,
+// `Foo::Bar { .. }`), a field name given its own sub-pattern (`b: c`) and,
+// by rust convention, a capitalised identifier (`None`, `MAX`) name what is
+// matched, not a new local.
+fn rust_pattern_idents<'t>(node: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    match node.kind() {
+        "identifier" | "shorthand_field_identifier" => {
+            let capitalised = node
+                .utf8_text(src)
+                .is_ok_and(|t| t.starts_with(char::is_uppercase));
+            if capitalised {
+                vec![]
+            } else {
+                vec![node]
+            }
+        }
+        "scoped_identifier" | "generic_pattern" | "range_pattern" | "macro_invocation" => vec![],
+        "field_pattern" => match node.child_by_field_name("pattern") {
+            Some(p) => rust_pattern_idents(p, src),
+            None => node
+                .child_by_field_name("name")
+                .map_or(vec![], |n| rust_pattern_idents(n, src)),
+        },
+        _ => {
+            let path = node.child_by_field_name("type").map(|t| t.id());
+            let mut cur = node.walk();
+            node.named_children(&mut cur)
+                .filter(|c| Some(c.id()) != path)
+                .flat_map(|c| rust_pattern_idents(c, src))
+                .collect()
+        }
     }
 }
 
 // Identifier(s) inside an assignment/let/var target subtree, skipping into
 // `attribute`/`subscript` targets (`obj.x = …`, `arr[0] = …` mutate an
 // existing binding, not introduce one) — everything else (bare identifier,
-// tuple/destructuring pattern) is a genuine new local name.
+// tuple/destructuring pattern, bar a js key or default) is a genuine new
+// local name.
 fn target_idents(node: Node) -> Vec<Node> {
     if matches!(node.kind(), "attribute" | "subscript") {
         return vec![];
     }
     if lang::is_ident(node.kind()) {
         return vec![node];
+    }
+    // js `{ a: b = c }`: the key names a property and the default is a use;
+    // only `b` is bound
+    let bound = match node.kind() {
+        "pair_pattern" => node.child_by_field_name("value"),
+        "object_assignment_pattern" | "assignment_pattern" => node.child_by_field_name("left"),
+        _ => None,
+    };
+    if let Some(bound) = bound {
+        return target_idents(bound);
     }
     let mut out = vec![];
     let mut cur = node.walk();
@@ -4574,7 +4620,7 @@ fn bound_names<'t>(
 ) -> impl Iterator<Item = (Node<'t>, String)> {
     let kind = node.kind();
     let ids = if spec.is_local(kind) && !node.has_error() {
-        binding_idents(node, kind)
+        binding_idents(node, kind, src)
     } else {
         vec![]
     };

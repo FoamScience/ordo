@@ -231,3 +231,44 @@ fn a_lua_local_in_a_function_still_binds() {
         "{rats:?}"
     );
 }
+
+#[test]
+fn a_rust_variant_pattern_binds_only_its_inner_name() {
+    let old = "fn f(a: Option<u8>) -> u8 {\n    0\n}\n";
+    let new = "fn f(a: Option<u8>) -> u8 {\n    let Some(x) = a else { panic!() };\n    x\n}\n";
+    let rats = one("a.rs", old, new);
+    assert!(
+        rats.iter().any(|r| r.contains("adds local x (1 use)")),
+        "{rats:?}"
+    );
+    assert!(!rats.iter().any(|r| r.contains("Some")), "{rats:?}");
+}
+
+#[test]
+fn a_rust_nested_pattern_skips_paths_field_names_and_constants() {
+    let old = "fn f() -> u8 {\n    0\n}\n";
+    let new = "fn f() -> u8 {\n    let (Ok(ref mut z), None) = h() else { return 0 };\n    let Foo::Bar { c, d: k @ Some(e), .. } = g();\n    z + c + e + k\n}\n";
+    let rats = one("a.rs", old, new);
+    assert!(
+        rats.iter()
+            .any(|r| r.contains("adds local c (1 use), e (1 use), k (1 use), and 1 more")),
+        "{rats:?}"
+    );
+}
+
+#[test]
+fn a_plain_rust_let_still_binds() {
+    let old = "fn f() -> u8 {\n    0\n}\n";
+    let new = "fn f() -> u8 {\n    let n = 2;\n    n\n}\n";
+    assert_eq!(one("a.rs", old, new), vec!["adds local n (1 use)"]);
+}
+
+#[test]
+fn a_js_destructuring_key_and_default_are_not_bound() {
+    let old = "function f(o) {\n  return 0;\n}\n";
+    let new = "function f(o) {\n  const { a: b, c = dflt } = o;\n  return b + c;\n}\n";
+    assert_eq!(
+        one("a.js", old, new),
+        vec!["adds local b (1 use), c (1 use)"]
+    );
+}
