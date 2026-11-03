@@ -1881,7 +1881,7 @@ function withSymbols(rows, items) {
   const runOf = /* @__PURE__ */ new Map();
   let run2 = [];
   const flush = () => {
-    const name = run2.length > 1 ? aboutOf(items[run2[0]]) : null;
+    const name = run2.length ? aboutOf(items[run2[0]]) : null;
     if (name) {
       out.push({ kind: "symbol", name, items: run2 });
       for (const i of run2) runOf.set(i, run2);
@@ -4321,14 +4321,14 @@ function renderList() {
           "div",
           {
             class: `symhead${row.items.includes(st2.sel) ? " cur" : ""}`,
-            title: `${row.items.length} hunks in a row change ${row.name}`,
+            title: row.items.length === 1 ? `1 hunk changes ${row.name}` : `${row.items.length} hunks in a row change ${row.name}`,
             onclick: () => {
               st2.focus = "list";
               select(row.items.find((i) => !r.items[i].reviewed) ?? row.items[0]);
             }
           },
           h("span", { class: "code-word" }, row.name),
-          h("span", null, `${row.items.length} hunks`)
+          h("span", null, `${row.items.length} hunk${row.items.length === 1 ? "" : "s"}`)
         )
       );
     } else if (row.kind === "file") {

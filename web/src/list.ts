@@ -10,13 +10,13 @@ export function aboutOf(it: Item): string | null {
   return it.symbols[0] || it.enclosing || null;
 }
 
-/** `rows` with a symbol heading before each run of two or more hunks about one name. */
+/** `rows` with a symbol heading before each run of hunks about one name, a single hunk included. */
 export function withSymbols(rows: Row[], items: Item[]): { rows: ListRow[]; runOf: Map<number, number[]> } {
   const out: ListRow[] = [];
   const runOf = new Map<number, number[]>();
   let run: number[] = [];
   const flush = () => {
-    const name = run.length > 1 ? aboutOf(items[run[0]]) : null;
+    const name = run.length ? aboutOf(items[run[0]]) : null;
     if (name) {
       out.push({ kind: "symbol", name, items: run });
       for (const i of run) runOf.set(i, run);
