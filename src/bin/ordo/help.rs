@@ -6,6 +6,7 @@
 use crate::code_view::Syntax;
 use crate::highlight::{highlight_file, LineSpans};
 use ratatui::crossterm::style::{ResetColor, SetForegroundColor};
+use ratatui::prelude::IntoCrossterm;
 use ratatui::style::Color;
 use ratatui::text::Line;
 
@@ -235,7 +236,7 @@ fn paint(out: &mut String, line: &[(char, Color)]) {
     let mut current = None;
     for &(ch, col) in line {
         if current != Some(col) {
-            out.push_str(&SetForegroundColor(col.into()).to_string());
+            out.push_str(&SetForegroundColor(col.into_crossterm()).to_string());
             current = Some(col);
         }
         out.push(ch);
