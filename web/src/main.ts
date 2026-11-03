@@ -373,7 +373,7 @@ function renderList(): void {
       const el = h(
         "div",
         {
-          class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run ? " inrun" : ""}`,
+          class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run ? " inrun" : ""}${run && run[run.length - 1] === items[0] ? " last" : ""}`,
           title: folded ? "Quiet: an import, formatting or generated code. Select it to read." : first.rationale,
           onclick: () => {
             st.focus = "list";

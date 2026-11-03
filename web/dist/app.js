@@ -4355,7 +4355,7 @@ function renderList() {
       const el = h(
         "div",
         {
-          class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run2 ? " inrun" : ""}`,
+          class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run2 ? " inrun" : ""}${run2 && run2[run2.length - 1] === items[0] ? " last" : ""}`,
           title: folded ? "Quiet: an import, formatting or generated code. Select it to read." : first.rationale,
           onclick: () => {
             st2.focus = "list";
