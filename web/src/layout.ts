@@ -28,10 +28,11 @@ export type CodeRow =
       spans: Spans | null;
       hunk: number | null;
       marks: [number, number][] | null;
+      moved?: [number, number][];
       /** on an `edit`, the text the old line had that this one lost, by the column it stood before */
       gone?: [number, string][];
     }
-  | { kind: "del"; o: number; text: string; spans: Spans | null; hunk: number; marks: [number, number][] | null };
+  | { kind: "del"; o: number; text: string; spans: Spans | null; hunk: number; marks: [number, number][] | null; moved?: [number, number][] };
 
 /**
  * The file as the code pane reads it: the new side top to bottom, each hunk's
@@ -46,10 +47,11 @@ export function codeRows(f: FileData): CodeRow[] {
   const rows: CodeRow[] = [];
   const startingAt = new Map<number, typeof hunks>();
   for (const h of hunks) startingAt.set(h.new[0], [...(startingAt.get(h.new[0]) ?? []), h]);
-  const added = new Map<number, { hunk: number; marks: [number, number][] | null }>();
+  const added = new Map<number, { hunk: number; marks: [number, number][] | null; moved?: [number, number][] }>();
   for (const h of hunks) {
     for (let n = h.new[0]; n <= h.new[1]; n++) {
-      added.set(n, { hunk: h.i, marks: h.added[n - h.new[0]] ?? null });
+      const moved = h.moved_added?.[n - h.new[0]];
+      added.set(n, { hunk: h.i, marks: h.added[n - h.new[0]] ?? null, ...(moved?.length ? { moved } : {}) });
     }
   }
   const { folded, edited } = editsInPlace(f, hunks);
@@ -57,6 +59,7 @@ export function codeRows(f: FileData): CodeRow[] {
     for (const h of startingAt.get(n) ?? []) {
       for (let o = h.old[0]; o <= h.old[1]; o++) {
         if (folded.has(o)) continue;
+        const moved = h.moved_removed?.[o - h.old[0]];
         rows.push({
           kind: "del",
           o,
@@ -64,6 +67,7 @@ export function codeRows(f: FileData): CodeRow[] {
           spans: f.old_spans?.[o - 1] ?? null,
           hunk: h.i,
           marks: h.removed[o - h.old[0]] ?? null,
+          ...(moved?.length ? { moved } : {}),
         });
       }
     }
@@ -79,6 +83,7 @@ export function codeRows(f: FileData): CodeRow[] {
       spans: f.new_spans?.[n - 1] ?? null,
       hunk: a?.hunk ?? null,
       marks: e ? e.marks : (a?.marks ?? null),
+      ...(a?.moved ? { moved: a.moved } : {}),
       ...(e && e.gone.length ? { gone: e.gone } : {}),
     });
   }
@@ -195,14 +200,15 @@ export function firstRowOf(rows: CodeRow[], hunk: number): number {
 
 /**
  * A line's text cut into runs, each with its syntax role and whether it is
- * part of the refined (actually changed) span.
+ * part of the refined (actually changed) span, or of text that moved.
  */
 export function runs(
   text: string,
   spans: Spans | null,
   marks: [number, number][] | null,
   gone: [number, string][] = [],
-): { text: string; role: string | null; changed: boolean; gone?: true }[] {
+  movedSpans: [number, number][] = [],
+): { text: string; role: string | null; changed: boolean; moved?: true; gone?: true }[] {
   const chars = [...text];
   const role: (string | null)[] = new Array(chars.length).fill(null);
   if (spans) {
@@ -213,15 +219,17 @@ export function runs(
   }
   const changed: boolean[] = new Array(chars.length).fill(false);
   for (const [a, b] of marks ?? []) for (let k = a; k < b && k < chars.length; k++) changed[k] = true;
-  const out: { text: string; role: string | null; changed: boolean; gone?: true }[] = [];
+  const moved: boolean[] = new Array(chars.length).fill(false);
+  for (const [a, b] of movedSpans) for (let k = a; k < b && k < chars.length; k++) moved[k] = true;
+  const out: { text: string; role: string | null; changed: boolean; moved?: true; gone?: true }[] = [];
   const lost = (k: number) => {
     for (const [at, t] of gone) if (at === k) out.push({ text: t, role: null, changed: false, gone: true });
   };
   for (let k = 0; k < chars.length; k++) {
     lost(k);
     const last = out[out.length - 1];
-    if (last && !last.gone && last.role === role[k] && last.changed === changed[k]) last.text += chars[k];
-    else out.push({ text: chars[k], role: role[k], changed: changed[k] });
+    if (last && !last.gone && last.role === role[k] && last.changed === changed[k] && !!last.moved === moved[k]) last.text += chars[k];
+    else out.push({ text: chars[k], role: role[k], changed: changed[k], ...(moved[k] ? { moved: true as const } : {}) });
   }
   lost(chars.length);
   return out;

@@ -84,6 +84,28 @@ test("a line splits into runs by syntax role and by what changed", () => {
   ]);
 });
 
+test("moved text is its own run, apart from what merely changed", () => {
+  const out = runs("f(b, a)", null, [[2, 6]], [], [[2, 3]]);
+  assert.deepEqual(out, [
+    { text: "f(", role: null, changed: false },
+    { text: "b", role: null, changed: true, moved: true },
+    { text: ", a", role: null, changed: true },
+    { text: ")", role: null, changed: false },
+  ]);
+});
+
+test("a hunk's moved spans reach the rows they belong to", () => {
+  const f = file({
+    old: ["a", "m", "b"],
+    new: ["a", "b", "m"],
+    hunks: [{ i: 1, old: [2, 3], new: [2, 3], removed: [null, [[0, 1]]], added: [[[0, 1]], null], moved_removed: [[[0, 1]], []], moved_added: [[], [[0, 1]]] }],
+  });
+  const rows = codeRows(f);
+  assert.deepEqual(rows.find((r) => r.kind === "del" && r.text === "m")?.moved, [[0, 1]]);
+  assert.deepEqual(rows.find((r) => r.kind !== "del" && r.text === "m")?.moved, [[0, 1]]);
+  assert.equal(rows.find((r) => r.kind !== "del" && r.text === "b")?.moved, undefined);
+});
+
 test("w skips the word, then the space after it, and crosses rows", () => {
   const lines = ["let a = b;", "  call(x)"];
   assert.deepEqual(wordMove(lines, { row: 0, col: 0 }, "next"), { row: 0, col: 4 });

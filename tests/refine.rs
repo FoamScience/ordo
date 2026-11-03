@@ -123,3 +123,107 @@ fn a_machine_generated_line_renders_whole() {
     let out = r.refine([1, 1], [1, 1]);
     assert_eq!(out.added, vec![None], "too large to refine → renders whole");
 }
+
+/// The moved spans of one line, as text.
+fn moved(line: &str, spans: &[Vec<(usize, usize)>], k: usize) -> Vec<String> {
+    texts(line, &spans.get(k).cloned())
+}
+
+#[test]
+fn swapped_arguments_read_as_moved_not_rewritten() {
+    let old = lines("x = scale(width, height)\n");
+    let new = lines("x = scale(height, width)\n");
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 1], [1, 1]);
+
+    let gone = moved(&old[0], &d.moved_removed, 0);
+    let came = moved(&new[0], &d.moved_added, 0);
+    assert_eq!(
+        gone.len(),
+        1,
+        "one argument kept its place, one moved: {gone:?}"
+    );
+    assert_eq!(gone, came);
+}
+
+#[test]
+fn a_statement_moved_down_the_hunk_is_moved_whole() {
+    let old = lines("total = 0\nlog.debug(\"start\")\ncount = 0\n");
+    let new = lines("total = 0\ncount = 0\nlog.debug(\"start\")\n");
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 3], [1, 3]);
+
+    assert_eq!(
+        moved(&old[1], &d.moved_removed, 1),
+        vec!["log.debug(\"start\")"]
+    );
+    assert_eq!(
+        moved(&new[2], &d.moved_added, 2),
+        vec!["log.debug(\"start\")"]
+    );
+    assert!(d.moved_removed[0].is_empty() && d.moved_added[0].is_empty());
+}
+
+#[test]
+fn one_shared_name_between_two_rewrites_is_not_a_move() {
+    let old = lines("self.cache = build(config)\n");
+    let new = lines("result = fetch(self)\n");
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 1], [1, 1]);
+
+    assert!(
+        d.moved_removed.iter().all(Vec::is_empty),
+        "{:?}",
+        d.moved_removed
+    );
+    assert!(
+        d.moved_added.iter().all(Vec::is_empty),
+        "{:?}",
+        d.moved_added
+    );
+}
+
+#[test]
+fn an_edit_in_place_moves_nothing() {
+    let old = lines("x = compute(alpha, 3, verbose=True)\n");
+    let new = lines("x = compute(alpha, 4, verbose=True)\n");
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 1], [1, 1]);
+
+    assert_eq!(d.moved_removed, vec![Vec::<(usize, usize)>::new()]);
+    assert_eq!(d.moved_added, vec![Vec::<(usize, usize)>::new()]);
+}
+
+#[test]
+fn an_edited_word_in_a_comment_or_string_marks_the_word() {
+    let old = lines(
+        "# Copyright (C) 2013-2024 OpenFOAM Foundation\nmsg = \"requires c-ares or newer\"\n",
+    );
+    let new = lines(
+        "# Copyright (C) 2013-2026 OpenFOAM Foundation\nmsg = \"requires c-ares or greater\"\n",
+    );
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 2], [1, 2]);
+
+    assert_eq!(texts(&new[0], &d.added[0]), vec!["2026"]);
+    assert_eq!(texts(&old[1], &d.removed[1]), vec!["newer"]);
+    assert_eq!(texts(&new[1], &d.added[1]), vec!["greater"]);
+}
+
+#[test]
+fn a_hunk_too_scrambled_to_search_reports_no_moves() {
+    // every argument reversed leaves hundreds of unmatched leaves a side; the
+    // greedy search is quadratic per round, so past its cap it does not run
+    let args = |rev: bool| {
+        let mut v: Vec<String> = (0..300).map(|i| format!("a{i}")).collect();
+        if rev {
+            v.reverse();
+        }
+        v.join(", ")
+    };
+    let old = vec![format!("x = f({})", args(false))];
+    let new = vec![format!("x = f({})", args(true))];
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 1], [1, 1]);
+    assert!(d.moved_added.iter().all(Vec::is_empty));
+}

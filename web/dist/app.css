@@ -912,6 +912,11 @@ body.zoom #panes > .pane:not(.zoomed) {
   background: var(--del-strong-bg);
   color: inherit;
 }
+.l mark.moved {
+  background: var(--note-strong-bg);
+  color: inherit;
+  outline: var(--rule-hair) dashed var(--accent);
+}
 .l.other,
 .l.other [class^=s-] {
   color: var(--faint);

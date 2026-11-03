@@ -1652,7 +1652,8 @@ function codeRows(f) {
   const added = /* @__PURE__ */ new Map();
   for (const h2 of hunks) {
     for (let n = h2.new[0]; n <= h2.new[1]; n++) {
-      added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null });
+      const moved = h2.moved_added?.[n - h2.new[0]];
+      added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null, ...moved?.length ? { moved } : {} });
     }
   }
   const { folded, edited } = editsInPlace(f, hunks);
@@ -1660,13 +1661,15 @@ function codeRows(f) {
     for (const h2 of startingAt.get(n) ?? []) {
       for (let o = h2.old[0]; o <= h2.old[1]; o++) {
         if (folded.has(o)) continue;
+        const moved = h2.moved_removed?.[o - h2.old[0]];
         rows.push({
           kind: "del",
           o,
           text: f.old[o - 1] ?? "",
           spans: f.old_spans?.[o - 1] ?? null,
           hunk: h2.i,
-          marks: h2.removed[o - h2.old[0]] ?? null
+          marks: h2.removed[o - h2.old[0]] ?? null,
+          ...moved?.length ? { moved } : {}
         });
       }
     }
@@ -1682,6 +1685,7 @@ function codeRows(f) {
       spans: f.new_spans?.[n - 1] ?? null,
       hunk: a?.hunk ?? null,
       marks: e ? e.marks : a?.marks ?? null,
+      ...a?.moved ? { moved: a.moved } : {},
       ...e && e.gone.length ? { gone: e.gone } : {}
     });
   }
@@ -1770,7 +1774,7 @@ function firstRowOf(rows, hunk) {
   const k = rows.findIndex((r) => r.hunk === hunk);
   return k < 0 ? 0 : k;
 }
-function runs(text, spans, marks, gone = []) {
+function runs(text, spans, marks, gone = [], movedSpans = []) {
   const chars = [...text];
   const role = new Array(chars.length).fill(null);
   if (spans) {
@@ -1781,6 +1785,8 @@ function runs(text, spans, marks, gone = []) {
   }
   const changed = new Array(chars.length).fill(false);
   for (const [a, b] of marks ?? []) for (let k = a; k < b && k < chars.length; k++) changed[k] = true;
+  const moved = new Array(chars.length).fill(false);
+  for (const [a, b] of movedSpans) for (let k = a; k < b && k < chars.length; k++) moved[k] = true;
   const out = [];
   const lost = (k) => {
     for (const [at2, t] of gone) if (at2 === k) out.push({ text: t, role: null, changed: false, gone: true });
@@ -1788,8 +1794,8 @@ function runs(text, spans, marks, gone = []) {
   for (let k = 0; k < chars.length; k++) {
     lost(k);
     const last = out[out.length - 1];
-    if (last && !last.gone && last.role === role[k] && last.changed === changed[k]) last.text += chars[k];
-    else out.push({ text: chars[k], role: role[k], changed: changed[k] });
+    if (last && !last.gone && last.role === role[k] && last.changed === changed[k] && !!last.moved === moved[k]) last.text += chars[k];
+    else out.push({ text: chars[k], role: role[k], changed: changed[k], ...moved[k] ? { moved: true } : {} });
   }
   lost(chars.length);
   return out;
@@ -4440,9 +4446,12 @@ function lineEl(row, k, mine, findings, uses, commented) {
   const search = st2.search;
   const caret = k === st2.cursor ? caretCol(row.text) : -1;
   let at2 = 0;
-  const parts = runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).flatMap((run2) => {
+  const parts = runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : [], row.moved).flatMap((run2) => {
     if (run2.gone) return [h("del", { class: "gone", title: "removed" }, run2.text)];
-    const piece = (text, extra) => h(run2.changed ? "mark" : "span", { class: [run2.role && `s-${run2.role}`, extra].filter(Boolean).join(" ") || null }, text);
+    const piece = (text, extra) => h(run2.changed || run2.moved ? "mark" : "span", {
+      class: [run2.role && `s-${run2.role}`, run2.moved && "moved", extra].filter(Boolean).join(" ") || null,
+      ...run2.moved ? { title: "moved" } : {}
+    }, text);
     const cs = [...run2.text];
     const i = caret - at2;
     at2 += cs.length;
@@ -5631,8 +5640,8 @@ function excerpt(f, hunk, context, max) {
         h(
           "span",
           null,
-          runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).map(
-            (run2) => run2.gone ? h("del", { class: "gone" }, run2.text) : h(run2.changed ? "mark" : "span", { class: run2.role ? `s-${run2.role}` : null }, run2.text)
+          runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : [], row.moved).map(
+            (run2) => run2.gone ? h("del", { class: "gone" }, run2.text) : h(run2.changed || run2.moved ? "mark" : "span", { class: [run2.role && `s-${run2.role}`, run2.moved && "moved"].filter(Boolean).join(" ") || null }, run2.text)
           )
         )
       )
