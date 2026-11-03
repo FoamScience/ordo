@@ -160,5 +160,13 @@
   ],
   "notes": [
     "code changed but no test touched"
-  ]
+  ],
+  "summary": {
+    "label": "feature",
+    "verdict": "unknown",
+    "sentences": [
+      "Adds make, run, with no test touched.",
+      "Behaviour change not ruled out: 3 hunks edit beyond a rename, move, extraction or reformat."
+    ]
+  }
 }

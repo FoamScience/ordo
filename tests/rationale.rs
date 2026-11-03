@@ -1940,6 +1940,24 @@ fn an_inserted_guard_clause_says_when_it_leaves() {
 }
 
 #[test]
+fn a_guard_leads_over_the_helper_it_calls() {
+    // "uses is_blank, added above" would hide that the hunk is a guard; the
+    // guard's own quote names the helper anyway
+    let rats = rationales(serde_json::json!({
+        "changes": [ { "path": "a.py",
+            "old": "def f(x):\n    y = 1\n    return g(x)\n",
+            "new": "def is_blank(x):\n    return not x.strip()\n\n\n\n\n\n\ndef f(x):\n    y = 1\n    if is_blank(x):\n        return None\n    return g(x)\n" } ]
+    }));
+    assert_eq!(
+        rats,
+        vec![
+            "adds is_blank, used by f below",
+            "returns early when is_blank(x) in f"
+        ]
+    );
+}
+
+#[test]
 fn an_if_that_does_more_than_leave_is_no_guard() {
     let rats = edit_rationales(&[
         // two statements under the condition

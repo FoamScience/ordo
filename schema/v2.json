@@ -679,6 +679,47 @@
           },
           "description": "P13.2 changeset notes: change-shape signals about the change as a whole, as facts rather than judgments \u2014 `code changed but no test touched`, `a.py: 14 hunks (high churn)`. Omitted when empty. Per-hunk signals live on hunks[].notes."
         },
+        "summary": {
+          "type": "object",
+          "description": "The change as a whole, read off the hunks' facts by fixed rules: a label, whether it preserves behaviour, and two sentences saying why. Omitted when the change has no hunks.",
+          "required": [
+            "label",
+            "verdict",
+            "sentences"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "type": "string",
+              "enum": [
+                "refactor",
+                "fix-candidate",
+                "feature",
+                "test",
+                "docs",
+                "chore",
+                "change"
+              ],
+              "description": "docs / test / chore when no code file changed, by which files did; refactor when every code hunk preserves behaviour (docs when every one is a comment, test when a test changed alongside); fix-candidate for a guard, try, narrowed, widened or inverted condition, or boundary edit, or for edited code with a test changed alongside; feature for new definitions; change when no rule holds"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "preserving",
+                "changes",
+                "unknown"
+              ],
+              "description": "preserving only when every hunk proves it (formatting, a comment, a rename, a move, an extraction); changes when an edit pattern or a changed value shows it; unknown otherwise"
+            },
+            "sentences": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "what the label rests on, then what the verdict rests on"
+            }
+          }
+        },
         "ledger": {
           "type": "array",
           "description": "P23.1 change ledger: one entry per symbol the change touches, in reading order, rather than per hunk. A projection of data already present elsewhere in this output. Omitted when empty.",

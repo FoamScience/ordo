@@ -150,6 +150,9 @@ fn the_schema_declares_everything_the_engine_emits() {
         for e in out["ledger"].as_array().into_iter().flatten() {
             check("ledger", e);
         }
+        if let Some(s) = out.get("summary") {
+            check("summary", s);
+        }
         for g in out["groups"].as_array().expect("groups") {
             check("groups", g);
         }
@@ -181,6 +184,7 @@ fn the_fixture_reaches_the_optional_output_fields() {
         );
     }
     assert!(out.get("ledger").is_some(), "fixture produced no ledger");
+    assert!(out.get("summary").is_some(), "fixture produced no summary");
 
     // the other two fixtures own the paths this one cannot reach; without them
     // the schema check walks those objects zero times and passes on nothing

@@ -11,6 +11,7 @@ mod order;
 mod patch;
 pub mod refine;
 pub mod rules;
+mod summary;
 
 use extract::{analyze, compute_hunks, HunkSem, RawHunk};
 use lang::LangSpec;
@@ -227,6 +228,7 @@ pub fn run(input: Input) -> Output {
 
     let ledger = build_ledger(&files, &order, &facts);
     let notes = changeset_notes(&files, &ledger);
+    let summary = summary::summarize(&input.changes, &hunks, &changed, &ledger);
     arity_check(&mut files, &ledger, &input.changes);
     incomplete_rename(&mut files, &ledger, &input.changes, &symbols);
     contract::run(&mut files, &ledger, &input.changes, &input.consumers);
@@ -243,6 +245,7 @@ pub fn run(input: Input) -> Output {
         problems,
         notes,
         ledger,
+        summary,
     }
 }
 

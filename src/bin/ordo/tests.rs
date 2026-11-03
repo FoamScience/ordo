@@ -1059,6 +1059,7 @@ fn build_items_resolves_edge_targets_within_the_review_and_flags_ones_outside_it
         problems: vec![],
         notes: vec![],
         ledger: vec![],
+        summary: None,
     };
     let items = build_items(&out);
     assert_eq!(items.len(), 2);

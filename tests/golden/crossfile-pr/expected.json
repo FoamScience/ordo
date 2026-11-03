@@ -115,5 +115,13 @@
   ],
   "notes": [
     "code changed but no test touched"
-  ]
+  ],
+  "summary": {
+    "label": "feature",
+    "verdict": "unknown",
+    "sentences": [
+      "Adds helper, with no test touched.",
+      "Behaviour change not ruled out: 2 hunks edit beyond a rename, move, extraction or reformat."
+    ]
+  }
 }

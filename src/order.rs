@@ -2167,6 +2167,20 @@ fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> 
         }
     }
     if let Some((u, b)) = defined_elsewhere(s, mine, ctx, |_| true) {
+        // what the edit did says more than what it depends on, and its
+        // quote usually names the dependency anyway; a use that only follows
+        // a rename says that instead
+        let renamed = ctx
+            .changed
+            .get(ctx.group_file[b])
+            .is_some_and(|c| c.rename.contains_key(u.as_str()));
+        let intent = s.enclosing.as_ref().zip(s.intent.as_ref());
+        if let Some(p) = intent
+            .filter(|_| !renamed)
+            .and_then(|(nm, i)| intent_phrase(i, &short_container(nm)))
+        {
+            return Some(p);
+        }
         return Some(ctx.use_of_phrase(u, mine, b, s.start_row));
     }
     // like a function the hunk adds, a container it adds carries its own

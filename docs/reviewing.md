@@ -325,6 +325,32 @@ so the agent reads a review of wave 2 in terms of what it was doing then.
 linked worktrees keep separate chains. herdr-ordo records a wave each time the
 agent goes from working back to idle, opt in with `WAVES=1`.
 
+### The change summary
+
+One label for the whole change, a verdict on whether it keeps what the code
+does, and two sentences saying what each rests on:
+
+```json
+"summary": { "label": "refactor", "verdict": "preserving",
+  "sentences": ["Refactor: renames parse_cfg → load_cfg.",
+                "Behaviour-preserving: every hunk is a rename."] }
+```
+
+Fixed rules, first match wins: no code file changed — `docs`, `test` or
+`chore` by which files did; every code hunk preserves behaviour — `refactor`
+(`docs` when they are all comments, `test` when a test changed alongside); a
+guard, try, narrowed, widened or inverted condition, or boundary edit —
+`fix-candidate`; new definitions — `feature`; existing code edited with a test
+changed alongside — `fix-candidate`; otherwise `change`.
+
+The verdict is `preserving` only when every hunk proves it from its own lines:
+whitespace that separates no tokens (and never indentation where it is
+syntax), a comment, a rename whose substitution turns each removed line into
+its added one, a moved definition whose lines left another file, an extraction
+whose lines left the definition it came out of. A hunk nothing explains makes
+it `unknown`; an edit pattern or a changed literal makes it `changes`. A wrong
+"preserving" is the costly mistake, so the verdict never guesses it.
+
 ### The change ledger
 
 One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk

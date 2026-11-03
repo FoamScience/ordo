@@ -189,6 +189,48 @@ pub struct Output {
     /// `a.py: 14 hunks (high churn)`. Per-hunk signals live on `hunks[].notes`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// the change as a whole: a label, whether it preserves behaviour, and
+    /// two sentences saying why. Omitted when the change has no hunks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Summary>,
+}
+
+/// What the change is, read off its hunks' facts by fixed rules.
+#[derive(Debug, Clone, Serialize)]
+pub struct Summary {
+    pub label: Label,
+    pub verdict: Verdict,
+    /// what the label rests on, then what the verdict rests on
+    pub sentences: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Label {
+    Refactor,
+    /// an edit pattern that tightens or corrects code: a guard, a try, a
+    /// condition, a boundary
+    FixCandidate,
+    /// new definitions in code
+    Feature,
+    Test,
+    Docs,
+    Chore,
+    /// code changed, and no rule says how
+    Change,
+}
+
+/// Whether the change keeps what the code does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verdict {
+    /// every hunk proves it: formatting, a comment, a rename, a move, an
+    /// extraction
+    Preserving,
+    /// some hunk shows an edit pattern or a value that changes behaviour
+    Changes,
+    /// neither shown
+    Unknown,
 }
 
 #[derive(Debug, Serialize)]
