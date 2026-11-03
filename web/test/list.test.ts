@@ -8,7 +8,7 @@ const item = (over: Partial<Item>): Item =>
 
 const rows = (...ks: (number | "gap")[]): Row[] => ks.map((k) => (k === "gap" ? { kind: "gap" } : { kind: "item", i: k, opens: true }));
 
-test("two or more hunks in a row about one symbol sit under its name", () => {
+test("hunks in a row about one symbol sit under its name, a lone one too", () => {
   const items = [
     item({ enclosing: "Bezier" }),
     item({ enclosing: "Bezier" }),
@@ -18,10 +18,10 @@ test("two or more hunks in a row about one symbol sit under its name", () => {
   const { rows: out, runOf } = withSymbols(rows(0, 1, 2, 3), items);
   assert.deepEqual(
     out.map((r) => (r.kind === "symbol" ? `[${r.name}]` : r.kind === "item" ? r.i : r.kind)),
-    ["[Bezier]", 0, 1, 2, 3],
+    ["[Bezier]", 0, 1, "[load]", 2, "[Bezier]", 3],
   );
   assert.deepEqual(runOf.get(1), [0, 1]);
-  assert.equal(runOf.has(3), false);
+  assert.deepEqual(runOf.get(3), [3]);
   assert.equal(out[1].kind === "item" && out[1].opens, true);
 });
 
@@ -29,7 +29,7 @@ test("a gap or a nameless hunk ends a run", () => {
   const items = [item({ enclosing: "A" }), item({ enclosing: "A" }), item({}), item({})];
   assert.deepEqual(
     withSymbols(rows(0, "gap", 1, 2, 3), items).rows.map((r) => r.kind),
-    ["item", "gap", "item", "item", "item"],
+    ["symbol", "item", "gap", "symbol", "item", "item", "item"],
   );
 });
 

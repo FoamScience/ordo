@@ -339,14 +339,14 @@ function renderList(): void {
           "div",
           {
             class: `symhead${row.items.includes(st.sel) ? " cur" : ""}`,
-            title: `${row.items.length} hunks in a row change ${row.name}`,
+            title: row.items.length === 1 ? `1 hunk changes ${row.name}` : `${row.items.length} hunks in a row change ${row.name}`,
             onclick: () => {
               st.focus = "list";
               select(row.items.find((i) => !r.items[i].reviewed) ?? row.items[0]);
             },
           },
           h("span", { class: "code-word" }, row.name),
-          h("span", null, `${row.items.length} hunks`),
+          h("span", null, `${row.items.length} hunk${row.items.length === 1 ? "" : "s"}`),
         ),
       );
     } else if (row.kind === "file") {
