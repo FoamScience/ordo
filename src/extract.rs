@@ -36,6 +36,9 @@ pub struct HunkSem {
     /// the one run of tokens a small edit changed, when that is all it
     /// changed (see `refine::Refiner::single_change`)
     pub single: Option<crate::refine::SingleChange>,
+    /// what a small edit set out to do, when one of the known edit patterns
+    /// says (see `intent`)
+    pub intent: Option<crate::intent::Intent>,
     pub defines: Vec<String>,
     /// subset of `defines` that a hunk introduces via *import* nodes — used for
     /// rationale wording so an import+def hunk doesn't call function names
@@ -168,6 +171,7 @@ impl HunkSem {
             annotations_only: false,
             directive: None,
             single: None,
+            intent: None,
             new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
             def_lines: 0,
             def_params: 0,
@@ -530,6 +534,7 @@ impl Parsed<'_> {
             annotations_only: false,
             directive: None,
             single: None,
+            intent: None,
             new_len: r1 - r0 + 1,
             def_lines: shape.lines,
             def_params: shape.params,

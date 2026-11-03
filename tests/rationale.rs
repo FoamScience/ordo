@@ -1590,8 +1590,8 @@ fn a_one_token_edit_it_cannot_name_stays_an_edit() {
         ("document.on(\"x\", g);", "doc.on(\"x\", g);"),
         // an element deep inside an argument is not an argument
         ("useEffect(g, [a]);", "useEffect(g, [a, b]);"),
-        // an operator is none of the named kinds
-        ("if (a > 1) g();", "if (a >= 1) g();"),
+        // an arithmetic operator is none of the named kinds
+        ("const c = a + 1;", "const c = a - 1;"),
     ] {
         let rats = rationales(serde_json::json!({
             "changes": [{ "path": "a.ts", "old": body(old), "new": body(new) }]
@@ -1858,4 +1858,404 @@ fn a_constructor_is_not_what_a_use_of_its_class_name_means() {
         "changes": [{ "path": "Box.C", "old": old, "new": new }]
     }));
     assert_eq!(rats, vec!["changes signature of check", "adds Box"]);
+}
+
+/// Each `(path, old, new)` edit's one rationale.
+fn edit_rationales(cases: &[(&str, &str, &str)]) -> Vec<String> {
+    cases
+        .iter()
+        .map(|(path, old, new)| {
+            let rats = rationales(serde_json::json!({
+                "changes": [{ "path": path, "old": old, "new": new }]
+            }));
+            assert_eq!(rats.len(), 1, "{path}: {old:?} -> {new:?}: {rats:?}");
+            rats[0].clone()
+        })
+        .collect()
+}
+
+#[test]
+fn an_inserted_guard_clause_says_when_it_leaves() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    return g(x)\n",
+            "def f(x):\n    y = 1\n    if x is None:\n        return\n    return g(x)\n",
+        ),
+        (
+            "a.py",
+            "def f(x):\n    return g(x)\n",
+            "def f(x):\n    if not x:\n        raise ValueError('x')\n    return g(x)\n",
+        ),
+        (
+            "a.go",
+            "package a\n\nfunc f() error {\n\terr := g()\n\th()\n\treturn nil\n}\n",
+            "package a\n\nfunc f() error {\n\terr := g()\n\tif err != nil {\n\t\treturn err\n\t}\n\th()\n\treturn nil\n}\n",
+        ),
+        (
+            "a.ts",
+            "function f(a) {\n  const b = 1;\n  g(a);\n}\n",
+            "function f(a) {\n  const b = 1;\n  if (!a) return;\n  g(a);\n}\n",
+        ),
+        (
+            "a.rs",
+            "fn f(a: u32) -> u32 {\n    let b = 1;\n    a + b\n}\n",
+            "fn f(a: u32) -> u32 {\n    let b = 1;\n    if a == 0 {\n        return 0;\n    }\n    a + b\n}\n",
+        ),
+        (
+            "a.c",
+            "int f(int *p) {\n  int a = 1;\n  return *p + a;\n}\n",
+            "int f(int *p) {\n  int a = 1;\n  if(!p)\n    return -1;\n  return *p + a;\n}\n",
+        ),
+        (
+            "a.java",
+            "class A {\n  void f(Object x) {\n    int a = 1;\n    g(x);\n  }\n}\n",
+            "class A {\n  void f(Object x) {\n    int a = 1;\n    if (x == null) {\n      throw new IllegalArgumentException();\n    }\n    g(x);\n  }\n}\n",
+        ),
+        (
+            "a.lua",
+            "local function f(t)\n  local a = 1\n  return t.x\nend\n",
+            "local function f(t)\n  local a = 1\n  if not t then return nil end\n  return t.x\nend\n",
+        ),
+        (
+            "a.py",
+            "def f(xs):\n    for x in xs:\n        y = 1\n        g(x)\n",
+            "def f(xs):\n    for x in xs:\n        y = 1\n        if x < 0:\n            continue\n        g(x)\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "returns early when x is None in f",
+            "raises when not x in f",
+            "returns early when err != nil in f",
+            "returns early when !a in f",
+            "returns early when a == 0 in f",
+            "returns early when !p in f",
+            "throws when x == null in A.f",
+            "returns early when not t in f",
+            "skips the iteration when x < 0 in f",
+        ]
+    );
+}
+
+#[test]
+fn an_if_that_does_more_than_leave_is_no_guard() {
+    let rats = edit_rationales(&[
+        // two statements under the condition
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    return g(x)\n",
+            "def f(x):\n    y = 1\n    if x is None:\n        log()\n        return\n    return g(x)\n",
+        ),
+        // an else branch
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    return g(x)\n",
+            "def f(x):\n    y = 1\n    if x is None:\n        return\n    else:\n        h()\n    return g(x)\n",
+        ),
+        // the condition calls what it tests
+        (
+            "a.go",
+            "package a\n\nfunc f() error {\n\tx := 1\n\treturn nil\n}\n",
+            "package a\n\nfunc f() error {\n\tx := 1\n\tif err := g(); err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec!["edits f", "adds 4 lines to f", "adds local err (2 uses)"]
+    );
+}
+
+#[test]
+fn statements_wrapped_in_a_try_name_the_call_and_what_it_catches() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    data = load(x)\n    return data\n",
+            "def f(x):\n    y = 1\n    try:\n        data = load(x)\n    except (OSError, ValueError) as e:\n        data = None\n    return data\n",
+        ),
+        (
+            "a.ts",
+            "function f(a) {\n  const b = 1;\n  g(a);\n  h(b);\n}\n",
+            "function f(a) {\n  const b = 1;\n  try {\n    g(a);\n    h(b);\n  } catch (e) {\n    log(e);\n  }\n}\n",
+        ),
+        (
+            "a.java",
+            "class A {\n  void f() {\n    int a = 1;\n    in.read();\n  }\n}\n",
+            "class A {\n  void f() {\n    int a = 1;\n    try {\n      in.read();\n    } catch (IOException e) {\n      log(e);\n    }\n  }\n}\n",
+        ),
+        (
+            "a.cpp",
+            "void f() {\n  int a = 1;\n  run(a);\n}\n",
+            "void f() {\n  int a = 1;\n  try {\n    run(a);\n  } catch (const std::exception& e) {\n    log(e);\n  }\n}\n",
+        ),
+        // the call sits in a nested statement: the try wraps the if
+        (
+            "a.ts",
+            "function f(a) {\n  const b = 1;\n  if (a) g(a);\n}\n",
+            "function f(a) {\n  const b = 1;\n  try {\n    if (a) g(a);\n  } catch (e) {\n    log(e);\n  }\n}\n",
+        ),
+        // the wrapped lines changed too: a rewrite, not a wrap
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    data = load(x)\n    return data\n",
+            "def f(x):\n    y = 1\n    try:\n        data = load(x, strict=True)\n    except OSError:\n        data = None\n    return data\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "wraps load() in try/except OSError, ValueError in f",
+            "wraps 2 lines in try/catch in f",
+            "wraps in.read() in try/catch IOException in A.f",
+            "wraps run() in try/catch std::exception in f",
+            "wraps 1 line in try/catch in f",
+            "edits f",
+        ]
+    );
+}
+
+#[test]
+fn an_operand_added_to_or_dropped_from_a_condition_narrows_or_widens_it() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f(a, b):\n    x = 1\n    if a:\n        g()\n",
+            "def f(a, b):\n    x = 1\n    if a and b:\n        g()\n",
+        ),
+        (
+            "a.ts",
+            "function f(a, b) {\n  const x = 1;\n  if (a || b) g();\n}\n",
+            "function f(a, b) {\n  const x = 1;\n  if (a) g();\n}\n",
+        ),
+        (
+            "a.go",
+            "package a\n\nfunc f() {\n\tx := 1\n\tif a {\n\t\tg()\n\t}\n}\n",
+            "package a\n\nfunc f() {\n\tx := 1\n\tif a || b.c() {\n\t\tg()\n\t}\n}\n",
+        ),
+        // not a condition
+        (
+            "a.py",
+            "def f(a, b):\n    x = 1\n    y = a\n",
+            "def f(a, b):\n    x = 1\n    y = a and b\n",
+        ),
+        // the operand sits under a negation: which way it moves is not read
+        (
+            "a.py",
+            "def f(a, b):\n    x = 1\n    if not (a):\n        g()\n",
+            "def f(a, b):\n    x = 1\n    if not (a and b):\n        g()\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "narrows condition with b in f",
+            "narrows condition by dropping b in f",
+            "widens condition with b.c() in f",
+            "edits f",
+            "edits f",
+        ]
+    );
+}
+
+#[test]
+fn a_comparison_made_inclusive_or_negated_says_so() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f(a, n):\n    x = 1\n    while a < n:\n        a += 1\n",
+            "def f(a, n):\n    x = 1\n    while a <= n:\n        a += 1\n",
+        ),
+        (
+            "a.rs",
+            "fn f(v: &[u8]) -> bool {\n    let a = 1;\n    v.len() > a\n}\n",
+            "fn f(v: &[u8]) -> bool {\n    let a = 1;\n    v.len() >= a\n}\n",
+        ),
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    if x is None:\n        g()\n",
+            "def f(x):\n    y = 1\n    if x is not None:\n        g()\n",
+        ),
+        (
+            "a.py",
+            "def f(x):\n    y = 1\n    if x:\n        g()\n",
+            "def f(x):\n    y = 1\n    if not x:\n        g()\n",
+        ),
+        (
+            "a.c",
+            "int f(int a) {\n  int b = 1;\n  if (a == b) g();\n}\n",
+            "int f(int a) {\n  int b = 1;\n  if (a != b) g();\n}\n",
+        ),
+        (
+            "a.rs",
+            "fn f(a: bool) {\n    let b = 1;\n    if !a { g(); }\n}\n",
+            "fn f(a: bool) {\n    let b = 1;\n    if a { g(); }\n}\n",
+        ),
+        // one operand negated is not the condition inverted
+        (
+            "a.py",
+            "def f(x, y):\n    z = 1\n    if x and y:\n        g()\n",
+            "def f(x, y):\n    z = 1\n    if x and not y:\n        g()\n",
+        ),
+        // a comparison turned round is neither
+        (
+            "a.ts",
+            "function f(a) {\n  const b = 1;\n  if (a < b) g();\n}\n",
+            "function f(a) {\n  const b = 1;\n  if (a > b) g();\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "changes boundary a < n → a <= n in f",
+            "changes boundary v.len() > a → v.len() >= a in f",
+            "inverts condition x is None → x is not None in f",
+            "inverts condition x → not x in f",
+            "inverts condition a == b → a != b in f",
+            "inverts condition !a → a in f",
+            "edits f",
+            "edits f",
+        ]
+    );
+}
+
+#[test]
+fn a_literal_replaced_by_a_constant_names_both() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f():\n    x = 1\n    time.sleep(30)\n",
+            "def f():\n    x = 1\n    time.sleep(TIMEOUT)\n",
+        ),
+        (
+            "a.java",
+            "class A {\n  void f() {\n    int a = 1;\n    g(\"utf-8\");\n  }\n}\n",
+            "class A {\n  void f() {\n    int a = 1;\n    g(Charsets.UTF_8);\n  }\n}\n",
+        ),
+        // a variable, not a constant
+        (
+            "a.py",
+            "def f():\n    x = 1\n    time.sleep(30)\n",
+            "def f():\n    x = 1\n    time.sleep(timeout)\n",
+        ),
+        // NULL is no named value
+        (
+            "a.c",
+            "int f(void) {\n  int a = 1;\n  g(\"x\");\n}\n",
+            "int f(void) {\n  int a = 1;\n  g(NULL);\n}\n",
+        ),
+        // a string's text changed, shouting or not
+        (
+            "a.js",
+            "function f() {\n  const a = 1;\n  g({code: 'ABORT_ERR'});\n}\n",
+            "function f() {\n  const a = 1;\n  g({code: 'ERR_CLOSED'});\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "replaces 30 with constant TIMEOUT in f",
+            "replaces \"utf-8\" with constant Charsets.UTF_8 in A.f",
+            "edits f",
+            "edits f",
+            "changes \"ABORT_ERR\" → \"ERR_CLOSED\" in f",
+        ]
+    );
+}
+
+#[test]
+fn a_defaulted_parameter_appended_leaves_callers_unaffected() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f(a):\n    return a\n",
+            "def f(a, b=1):\n    return a\n",
+        ),
+        (
+            "a.py",
+            "def f(\n    a,\n    c=2,\n):\n    return a\n",
+            "def f(\n    a,\n    c=2,\n    d: int = 3,\n):\n    return a\n",
+        ),
+        (
+            "a.py",
+            "def f(a, **kw):\n    return a\n",
+            "def f(a, b=None, **kw):\n    return a\n",
+        ),
+        (
+            "a.ts",
+            "export function f(a: number) {\n  return a;\n}\n",
+            "export function f(a: number, b?: string) {\n  return a;\n}\n",
+        ),
+        (
+            "a.js",
+            "function f(a) {\n  return a;\n}\n",
+            "function f(a, b = 1) {\n  return a;\n}\n",
+        ),
+        (
+            "a.cpp",
+            "void f(int a);\nint g();\n",
+            "void f(int a, int b = 0);\nint g();\n",
+        ),
+        // ahead of another parameter, it takes that one's positional argument
+        (
+            "a.py",
+            "def f(a, c=2):\n    return a\n",
+            "def f(a, b=1, c=2):\n    return a\n",
+        ),
+        // no default: every caller must pass it
+        (
+            "a.py",
+            "def f(a):\n    return a\n",
+            "def f(a, b):\n    return a\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "adds optional parameter b to f",
+            "adds optional parameter d to f",
+            "adds optional parameter b to f",
+            "adds optional parameter b to f",
+            "adds optional parameter b to f",
+            "adds optional parameter b to f",
+            "changes signature of f",
+            "changes signature of f",
+        ]
+    );
+}
+
+#[test]
+fn a_function_made_async_is_named() {
+    let rats = edit_rationales(&[
+        (
+            "a.py",
+            "def f(a):\n    return a\n",
+            "async def f(a):\n    return a\n",
+        ),
+        (
+            "a.ts",
+            "class K {\n  m(a) {\n    return a;\n  }\n}\n",
+            "class K {\n  async m(a) {\n    return a;\n  }\n}\n",
+        ),
+        (
+            "a.rs",
+            "pub async fn f(a: u32) -> u32 {\n    a\n}\n",
+            "pub fn f(a: u32) -> u32 {\n    a\n}\n",
+        ),
+        (
+            "a.js",
+            "function f(p) {\n  const a = 1;\n  p.then((x) => g(x));\n}\n",
+            "function f(p) {\n  const a = 1;\n  p.then(async (x) => g(x));\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "makes f async",
+            "makes m async",
+            "makes f synchronous",
+            "makes a callback async in f",
+        ]
+    );
 }

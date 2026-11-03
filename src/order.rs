@@ -1330,7 +1330,9 @@ impl<'a> RatCtx<'a> {
         } else {
             "signature"
         };
-        existed.then(|| format!("changes {what} of {}", short_container(nm)))
+        let nm = short_container(nm);
+        existed
+            .then(|| signature_intent(s, &nm).unwrap_or_else(|| format!("changes {what} of {nm}")))
     }
     // a file-scope hunk that touches module-level bindings: "changes STRING"
     // for a constant whose declaration line changed (an annotation, a value),
@@ -1729,7 +1731,11 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
         } else {
             "signature"
         };
-        frags.push(format!("changes {what} of {}", name_list(&sig)));
+        let named = match sig[..] {
+            [nm] => signature_intent(s, nm),
+            _ => None,
+        };
+        frags.push(named.unwrap_or_else(|| format!("changes {what} of {}", name_list(&sig))));
     }
     if !plain.is_empty() {
         frags.push(
@@ -2061,6 +2067,9 @@ fn container_phrase(s: &HunkSem, nm: &str) -> String {
     if adds_whole(s) {
         return format!("adds {nm}");
     }
+    if let Some(p) = s.intent.as_ref().and_then(|i| intent_phrase(i, nm)) {
+        return p;
+    }
     if let Some(p) = s.single.as_ref().and_then(|c| single_phrase(c, nm)) {
         return p;
     }
@@ -2074,8 +2083,125 @@ fn container_phrase(s: &HunkSem, nm: &str) -> String {
 /// thing changed instead.
 const SINGLE_QUOTE_MAX: usize = 30;
 
-/// "changes 3 → 5 in f", "calls b instead of a in f": the one thing a small
-/// edit changed, when it is a literal, a callee, a name or an argument.
+/// Longest condition a guard's headline quotes before it only says there is one.
+const CONDITION_MAX: usize = 40;
+
+/// What a recognised edit pattern did in `nm`: "returns early when x is None
+/// in f", "wraps fetch() in try/except OSError in f", "calls b instead of a in
+/// f". `None` when what it would quote is too long or says nothing.
+fn intent_phrase(i: &crate::intent::Intent, nm: &str) -> Option<String> {
+    use crate::intent::{Exit, Intent};
+    let fits =
+        |t: &str| t.chars().any(char::is_alphanumeric) && t.chars().count() <= SINGLE_QUOTE_MAX;
+    Some(match i {
+        Intent::Guard { cond, exit } => {
+            let verb = match exit {
+                Exit::Return => "returns early",
+                Exit::Raise => "raises",
+                Exit::Throw => "throws",
+                Exit::Continue => "skips the iteration",
+                Exit::Break => "leaves the loop",
+            };
+            if cond.chars().count() <= CONDITION_MAX {
+                format!("{verb} when {cond} in {nm}")
+            } else {
+                format!("adds a guard clause to {nm}")
+            }
+        }
+        Intent::WrapsTry {
+            call,
+            lines,
+            caught,
+            word,
+        } => {
+            let what = match call.as_deref().filter(|c| fits(c)) {
+                Some(c) => format!("{c}()"),
+                None if *lines == 1 => "1 line".to_string(),
+                None => format!("{lines} lines"),
+            };
+            let caught = match caught.as_deref().filter(|c| fits(c)) {
+                Some(c) => format!(" {c}"),
+                None => String::new(),
+            };
+            format!("wraps {what} in {word}{caught} in {nm}")
+        }
+        Intent::Condition {
+            narrows,
+            added,
+            clause,
+        } => {
+            let verb = if *narrows { "narrows" } else { "widens" };
+            match (fits(clause), added) {
+                (true, true) => format!("{verb} condition with {clause} in {nm}"),
+                (true, false) => format!("{verb} condition by dropping {clause} in {nm}"),
+                (false, _) => format!("{verb} condition in {nm}"),
+            }
+        }
+        Intent::Boundary { ops, old, new } => {
+            let [o, n] = if fits(old) && fits(new) {
+                [old, new]
+            } else {
+                [&ops[0], &ops[1]]
+            };
+            format!("changes boundary {o} → {n} in {nm}")
+        }
+        Intent::Inverts { old, new } if fits(old) && fits(new) => {
+            format!("inverts condition {old} → {new} in {nm}")
+        }
+        Intent::Inverts { .. } => format!("inverts condition in {nm}"),
+        Intent::NamesLiteral { literal, name } if fits(name) => {
+            if fits(literal) {
+                format!("replaces {literal} with constant {name} in {nm}")
+            } else {
+                format!("replaces a literal with constant {name} in {nm}")
+            }
+        }
+        Intent::DefaultParam { param, func } => {
+            let (to, place) = function_in(func.as_deref(), nm);
+            let plain = param
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$'));
+            if plain && fits(param) {
+                format!("adds optional parameter {param} to {to}{place}")
+            } else {
+                format!("adds an optional parameter to {to}{place}")
+            }
+        }
+        Intent::Async { added, func } => {
+            let (what, place) = function_in(func.as_deref(), nm);
+            let how = if *added { "async" } else { "synchronous" };
+            format!("makes {what} {how}{place}")
+        }
+        Intent::SwapsCall { old, new } if fits(old) && fits(new) => {
+            format!("calls {new} instead of {old} in {nm}")
+        }
+        _ => return None,
+    })
+}
+
+/// The function a pattern found, and where it sits, said from `nm`, the
+/// hunk's container: `nm` itself when it is that function, else the function's
+/// name — "a callback" when it has none — and " in nm".
+fn function_in(func: Option<&str>, nm: &str) -> (String, String) {
+    match func {
+        Some(f) if bare_name(nm) == bare_name(f) => (nm.to_string(), String::new()),
+        Some(f) => (bare_name(f).to_string(), format!(" in {nm}")),
+        None => ("a callback".to_string(), format!(" in {nm}")),
+    }
+}
+
+/// A signature edit a pattern recognised — an optional parameter appended,
+/// `async` added — said of `nm` in place of "changes signature of".
+fn signature_intent(s: &HunkSem, nm: &str) -> Option<String> {
+    use crate::intent::Intent;
+    s.intent
+        .as_ref()
+        .filter(|i| matches!(i, Intent::DefaultParam { .. } | Intent::Async { .. }))
+        .and_then(|i| intent_phrase(i, nm))
+}
+
+/// "changes 3 → 5 in f", "replaces a with b in f": the one thing a small edit
+/// changed, when it is a literal, a name or an argument.
 fn single_phrase(c: &crate::refine::SingleChange, nm: &str) -> Option<String> {
     use crate::refine::Role;
     let fits =
@@ -2096,9 +2222,6 @@ fn single_phrase(c: &crate::refine::SingleChange, nm: &str) -> Option<String> {
             )
         }
         Role::Str if !c.old.is_empty() && !c.new.is_empty() => format!("changes a string in {nm}"),
-        Role::Callee if fits(&c.old) && fits(&c.new) => {
-            format!("calls {} instead of {} in {nm}", c.new, c.old)
-        }
         Role::Ident if fits(&c.old) && fits(&c.new) => {
             format!("replaces {} with {} in {nm}", c.old, c.new)
         }

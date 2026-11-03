@@ -103,6 +103,12 @@ pub struct SingleChange {
     /// or `:` in front of it, when only a closing quote, a `;` or `,` and a
     /// comment follow it on its line
     pub lhs: Option<String>,
+    /// the changed line pair's 0-based rows, old side then new
+    pub rows: [usize; 2],
+    /// each side's run as a char span on its row, `None` when that run is empty
+    pub spans: [Option<Span>; 2],
+    /// each side's run's role on its own, `None` when that run is empty
+    pub roles: [Option<Role>; 2],
 }
 
 /// A file parsed once, refined per hunk — parsing per hunk would re-walk the
@@ -210,26 +216,33 @@ impl Refiner {
         };
         let o = rest(&old[i], matched.iter().map(|&(a, _)| a).collect())?;
         let n = rest(&new[j], matched.iter().map(|&(_, b)| b).collect())?;
-        let role =
-            o.iter()
-                .chain(&n)
+        let role_of_run = |toks: &[Token]| {
+            toks.iter()
                 .map(|t| t.role)
-                .reduce(|a, b| if a == b { a } else { Role::Other })?;
-        let text = |toks: &[Token], line: &str| -> String {
-            match (toks.first(), toks.last()) {
-                (Some(f), Some(l)) => line.chars().skip(f.start).take(l.end - f.start).collect(),
-                _ => String::new(),
-            }
+                .reduce(|a, b| if a == b { a } else { Role::Other })
         };
-        let new_line = &self.new_lines[new_range[0] - 1 + j];
+        let roles = [role_of_run(&o), role_of_run(&n)];
+        let role = roles
+            .into_iter()
+            .flatten()
+            .reduce(|a, b| if a == b { a } else { Role::Other })?;
+        let span = |toks: &[Token]| toks.first().zip(toks.last()).map(|(f, l)| (f.start, l.end));
+        let spans = [span(&o), span(&n)];
+        let text = |s: Option<Span>, line: &str| -> String {
+            s.map_or_else(String::new, |(a, b)| {
+                line.chars().skip(a).take(b - a).collect()
+            })
+        };
+        let rows = [old_range[0] - 1 + i, new_range[0] - 1 + j];
+        let new_line = &self.new_lines[rows[1]];
         Some(SingleChange {
             role,
-            old: text(&o, &self.old_lines[old_range[0] - 1 + i]),
-            new: text(&n, new_line),
-            lhs: n
-                .first()
-                .zip(n.last())
-                .and_then(|(f, l)| value_lhs(new_line, f.start, l.end)),
+            old: text(spans[0], &self.old_lines[rows[0]]),
+            new: text(spans[1], new_line),
+            lhs: spans[1].and_then(|(a, b)| value_lhs(new_line, a, b)),
+            rows,
+            spans,
+            roles,
         })
     }
 

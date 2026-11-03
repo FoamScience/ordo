@@ -4,6 +4,7 @@ mod advisories;
 pub mod catalog;
 mod contract;
 mod extract;
+mod intent;
 mod lang;
 pub mod model;
 mod order;
@@ -2143,6 +2144,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     if let Some(spec) = lang::for_path(&change.path) {
         fill_details(&raw, &mut sems, (old, &new), spec);
         fill_single_changes(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
+        intent::fill(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
     }
     let switched: Vec<Option<SideShift>> = raw
         .iter()
