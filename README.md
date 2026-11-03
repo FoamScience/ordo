@@ -35,8 +35,8 @@ it as such.
 - **Advisories** — curated, deterministic guidance on advanced constructs
   (metaclasses, `unsafe`, raw `new`/`delete`, shell injection), with an
   escalation ladder and a verdict only when the pattern is concretely wrong.
-- **Noise flags** — generated, lock and pure-formatting hunks marked so a
-  client can dim or drop them.
+- **Noise flags** — generated, lock, pure-formatting and copyright-notice
+  hunks marked so a client can dim or drop them.
 - **Full accounting** — every hunk the diff produced is either in the reading
   order or recorded in `dropped` with the reason, so a consumer can prove
   nothing went missing silently.

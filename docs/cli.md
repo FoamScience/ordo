@@ -26,7 +26,7 @@ instead carry a `diff` (unified/git) — see [Ceilings](ceilings.md).
 
 Output carries the global `order`, per-file `hunks` (with `category`,
 `enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, `details`,
-`symbols`, `findings`, `uses_at`, `noise` for skippable formatting/generated
+`symbols`, `findings`, `uses_at`, `noise` for skippable formatting/generated/copyright-notice
 hunks, `extent` for how much of it changed — `whitespace`, `formatting`,
 `edited` (most of the old leaves survive), `rewritten`, `added` or `removed` —
 and `comment` for comment/docstring-only hunks), the `groups`, the def→use `edges`, and the

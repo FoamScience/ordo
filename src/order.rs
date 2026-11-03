@@ -1495,6 +1495,8 @@ fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> 
     }
     Some(if crate::lang::is_generated_path(&ctx.paths[my_file]) {
         "generated file".to_string()
+    } else if s.copyright {
+        "copyright notice".to_string()
     } else {
         "formatting only".to_string()
     })

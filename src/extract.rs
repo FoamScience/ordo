@@ -55,9 +55,13 @@ pub struct HunkSem {
     pub adds_enclosing: bool,
     /// a type-def (class/struct/enum/…) starts in this hunk (#4 wording)
     pub is_type: bool,
-    /// formatting-only / generated-file hunk — skippable for review (P12.2)
+    /// formatting-only / generated-file / copyright-notice hunk — skippable
+    /// for review (P12.2)
     pub noise: bool,
     pub extent: Option<crate::model::Extent>,
+    /// every changed line names a copyright in the file's leading comments: a
+    /// year bumped, a holder added
+    pub copyright: bool,
     /// named members of the enclosing container this hunk touches, new side, as
     /// `(name, normalized text)` (P15) — compared against the old side to
     /// compose `details`
@@ -146,6 +150,7 @@ impl HunkSem {
             is_type: false,
             noise: false,
             extent: None,
+            copyright: false,
             members: vec![],
             details: vec![],
             touched: vec![],
@@ -472,6 +477,7 @@ impl Parsed<'_> {
             is_type: (r0..=r1).any(|r| self.c.type_rows.contains(&r)),
             noise: false,
             extent: None,
+            copyright: false,
             members: sorted_unique(
                 self.c
                     .member_rows

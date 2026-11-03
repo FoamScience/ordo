@@ -618,7 +618,8 @@ pub struct HunkOut {
     pub group: String,
     pub order_index: usize,
     pub rationale: String,
-    /// formatting-only or generated-file hunk — skippable for review (P12.2)
+    /// formatting-only, generated-file or copyright-notice hunk — skippable for
+    /// review (P12.2)
     #[serde(default, skip_serializing_if = "is_false")]
     pub noise: bool,
     /// how much of the hunk changed; omitted on a degraded file, whose old

@@ -272,6 +272,115 @@ fn p12_noise_formatting_and_generated() {
     assert_eq!(rats, vec!["generated file"]);
 }
 
+/// Each hunk of a single changed file as (rationale, noise).
+fn rationale_noise(path: &str, old: &str, new: &str) -> Vec<(String, bool)> {
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": path, "old": old, "new": new }]
+    }));
+    out.files[0]
+        .hunks
+        .iter()
+        .map(|h| (h.rationale.clone(), h.noise))
+        .collect()
+}
+
+#[test]
+fn p12_noise_copyright_notice_in_the_file_header() {
+    // openfoam bumps the year on line 5 of every file a commit touches: the
+    // header hunk is noise, the code beside it is the change
+    let foam = |year: &str, ret: &str| {
+        format!(
+            "/*---------------------------------------------------------------------------*\\\n  \
+             =========                 |\n  \
+             \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox\n   \
+             \\\\    /   O peration     | Website:  https://openfoam.org\n    \
+             \\\\  /    A nd           | Copyright (C) {year} OpenFOAM Foundation\n     \
+             \\\\/     M anipulation  |\n\
+             -------------------------------------------------------------------------------\n\
+             License\n    This file is part of OpenFOAM.\n\
+             \\*---------------------------------------------------------------------------*/\n\
+             \n\
+             int f()\n{{\n    return {ret};\n}}\n"
+        )
+    };
+    assert_eq!(
+        rationale_noise("f.C", &foam("2023", "1"), &foam("2023-2024", "2")),
+        vec![
+            ("copyright notice".to_string(), true),
+            ("changes 1 → 2 in f".to_string(), false)
+        ]
+    );
+    // a holder added under an existing notice, in a `//` header
+    assert_eq!(
+        rationale_noise(
+            "cmd.go",
+            "// Copyright 2013-2023 The Cobra Authors\n\npackage cobra\n",
+            "// Copyright 2013-2023 The Cobra Authors\n// Copyright 2024 Someone Else\n\npackage cobra\n",
+        ),
+        vec![("copyright notice".to_string(), true)]
+    );
+}
+
+#[test]
+fn p12_a_notice_handed_to_another_holder_is_read() {
+    let out = rationale_noise(
+        "cmd.go",
+        "// Copyright 2020 Acme\n\npackage cobra\n",
+        "// Copyright 2024 Other Corp\n\npackage cobra\n",
+    );
+    assert!(out.iter().all(|(_, noise)| !noise), "{out:?}");
+}
+
+#[test]
+fn p12_a_copyright_notice_does_not_join_the_code_below_it() {
+    let go = |year: &str, ret: &str| {
+        format!("// Copyright {year} Foo\n\npackage foo\n\nfunc f() int {{\n\treturn {ret}\n}}\n")
+    };
+    let out = run_json(serde_json::json!({
+        "changes": [{ "path": "f.go", "old": go("2023", "1"), "new": go("2023-2024", "2") }]
+    }));
+    assert_eq!(out.files[0].hunks.len(), 2, "{:?}", out.files[0].hunks);
+    assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
+}
+
+#[test]
+fn p12_license_text_a_deleted_notice_or_one_below_code_is_not_noise() {
+    // the license itself changing is a change a reviewer reads
+    let lic = |id: &str| {
+        format!("// Copyright 2024 Foo\n// SPDX-License-Identifier: {id}\n\npackage foo\n")
+    };
+    assert_eq!(
+        rationale_noise("a.go", &lic("Apache-2.0"), &lic("MIT")),
+        vec![("edits comment".to_string(), false)]
+    );
+    // license prose that only says the word is not a notice
+    let mit = |verb: &str| {
+        format!("// Copyright 2024 Foo\n//\n// The above copyright notice {verb} be included.\n\npackage foo\n")
+    };
+    assert_eq!(
+        rationale_noise("b.go", &mit("shall"), &mit("must")),
+        vec![("edits comment".to_string(), false)]
+    );
+    // an attribution stripped outright
+    assert_eq!(
+        rationale_noise(
+            "c.go",
+            "// Copyright 2023 Foo\n// Copyright 2024 Bar\n\npackage foo\n",
+            "// Copyright 2023 Foo\n\npackage foo\n"
+        ),
+        vec![("removes comment".to_string(), false)]
+    );
+    // a notice with code above it is not the file's header
+    assert_eq!(
+        rationale_noise(
+            "a.py",
+            "x = 1\n# Copyright 2023 Foo\n",
+            "x = 1\n# Copyright 2024 Foo\n"
+        ),
+        vec![("edits comment".to_string(), false)]
+    );
+}
+
 #[test]
 fn p12_clusters_split_and_connected() {
     // two unrelated files → two independent parts

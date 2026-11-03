@@ -2133,6 +2133,13 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
             )
         })
         .collect();
+    let docs = (old_doc.as_ref(), new_doc.as_ref());
+    for (h, sem) in raw.iter().zip(&mut sems) {
+        if copyright_notice(h, (&old_lines, &new_lines), ext, docs) {
+            sem.copyright = true;
+            sem.noise = true;
+        }
+    }
     if let Some(spec) = lang::for_path(&change.path) {
         fill_details(&raw, &mut sems, (old, &new), spec);
         fill_single_changes(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
@@ -2456,15 +2463,11 @@ fn comment_only_hunk(
         if seg.iter().all(|l| l.trim().is_empty()) {
             return None; // nothing but blank lines: not a meaningful side
         }
-        let comment = |(line_no, l): (usize, &&str)| {
-            // With a parsed grammar the doc set is the authority on strings:
-            // a lone `"""` closing a `patch = """…"""` assignment is code,
-            // and only the textual check ever called it a comment.
-            let textual = is_comment_line(l.trim(), ext)
-                && !(doc.is_some() && l.trim().starts_with(['"', '\'']));
-            textual || doc.is_some_and(|d| d.contains(&line_no))
-        };
-        Some((r[0]..=r[1]).zip(seg.iter()).all(comment))
+        Some(
+            (r[0]..=r[1])
+                .zip(seg.iter())
+                .all(|(line_no, l)| comment_row(line_no, l, ext, doc)),
+        )
     };
     match (
         side(new_lines, h.new_range, new_doc),
@@ -2475,6 +2478,90 @@ fn comment_only_hunk(
         (None, Some(o)) => o,
         (None, None) => false,
     }
+}
+
+/// Whether 1-based `line_no` of a file, reading `l`, is a comment: by the
+/// extension's textual syntax, or inside the grammar's comment set `doc`.
+fn comment_row(line_no: usize, l: &str, ext: &str, doc: Option<&HashSet<usize>>) -> bool {
+    // With a parsed grammar the doc set is the authority on strings:
+    // a lone `"""` closing a `patch = """…"""` assignment is code,
+    // and only the textual check ever called it a comment.
+    let textual =
+        is_comment_line(l.trim(), ext) && !(doc.is_some() && l.trim().starts_with(['"', '\'']));
+    textual || doc.is_some_and(|d| d.contains(&line_no))
+}
+
+/// A hunk that only touches the copyright notice in the file's leading
+/// comments — a year bumped, a holder added — says nothing about the change
+/// around it: every changed line is a notice, the new side still carries one,
+/// and nothing above the hunk is code. License text is left alone, and so is a
+/// notice deleted outright: a relicensing or a stripped attribution is read.
+fn copyright_notice(
+    h: &RawHunk,
+    (old_lines, new_lines): (&[&str], &[&str]),
+    ext: &str,
+    (old_doc, new_doc): (Option<&HashSet<usize>>, Option<&HashSet<usize>>),
+) -> bool {
+    let header = |lines: &[&str], [a, b]: [usize; 2], doc: Option<&HashSet<usize>>| {
+        a == 0
+            || a > b
+            || b > lines.len()
+            || (1..=b)
+                .zip(lines)
+                .all(|(line_no, l)| comment_row(line_no, l, ext, doc))
+    };
+    let [n0, n1] = h.new_range;
+    let kept = n0 >= 1
+        && new_lines
+            .get(n0 - 1..n1)
+            .is_some_and(|s| s.iter().any(|l| !l.trim().is_empty()));
+    let changed = changed_lines(h, old_lines, new_lines);
+    let in_range = |lines: &[&str], [a, b]: [usize; 2]| {
+        let rows = if a == 0 || a > b || b > lines.len() {
+            &[][..]
+        } else {
+            &lines[a - 1..b]
+        };
+        rows.iter()
+            .filter_map(|l| copyright_holder(l))
+            .collect::<HashSet<_>>()
+    };
+    let new_holders = in_range(new_lines, h.new_range);
+    kept && changed.iter().all(|l| names_copyright(l))
+        && in_range(old_lines, h.old_range).is_subset(&new_holders)
+        && header(old_lines, h.old_range, old_doc)
+        && header(new_lines, h.new_range, new_doc)
+}
+
+/// A copyright notice line — `Copyright (C) 2023 …`, `Copyright 2015-2026 …`,
+/// `© 2024 …`, `SPDX-FileCopyrightText: …` — rather than license prose that
+/// says the word ("the above copyright notice", "COPYRIGHT HOLDERS").
+fn names_copyright(line: &str) -> bool {
+    let l = line.to_lowercase();
+    l.contains('©')
+        || l.contains("spdx-filecopyrighttext")
+        || l.match_indices("copyright").any(|(i, w)| {
+            let rest = l[i + w.len()..].trim_start();
+            rest.starts_with("(c)") || rest.starts_with(|c: char| c.is_ascii_digit())
+        })
+}
+
+/// Who a notice line names, its years and `(c)` left out: `openfoam
+/// foundation` in `Copyright (C) 2011-2024 OpenFOAM Foundation`.
+fn copyright_holder(line: &str) -> Option<String> {
+    let l = line.to_lowercase();
+    let at = ["spdx-filecopyrighttext:", "copyright", "©"]
+        .iter()
+        .find_map(|w| l.find(w).map(|i| i + w.len()))?;
+    let rest = l[at..]
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c.is_whitespace() || "-,©".contains(c));
+    let rest = rest.strip_prefix("(c)").unwrap_or(rest);
+    let holder = rest
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c.is_whitespace() || "-,".contains(c))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!holder.is_empty()).then_some(holder)
 }
 
 // Tree-sitter line coverage for comment-like content: every 1-based line
