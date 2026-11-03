@@ -1997,6 +1997,59 @@ fn a_guard_leads_over_the_helper_it_calls() {
 }
 
 #[test]
+fn a_let_else_and_a_forward_goto_are_guards() {
+    let rats = edit_rationales(&[
+        (
+            "a.rs",
+            "fn f(a: Option<u32>) -> u32 {\n    let b = 1;\n    g(b);\n    b\n}\n",
+            "fn f(a: Option<u32>) -> u32 {\n    let b = 1;\n    let Some(x) = a else {\n        return 0;\n    };\n    g(b);\n    b\n}\n",
+        ),
+        (
+            "a.rs",
+            "fn f(xs: &[u32]) {\n    for a in xs {\n        k();\n        g(a);\n    }\n}\n",
+            "fn f(xs: &[u32]) {\n    for a in xs {\n        let Ok(n) = h(a) else { continue };\n        k();\n        g(a);\n    }\n}\n",
+        ),
+        (
+            "a.c",
+            "int f(int *p) {\n  int a = 1;\n  a = g(p);\nout:\n  return a;\n}\n",
+            "int f(int *p) {\n  int a = 1;\n  if(!p)\n    goto out;\n  a = g(p);\nout:\n  return a;\n}\n",
+        ),
+    ]);
+    assert_eq!(
+        rats,
+        vec![
+            "returns early when a is not Some(x) in f",
+            "skips the iteration when h(a) is not Ok(n) in f",
+            "jumps to out when !p in f",
+        ]
+    );
+}
+
+#[test]
+fn a_backward_goto_or_a_panicking_let_else_is_no_guard() {
+    let rats = edit_rationales(&[
+        // a jump back is a loop, not an early exit
+        (
+            "a.c",
+            "int f(int *p) {\nretry:\n  int a = 1;\n  a = g(p);\n  return a;\n}\n",
+            "int f(int *p) {\nretry:\n  int a = 1;\n  if(!p)\n    goto retry;\n  a = g(p);\n  return a;\n}\n",
+        ),
+        // the label is in another function
+        (
+            "a.c",
+            "int f(int *p) {\n  int a = 1;\n  return a;\n}\nint g(void) {\nout:\n  return 0;\n}\n",
+            "int f(int *p) {\n  int a = 1;\n  if(!p)\n    goto out;\n  return a;\n}\nint g(void) {\nout:\n  return 0;\n}\n",
+        ),
+        (
+            "a.rs",
+            "fn f(a: Option<u32>) -> u32 {\n    let b = 1;\n    g(b);\n    b\n}\n",
+            "fn f(a: Option<u32>) -> u32 {\n    let b = 1;\n    let Some(x) = a else {\n        panic!();\n    };\n    g(b);\n    b\n}\n",
+        ),
+    ]);
+    assert!(rats.iter().all(|r| !r.contains(" when ")), "{rats:?}");
+}
+
+#[test]
 fn an_if_that_does_more_than_leave_is_no_guard() {
     let rats = edit_rationales(&[
         // two statements under the condition

@@ -2225,7 +2225,15 @@ fn defined_elsewhere<'a>(
 // add_argument(...)") where "uses action, add_argument, help" would only list
 // the identifiers
 fn scope_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
-    binding_rationale(s, &ctx.symbols[my_file])
+    // a `let … else` binds what its guard tests: the guard is the point
+    let guard = s
+        .enclosing
+        .as_ref()
+        .zip(s.intent.as_ref())
+        .filter(|(_, i)| matches!(i, crate::intent::Intent::Guard { .. }));
+    guard
+        .and_then(|(nm, i)| intent_phrase(i, &short_container(nm)))
+        .or_else(|| binding_rationale(s, &ctx.symbols[my_file]))
         .or_else(|| ctx.header_edit(my_file, s))
         .or_else(|| ctx.file_bind_phrase(my_file, s))
         .or_else(|| detail_rationale(s))
@@ -2417,11 +2425,12 @@ fn intent_phrase(i: &crate::intent::Intent, nm: &str) -> Option<String> {
     Some(match i {
         Intent::Guard { cond, exit } => {
             let verb = match exit {
-                Exit::Return => "returns early",
-                Exit::Raise => "raises",
-                Exit::Throw => "throws",
-                Exit::Continue => "skips the iteration",
-                Exit::Break => "leaves the loop",
+                Exit::Return => "returns early".to_string(),
+                Exit::Raise => "raises".to_string(),
+                Exit::Throw => "throws".to_string(),
+                Exit::Continue => "skips the iteration".to_string(),
+                Exit::Break => "leaves the loop".to_string(),
+                Exit::Goto(label) => format!("jumps to {label}"),
             };
             if cond.chars().count() <= CONDITION_MAX {
                 format!("{verb} when {cond} in {nm}")

@@ -17,7 +17,7 @@ use tree_sitter::{Node, Point};
 /// One recognised edit pattern, with the text its headline quotes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {
-    /// an inserted `if` whose one statement leaves early
+    /// an inserted `if`, or a `let … else`, whose one statement leaves early
     Guard { cond: String, exit: Exit },
     /// the lines that were there now run inside a try: the call they make
     /// when they are one statement making one, what the handlers catch, and
@@ -54,13 +54,15 @@ pub enum Intent {
 }
 
 /// How a guard leaves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exit {
     Return,
     Raise,
     Throw,
     Continue,
     Break,
+    /// a jump forward to a label, c's error path
+    Goto(String),
 }
 
 /// How one grammar family spells the patterns: node kinds as each grammar's
@@ -71,6 +73,12 @@ struct Spelling {
     ifs: &'static [&'static str],
     /// statements that leave early, and how
     exits: &'static [(&'static str, Exit)],
+    /// a jump and the labelled statement it lands on: a guard when the label
+    /// comes later in the function
+    gotos: &'static [(&'static str, &'static str)],
+    /// a binding whose `alternative` runs when its `pattern` does not match
+    /// its `value` (rust's `let … else`)
+    let_elses: &'static [&'static str],
     /// what holds statements without changing them: a block, an expression
     /// statement
     blocks: &'static [&'static str],
@@ -124,6 +132,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_statement", Exit::Continue),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[],
+        let_elses: &[],
         blocks: &["block", "expression_statement"],
         parens: &["parenthesized_expression"],
         binding_conds: &[],
@@ -152,6 +162,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_statement", Exit::Continue),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[],
+        let_elses: &[],
         blocks: &["statement_block", "expression_statement"],
         parens: C_LIKE_PARENS,
         binding_conds: &[],
@@ -179,6 +191,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_expression", Exit::Continue),
             ("break_expression", Exit::Break),
         ],
+        gotos: &[],
+        let_elses: &["let_declaration"],
         blocks: &["block", "expression_statement"],
         parens: C_LIKE_PARENS,
         binding_conds: &["let_condition", "let_chain"],
@@ -201,6 +215,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_statement", Exit::Continue),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[],
+        let_elses: &[],
         blocks: &["block", "statement_list", "expression_statement"],
         parens: C_LIKE_PARENS,
         binding_conds: &[],
@@ -223,6 +239,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_statement", Exit::Continue),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[("goto_statement", "labeled_statement")],
+        let_elses: &[],
         blocks: &["compound_statement", "expression_statement"],
         parens: C_LIKE_PARENS,
         binding_conds: &[],
@@ -246,6 +264,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_statement", Exit::Continue),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[("goto_statement", "labeled_statement")],
+        let_elses: &[],
         blocks: &["compound_statement", "expression_statement"],
         parens: &["parenthesized_expression", "condition_clause"],
         binding_conds: &[],
@@ -274,6 +294,8 @@ static SPELLINGS: &[Spelling] = &[
             ("continue_statement", Exit::Continue),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[],
+        let_elses: &[],
         blocks: &["block", "expression_statement"],
         parens: C_LIKE_PARENS,
         binding_conds: &[],
@@ -300,6 +322,8 @@ static SPELLINGS: &[Spelling] = &[
             ("return_statement", Exit::Return),
             ("break_statement", Exit::Break),
         ],
+        gotos: &[],
+        let_elses: &[],
         blocks: &["block"],
         parens: C_LIKE_PARENS,
         binding_conds: &[],
@@ -658,7 +682,8 @@ fn hunk_intent(sp: &Spelling, h: &RawHunk, sides: &[Side; 2]) -> Option<Intent> 
 }
 
 /// An inserted `if` with no `else`, testing a value it does not bind, whose
-/// one statement returns, raises or leaves the loop.
+/// one statement returns, raises, leaves the loop or jumps forward; or a
+/// binding whose `else` does one of those.
 fn guard(sp: &Spelling, side: Side, new: (usize, usize)) -> Option<Intent> {
     if new.1 - new.0 >= GUARD_LINES {
         return None;
@@ -666,24 +691,65 @@ fn guard(sp: &Spelling, side: Side, new: (usize, usize)) -> Option<Intent> {
     let [stmt] = statements_in(sp, side.root, new)?[..] else {
         return None;
     };
-    let plain = ["alternative", "initializer"]
-        .iter()
-        .all(|f| stmt.child_by_field_name(f).is_none());
-    if !sp.ifs.contains(&stmt.kind()) || !plain {
-        return None;
-    }
-    let cond = stmt.child_by_field_name("condition")?;
-    if sp.binding_conds.contains(&cond.kind()) {
-        return None;
-    }
-    let [exit] = statements(sp, stmt.child_by_field_name("consequence")?)[..] else {
+    let (cond, leaves) = if sp.let_elses.contains(&stmt.kind()) {
+        let value = squeeze(side.text(stmt.child_by_field_name("value")?));
+        let pattern = squeeze(side.text(stmt.child_by_field_name("pattern")?));
+        (
+            format!("{value} is not {pattern}"),
+            stmt.child_by_field_name("alternative")?,
+        )
+    } else {
+        let plain = ["alternative", "initializer"]
+            .iter()
+            .all(|f| stmt.child_by_field_name(f).is_none());
+        if !sp.ifs.contains(&stmt.kind()) || !plain {
+            return None;
+        }
+        let cond = stmt.child_by_field_name("condition")?;
+        if sp.binding_conds.contains(&cond.kind()) {
+            return None;
+        }
+        (
+            squeeze(side.text(unparen(sp, cond))),
+            stmt.child_by_field_name("consequence")?,
+        )
+    };
+    let [exit] = statements(sp, leaves)[..] else {
         return None;
     };
-    let exit = sp.exits.iter().find(|(k, _)| *k == exit.kind())?.1;
     Some(Intent::Guard {
-        cond: squash(side.text(unparen(sp, cond))),
-        exit,
+        cond,
+        exit: exit_of(sp, side, exit)?,
     })
+}
+
+/// How statement `n` leaves, if it does: a goto only when its label lies
+/// further down the same function, where cleanup code sits — a jump back is
+/// a loop.
+fn exit_of(sp: &Spelling, side: Side, n: Node) -> Option<Exit> {
+    if let Some((_, e)) = sp.exits.iter().find(|(k, _)| *k == n.kind()) {
+        return Some(e.clone());
+    }
+    let (_, labelled) = sp.gotos.iter().find(|(k, _)| *k == n.kind())?;
+    let label = side.text(n.child_by_field_name("label")?);
+    let mut func = n.parent()?;
+    while !is_function(func.kind()) {
+        func = func.parent()?;
+    }
+    let mut stack = vec![func];
+    while let Some(at) = stack.pop() {
+        let lands = at.kind() == *labelled
+            && at.start_byte() > n.end_byte()
+            && at
+                .child_by_field_name("label")
+                .is_some_and(|l| side.text(l) == label);
+        if lands {
+            return Some(Exit::Goto(label.to_string()));
+        }
+        let mut cur = at.walk();
+        stack.extend(at.named_children(&mut cur));
+    }
+    None
 }
 
 /// The new side is one try statement whose body is exactly the old lines,
@@ -966,11 +1032,6 @@ fn unparen<'t>(sp: &Spelling, mut n: Node<'t>) -> Node<'t> {
         }
     }
     n
-}
-
-/// Whitespace runs collapsed to one space, ends trimmed.
-fn squash(t: &str) -> String {
-    squeeze(t)
 }
 
 /// Every whitespace character removed: two texts equal under this differ
