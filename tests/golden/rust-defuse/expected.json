@@ -35,7 +35,8 @@
           "group": "g0",
           "order_index": 0,
           "rationale": "adds import fmt, std",
-          "noise": true
+          "noise": true,
+          "extent": "added"
         },
         {
           "id": "h1",
@@ -56,6 +57,7 @@
           "group": "g1",
           "order_index": 1,
           "rationale": "adds make, used by run below",
+          "extent": "added",
           "symbols": [
             {
               "name": "make",
@@ -85,6 +87,7 @@
           "group": "g2",
           "order_index": 2,
           "rationale": "adds run",
+          "extent": "added",
           "symbols": [
             {
               "name": "run",

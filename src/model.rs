@@ -125,6 +125,26 @@ pub enum Category {
     Other,
 }
 
+/// How much of a hunk a reader actually meets: nothing but layout, or the
+/// same lines edited, or new text in place of old.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Extent {
+    /// blank lines and indentation only
+    Whitespace,
+    /// the same tokens laid out differently: re-wrapped, a trailing comma, a
+    /// comment re-flowed
+    Formatting,
+    /// most of the old text survives into the new
+    Edited,
+    /// most of the old text is gone, new text in its place
+    Rewritten,
+    /// no old side
+    Added,
+    /// no new side
+    Removed,
+}
+
 /// Why the engine removed a hunk before ordering — a selection the caller
 /// *asked* for, so the difference between the hunks a file had and the hunks it
 /// can see is always accountable. An import is no longer among these: it is
@@ -601,6 +621,10 @@ pub struct HunkOut {
     /// formatting-only or generated-file hunk — skippable for review (P12.2)
     #[serde(default, skip_serializing_if = "is_false")]
     pub noise: bool,
+    /// how much of the hunk changed; omitted on a degraded file, whose old
+    /// side is not there to compare
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent: Option<Extent>,
     /// every changed line is a comment or docstring — drives `--only-comments`
     /// filtering. Omitted when false.
     #[serde(default, skip_serializing_if = "is_false")]

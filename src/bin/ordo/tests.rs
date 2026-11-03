@@ -615,6 +615,7 @@ fn test_hunk(rationale: &str, enclosing: Option<&str>, symbols: Vec<Symbol>) -> 
         order_index: 0,
         rationale: rationale.to_string(),
         noise: false,
+        extent: None,
         comment: false,
         details: vec![],
         notes: vec![],
