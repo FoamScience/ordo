@@ -6,6 +6,8 @@ from concurrent import futures         # fine
 MAX_RETRIES = 3                        # fine: module constant
 _CACHE = {}                            # fine: internal, leading underscore
 cache = {}                             # mutable-global-state
+registry = make_registry()             # mutable-global-state
+log = logging.getLogger(__name__)      # fine: a logger
 
 
 class Widget:

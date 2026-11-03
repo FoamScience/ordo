@@ -118,3 +118,40 @@ fn every_shipped_ruleset_loads_and_every_rule_fires_on_its_sample() {
         );
     }
 }
+
+/// `mutable-global-state` sits on the assignment, not the module's first line,
+/// and an import bound by a call (`pytest.importorskip`) is not state. One
+/// source per case: a hunk reports an identical finding once.
+#[test]
+fn mutable_global_state_reports_the_assignment_and_spares_imports() {
+    let set = Path::new(env!("CARGO_MANIFEST_DIR")).join("rulesets/python-google-style.toml");
+    let rows = |src: &str| -> Vec<usize> {
+        let input = Input {
+            changes: vec![ordo::model::Change {
+                path: "m.py".into(),
+                old: Some(String::new()),
+                new: Some(src.into()),
+                diff: None,
+            }],
+            options: ordo::model::Options {
+                rules: load(&set),
+                ..Default::default()
+            },
+            consumers: vec![],
+        };
+        let out: Output = ordo::run(input);
+        out.files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .flat_map(|h| h.findings.iter())
+            .filter(|f| f.name == "mutable-global-state")
+            .filter_map(|f| f.row)
+            .collect()
+    };
+    let doc = "\"\"\"A module docstring.\"\"\"\n\nimport pytest\n\n";
+    assert_eq!(rows(&format!("{doc}cache = {{}}\n")), vec![5]);
+    assert_eq!(
+        rows(&format!("{doc}FreeCAD = pytest.importorskip(\"FreeCAD\")\nlog = logging.getLogger(__name__)\nregistry = make_registry()\n")),
+        vec![7]
+    );
+}
