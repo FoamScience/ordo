@@ -1,0 +1,301 @@
+# Census repos, drawn by scripts/census-list.py; read by scripts/census.py.
+
+[[repo]]
+name = "public-apis__public-apis"
+url = "https://github.com/public-apis/public-apis"
+lang = "python"
+rev = "2676ca49d557ef14a0f478311506dae947639028"
+
+[[repo]]
+name = "EbookFoundation__free-programming-books"
+url = "https://github.com/EbookFoundation/free-programming-books"
+lang = "python"
+rev = "b4c4cc4040b614d2aca81ad5f2bcd92ed3d422ec"
+
+[[repo]]
+name = "donnemartin__system-design-primer"
+url = "https://github.com/donnemartin/system-design-primer"
+lang = "python"
+rev = "ae9bbd7b02d90b9866215de185217d33f39ab733"
+
+[[repo]]
+name = "practical-tutorials__project-based-learning"
+url = "https://github.com/practical-tutorials/project-based-learning"
+lang = "python"
+rev = "2146917314b5e98e58513c930c0a745cc6c7100c"
+
+[[repo]]
+name = "TheAlgorithms__Python"
+url = "https://github.com/TheAlgorithms/Python"
+lang = "python"
+rev = "574d100b7181956e9c8384552fd078165e4cc326"
+
+[[repo]]
+name = "ultraworkers__claw-code"
+url = "https://github.com/ultraworkers/claw-code"
+lang = "rust"
+rev = "51cfca114cf506a5d7a53ab1bffa8e1bbd3c780d"
+
+[[repo]]
+name = "rtk-ai__rtk"
+url = "https://github.com/rtk-ai/rtk"
+lang = "rust"
+rev = "63b8c3e26ec9487eb3953a142a8279366b5f5689"
+
+[[repo]]
+name = "dani-garcia__vaultwarden"
+url = "https://github.com/dani-garcia/vaultwarden"
+lang = "rust"
+rev = "82fc47e83e39c5d09e85a6f259c8ab51166735d1"
+
+[[repo]]
+name = "alacritty__alacritty"
+url = "https://github.com/alacritty/alacritty"
+lang = "rust"
+rev = "aecf0f600fa840a415b55da5cf34fbeaec39ac32"
+
+[[repo]]
+name = "rust-lang__rustlings"
+url = "https://github.com/rust-lang/rustlings"
+lang = "rust"
+rev = "f7b9b3c5882a1a43275130b95142d94f847526f5"
+
+[[repo]]
+name = "Genymobile__scrcpy"
+url = "https://github.com/Genymobile/scrcpy"
+lang = "c"
+rev = "a60891aea193d92e7e5c3942700eca63f9d19a5f"
+
+[[repo]]
+name = "tmux__tmux"
+url = "https://github.com/tmux/tmux"
+lang = "c"
+rev = "a73616d781f2af13085691c741cfb0780d365328"
+
+[[repo]]
+name = "JustVugg__colibri"
+url = "https://github.com/JustVugg/colibri"
+lang = "c"
+rev = "0a5504a1dc64f86fcd0fe7db298b0448c730e7e6"
+
+[[repo]]
+name = "wg__wrk"
+url = "https://github.com/wg/wrk"
+lang = "c"
+rev = "a211dd5a7050b1f9e8a9870b95513060e72ac4a0"
+
+[[repo]]
+name = "pbatard__rufus"
+url = "https://github.com/pbatard/rufus"
+lang = "c"
+rev = "acf7de640848ab249bedeb6feb59b33001f656b6"
+
+[[repo]]
+name = "nomic-ai__gpt4all"
+url = "https://github.com/nomic-ai/gpt4all"
+lang = "c++"
+rev = "b666d16db5aeab8b91aaf7963adcee9c643734d7"
+
+[[repo]]
+name = "tesseract-ocr__tesseract"
+url = "https://github.com/tesseract-ocr/tesseract"
+lang = "c++"
+rev = "c21194d06998e244754d65329d6c9f1e14fe392e"
+
+[[repo]]
+name = "WerWolv__ImHex"
+url = "https://github.com/WerWolv/ImHex"
+lang = "c++"
+rev = "34483cb90527cd71c92049ef3b1b2cc27936a1d4"
+
+[[repo]]
+name = "ggml-org__whisper.cpp"
+url = "https://github.com/ggml-org/whisper.cpp"
+lang = "c++"
+rev = "4da27c41cebadb3cbbcd2563e9c7cbc8d84bdcad"
+
+[[repo]]
+name = "zhongyang219__TrafficMonitor"
+url = "https://github.com/zhongyang219/TrafficMonitor"
+lang = "c++"
+rev = "930f17533d6098989ebad62f210aa97d75ef174b"
+
+[[repo]]
+name = "JuliusBrussee__caveman"
+url = "https://github.com/JuliusBrussee/caveman"
+lang = "go"
+rev = "2e068f735253cce28256744804785f01887d9646"
+
+[[repo]]
+name = "fatedier__frp"
+url = "https://github.com/fatedier/frp"
+lang = "go"
+rev = "331abd5aa144e3f105abba29a22af701acf1a298"
+
+[[repo]]
+name = "gin-gonic__gin"
+url = "https://github.com/gin-gonic/gin"
+lang = "go"
+rev = "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646"
+
+[[repo]]
+name = "junegunn__fzf"
+url = "https://github.com/junegunn/fzf"
+lang = "go"
+rev = "99bfd5aa0f66133d7dcfbf18f8044eb765f04649"
+
+[[repo]]
+name = "caddyserver__caddy"
+url = "https://github.com/caddyserver/caddy"
+lang = "go"
+rev = "bbea66f2ecec7907d09243801362546b84003706"
+
+[[repo]]
+name = "iluwatar__java-design-patterns"
+url = "https://github.com/iluwatar/java-design-patterns"
+lang = "java"
+rev = "4cabb204f240240bea319605a5ffa46ded728001"
+
+[[repo]]
+name = "macrozheng__mall"
+url = "https://github.com/macrozheng/mall"
+lang = "java"
+rev = "dcaa93b3150352e5044708d7211b5bed0af4509f"
+
+[[repo]]
+name = "doocs__advanced-java"
+url = "https://github.com/doocs/advanced-java"
+lang = "java"
+rev = "80b89fb9496d7ea3213e402c8c3853399e00c363"
+
+[[repo]]
+name = "TheAlgorithms__Java"
+url = "https://github.com/TheAlgorithms/Java"
+lang = "java"
+rev = "e6b2ecb50f8278c55ade38b947c5c82afdc68438"
+
+[[repo]]
+name = "kdn251__interviews"
+url = "https://github.com/kdn251/interviews"
+lang = "java"
+rev = "03fdcb2703ce72dc0606748733d0c13f09d41d21"
+
+[[repo]]
+name = "trekhleb__javascript-algorithms"
+url = "https://github.com/trekhleb/javascript-algorithms"
+lang = "javascript"
+rev = "85293e3e2b88f4d2ce330d956b139cf628aa1e82"
+
+[[repo]]
+name = "DietrichGebert__ponytail"
+url = "https://github.com/DietrichGebert/ponytail"
+lang = "javascript"
+rev = "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846"
+
+[[repo]]
+name = "airbnb__javascript"
+url = "https://github.com/airbnb/javascript"
+lang = "javascript"
+rev = "8ed19247bef145e3cc41b24a02dd1fe6d9b5e681"
+
+[[repo]]
+name = "addyosmani__agent-skills"
+url = "https://github.com/addyosmani/agent-skills"
+lang = "javascript"
+rev = "301b02b12bff98e4688e6984af6556802322bbde"
+
+[[repo]]
+name = "axios__axios"
+url = "https://github.com/axios/axios"
+lang = "javascript"
+rev = "fb88a1b133c1a2d774713070b8ca25f7bcd382ac"
+
+[[repo]]
+name = "vuejs__vue"
+url = "https://github.com/vuejs/vue"
+lang = "typescript"
+rev = "9e88707940088cb1f4cd7dd210c9168a50dc347c"
+
+[[repo]]
+name = "anthropics__claude-code"
+url = "https://github.com/anthropics/claude-code"
+lang = "typescript"
+rev = "964d69565952a176ac1975ed218362991db71433"
+
+[[repo]]
+name = "yangshun__tech-interview-handbook"
+url = "https://github.com/yangshun/tech-interview-handbook"
+lang = "typescript"
+rev = "e1d28e8886c0b6ff3e50da991ce0e895134ddc59"
+
+[[repo]]
+name = "OpenCut-app__OpenCut"
+url = "https://github.com/OpenCut-app/OpenCut"
+lang = "typescript"
+rev = "e668010778568641babef2cc40be4703ae6916d6"
+
+[[repo]]
+name = "modelcontextprotocol__servers"
+url = "https://github.com/modelcontextprotocol/servers"
+lang = "typescript"
+rev = "194cc86e3ae6400958555bd4116849d822d69263"
+
+[[repo]]
+name = "nvim-lua__kickstart.nvim"
+url = "https://github.com/nvim-lua/kickstart.nvim"
+lang = "lua"
+rev = "8e35dbedb7966e3a95e1f26f9fc1179ab6c68db4"
+
+[[repo]]
+name = "NvChad__NvChad"
+url = "https://github.com/NvChad/NvChad"
+lang = "lua"
+rev = "87d6a41ec07ab995de912a892749b6b4805ad2b3"
+
+[[repo]]
+name = "LazyVim__LazyVim"
+url = "https://github.com/LazyVim/LazyVim"
+lang = "lua"
+rev = "301a3f71007c4aa5da5dab82f1a7a08389091224"
+
+[[repo]]
+name = "nvim-telescope__telescope.nvim"
+url = "https://github.com/nvim-telescope/telescope.nvim"
+lang = "lua"
+rev = "40aedd8a68c78a656a10a8d62d80c54af59420fb"
+
+[[repo]]
+name = "LunarVim__LunarVim"
+url = "https://github.com/LunarVim/LunarVim"
+lang = "lua"
+rev = "aa51c20f3404cb482e9c6fd6e5e4a4bf5b1612aa"
+
+[[repo]]
+name = "obra__superpowers"
+url = "https://github.com/obra/superpowers"
+lang = "shell"
+rev = "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b"
+
+[[repo]]
+name = "mattpocock__skills"
+url = "https://github.com/mattpocock/skills"
+lang = "shell"
+rev = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[repo]]
+name = "ohmyzsh__ohmyzsh"
+url = "https://github.com/ohmyzsh/ohmyzsh"
+lang = "shell"
+rev = "b509b1c6ed0c1ba37de12cbd37f30b2b2f61193a"
+
+[[repo]]
+name = "msitarzewski__agency-agents"
+url = "https://github.com/msitarzewski/agency-agents"
+lang = "shell"
+rev = "b37b5bb33b78f2c1d6567d98e25ca818e3259219"
+
+[[repo]]
+name = "d3__d3"
+url = "https://github.com/d3/d3"
+lang = "shell"
+rev = "374c4b32782c5f3b31f48c52b6fcdd8f3272f3b1"
