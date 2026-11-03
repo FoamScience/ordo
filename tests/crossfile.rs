@@ -517,3 +517,169 @@ fn a_nested_module_exports_object_stays_at_file_scope() {
     );
     assert_eq!(edges_of(&out), vec!["def→use: load"]);
 }
+
+/// One function per file whose `return fetch(url)` line became `to`.
+fn fetches(paths: &[&str], to: &[&str]) -> ordo::model::Output {
+    let changes: Vec<serde_json::Value> = paths
+        .iter()
+        .zip(to)
+        .enumerate()
+        .map(|(i, (path, to))| {
+            serde_json::json!({ "path": path,
+                "old": format!("def f{i}(url):\n    return fetch(url)\n"),
+                "new": format!("def f{i}(url):\n    return {to}\n") })
+        })
+        .collect();
+    run_json(serde_json::json!({ "changes": changes }))
+}
+
+fn same_edit_groups(out: &ordo::model::Output) -> Vec<&ordo::model::Group> {
+    out.groups.iter().filter(|g| !g.files.is_empty()).collect()
+}
+
+#[test]
+fn the_same_edit_in_three_files_reads_as_one_item() {
+    let to = "fetch(url, timeout=30)";
+    let out = fetches(&["a.py", "b.py", "c.py"], &[to, to, to]);
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    let g = same[0];
+    assert_eq!(g.files, vec!["a.py", "b.py", "c.py"]);
+    assert_eq!(g.members.len(), 3);
+    assert_eq!(g.reason, "same edit in 3 files: a.py, b.py, c.py");
+    // read one after another, as one part of the change
+    let order: Vec<&str> = out.order.iter().map(|o| o.hunk.as_str()).collect();
+    let at = order.iter().position(|h| *h == g.members[0]).unwrap();
+    assert_eq!(&order[at..at + 3], &g.members[..]);
+    assert_eq!(out.clusters.len(), 1, "{:?}", out.clusters);
+}
+
+#[test]
+fn similar_but_different_edits_stay_apart() {
+    let out = fetches(
+        &["a.py", "b.py", "c.py"],
+        &[
+            "fetch(url, timeout=30)",
+            "fetch(url, timeout=60)",
+            "fetch(url, retries=3)",
+        ],
+    );
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+    assert_eq!(out.groups.len(), 3);
+}
+
+#[test]
+fn a_repeat_inside_one_file_is_not_collapsed() {
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "a.py",
+          "old": "def f(url):\n    return fetch(url)\n\n\n\n\n\n\n\n\n\n\n\ndef g(url):\n    return fetch(url)\n",
+          "new": "def f(url):\n    return fetch(url, timeout=30)\n\n\n\n\n\n\n\n\n\n\n\ndef g(url):\n    return fetch(url, timeout=30)\n" }
+    ]}));
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+    assert_eq!(out.groups.len(), 2);
+}
+
+/// What two new files have in common is boilerplate, not one edit.
+#[test]
+fn boilerplate_shared_by_new_files_is_not_a_same_edit() {
+    // long enough to be cut at its definitions, so the shared head is a hunk
+    let new = |name: &str| {
+        let body = format!("    {name} = 0\n").repeat(70);
+        format!("import logging\n\nLOGGER = logging.getLogger(__name__)\n\n\ndef {name}():\n{body}")
+    };
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "a.py", "old": "", "new": new("fa") },
+        { "path": "b.py", "old": "", "new": new("fb") }
+    ]}));
+    assert!(
+        out.files.iter().all(|f| f.hunks.len() > 1),
+        "{:?}",
+        out.files
+    );
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+}
+
+/// Taken out of a function it changed together with something else, the
+/// repeated line would read as nothing; there it stays.
+#[test]
+fn a_repeat_sharing_its_definition_with_another_edit_stays_in_it() {
+    let pad = "    x = 1\n".repeat(12);
+    let to = "fetch(url, timeout=30)";
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "a.py", "old": "def f0(url):\n    return fetch(url)\n", "new": format!("def f0(url):\n    return {to}\n") },
+        { "path": "b.py", "old": "def f1(url):\n    return fetch(url)\n", "new": format!("def f1(url):\n    return {to}\n") },
+        { "path": "c.py",
+          "old": format!("def f2(url):\n    y = 0\n{pad}    return fetch(url)\n"),
+          "new": format!("def f2(url):\n    y = 2\n{pad}    return {to}\n") }
+    ]}));
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    assert_eq!(same[0].files, vec!["a.py", "b.py"]);
+    let c = out.files.iter().find(|f| f.path == "c.py").unwrap();
+    assert_eq!(c.hunks.len(), 2);
+    assert_eq!(c.hunks[0].group, c.hunks[1].group, "{:?}", c.hunks);
+}
+
+/// The joined edit waits for everything any of its files needs: only a.py's
+/// `helper` is the one util.py adds, and b.py, which nothing holds back on
+/// its own, still reads after it, beside a.py.
+#[test]
+fn a_same_edit_reads_after_the_definition_any_of_it_uses() {
+    let edit = |path: &str, module: &str| {
+        let old = format!(
+            "from {module} import helper
+
+
+def f():
+    return old()
+"
+        );
+        serde_json::json!({ "path": path, "old": old, "new": old.replace("old()", "helper()") })
+    };
+    let out = run_json(serde_json::json!({ "changes": [
+        edit("a.py", "util"),
+        edit("b.py", "other"),
+        { "path": "util.py", "old": "def other():\n    return 1\n",
+          "new": "def other():\n    return 1\n\n\ndef helper():\n    return 2\n" }
+    ]}));
+    assert_eq!(same_edit_groups(&out).len(), 1, "{:?}", out.groups);
+    let paths: Vec<&str> = out.order.iter().map(|o| o.path.as_str()).collect();
+    assert_eq!(paths, vec!["util.py", "a.py", "b.py"], "{:?}", out.edges);
+}
+
+/// A notice or an import repeated across files is one thing to skip, but says
+/// nothing about whether the rest of those files' changes belong together.
+#[test]
+fn a_repeated_noise_edit_is_one_group_but_joins_no_clusters() {
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "a.py", "old": "def fa():\n    return 1\n",
+          "new": "import functools\n\n\ndef fa():\n    return 1\n" },
+        { "path": "b.py", "old": "def fb():\n    return 1\n",
+          "new": "import functools\n\n\ndef fb():\n    return 1\n" }
+    ]}));
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    let cluster_of = |id: &str| out.clusters.iter().position(|c| c.iter().any(|h| h == id));
+    assert_ne!(
+        cluster_of(&same[0].members[0]),
+        cluster_of(&same[0].members[1]),
+        "{:?}",
+        out.clusters
+    );
+}
+
+#[test]
+fn the_file_strategy_keeps_a_same_edit_in_file_order() {
+    let to = "fetch(url, timeout=30)";
+    let mut input: Input = serde_json::from_value(serde_json::json!({ "changes": [
+        { "path": "a.py", "old": "def f0(url):\n    return fetch(url)\n", "new": format!("def f0(url):\n    return {to}\n") },
+        { "path": "b.py", "old": "x = 1\n", "new": "x = 2\n" },
+        { "path": "c.py", "old": "def f2(url):\n    return fetch(url)\n", "new": format!("def f2(url):\n    return {to}\n") }
+    ]}))
+    .unwrap();
+    input.options.strategy = ordo::model::Strategy::File;
+    let out = ordo::run(input);
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+    let paths: Vec<&str> = out.order.iter().map(|o| o.path.as_str()).collect();
+    assert_eq!(paths, vec!["a.py", "b.py", "c.py"]);
+}

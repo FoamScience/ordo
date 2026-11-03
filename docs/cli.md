@@ -33,6 +33,16 @@ and `comment` for comment/docstring-only hunks), the `groups`, the def→use `ed
 `clusters` shown above. `ordo-engine pack` renders all of it as compact review
 context.
 
+A group is one file's, except a **same-edit** group: one edit — the same lines
+removed and added, each trimmed — repeated in several files (a rename carried
+through, an annotation added to each, a notice bumped in every header) reads as
+one item. Its `reason` is `same edit in N files: …`, its `files` lists them,
+and its members sit next to each other in `order`, after anything any of them
+uses. A hunk joins only when nothing else changed in its definition, and an
+edit must change at least eight letters or digits; repeats inside one file, and
+the `file` strategy, are left alone. Unless the edit is noise, its members share
+a cluster.
+
 `options.only_comments` (`--only-comments` on `ordo-engine order`/`ordo-engine pack`) drops
 every non-comment hunk before ordering, so `order`/`groups`/`edges`/`clusters`
 cover only comment/docstring changes — a lightweight pass over documentation

@@ -10,6 +10,9 @@ pub struct GroupInfo {
     pub reason: String,
     /// global hunk indices
     pub members: Vec<usize>,
+    /// the files a same-edit group spans (see `same_edits`); empty for every
+    /// other group, which lies in one file
+    pub files: Vec<usize>,
 }
 
 /// (from global idx, to global idx, why)
@@ -261,6 +264,8 @@ pub struct FileFacts<'a> {
     pub symbols: &'a [crate::FileSymbols],
     /// what the change did to each file's definitions
     pub changed: &'a [crate::FileChanges],
+    /// each file's two sides, for the text a hunk changed
+    pub changes: &'a [crate::model::Change],
 }
 
 pub fn order_all(
@@ -269,9 +274,20 @@ pub fn order_all(
     facts: &FileFacts,
     options: &Options,
 ) -> OrderedAll {
-    let FileFacts { symbols, changed } = *facts;
+    let FileFacts {
+        symbols,
+        changed,
+        changes,
+    } = *facts;
     let flat = flatten(files);
-    let (groups, group_idx) = group_hunks(&flat);
+    // the file strategy promises diff order, which reading a repeat where its
+    // first file is would break
+    let sets = match options.strategy {
+        Strategy::File => vec![],
+        _ => same_edits(&flat, files, changes),
+    };
+    let (groups, mut group_idx) = group_hunks(&flat, &sets);
+    let joined = joined_groups(groups.len(), &sets, &group_idx);
     let (gdef, guse, glocal) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
     // `users`/`definers` invert the per-group sets once (symbol → the groups
     // using / defining it, ascending), so a group's defs look up their users
@@ -334,7 +350,14 @@ pub fn order_all(
         file: &group_file,
         row: &group_row,
     };
-    let group_order = order_groups(options.strategy, &groups, &flat.sem, &gedges, &keys);
+    let group_order = order_groups(
+        options.strategy,
+        &groups,
+        &flat.sem,
+        &gedges,
+        &keys,
+        &joined,
+    );
     // ---- flatten groups to a global hunk permutation ----
     let mut perm = vec![];
     for &gi in &group_order {
@@ -387,17 +410,21 @@ pub fn order_all(
         .map(|i| clamp_rationale(rationale_for(i, &flat.sem, &group_idx, &ctx)))
         .collect();
     // a doc's code fence orders the doc after the code in another file, but
-    // never joins its cluster; a doc's own sections still cluster together
+    // never joins its cluster; a doc's own sections still cluster together,
+    // and a doc making the same edit as code joins it, as its group does
     let prose = |g: usize| crate::lang::for_path(&paths[group_file[g]]).is_some_and(|s| s.prose);
     let near_gedges = near_links(&flat, &group_idx);
+    let same_gedges = same_edit_links(&flat, &sets, &group_idx);
     let clusters = components(
         &groups,
         gedges
             .iter()
             .chain(&contain_gedges)
             .chain(&near_gedges)
-            .filter(|&&(a, b)| group_file[a] == group_file[b] || !prose(b)),
+            .filter(|&&(a, b)| group_file[a] == group_file[b] || !prose(b))
+            .chain(&same_gedges),
     );
+    let groups = merge_same_edits(groups, &mut group_idx, &joined, &flat, paths);
 
     OrderedAll {
         coord: flat.coord,
@@ -495,41 +522,256 @@ fn replaced_nearby(flat: &Flat) -> Vec<Option<&'static str>> {
 /// P1: group by (file, enclosing definition); top-level hunks (no enclosing
 /// definition) share one group per file — module constants, imports, exports
 /// and similar file-scope hunks all live in the same scope, so they group the
-/// same way two hunks in the same function do. Returns the groups in
-/// first-seen order and each hunk's group.
-fn group_hunks(flat: &Flat) -> (Vec<GroupInfo>, Vec<usize>) {
-    let mut idx_of_key: HashMap<String, usize> = HashMap::new();
+/// same way two hunks in the same function do. A hunk of a same edit
+/// (`same_edits`) groups with the rest of that edit in its file instead.
+/// Returns the groups in first-seen order and each hunk's group.
+fn group_hunks(flat: &Flat, sets: &[Vec<usize>]) -> (Vec<GroupInfo>, Vec<usize>) {
+    let mut set_of: HashMap<usize, usize> = HashMap::new();
+    for (k, set) in sets.iter().enumerate() {
+        set_of.extend(set.iter().map(|&i| (i, k)));
+    }
+    let mut idx_of_key: HashMap<(usize, Slot), usize> = HashMap::new();
     let mut groups: Vec<GroupInfo> = vec![];
     let mut group_idx = vec![0usize; flat.sem.len()];
     for (i, s) in flat.sem.iter().enumerate() {
-        let fi = flat.coord[i].0;
-        // imports group together, apart from the module-level code they sit
-        // among: they are bookkeeping, they read as a block, and mixing them
-        // into the top-level group would drag that group up to the first import
-        // line — which cost the `file` strategy its positional promise.
-        let import = s.category == Category::Import;
-        let (key, reason) = match (&s.enclosing, import) {
-            (_, true) => (
-                format!("{fi}\u{0}imports"),
-                "same scope: imports".to_string(),
-            ),
-            (Some(nm), _) => (
-                format!("{fi}\u{0}def:{nm}"),
-                format!("same definition: {nm}"),
-            ),
-            (None, _) => (format!("{fi}\u{0}top"), "same scope: top-level".to_string()),
+        let slot = match set_of.get(&i) {
+            Some(&k) => Slot::Same(k),
+            None => Slot::Home(Home::of(s)),
         };
-        let gi = *idx_of_key.entry(key).or_insert_with(|| {
-            groups.push(GroupInfo {
-                reason,
-                members: vec![],
+        let gi = *idx_of_key
+            .entry((flat.coord[i].0, slot))
+            .or_insert_with(|| {
+                groups.push(GroupInfo {
+                    reason: match slot {
+                        Slot::Home(h) => h.reason(),
+                        // named once its files' groups are one, in
+                        // `merge_same_edits`
+                        Slot::Same(_) => String::new(),
+                    },
+                    members: vec![],
+                    files: vec![],
+                });
+                groups.len() - 1
             });
-            groups.len() - 1
-        });
         group_idx[i] = gi;
         groups[gi].members.push(i);
     }
     (groups, group_idx)
+}
+
+/// Where a hunk groups within its file: its own scope, or the same edit (an
+/// index into `same_edits`) it makes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Slot<'a> {
+    Home(Home<'a>),
+    Same(usize),
+}
+
+/// The scope a hunk reads in on its own, within its file.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Home<'a> {
+    Imports,
+    Def(&'a str),
+    Top,
+}
+
+impl<'a> Home<'a> {
+    fn of(s: &'a HunkSem) -> Self {
+        // imports group together, apart from the module-level code they sit
+        // among: they are bookkeeping, they read as a block, and mixing them
+        // into the top-level group would drag that group up to the first import
+        // line — which cost the `file` strategy its positional promise.
+        match (&s.enclosing, s.category == Category::Import) {
+            (_, true) => Home::Imports,
+            (Some(nm), _) => Home::Def(nm),
+            (None, _) => Home::Top,
+        }
+    }
+
+    fn reason(self) -> String {
+        match self {
+            Home::Imports => "same scope: imports".to_string(),
+            Home::Def(nm) => format!("same definition: {nm}"),
+            Home::Top => "same scope: top-level".to_string(),
+        }
+    }
+
+    fn file_scope(self) -> bool {
+        !matches!(self, Home::Def(_))
+    }
+}
+
+/// How many letters and digits an edit has to change before a repeat of it in
+/// another file is the same edit rather than a coincidence: an `#endif` or a
+/// `return 0;` turns up wherever a change touches code.
+const SAME_EDIT_MIN: usize = 8;
+
+/// Hunks making one edit in several files — the same lines removed and the
+/// same lines added, each trimmed, blank lines aside — as sets of global hunk
+/// indices, one per edit, each spanning two files or more. A rename carried
+/// through a dozen files, an annotation added to each, a notice bumped in every
+/// header: one thing to read, not a dozen.
+///
+/// A hunk joins only when nothing else changed in its definition: taken out
+/// of a function it shared with other edits, `CURLcode result;` reads as
+/// nothing at all. File scope is no such container — its hunks share a group
+/// by position, not by meaning.
+///
+/// Repeats confined to one file are left in place, in that file's own order.
+fn same_edits(
+    flat: &Flat,
+    files: &[crate::PerFileHunks],
+    changes: &[crate::model::Change],
+) -> Vec<Vec<usize>> {
+    // a file added or deleted whole is no edit: what its pieces share with
+    // another's is boilerplate, `namespace Foam {` opening every new header
+    let sides: Vec<Option<(Vec<&str>, Vec<&str>)>> = changes
+        .iter()
+        .map(|c| {
+            let old = c.old.as_deref().filter(|t| !t.is_empty())?;
+            let new = c.new.as_deref().filter(|t| !t.is_empty())?;
+            Some((old.lines().collect(), new.lines().collect()))
+        })
+        .collect();
+    let edits: Vec<Option<String>> = flat
+        .coord
+        .iter()
+        .map(|&(fi, li)| {
+            // a degraded file has no sides to read the text off
+            if files[fi].degraded {
+                return None;
+            }
+            let (old, new) = sides[fi].as_ref()?;
+            let text = edit_text(&files[fi].raw[li], old, new);
+            let said = text.chars().filter(|c| c.is_alphanumeric()).count();
+            (said >= SAME_EDIT_MIN).then_some(text)
+        })
+        .collect();
+    let homes: Vec<(usize, Home)> = flat
+        .sem
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (flat.coord[i].0, Home::of(s)))
+        .collect();
+    // a definition every hunk of which makes the same edit
+    let mut uniform: HashMap<(usize, Home), (usize, bool)> = HashMap::new();
+    for (i, &home) in homes.iter().enumerate() {
+        let (first, same) = uniform.entry(home).or_insert((i, true));
+        *same &= edits[i].is_some() && edits[i] == edits[*first];
+    }
+    let mut by_edit: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, edit) in edits.iter().enumerate() {
+        let home = homes[i];
+        if let Some(e) = edit
+            .as_deref()
+            .filter(|_| home.1.file_scope() || uniform[&home].1)
+        {
+            by_edit.entry(e).or_default().push(i);
+        }
+    }
+    let mut sets: Vec<Vec<usize>> = by_edit
+        .into_values()
+        .filter(|m| m.iter().any(|&i| flat.coord[i].0 != flat.coord[m[0]].0))
+        .collect();
+    sets.sort_unstable();
+    sets
+}
+
+/// What a hunk changed, as text: each removed line, then each added line,
+/// marked with its side and trimmed, blank lines left out.
+fn edit_text(h: &RawHunk, old: &[&str], new: &[&str]) -> String {
+    let mut out = String::new();
+    for (mark, lines, [a, b]) in [('-', old, h.old_range), ('+', new, h.new_range)] {
+        let rows = lines.get(a.saturating_sub(1)..b).unwrap_or_default();
+        for l in rows.iter().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+            out.push(mark);
+            out.push_str(l);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Each group's representative: for a same edit's per-file groups the first
+/// of them, for every other group itself. What the ordering reads as one.
+fn joined_groups(n: usize, sets: &[Vec<usize>], group_idx: &[usize]) -> Vec<usize> {
+    let mut joined: Vec<usize> = (0..n).collect();
+    for set in sets {
+        let Some(head) = set.iter().map(|&i| group_idx[i]).min() else {
+            continue;
+        };
+        for &i in set {
+            joined[group_idx[i]] = head;
+        }
+    }
+    joined
+}
+
+/// Cluster links a same edit adds. Each member keeps the group it would
+/// otherwise have read in, so the parts of its own file stay as they were;
+/// the members join one another unless the edit is noise. A notice bumped in
+/// two files says nothing about whether the rest of the two changes belong
+/// together.
+fn same_edit_links(flat: &Flat, sets: &[Vec<usize>], group_idx: &[usize]) -> Vec<(usize, usize)> {
+    let in_set: HashSet<usize> = sets.iter().flatten().copied().collect();
+    let home = |i: usize| (flat.coord[i].0, Home::of(flat.sem[i]));
+    let mut home_group: HashMap<(usize, Home), usize> = HashMap::new();
+    for i in (0..flat.sem.len()).filter(|i| !in_set.contains(i)) {
+        home_group.entry(home(i)).or_insert(group_idx[i]);
+    }
+    let mut out = vec![];
+    for set in sets {
+        for &i in set {
+            if let Some(&g) = home_group.get(&home(i)) {
+                out.push((group_idx[i], g));
+            }
+        }
+        if !set.iter().any(|&i| flat.sem[i].noise) {
+            out.extend(set.windows(2).map(|w| (group_idx[w[0]], group_idx[w[1]])));
+        }
+    }
+    out
+}
+
+/// The groups a consumer is shown: a same edit's per-file groups as one,
+/// named for the files it spans. Until here each file kept its own, because
+/// the edges, the rationale and the clusters all ask which file a group is in.
+fn merge_same_edits(
+    groups: Vec<GroupInfo>,
+    group_idx: &mut [usize],
+    joined: &[usize],
+    flat: &Flat,
+    paths: &[String],
+) -> Vec<GroupInfo> {
+    let heads: HashSet<usize> = (0..groups.len())
+        .filter(|&g| joined[g] != g)
+        .map(|g| joined[g])
+        .collect();
+    let mut out: Vec<GroupInfo> = vec![];
+    let mut renum = vec![0usize; groups.len()];
+    for (g, gr) in groups.into_iter().enumerate() {
+        if joined[g] == g {
+            renum[g] = out.len();
+            out.push(gr);
+        } else {
+            // a head is the lowest of its groups, so it is already out
+            renum[g] = renum[joined[g]];
+            out[renum[g]].members.extend(gr.members);
+        }
+    }
+    for &h in &heads {
+        let gr = &mut out[renum[h]];
+        gr.members.sort_unstable();
+        let mut files: Vec<usize> = gr.members.iter().map(|&i| flat.coord[i].0).collect();
+        files.dedup();
+        let names: Vec<&str> = files.iter().map(|&f| paths[f].as_str()).collect();
+        gr.reason = format!("same edit in {} files: {}", files.len(), name_list(&names));
+        gr.files = files;
+    }
+    for gi in group_idx.iter_mut() {
+        *gi = renum[*gi];
+    }
+    out
 }
 
 /// One set of symbol names per group.
@@ -808,13 +1050,15 @@ struct GroupKeys<'a> {
     row: &'a [usize],
 }
 
-/// The groups in reading order, per strategy.
+/// The groups in reading order, per strategy. The groups `joined` names as
+/// one (see `joined_groups`) come out together; the file strategy has none.
 fn order_groups(
     strategy: Strategy,
     groups: &[GroupInfo],
     sem: &[&HunkSem],
     gedges: &[(usize, usize)],
     k: &GroupKeys,
+    joined: &[usize],
 ) -> Vec<usize> {
     let mut v: Vec<usize> = (0..groups.len()).collect();
     match strategy {
@@ -830,7 +1074,12 @@ fn order_groups(
                         .unwrap_or(2)
                 })
                 .collect();
-            v.sort_by_key(|&gi| (k.docs[gi], gcat_v[gi], k.file[gi], k.row[gi], gi));
+            let key: Vec<_> = v
+                .iter()
+                .map(|&gi| (k.docs[gi], gcat_v[gi], k.file[gi], k.row[gi], gi))
+                .collect();
+            let key = together(&key, joined);
+            v.sort_by_key(|&gi| key[gi]);
         }
         Strategy::Comprehension => {
             // A group's rule priority is the highest any of its hunks carries.
@@ -862,10 +1111,57 @@ fn order_groups(
                     )
                 })
                 .collect();
-            v = topo_order(&key_v, gedges);
+            v = joined_topo(&key_v, gedges, joined);
         }
     }
     v
+}
+
+/// Each group's sort key behind the least one among the groups it is joined
+/// with, so joined groups sort as one and in their own order among themselves.
+fn together<K: Ord + Copy>(keys: &[K], joined: &[usize]) -> Vec<(K, K)> {
+    let mut least = keys.to_vec();
+    for (g, &h) in joined.iter().enumerate() {
+        least[h] = least[h].min(keys[g]);
+    }
+    (0..keys.len())
+        .map(|g| (least[joined[g]], keys[g]))
+        .collect()
+}
+
+/// `topo_order` with the groups `joined` names as one node: it waits for every
+/// definition any of them uses, and whatever uses a definition of one of them
+/// waits for all of them. A node reads as its groups in key order.
+fn joined_topo(key_v: &[GroupKey], gedges: &[(usize, usize)], joined: &[usize]) -> Vec<usize> {
+    let heads: Vec<usize> = (0..key_v.len()).filter(|&g| joined[g] == g).collect();
+    let mut node = vec![0usize; key_v.len()];
+    for (n, &h) in heads.iter().enumerate() {
+        node[h] = n;
+    }
+    let mut parts: Vec<Vec<usize>> = vec![vec![]; heads.len()];
+    for (g, &h) in joined.iter().enumerate() {
+        parts[node[h]].push(g);
+    }
+    for p in &mut parts {
+        p.sort_by_key(|&g| key_v[g]);
+    }
+    let node_keys: Vec<GroupKey> = parts
+        .iter()
+        .enumerate()
+        .map(|(n, p)| {
+            let (prio, docs, file, row, _) = key_v[p[0]];
+            (prio, docs, file, row, n)
+        })
+        .collect();
+    let node_edges: Vec<(usize, usize)> = gedges
+        .iter()
+        .map(|&(a, b)| (node[joined[a]], node[joined[b]]))
+        .filter(|(a, b)| a != b)
+        .collect();
+    topo_order(&node_keys, &node_edges)
+        .into_iter()
+        .flat_map(|n| parts[n].iter().copied())
+        .collect()
 }
 
 /// Kahn's topological sort over `gedges`, lowest key first among the freed
@@ -2852,6 +3148,7 @@ mod tests {
             .map(|members| GroupInfo {
                 reason: String::new(),
                 members,
+                files: vec![],
             })
             .collect();
         assert_eq!(

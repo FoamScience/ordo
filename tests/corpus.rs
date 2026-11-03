@@ -172,6 +172,10 @@ struct Metrics {
     clusters: usize,
     /// ...of which a single hunk
     singletons: usize,
+    /// groups reading one edit repeated across files as one item
+    same_edits: usize,
+    /// ...and the hunks they hold
+    same_edit_hunks: usize,
 }
 
 impl Metrics {
@@ -198,6 +202,8 @@ impl Metrics {
             ("shared_skipped", self.shared_skipped, Dir::Any),
             ("clusters", self.clusters, Dir::Any),
             ("singletons", self.singletons, Dir::Any),
+            ("same_edits", self.same_edits, Dir::Any),
+            ("same_edit_hunks", self.same_edit_hunks, Dir::Up),
         ]
     }
 }
@@ -438,6 +444,10 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
         }
         m.clusters += out.clusters.len();
         m.singletons += out.clusters.iter().filter(|c| c.len() == 1).count();
+        for g in out.groups.iter().filter(|g| !g.files.is_empty()) {
+            m.same_edits += 1;
+            m.same_edit_hunks += g.members.len();
+        }
         child = Some((
             sha,
             parent,
@@ -530,7 +540,8 @@ fn corpora_hold_their_invariants_and_do_not_regress() {
         let pct = |a: usize, b: usize| (a * 100).checked_div(b).unwrap_or(0);
         eprintln!(
             "corpus: {:10} fix commits={} finding on fix={}% on other={}% code first={}% \
-             pairs={} merged={} shared pairs={} merged={} skipped={} clusters={} singletons={}",
+             pairs={} merged={} shared pairs={} merged={} skipped={} clusters={} singletons={} \
+             same edits={} ({} hunks)",
             "",
             m.fix_commits,
             pct(m.fix_with_finding, m.fix_commits),
@@ -542,7 +553,9 @@ fn corpora_hold_their_invariants_and_do_not_regress() {
             m.shared_merged,
             m.shared_skipped,
             m.clusters,
-            m.singletons
+            m.singletons,
+            m.same_edits,
+            m.same_edit_hunks
         );
 
         if let Some(before) = baseline.get(&repo.name) {

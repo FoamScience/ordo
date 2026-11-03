@@ -92,6 +92,18 @@ fn dropped() -> Input {
     .expect("fixture parses")
 }
 
+/// Nor can it reach `groups[].files`: that takes one edit repeated in two
+/// files, which `rich` has no reason to make.
+fn same_edit() -> Input {
+    serde_json::from_value(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def f(u):\n    return get(u)\n", "new": "def f(u):\n    return get(u, timeout=3)\n" },
+            { "path": "b.py", "old": "def g(u):\n    return get(u)\n", "new": "def g(u):\n    return get(u, timeout=3)\n" }
+        ]
+    }))
+    .expect("fixture parses")
+}
+
 /// Every key the engine emits is a key the schema declares.
 #[test]
 fn the_schema_declares_everything_the_engine_emits() {
@@ -113,6 +125,7 @@ fn the_schema_declares_everything_the_engine_emits() {
         serde_json::to_value(ordo::run(rich())).expect("output serializes"),
         serde_json::to_value(ordo::run(advisory())).expect("output serializes"),
         serde_json::to_value(ordo::run(dropped())).expect("output serializes"),
+        serde_json::to_value(ordo::run(same_edit())).expect("output serializes"),
     ] {
         check("", &out);
         for f in out["files"].as_array().expect("files") {
@@ -196,6 +209,15 @@ fn the_fixture_reaches_the_optional_output_fields() {
             .iter()
             .any(|f| f.get("dropped").is_some()),
         "dropped fixture drops no hunk: {drp}"
+    );
+    let same = serde_json::to_value(ordo::run(same_edit())).expect("serializes");
+    assert!(
+        same["groups"]
+            .as_array()
+            .expect("groups")
+            .iter()
+            .any(|g| g.get("files").is_some()),
+        "same-edit fixture makes no same-edit group: {same}"
     );
 }
 

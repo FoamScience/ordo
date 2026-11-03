@@ -147,6 +147,7 @@ pub fn run(input: Input) -> Output {
     let facts = order::FileFacts {
         symbols: &symbols,
         changed: &changed,
+        changes: &input.changes,
     };
     let ordered = order::order_all(&hunks, &paths, &facts, &input.options);
     let placed = placements(&ordered, &hunks);
@@ -206,6 +207,7 @@ pub fn run(input: Input) -> Output {
             id: gids[gi].clone(),
             reason: info.reason.clone(),
             members: info.members.iter().map(|&i| hid(i)).collect(),
+            files: info.files.iter().map(|&f| paths[f].clone()).collect(),
         })
         .collect();
     let edges_out: Vec<Edge> = ordered
