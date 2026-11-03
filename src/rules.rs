@@ -387,7 +387,7 @@ fn query_matches(query: &Query, root: Node, src: &[u8]) -> Vec<usize> {
     let mut rows = vec![];
     let mut it = cursor.matches(query, root, src);
     while let Some(m) = it.next() {
-        rows.extend(m.captures.iter().map(|cap| node_row(cap.node)));
+        rows.extend(m.captures().iter().map(|cap| node_row(cap.node)));
     }
     unique_rows(rows)
 }
