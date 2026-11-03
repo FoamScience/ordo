@@ -2377,6 +2377,9 @@ fn container_phrase(s: &HunkSem, nm: &str) -> String {
     if adds_whole(s) {
         return format!("adds {nm}");
     }
+    if let Some(d) = s.directive.as_ref().filter(|_| s.adds_conditional) {
+        return format!("adds {} to {nm}", conditional_block(d));
+    }
     if let Some(p) = s.intent.as_ref().and_then(|i| intent_phrase(i, nm)) {
         return p;
     }
@@ -2387,6 +2390,14 @@ fn container_phrase(s: &HunkSem, nm: &str) -> String {
         return format!("edits {nm}");
     }
     format!("adds {} lines to {nm}", s.new_len)
+}
+
+/// "#ifdef X", or "an #if block" when the condition runs past its line.
+fn conditional_block(d: &str) -> String {
+    match d.split_whitespace().next() {
+        Some(word) if d.ends_with('\\') => format!("an {word} block"),
+        _ => d.to_string(),
+    }
 }
 
 /// Longest text a single-change headline quotes before it says what kind of

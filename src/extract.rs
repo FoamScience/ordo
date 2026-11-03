@@ -30,9 +30,13 @@ pub struct HunkSem {
     /// (`@Test` → `@ParameterizedTest`): what changed is how the definition is
     /// marked, not its signature
     pub annotations_only: bool,
-    /// c/c++: the conditional directive a hunk of nothing else adds or removes
-    /// (`#ifdef X`), for its headline
+    /// c/c++: the conditional directive a hunk of nothing else adds or
+    /// removes, or whose block an insertion adds whole (`#ifdef X`), for its
+    /// headline
     pub directive: Option<String>,
+    /// `directive` opens on the inserted side's first line a conditional its
+    /// last line closes: the hunk adds that block whole
+    pub adds_conditional: bool,
     /// the one run of tokens a small edit changed, when that is all it
     /// changed (see `refine::Refiner::single_change`)
     pub single: Option<crate::refine::SingleChange>,
@@ -170,6 +174,7 @@ impl HunkSem {
             whole_old_file: false,
             annotations_only: false,
             directive: None,
+            adds_conditional: false,
             single: None,
             intent: None,
             new_len: h.new_r0.map_or(0, |r0| h.new_r1.saturating_sub(r0) + 1),
@@ -533,6 +538,7 @@ impl Parsed<'_> {
             whole_old_file: false,
             annotations_only: false,
             directive: None,
+            adds_conditional: false,
             single: None,
             intent: None,
             new_len: r1 - r0 + 1,

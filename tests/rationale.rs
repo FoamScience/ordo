@@ -1758,6 +1758,45 @@ fn a_lone_conditional_directive_is_named() {
 }
 
 #[test]
+fn a_conditional_block_added_inside_a_function_is_named() {
+    let old = "int f(int p)\n{\n  int a = 1;\n  return a;\n}\n";
+    let rats = |body: &str| {
+        let new = format!("int f(int p)\n{{\n  int a = 1;\n{body}  return a;\n}}\n");
+        rationales(serde_json::json!({
+            "changes": [{ "path": "a.c", "old": old, "new": new }]
+        }))
+    };
+    assert_eq!(
+        rats("#ifdef NO_PROXY /* off */\n  if(p)\n    a = 2;\n  a++;\n#endif\n"),
+        vec!["adds #ifdef NO_PROXY to f"]
+    );
+    assert_eq!(
+        rats("#if defined(A) && \\\n    defined(B)\n  a = 2;\n#else\n  a = 3;\n#endif\n"),
+        vec!["adds an #if block to f"]
+    );
+    // two conditionals side by side are not one block
+    assert_eq!(
+        rats("#ifdef A\n  a = 2;\n#endif\n#ifdef B\n  a = 3;\n#endif\n"),
+        vec!["adds 6 lines to f"]
+    );
+    // a block that ends before the insertion does is not the whole insertion
+    assert_eq!(
+        rats("#ifdef A\n  a = 2;\n#endif\n  a++;\n"),
+        vec!["adds 4 lines to f"]
+    );
+}
+
+#[test]
+fn a_conditional_opened_around_existing_lines_is_not_an_added_block() {
+    let old = "int f(int p)\n{\n  int a = 1;\n  a++;\n  a--;\n  return a;\n}\n";
+    let new = "int f(int p)\n{\n  int a = 1;\n#ifdef A\n  a++;\n  a--;\n#endif\n  return a;\n}\n";
+    let rats = rationales(serde_json::json!({
+        "changes": [{ "path": "a.c", "old": old, "new": new }]
+    }));
+    assert!(rats.iter().all(|r| !r.contains("#ifdef A to")), "{rats:?}");
+}
+
+#[test]
 fn a_function_local_typedef_stays_the_functions() {
     let old = "int f(void)\n{\n    typedef int a_t;\n    return 1;\n}\n";
     let new = "int f(void)\n{\n    typedef long a_t;\n    return 1;\n}\n";

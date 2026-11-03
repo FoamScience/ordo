@@ -2257,7 +2257,12 @@ fn mark_shape(
         sem.whole_old_file = !old_lines.is_empty() && o0 == 1 && o1 >= old_lines.len();
         let changed = changed_lines(h, old_lines, new_lines);
         sem.annotations_only = annotations_only(&changed);
-        sem.directive = c_like.then(|| conditional_directive(&changed)).flatten();
+        let inserted = h.old_range[1] < h.old_range[0];
+        let found = c_like
+            .then(|| conditional_directive(&changed, inserted))
+            .flatten();
+        sem.adds_conditional = found.as_ref().is_some_and(|f| f.1);
+        sem.directive = found.map(|f| f.0);
     }
 }
 
@@ -2290,20 +2295,52 @@ fn changed_lines<'a>(h: &RawHunk, old_lines: &[&'a str], new_lines: &[&'a str]) 
 }
 
 /// c/c++: every changed line is a conditional directive (`#ifdef X`,
-/// `#endif`), so the hunk adds or drops a guard rather than code; the first
-/// one, spaced as `#ifdef X` and without its trailing comment, names it.
-fn conditional_directive(changed: &[&str]) -> Option<String> {
-    let directive = |l: &str| -> Option<String> {
-        let rest = l.strip_prefix('#')?.trim_start();
-        let word = rest.split_whitespace().next()?;
-        matches!(word, "if" | "ifdef" | "ifndef" | "elif" | "else" | "endif").then(|| {
-            let text = rest.split("/*").next().unwrap_or(rest);
-            let text = text.split("//").next().unwrap_or(text);
-            format!("#{}", text.split_whitespace().collect::<Vec<_>>().join(" "))
-        })
-    };
-    let all: Option<Vec<String>> = changed.iter().map(|l| directive(l)).collect();
-    all?.into_iter().next()
+/// `#endif`), so the hunk adds or drops a guard rather than code, or an
+/// insertion opens one conditional on its first line and closes it on its
+/// last, so it adds a guarded block; the first directive, spaced as `#ifdef X`
+/// and without its trailing comment, names it, and whether the insertion
+/// holds that one conditional whole rides beside it.
+fn conditional_directive(changed: &[&str], inserted: bool) -> Option<(String, bool)> {
+    let all: Option<Vec<(&str, String)>> = changed.iter().map(|l| directive(l)).collect();
+    let first = directive(changed.first()?)?;
+    let whole = inserted && one_conditional(changed);
+    match all {
+        Some(_) => Some((first.1, whole)),
+        None => whole.then_some((first.1, true)),
+    }
+}
+
+/// The lines open a conditional on the first and close it on the last, and
+/// only there.
+fn one_conditional(lines: &[&str]) -> bool {
+    let mut depth = 0usize;
+    for (i, l) in lines.iter().enumerate() {
+        match directive(l).map(|d| d.0) {
+            Some("if" | "ifdef" | "ifndef") => depth += 1,
+            Some("endif") if depth > 0 => depth -= 1,
+            _ if i == 0 => return false,
+            _ => {}
+        }
+        if depth == 0 {
+            return i + 1 == lines.len();
+        }
+    }
+    false
+}
+
+/// A conditional directive line's keyword and its text, spaced as `#ifdef X`
+/// and without a trailing comment.
+fn directive(l: &str) -> Option<(&str, String)> {
+    let rest = l.strip_prefix('#')?.trim_start();
+    let word = rest.split_whitespace().next()?;
+    matches!(word, "if" | "ifdef" | "ifndef" | "elif" | "else" | "endif").then(|| {
+        let text = rest.split("/*").next().unwrap_or(rest);
+        let text = text.split("//").next().unwrap_or(text);
+        (
+            word,
+            format!("#{}", text.split_whitespace().collect::<Vec<_>>().join(" ")),
+        )
+    })
 }
 
 /// Up to this many lines a side, an edit is small enough to be one change.
