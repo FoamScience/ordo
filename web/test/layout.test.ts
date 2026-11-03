@@ -57,6 +57,18 @@ test("an edit reads removed lines first, then the added ones, refined spans kept
   assert.deepEqual(rows[1].marks, [[4, 5]]);
 });
 
+test("a name added to an import reads as one edited line, even when the refiner's span stops short", () => {
+  const f = file({
+    old: ["from geolib import lazyloader"],
+    new: ["from geolib import errors, lazyloader"],
+    // the refiner marks `errors,` and leaves the space after it unmarked
+    hunks: [{ i: 0, old: [1, 1], new: [1, 1], removed: [[]], added: [[[19, 26]]] }],
+  });
+  const rows = codeRows(f);
+  assert.deepEqual(rows.map((r) => r.kind), ["edit"]);
+  assert.deepEqual(rows[0].marks, [[19, 26]]);
+});
+
 test("a deletion at the end of the file still shows", () => {
   const f = file({ old: ["a", "z"], new: ["a"], hunks: [{ i: 1, old: [2, 2], new: [2, 1], removed: [null], added: [] }] });
   assert.deepEqual(codeRows(f).map((r) => r.kind), ["ctx", "del"]);

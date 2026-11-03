@@ -1696,7 +1696,7 @@ function editsInPlace(f, hunks) {
         if (edited.has(n)) continue;
         const add = h2.added[n - h2.new[0]];
         const newText = f.new[n - 1] ?? "";
-        const e = rm && add ? fromSpans(oldText, newText, rm, add) : !rm && !add ? byChars(oldText, newText) : null;
+        const e = (rm && add ? fromSpans(oldText, newText, rm, add) : null) ?? (!rm === !add ? byChars(oldText, newText) : null);
         if (e) {
           folded.add(o);
           edited.set(n, e);
@@ -1753,7 +1753,14 @@ function byChars(oldText, newText) {
       gone.push([col, text]);
     }
   }
-  return kept >= KEPT * Math.max([...oldText].length, [...newText].length) ? { marks, gone } : null;
+  if (kept < KEPT * Math.max([...oldText].length, [...newText].length)) return null;
+  const chars = [...newText];
+  const trimmed = marks.map(([a, b]) => {
+    while (a < b && /\s/.test(chars[a])) a++;
+    while (b > a && /\s/.test(chars[b - 1])) b--;
+    return [a, b];
+  }).filter(([a, b]) => b > a);
+  return { marks: trimmed, gone };
 }
 function firstRowOf(rows, hunk) {
   const k = rows.findIndex((r) => r.hunk === hunk);
@@ -1902,13 +1909,22 @@ function rowText(it2, run2) {
     const v = pick(it2);
     return v && run2.filter((o) => pick(o) === v).length === 1 ? v : null;
   };
-  const name = aboutOf(it2);
+  const name = aboutOf(it2) ?? "";
   const sentence2 = alone((o) => o.rationale);
-  if (sentence2 && sentence2 !== `edits ${name}`) return { text: sentence2, code: false };
+  const tail = new RegExp(`\\s+(?:to|in|of|from|on)\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+  const short = sentence2?.replace(tail, "");
+  if (short && short !== `edits ${name}`) return { text: short, code: false };
   const detail = alone((o) => o.details[0]);
   if (detail) return { text: detail, code: false };
   if (it2.gist) return { text: it2.gist, code: true };
   return { text: it2.details[0] ?? it2.rationale, code: false };
+}
+function foldedText(items) {
+  if (items.length === 1) return items[0].rationale;
+  const imports = items.filter((it2) => it2.category === "import").length;
+  const rest = items.length - imports;
+  const parts = [imports && `${imports} import${imports === 1 ? "" : "s"}`, rest && `${rest} formatting or generated`].filter(Boolean);
+  return `${items.length} quiet hunks: ${parts.join(", ")}`;
 }
 
 // node_modules/@dagrejs/dagre/dist/dagre.esm.js
@@ -4340,7 +4356,7 @@ function renderList() {
         "div",
         {
           class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run2 ? " inrun" : ""}`,
-          title: folded ? first.symbol ?? "" : first.rationale,
+          title: folded ? "Quiet: an import, formatting or generated code. Select it to read." : first.rationale,
           onclick: () => {
             st2.focus = "list";
             select(items.includes(st2.sel) ? st2.sel : items[0]);
@@ -4349,14 +4365,14 @@ function renderList() {
         h(
           "span",
           { class: "txt" },
-          run2 && h("span", { class: "ln" }, `L${removal ? first.old[0] : first.new[0]}`),
-          folded ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded` : said.code ? h("span", { class: `gist${removal ? " removed" : ""}` }, said.text) : sentence(said.text)
+          folded ? sentence(foldedText(items.map((i) => r.items[i]))) : said.code ? h("span", { class: `gist${removal ? " removed" : ""}` }, said.text) : sentence(said.text)
         ),
         h(
           "span",
           { class: "meta" },
           first.delta && h("span", { class: "since", title: SINCE[first.delta][1] }, SINCE[first.delta][0]),
-          level && h("span", { class: `lv lv-${level}`, title: `${level} finding` }, level === "warn" ? "warning" : level)
+          level && h("span", { class: `lv lv-${level}`, title: `${level} finding` }, level === "warn" ? "warning" : level),
+          folded ? h("span", null, "quiet") : h("span", { class: "ln" }, `L${removal ? first.old[0] : first.new[0]}`)
         )
       );
       for (const i of items) dots.set(i, el);

@@ -6,7 +6,7 @@ import { Api } from "./api.ts";
 import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
-import { rowText, withSymbols } from "./list.ts";
+import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, parseCommand } from "./palette.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
@@ -374,7 +374,7 @@ function renderList(): void {
         "div",
         {
           class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run ? " inrun" : ""}`,
-          title: folded ? first.symbol ?? "" : first.rationale,
+          title: folded ? "Quiet: an import, formatting or generated code. Select it to read." : first.rationale,
           onclick: () => {
             st.focus = "list";
             select(items.includes(st.sel) ? st.sel : items[0]);
@@ -383,9 +383,8 @@ function renderList(): void {
         h(
           "span",
           { class: "txt" },
-          run && h("span", { class: "ln" }, `L${removal ? first.old[0] : first.new[0]}`),
           folded
-            ? `${items.length} hunk${items.length === 1 ? "" : "s"}, folded`
+            ? sentence(foldedText(items.map((i) => r.items[i])))
             : said.code
               ? h("span", { class: `gist${removal ? " removed" : ""}` }, said.text)
               : sentence(said.text),
@@ -395,6 +394,7 @@ function renderList(): void {
           { class: "meta" },
           first.delta && h("span", { class: "since", title: SINCE[first.delta][1] }, SINCE[first.delta][0]),
           level && h("span", { class: `lv lv-${level}`, title: `${level} finding` }, level === "warn" ? "warning" : level),
+          folded ? h("span", null, "quiet") : h("span", { class: "ln" }, `L${removal ? first.old[0] : first.new[0]}`),
         ),
       );
       for (const i of items) dots.set(i, el);

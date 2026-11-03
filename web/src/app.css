@@ -191,7 +191,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .symhead:hover { background: var(--raise); }
 .symhead.cur .code-word { text-decoration: underline; text-decoration-thickness: var(--rule-heavy); text-underline-offset: 0.2em; }
 .r.inrun { padding-left: calc(var(--rail) + var(--space-xl)); }
-.r .ln { color: var(--faint); font-size: var(--fs-tiny); margin-right: var(--space-xs); }
+.r .ln { color: var(--faint); font-size: var(--fs-tiny); }
 .r .gist { color: var(--dim); }
 .r .gist.removed { text-decoration: line-through; text-decoration-color: var(--faint); }
 .r.sel .gist { color: var(--fg); }
