@@ -108,13 +108,25 @@ part carries the strong tint —
 
 The unit of comparison is the tree-sitter **leaf node**, never a character or a
 whitespace-split word, so `AgentNode` → `AgentNodeRef` reads as one identifier
-replaced rather than a three-character suffix appended. Lines with too little in
+replaced rather than a three-character suffix appended. A comment, a string or
+prose is the exception: its leaf is a run of words, so it is compared word by
+word and a bumped year marks the year. Lines with too little in
 common are left unrefined and render whole, so a rewrite is never dressed up as
 a small edit. The algorithm is `ordo::refine`, a public library module — a
 leaf-level LCS, deliberately not a full tree alignment (difftastic's
 Dijkstra-over-graphs, or `syndiff`): those buy accuracy on moved and
 restructured code at a cost this does not need to pay to say "an argument was
 added".
+
+Text the pairing leaves unmatched on both sides that is the same text — two
+arguments swapped, a statement moved a few lines down — is marked **moved**,
+with a dashed outline, rather than as one thing deleted and another added. Text
+that only re-wraps (a call split over three lines) keeps its place among what
+did match and is not called moved.
+
+`corpus/refine_gold.jsonl` holds hunks whose changed and moved text a person
+marked; `tests/refine_gold.rs` scores the refiner against them char by char
+(opt-in on `$ORDO_CORPUS`) and fails when any one of them gets worse.
 
 The margin carries the file's recent churn — how many commits touched it in
 the last six months — counted once at load, because one `git rev-list` per file

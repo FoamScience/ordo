@@ -256,6 +256,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
   text-decoration-color: var(--verdict); text-decoration-thickness: 1.5px;
 }
 .l.del mark { background: var(--del-strong-bg); color: inherit; }
+.l mark.moved { background: var(--note-strong-bg); color: inherit; outline: var(--rule-hair) dashed var(--accent); }
 .l.other, .l.other [class^="s-"] { color: var(--faint); }
 .l.other mark, .l.other mark[class^="s-"] { color: var(--dim); }
 .l.cur { box-shadow: inset var(--rule-heavy) 0 0 var(--accent); }

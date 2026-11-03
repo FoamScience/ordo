@@ -25,10 +25,16 @@ pub type Span = (usize, usize);
 /// What changed in one hunk. Each vector is parallel to the hunk's lines on that
 /// side: `Some(spans)` means the line was paired with its counterpart and only
 /// `spans` differ; `None` means it stands alone and changed as a whole.
+///
+/// `moved_removed`/`moved_added` lie over those: the parts of the changed text
+/// that reappear, unmatched, on the other side of the hunk — an argument two
+/// places over, a statement a few lines down. Empty when nothing moved.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Refined {
     pub removed: Vec<Option<Vec<Span>>>,
     pub added: Vec<Option<Vec<Span>>>,
+    pub moved_removed: Vec<Vec<Span>>,
+    pub moved_added: Vec<Vec<Span>>,
 }
 
 /// Below this leaf-overlap ratio two lines are not the same line edited, they
@@ -48,6 +54,11 @@ const MAX_PAIRS: usize = 4096;
 /// whole, which is what a machine-generated line deserves anyway.
 const MAX_LCS_CELLS: usize = 1 << 22;
 
+/// Unmatched leaves a side may hold for move detection to run: each round
+/// compares every unmatched run against every one on the other side, so past
+/// this the hunk is a rewrite and nothing in it is reported moved.
+const MAX_MOVE_TOKENS: usize = 256;
+
 /// One grammar leaf, clipped to a single line. `id` is an interned form of the
 /// leaf's text, unique per distinct string across both sides of a `Refiner`,
 /// so the LCS inner loop compares `u32`s instead of `String`s.
@@ -57,6 +68,9 @@ struct Token {
     end: usize,
     id: u32,
     role: Role,
+    /// part of a comment, a string or prose, where the leaf is a run of words
+    /// rather than one name
+    texty: bool,
 }
 
 /// What a leaf is part of, as far as a one-line headline can say it.
@@ -100,6 +114,11 @@ impl Refiner {
     pub fn new(path: &str, old: &[String], new: &[String]) -> Option<Refiner> {
         let spec = lang::for_path(path)?;
         let lang = (spec.language)();
+        let leaves = Leaves {
+            want: None,
+            words: true,
+            prose: spec.prose,
+        };
         let parse = |lines: &[String]| -> Option<(Tree, String)> {
             let src = lines.join("\n");
             let mut p = Parser::new();
@@ -113,8 +132,8 @@ impl Refiner {
         // `lcs` are comparing unrelated numbers.
         let mut interned: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         Some(Refiner {
-            old_tokens: tokens_by_row(&old_tree, &old_src, old, &mut interned, None),
-            new_tokens: tokens_by_row(&new_tree, &new_src, new, &mut interned, None),
+            old_tokens: tokens_by_row(&old_tree, &old_src, old, &mut interned, &leaves),
+            new_tokens: tokens_by_row(&new_tree, &new_src, new, &mut interned, &leaves),
             old_lines: old.to_vec(),
             new_lines: new.to_vec(),
         })
@@ -133,9 +152,15 @@ impl Refiner {
         let owned = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
         let (old, new) = (owned(old_src), owned(new_src));
         let mut interned: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        // whole leaves: a headline names the string that changed, not a word in it
+        let leaves = |want| Leaves {
+            want: Some(want),
+            words: false,
+            prose: spec.prose,
+        };
         Some(Refiner {
-            old_tokens: tokens_by_row(&old_tree, old_src, &old, &mut interned, Some(old_rows)),
-            new_tokens: tokens_by_row(&new_tree, new_src, &new, &mut interned, Some(new_rows)),
+            old_tokens: tokens_by_row(&old_tree, old_src, &old, &mut interned, &leaves(old_rows)),
+            new_tokens: tokens_by_row(&new_tree, new_src, &new, &mut interned, &leaves(new_rows)),
             old_lines: old,
             new_lines: new,
         })
@@ -197,6 +222,44 @@ impl Refiner {
         })
     }
 
+    /// How much of a hunk's old leaves survive into its new side, 0.0–1.0, both
+    /// sides read as one stream each with line breaks set aside: a call
+    /// re-wrapped over three lines keeps all of them. A comment or a string
+    /// counts by its words, so a year bumped in a copyright line keeps the rest
+    /// of the line.
+    pub(crate) fn kept_share(&self, old_range: [usize; 2], new_range: [usize; 2]) -> f32 {
+        #[derive(Hash, PartialEq, Eq)]
+        enum Key {
+            Leaf(u32),
+            Word(String),
+        }
+        let keys = |r: [usize; 2], all: &[Vec<Token>], lines: &[String]| -> Vec<Key> {
+            let mut out = vec![];
+            for (k, row) in rows_of(r, all).iter().enumerate() {
+                let line: Vec<char> = lines
+                    .get(r[0] - 1 + k)
+                    .map_or(vec![], |l| l.chars().collect());
+                for t in row {
+                    if !t.texty {
+                        out.push(Key::Leaf(t.id));
+                        continue;
+                    }
+                    let text: String = line
+                        .get(t.start..t.end.min(line.len()))
+                        .unwrap_or(&[])
+                        .iter()
+                        .collect();
+                    out.extend(words_of(&text).map(|(a, b)| Key::Word(text[a..b].to_string())));
+                }
+            }
+            out
+        };
+        kept_of(
+            &keys(old_range, &self.old_tokens, &self.old_lines),
+            &keys(new_range, &self.new_tokens, &self.new_lines),
+        )
+    }
+
     /// `old_range`/`new_range` are the hunk's 1-based inclusive line ranges, as
     /// the engine reports them (an empty side has `end < start`).
     pub fn refine(&self, old_range: [usize; 2], new_range: [usize; 2]) -> Refined {
@@ -205,17 +268,198 @@ impl Refiner {
         let mut out = Refined {
             removed: vec![None; old.len()],
             added: vec![None; new.len()],
+            ..Refined::default()
         };
         if old.is_empty() || new.is_empty() || old.len() * new.len() > MAX_PAIRS {
             return out;
         }
+        let mut old_free: Vec<Vec<bool>> = old.iter().map(|r| vec![true; r.len()]).collect();
+        let mut new_free: Vec<Vec<bool>> = new.iter().map(|r| vec![true; r.len()]).collect();
+        let mut anchors: Vec<Anchor> = vec![];
         for (i, j) in pair_lines(&old, &new) {
-            let (rm, add) = line_spans(&old[i], &new[j]);
-            out.removed[i] = Some(rm);
-            out.added[j] = Some(add);
+            for (a, b) in lcs(&old[i], &new[j]) {
+                old_free[i][a] = false;
+                new_free[j][b] = false;
+                anchors.push(((i, a), (j, b)));
+            }
+            out.removed[i] = Some(spans_of(&old[i], &old_free[i]));
+            out.added[j] = Some(spans_of(&new[j], &new_free[j]));
+        }
+        let words = |rows: &[Vec<Token>], lines: &[String], first: usize| -> Vec<Vec<bool>> {
+            rows.iter()
+                .enumerate()
+                .map(|(k, r)| {
+                    let line: Vec<char> =
+                        lines.get(first + k).map_or(vec![], |l| l.chars().collect());
+                    r.iter()
+                        .map(|t| {
+                            line.get(t.start..t.end.min(line.len()))
+                                .is_some_and(|cs| cs.iter().any(|c| c.is_alphanumeric()))
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let old_side = Side {
+            rows: &old,
+            free: &old_free,
+            word: &words(&old, &self.old_lines, old_range[0] - 1),
+        };
+        let new_side = Side {
+            rows: &new,
+            free: &new_free,
+            word: &words(&new, &self.new_lines, new_range[0] - 1),
+        };
+        (out.moved_removed, out.moved_added) = moves(&old_side, &new_side, &anchors);
+        out
+    }
+}
+
+/// One side of a hunk as move detection reads it: its token rows, which
+/// tokens the line pairing left unmatched, and which carry a letter or digit.
+struct Side<'a> {
+    rows: &'a [Vec<Token>],
+    free: &'a [Vec<bool>],
+    word: &'a [Vec<bool>],
+}
+
+/// The share of `old` a diff finds again in `new`; all of it when `old` is empty.
+pub(crate) fn kept_of<T: std::hash::Hash + Eq>(old: &[T], new: &[T]) -> f32 {
+    if old.is_empty() {
+        return 1.0;
+    }
+    let kept: usize = similar::capture_diff_slices(similar::Algorithm::Myers, old, new)
+        .iter()
+        .filter(|op| op.tag() == similar::DiffTag::Equal)
+        .map(|op| op.old_range().len())
+        .sum();
+    kept as f32 / old.len() as f32
+}
+
+/// A run of consecutive unmatched tokens on one row: `(row, start, end)`.
+type Run = (usize, usize, usize);
+
+/// A token the line pairing matched, as `(row, index)` on each side.
+type Anchor = ((usize, usize), (usize, usize));
+
+impl Side<'_> {
+    fn runs(&self) -> Vec<Run> {
+        let mut out = vec![];
+        for (row, free) in self.free.iter().enumerate() {
+            let mut k = 0;
+            while k < free.len() {
+                if !free[k] {
+                    k += 1;
+                    continue;
+                }
+                let start = k;
+                while k < free.len() && free[k] {
+                    k += 1;
+                }
+                out.push((row, start, k));
+            }
         }
         out
     }
+
+    /// The run without the punctuation at its ends: `, b` is the run `b`.
+    fn core(&self, (row, a, b): Run) -> Option<(usize, usize)> {
+        let w = &self.word[row];
+        let s = (a..b).find(|&k| w[k])?;
+        let e = (a..b).rev().find(|&k| w[k])? + 1;
+        Some((s, e))
+    }
+}
+
+/// Text left unmatched on both sides that is the same text: what moved rather
+/// than changed. Greedy, longest first, over runs of unmatched tokens. A match
+/// counts when it holds two words, or is the only word of its run on both
+/// sides — a lone `self` shared by two rewritten lines is a coincidence, a lone
+/// argument that left one place and arrived at another is a move.
+///
+/// Text that kept its place relative to everything the pairing matched — a
+/// call split over three lines, the rest of a line wrapped onto the next — is
+/// re-wrapped, not moved, and stays as the pairing left it.
+fn moves(old: &Side, new: &Side, anchors: &[Anchor]) -> (Vec<Vec<Span>>, Vec<Vec<Span>>) {
+    let mut old_moved: Vec<Vec<bool>> = old.rows.iter().map(|r| vec![false; r.len()]).collect();
+    let mut new_moved: Vec<Vec<bool>> = new.rows.iter().map(|r| vec![false; r.len()]).collect();
+    let free = |s: &Side| s.free.iter().flatten().filter(|&&f| f).count();
+    if free(old) <= MAX_MOVE_TOKENS && free(new) <= MAX_MOVE_TOKENS {
+        let (mut old_runs, mut new_runs) = (old.runs(), new.runs());
+        while let Some((oi, ni, oa, na, len)) = best_move(old, new, &old_runs, &new_runs, anchors) {
+            let (orow, os, oe) = old_runs[oi];
+            let (nrow, ns, ne) = new_runs[ni];
+            old_moved[orow][oa..oa + len].fill(true);
+            new_moved[nrow][na..na + len].fill(true);
+            let split = |runs: &mut Vec<Run>, at: usize, (row, s, e): Run, a: usize| {
+                runs.remove(at);
+                runs.extend(
+                    [(row, s, a), (row, a + len, e)]
+                        .into_iter()
+                        .filter(|r| r.1 < r.2),
+                );
+            };
+            split(&mut old_runs, oi, (orow, os, oe), oa);
+            split(&mut new_runs, ni, (nrow, ns, ne), na);
+        }
+    }
+    let spans = |s: &Side, moved: &[Vec<bool>]| -> Vec<Vec<Span>> {
+        s.rows
+            .iter()
+            .zip(moved)
+            .map(|(toks, m)| spans_of(toks, m))
+            .collect()
+    };
+    (spans(old, &old_moved), spans(new, &new_moved))
+}
+
+/// The longest acceptable common token run between any old and any new run:
+/// `(old run, new run, old start, new start, length)`.
+fn best_move(
+    old: &Side,
+    new: &Side,
+    old_runs: &[Run],
+    new_runs: &[Run],
+    anchors: &[Anchor],
+) -> Option<(usize, usize, usize, usize, usize)> {
+    let crosses = |at: Anchor| anchors.iter().any(|&(o, n)| (o < at.0) != (n < at.1));
+    let mut best: Option<(usize, usize, usize, usize, usize)> = None;
+    for (oi, &(orow, os, oe)) in old_runs.iter().enumerate() {
+        let a = &old.rows[orow][os..oe];
+        for (ni, &(nrow, ns, ne)) in new_runs.iter().enumerate() {
+            let b = &new.rows[nrow][ns..ne];
+            // longest common substring ending at each (i, j), one row at a time
+            let mut prev = vec![0usize; b.len() + 1];
+            for (i, at) in a.iter().enumerate() {
+                let mut cur = vec![0usize; b.len() + 1];
+                for (j, bt) in b.iter().enumerate() {
+                    if at.id != bt.id {
+                        continue;
+                    }
+                    cur[j + 1] = prev[j] + 1;
+                    let len = cur[j + 1];
+                    if best.is_some_and(|m| m.4 >= len) {
+                        continue;
+                    }
+                    let (oa, na) = (os + i + 1 - len, ns + j + 1 - len);
+                    let words = old.word[orow][oa..oa + len].iter().filter(|&&w| w).count();
+                    let covers = |s: &Side, run: Run, at: usize| {
+                        s.core(run)
+                            .is_some_and(|(cs, ce)| at <= cs && ce <= at + len)
+                    };
+                    let enough = words >= 2
+                        || words == 1
+                            && covers(old, (orow, os, oe), oa)
+                            && covers(new, (nrow, ns, ne), na);
+                    if enough && crosses(((orow, oa), (nrow, na))) {
+                        best = Some((oi, ni, oa, na, len));
+                    }
+                }
+                prev = cur;
+            }
+        }
+    }
+    best
 }
 
 /// The token rows of a 1-based inclusive line range; empty when the side is.
@@ -284,15 +528,26 @@ fn role_of(leaf: Node) -> Role {
 /// Every leaf of the tree, clipped to the row it sits on — a multi-row leaf (a
 /// block comment, a raw string) contributes one token per row it covers, so a
 /// row's tokens always describe that row alone.
+/// Which leaves `tokens_by_row` reads, and how.
+struct Leaves<'a> {
+    /// only these rows (0-based, sorted), each leaf with its `Role`; `None` is
+    /// every row and no roles, which is all the renderer needs
+    want: Option<&'a [usize]>,
+    /// a comment, string or prose leaf as one token per word, so an edited
+    /// word marks the word rather than the whole comment
+    words: bool,
+    /// every leaf of the file is prose
+    prose: bool,
+}
+
 fn tokens_by_row(
     tree: &Tree,
     src: &str,
     lines: &[String],
     interned: &mut std::collections::HashMap<String, u32>,
-    // only these rows (0-based, sorted), each leaf with its `Role`; `None` is
-    // every row and no roles, which is all the renderer needs
-    want: Option<&[usize]>,
+    leaves: &Leaves,
 ) -> Vec<Vec<Token>> {
+    let want = leaves.want;
     let rows = lines.len();
     let wanted = |a: usize, b: usize| {
         want.is_none_or(|w| {
@@ -318,21 +573,34 @@ fn tokens_by_row(
             continue;
         }
         let text = src.get(node.start_byte()..node.end_byte()).unwrap_or("");
+        let texty = leaves.prose || is_texty(node);
+        let role = if want.is_some() {
+            role_of(node)
+        } else {
+            Role::Other
+        };
         for (row, bytes, line) in leaf_spans(node, text) {
             if row >= rows {
                 break;
             }
-            if !bytes.is_empty() {
+            if bytes.is_empty() {
+                continue;
+            }
+            let mut push = |a: usize, b: usize, piece: &str| {
                 out[row].push(Token {
-                    start: to_char(row, bytes.start),
-                    end: to_char(row, bytes.end),
-                    id: intern(interned, line),
-                    role: if want.is_some() {
-                        role_of(node)
-                    } else {
-                        Role::Other
-                    },
-                });
+                    start: to_char(row, a),
+                    end: to_char(row, b),
+                    id: intern(interned, piece),
+                    role,
+                    texty,
+                })
+            };
+            if texty && leaves.words {
+                for (a, b) in words_of(line) {
+                    push(bytes.start + a, bytes.start + b, &line[a..b]);
+                }
+            } else {
+                push(bytes.start, bytes.end, line);
             }
         }
     }
@@ -340,6 +608,35 @@ fn tokens_by_row(
         row.sort_by_key(|t| t.start);
     }
     out
+}
+
+/// A leaf whose text is words rather than one token: a comment, a string
+/// literal or its content, or what a c directive holds unparsed (`#error`'s
+/// message).
+fn is_texty(leaf: Node) -> bool {
+    let k = leaf.kind();
+    k.contains("comment") || k.contains("string") || k.contains("heredoc") || k == "preproc_arg"
+}
+
+/// The byte ranges of a text's words and punctuation: a run of letters, digits
+/// and `_` is one, any other non-blank char is one on its own.
+fn words_of(text: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut it = text.char_indices().peekable();
+    std::iter::from_fn(move || {
+        let (start, c) = it.find(|&(_, c)| !c.is_whitespace())?;
+        let mut end = start + c.len_utf8();
+        if word(c) {
+            while let Some(&(i, n)) = it.peek() {
+                if !word(n) {
+                    break;
+                }
+                end = i + n.len_utf8();
+                it.next();
+            }
+        }
+        Some((start, end))
+    })
 }
 
 /// Does the node hold text none of its children do? css's `1px` is an
@@ -494,29 +791,16 @@ fn pair_lines(old: &[Vec<Token>], new: &[Vec<Token>]) -> Vec<(usize, usize)> {
     out
 }
 
-/// The char spans of one line pair that differ: whatever the leaf LCS didn't
-/// match. Adjacent spans separated by at most one column (the space between two
-/// tokens) are merged, so `, label: Option<&str>` reads as one region rather
-/// than eight.
-fn line_spans(old: &[Token], new: &[Token]) -> (Vec<Span>, Vec<Span>) {
-    let matched = lcs(old, new);
-    let take = |toks: &[Token], keep: Vec<usize>| -> Vec<Span> {
-        // `keep` comes from `lcs`'s backtrack, which pushes matched indices in
-        // increasing order, so it's already sorted — binary search over it.
-        let mut spans: Vec<Span> = vec![];
-        for (k, t) in toks.iter().enumerate() {
-            if keep.binary_search(&k).is_ok() {
-                continue;
-            }
-            match spans.last_mut() {
-                Some(last) if t.start <= last.1 + 1 => last.1 = t.end,
-                _ => spans.push((t.start, t.end)),
-            }
+/// The char spans of the tokens `pick` selects. Adjacent spans separated by at
+/// most one column (the space between two tokens) are merged, so `, label:
+/// Option<&str>` reads as one region rather than eight.
+fn spans_of(toks: &[Token], pick: &[bool]) -> Vec<Span> {
+    let mut spans: Vec<Span> = vec![];
+    for (t, _) in toks.iter().zip(pick).filter(|(_, &p)| p) {
+        match spans.last_mut() {
+            Some(last) if t.start <= last.1 + 1 => last.1 = t.end,
+            _ => spans.push((t.start, t.end)),
         }
-        spans
-    };
-    (
-        take(old, matched.iter().map(|&(i, _)| i).collect()),
-        take(new, matched.iter().map(|&(_, j)| j).collect()),
-    )
+    }
+    spans
 }

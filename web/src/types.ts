@@ -131,6 +131,9 @@ export interface FileHunk {
   new: [number, number];
   removed: ([number, number][] | null)[];
   added: ([number, number][] | null)[];
+  /** per line, what of its changed text reappears elsewhere in the hunk */
+  moved_removed?: [number, number][][];
+  moved_added?: [number, number][][];
 }
 
 export interface LineComment {

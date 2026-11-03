@@ -275,6 +275,8 @@ pub(super) fn file_text(app: &App, path: &str) -> Option<FileText> {
                 "new": it.new_range,
                 "removed": it.refined.removed,
                 "added": it.refined.added,
+                "moved_removed": it.refined.moved_removed,
+                "moved_added": it.refined.moved_added,
             })
         })
         .collect();

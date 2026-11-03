@@ -471,11 +471,14 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
   const search = st.search;
   const caret = k === st.cursor ? caretCol(row.text) : -1;
   let at = 0;
-  const parts = runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).flatMap((run) => {
+  const parts = runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : [], row.moved).flatMap((run) => {
     // what the old line had here: shown, but no column of this one
     if (run.gone) return [h("del", { class: "gone", title: "removed" }, run.text)];
     const piece = (text: string, extra?: string) =>
-      h(run.changed ? "mark" : "span", { class: [run.role && `s-${run.role}`, extra].filter(Boolean).join(" ") || null }, text);
+      h(run.changed || run.moved ? "mark" : "span", {
+        class: [run.role && `s-${run.role}`, run.moved && "moved", extra].filter(Boolean).join(" ") || null,
+        ...(run.moved ? { title: "moved" } : {}),
+      }, text);
     const cs = [...run.text];
     const i = caret - at;
     at += cs.length;
@@ -1793,8 +1796,10 @@ function excerpt(f: FileData, hunk: number, context: number, max: number): HTMLE
         h(
           "span",
           null,
-          runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : []).map((run) =>
-            run.gone ? h("del", { class: "gone" }, run.text) : h(run.changed ? "mark" : "span", { class: run.role ? `s-${run.role}` : null }, run.text),
+          runs(row.text, row.spans, row.marks, row.kind === "edit" ? row.gone : [], row.moved).map((run) =>
+            run.gone
+              ? h("del", { class: "gone" }, run.text)
+              : h(run.changed || run.moved ? "mark" : "span", { class: [run.role && `s-${run.role}`, run.moved && "moved"].filter(Boolean).join(" ") || null }, run.text),
           ),
         ),
       ),
