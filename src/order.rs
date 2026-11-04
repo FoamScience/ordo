@@ -424,7 +424,7 @@ pub fn order_all(
             .filter(|&&(a, b)| group_file[a] == group_file[b] || !prose(b))
             .chain(&same_gedges),
     );
-    let groups = merge_same_edits(groups, &mut group_idx, &joined, &flat, paths);
+    let groups = merge_same_edits(groups, &mut group_idx, &sets, &joined, &flat, paths);
 
     OrderedAll {
         coord: flat.coord,
@@ -601,24 +601,24 @@ impl<'a> Home<'a> {
     }
 }
 
-/// How many letters and digits an edit has to change before a repeat of it in
-/// another file is the same edit rather than a coincidence: an `#endif` or a
+/// How many letters and digits an edit has to change before a repeat of it
+/// elsewhere is the same edit rather than a coincidence: an `#endif` or a
 /// `return 0;` turns up wherever a change touches code.
 const SAME_EDIT_MIN: usize = 8;
 
-/// Hunks making one edit in several files — the same lines removed and the
+/// Hunks making one edit in several places — the same lines removed and the
 /// same lines added, each trimmed, blank lines aside, or the same run of
 /// tokens swapped for another on a line otherwise left alone — as sets of
-/// global hunk indices, one per edit, each spanning two files or more. A rename carried
-/// through a dozen files, an annotation added to each, a notice bumped in every
-/// header: one thing to read, not a dozen.
+/// global hunk indices, one per edit, each spanning two files or two scopes
+/// of one file or more. A rename carried through a dozen files, an annotation
+/// added to each method, a notice bumped in every header: one thing to read,
+/// not a dozen.
 ///
 /// A hunk joins only when nothing else changed in its definition: taken out
 /// of a function it shared with other edits, `CURLcode result;` reads as
 /// nothing at all. File scope is no such container — its hunks share a group
-/// by position, not by meaning.
-///
-/// Repeats confined to one file are left in place, in that file's own order.
+/// by position, not by meaning. Repeats within one scope already read
+/// together, in its group.
 fn same_edits(
     flat: &Flat,
     files: &[crate::PerFileHunks],
@@ -693,7 +693,7 @@ fn same_edits(
     }
     let mut sets: Vec<Vec<usize>> = by_root
         .into_values()
-        .filter(|m| m.iter().any(|&i| flat.coord[i].0 != flat.coord[m[0]].0))
+        .filter(|m| m.iter().any(|&i| homes[i] != homes[m[0]]))
         .collect();
     sets.sort_unstable();
     sets
@@ -755,20 +755,19 @@ fn same_edit_links(flat: &Flat, sets: &[Vec<usize>], group_idx: &[usize]) -> Vec
     out
 }
 
-/// The groups a consumer is shown: a same edit's per-file groups as one,
-/// named for the files it spans. Until here each file kept its own, because
-/// the edges, the rationale and the clusters all ask which file a group is in.
+/// The groups a consumer is shown: a same edit's per-file groups as one (a
+/// repeat inside one file already is), named for the places and files it
+/// spans. Until here each file kept its own, because the edges, the rationale
+/// and the clusters all ask which file a group is in.
 fn merge_same_edits(
     groups: Vec<GroupInfo>,
     group_idx: &mut [usize],
+    sets: &[Vec<usize>],
     joined: &[usize],
     flat: &Flat,
     paths: &[String],
 ) -> Vec<GroupInfo> {
-    let heads: HashSet<usize> = (0..groups.len())
-        .filter(|&g| joined[g] != g)
-        .map(|g| joined[g])
-        .collect();
+    let heads: Vec<usize> = sets.iter().map(|set| joined[group_idx[set[0]]]).collect();
     let mut out: Vec<GroupInfo> = vec![];
     let mut renum = vec![0usize; groups.len()];
     for (g, gr) in groups.into_iter().enumerate() {
@@ -786,8 +785,12 @@ fn merge_same_edits(
         gr.members.sort_unstable();
         let mut files: Vec<usize> = gr.members.iter().map(|&i| flat.coord[i].0).collect();
         files.dedup();
-        let names: Vec<&str> = files.iter().map(|&f| paths[f].as_str()).collect();
-        gr.reason = format!("same edit in {} files: {}", files.len(), name_list(&names));
+        let names = name_list(&files.iter().map(|&f| paths[f].as_str()).collect::<Vec<_>>());
+        gr.reason = match (gr.members.len(), files.len()) {
+            (n, 1) => format!("same edit in {n} places: {names}"),
+            (n, f) if n == f => format!("same edit in {f} files: {names}"),
+            (n, f) => format!("same edit in {n} places across {f} files: {names}"),
+        };
         gr.files = files;
     }
     for gi in group_idx.iter_mut() {

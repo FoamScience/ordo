@@ -35,13 +35,15 @@ context.
 
 A group is one file's, except a **same-edit** group: one edit — the same lines
 removed and added, each trimmed, or the same run of tokens swapped for another
-on a line otherwise left alone — repeated in several files (a rename carried
-through, an annotation added to each, a notice bumped in every header) reads as
-one item. Its `reason` is `same edit in N files: …`, its `files` lists them,
-and its members sit next to each other in `order`, after anything any of them
-uses. A hunk joins only when nothing else changed in its definition, and an
-edit must change at least eight letters or digits; repeats inside one file, and
-the `file` strategy, are left alone. Unless the edit is noise, its members share
+on a line otherwise left alone — repeated in several files, or in several
+definitions of one (a rename carried through, an annotation added to each
+method, a notice bumped in every header) reads as one item. Its `reason` is
+`same edit in N files: …`, `same edit in N places: file` or `same edit in N
+places across M files: …`, its `files` lists them, and its members sit next to
+each other in `order`, after anything any of them uses. A hunk joins only when
+nothing else changed in its definition, and an edit must change at least eight
+letters or digits; repeats inside one definition read as that definition, and
+the `file` strategy is left alone. Unless the edit is noise, its members share
 a cluster.
 
 `options.only_comments` (`--only-comments` on `ordo-engine order`/`ordo-engine pack`) drops

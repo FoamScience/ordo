@@ -697,9 +697,10 @@ pub struct Group {
     pub id: String,
     pub reason: String,
     pub members: Vec<String>,
-    /// the files a same-edit group spans — the one group that is not confined
-    /// to a file: its members are one edit, the same lines removed and added,
-    /// repeated across them. Omitted for every other group.
+    /// the files a same-edit group spans — the one group that may leave a
+    /// file or a scope: its members are one edit, the same lines removed and
+    /// added or the same run of tokens swapped, repeated across them. Omitted
+    /// for every other group.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
 }

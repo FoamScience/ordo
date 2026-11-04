@@ -635,15 +635,74 @@ fn a_different_or_trivial_token_swap_stays_apart() {
     assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
 }
 
+/// Defs `f`, `h`, `g` of one file, twelve lines apart; `f` and `g` make the
+/// same edit, `h` another.
+fn one_file(f: &str, h: &str, g: &str) -> ordo::model::Output {
+    let pad = "\n".repeat(12);
+    let src = |f: &str, h: &str, g: &str| {
+        format!("def f(url):\n    return {f}\n{pad}def h(url):\n    return {h}\n{pad}def g(url):\n    return {g}\n")
+    };
+    let old = "fetch(url)";
+    run_json(serde_json::json!({ "changes": [
+        { "path": "a.py", "old": src(old, "len(url)", old), "new": src(f, h, g) }
+    ]}))
+}
+
 #[test]
-fn a_repeat_inside_one_file_is_not_collapsed() {
+fn a_repeat_in_two_definitions_of_one_file_reads_as_one_item() {
+    let to = "fetch(url, timeout=30)";
+    let out = one_file(to, "len(url) + 1", to);
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    let g = same[0];
+    assert_eq!(g.files, vec!["a.py"]);
+    assert_eq!(g.reason, "same edit in 2 places: a.py");
+    let order: Vec<&str> = out.order.iter().map(|o| o.hunk.as_str()).collect();
+    let at = order.iter().position(|h| *h == g.members[0]).unwrap();
+    assert_eq!(&order[at..at + 2], &g.members[..], "{order:?}");
+}
+
+#[test]
+fn a_different_edit_in_one_file_stays_apart() {
+    let out = one_file(
+        "fetch(url, timeout=30)",
+        "len(url) + 1",
+        "fetch(url, timeout=60)",
+    );
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+    assert_eq!(out.groups.len(), 3);
+}
+
+/// Two hunks of one function already read together, as that function.
+#[test]
+fn a_repeat_inside_one_definition_keeps_its_definition_group() {
+    let pad = "    x = 1\n".repeat(12);
     let out = run_json(serde_json::json!({ "changes": [
         { "path": "a.py",
-          "old": "def f(url):\n    return fetch(url)\n\n\n\n\n\n\n\n\n\n\n\ndef g(url):\n    return fetch(url)\n",
-          "new": "def f(url):\n    return fetch(url, timeout=30)\n\n\n\n\n\n\n\n\n\n\n\ndef g(url):\n    return fetch(url, timeout=30)\n" }
+          "old": format!("def f(url):\n    a = fetch(url)\n{pad}    b = fetch(url)\n"),
+          "new": format!("def f(url):\n    a = fetch(url, timeout=30)\n{pad}    b = fetch(url, timeout=30)\n") }
     ]}));
     assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
-    assert_eq!(out.groups.len(), 2);
+    assert_eq!(out.groups.len(), 1);
+    assert_eq!(out.groups[0].reason, "same definition: f");
+}
+
+#[test]
+fn a_repeat_inside_a_file_and_across_files_counts_its_places() {
+    let to = "fetch(url, timeout=30)";
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "a.py",
+          "old": format!("def f(url):\n    return fetch(url)\n{}def g(url):\n    return fetch(url)\n", "\n".repeat(12)),
+          "new": format!("def f(url):\n    return {to}\n{}def g(url):\n    return {to}\n", "\n".repeat(12)) },
+        { "path": "b.py", "old": "def k(url):\n    return fetch(url)\n", "new": format!("def k(url):\n    return {to}\n") }
+    ]}));
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    assert_eq!(
+        same[0].reason,
+        "same edit in 3 places across 2 files: a.py, b.py"
+    );
+    assert_eq!(same[0].files, vec!["a.py", "b.py"]);
 }
 
 /// What two new files have in common is boilerplate, not one edit.

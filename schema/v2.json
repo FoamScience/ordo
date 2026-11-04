@@ -628,7 +628,7 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "the files a same-edit group spans — the one group not confined to a file: its members are one edit (the same lines removed and added, each trimmed) repeated across them, read together. Omitted for every other group."
+                "description": "the files a same-edit group spans — the one group that may leave a file or a scope: its members are one edit (the same lines removed and added, each trimmed, or the same run of tokens swapped) repeated across them, read together. Omitted for every other group."
               }
             }
           }
