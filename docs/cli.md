@@ -34,7 +34,8 @@ and `comment` for comment/docstring-only hunks), the `groups`, the def→use `ed
 context.
 
 A group is one file's, except a **same-edit** group: one edit — the same lines
-removed and added, each trimmed — repeated in several files (a rename carried
+removed and added, each trimmed, or the same run of tokens swapped for another
+on a line otherwise left alone — repeated in several files (a rename carried
 through, an annotation added to each, a notice bumped in every header) reads as
 one item. Its `reason` is `same edit in N files: …`, its `files` lists them,
 and its members sit next to each other in `order`, after anything any of them

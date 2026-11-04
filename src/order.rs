@@ -607,8 +607,9 @@ impl<'a> Home<'a> {
 const SAME_EDIT_MIN: usize = 8;
 
 /// Hunks making one edit in several files — the same lines removed and the
-/// same lines added, each trimmed, blank lines aside — as sets of global hunk
-/// indices, one per edit, each spanning two files or more. A rename carried
+/// same lines added, each trimmed, blank lines aside, or the same run of
+/// tokens swapped for another on a line otherwise left alone — as sets of
+/// global hunk indices, one per edit, each spanning two files or more. A rename carried
 /// through a dozen files, an annotation added to each, a notice bumped in every
 /// header: one thing to read, not a dozen.
 ///
@@ -633,20 +634,32 @@ fn same_edits(
             Some((old.lines().collect(), new.lines().collect()))
         })
         .collect();
-    let edits: Vec<Option<String>> = flat
+    let said = |t: &str| t.chars().filter(|c| c.is_alphanumeric()).count() >= SAME_EDIT_MIN;
+    // each hunk's edit read two ways: the run of tokens it swapped, and its
+    // whole lines; either one shared makes a repeat
+    let edits: Vec<[Option<String>; 2]> = flat
         .coord
         .iter()
-        .map(|&(fi, li)| {
+        .enumerate()
+        .map(|(i, &(fi, li))| {
             // a degraded file has no sides to read the text off
-            if files[fi].degraded {
-                return None;
-            }
-            let (old, new) = sides[fi].as_ref()?;
-            let text = edit_text(&files[fi].raw[li], old, new);
-            let said = text.chars().filter(|c| c.is_alphanumeric()).count();
-            (said >= SAME_EDIT_MIN).then_some(text)
+            let Some((old, new)) = sides[fi].as_ref().filter(|_| !files[fi].degraded) else {
+                return [None, None];
+            };
+            // one run of tokens swapped for another is the same edit whatever
+            // the line around it: `Foo,` in an import list, `Foo)` in a call
+            let swap = flat.sem[i]
+                .single
+                .as_ref()
+                .filter(|c| !c.old.is_empty() && !c.new.is_empty())
+                .map(|c| format!("~{}\n~{}\n", c.old, c.new))
+                .filter(|t| said(t));
+            let text = Some(edit_text(&files[fi].raw[li], old, new)).filter(|t| said(t));
+            [swap, text]
         })
         .collect();
+    let agree =
+        |i: usize, j: usize| (0..2).any(|k| edits[i][k].is_some() && edits[i][k] == edits[j][k]);
     let homes: Vec<(usize, Home)> = flat
         .sem
         .iter()
@@ -657,19 +670,28 @@ fn same_edits(
     let mut uniform: HashMap<(usize, Home), (usize, bool)> = HashMap::new();
     for (i, &home) in homes.iter().enumerate() {
         let (first, same) = uniform.entry(home).or_insert((i, true));
-        *same &= edits[i].is_some() && edits[i] == edits[*first];
+        *same &= agree(i, *first);
     }
-    let mut by_edit: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, edit) in edits.iter().enumerate() {
-        let home = homes[i];
-        if let Some(e) = edit
-            .as_deref()
-            .filter(|_| home.1.file_scope() || uniform[&home].1)
-        {
-            by_edit.entry(e).or_default().push(i);
+    let eligible: Vec<usize> = (0..edits.len())
+        .filter(|&i| homes[i].1.file_scope() || uniform[&homes[i]].1)
+        .collect();
+    let mut parent: Vec<usize> = (0..edits.len()).collect();
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    for &i in &eligible {
+        for e in edits[i].iter().flatten() {
+            let first = *seen.entry(e).or_insert(i);
+            let (ra, rb) = (uf_find(&mut parent, i), uf_find(&mut parent, first));
+            parent[ra] = rb;
         }
     }
-    let mut sets: Vec<Vec<usize>> = by_edit
+    let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &i in eligible
+        .iter()
+        .filter(|&&i| edits[i].iter().any(Option::is_some))
+    {
+        by_root.entry(uf_find(&mut parent, i)).or_default().push(i);
+    }
+    let mut sets: Vec<Vec<usize>> = by_root
         .into_values()
         .filter(|m| m.iter().any(|&i| flat.coord[i].0 != flat.coord[m[0]].0))
         .collect();

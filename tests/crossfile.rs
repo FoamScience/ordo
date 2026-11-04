@@ -568,6 +568,73 @@ fn similar_but_different_edits_stay_apart() {
     assert_eq!(out.groups.len(), 3);
 }
 
+/// One function per file whose `old` line became `new`.
+fn lines(paths: &[&str], old: &[&str], new: &[&str]) -> ordo::model::Output {
+    let changes: Vec<serde_json::Value> = (0..paths.len())
+        .map(|i| {
+            serde_json::json!({ "path": paths[i],
+                "old": format!("def f{i}(path):\n    {}\n", old[i]),
+                "new": format!("def f{i}(path):\n    {}\n", new[i]) })
+        })
+        .collect();
+    run_json(serde_json::json!({ "changes": changes }))
+}
+
+/// The same name swapped on lines that differ around it is still one edit.
+#[test]
+fn the_same_token_swap_on_different_lines_reads_as_one_item() {
+    let out = lines(
+        &["a.py", "b.py"],
+        &["x = load_config(path)", "return [load_config(path), 1]"],
+        &["x = read_settings(path)", "return [read_settings(path), 1]"],
+    );
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    assert_eq!(same[0].files, vec!["a.py", "b.py"]);
+    assert_eq!(same[0].members.len(), 2);
+}
+
+/// A file with no grammar has no token run to key on; its whole line still
+/// matches the line a parsed file swapped a name in.
+#[test]
+fn a_repeat_in_a_file_without_a_grammar_still_joins_by_its_lines() {
+    let out = run_json(serde_json::json!({ "changes": [
+        { "path": "a.py", "old": "def f0(path):\n    x = load_config(path)\n",
+          "new": "def f0(path):\n    x = read_settings(path)\n" },
+        { "path": "notes.txt", "old": "x = load_config(path)\n", "new": "x = read_settings(path)\n" }
+    ]}));
+    let same = same_edit_groups(&out);
+    assert_eq!(same.len(), 1, "{:?}", out.groups);
+    assert_eq!(same[0].files, vec!["a.py", "notes.txt"]);
+}
+
+/// The swap is keyed on both sides, and a swap too small to say anything
+/// falls back to the whole line.
+#[test]
+fn a_different_or_trivial_token_swap_stays_apart() {
+    let out = lines(
+        &["a.py", "b.py"],
+        &["x = load_config(path)", "return [load_config(path), 1]"],
+        &[
+            "x = read_settings(path)",
+            "return [parse_settings(path), 1]",
+        ],
+    );
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+    let out = lines(
+        &["a.py", "b.py"],
+        &[
+            "x = load_config(path, 1)",
+            "return [load_config(path, 1), 1]",
+        ],
+        &[
+            "x = load_config(path, 2)",
+            "return [load_config(path, 2), 1]",
+        ],
+    );
+    assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
+}
+
 #[test]
 fn a_repeat_inside_one_file_is_not_collapsed() {
     let out = run_json(serde_json::json!({ "changes": [
