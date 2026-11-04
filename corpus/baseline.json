@@ -50,7 +50,7 @@
   "cobra": {
     "anonymous": 0,
     "bare_change": 0,
-    "clusters": 787,
+    "clusters": 779,
     "degraded_files": 0,
     "fix_code_first": 47,
     "fix_commits": 50,
@@ -66,7 +66,7 @@
     "shared_merged": 24,
     "shared_pairs": 41,
     "shared_skipped": 16,
-    "singletons": 511,
+    "singletons": 503,
     "unsupported_files": 0,
     "with_details": 280,
     "with_symbols": 494
@@ -218,7 +218,7 @@
   "openfoam": {
     "anonymous": 0,
     "bare_change": 0,
-    "clusters": 4790,
+    "clusters": 4786,
     "degraded_files": 0,
     "fix_code_first": 8,
     "fix_commits": 10,
@@ -229,12 +229,12 @@
     "other_commits": 153,
     "other_with_finding": 33,
     "pairs": 115,
-    "same_edit_hunks": 3568,
+    "same_edit_hunks": 3572,
     "same_edits": 581,
     "shared_merged": 6,
     "shared_pairs": 11,
     "shared_skipped": 23,
-    "singletons": 2720,
+    "singletons": 2716,
     "unsupported_files": 0,
     "with_details": 746,
     "with_symbols": 2489
