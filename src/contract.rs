@@ -442,10 +442,11 @@ fn loosened_tests(files: &mut [FileOut], ledger: &[LedgerEntry], changes: &[Chan
         else {
             continue;
         };
+        let named = extract::identifier_rows_of(spec, new, &edited.iter().copied().collect());
         let exercised: Vec<&str> = edited
             .iter()
             .copied()
-            .filter(|n| !extract::identifier_rows(spec, new, n).is_empty())
+            .filter(|n| named.contains_key(*n))
             .collect();
         let Some(first) = exercised.first() else {
             continue;

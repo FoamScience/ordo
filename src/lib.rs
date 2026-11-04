@@ -856,13 +856,35 @@ fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<St
     // one index per side, so a file of N definitions is walked twice rather
     // than once per candidate pair
     let (old_body, new_body) = (index_bodies(&fs.old_body), index_bodies(&fs.new_body));
+    // the added definitions by their body and by each line of it: a removed
+    // one is weighed only against those sharing something with it, not
+    // against every addition in the file
+    let mut by_whole: HashMap<&str, Vec<&String>> = HashMap::new();
+    let mut by_line: HashMap<&str, Vec<&String>> = HashMap::new();
+    for a in added {
+        if let Some((whole, lines)) = new_body.get(a.as_str()) {
+            by_whole.entry(whole).or_default().push(a);
+            for l in lines.iter() {
+                by_line.entry(l.as_str()).or_default().push(a);
+            }
+        }
+    }
     let mut pairs: Vec<(bool, bool, usize, &String, &String)> = vec![];
     for r in removed {
-        let rb = old_body
-            .get(r.as_str())
-            .map(|(whole, _)| *whole)
-            .filter(|b| b.len() >= 8);
-        for a in added {
+        let Some(&(whole, lines)) = old_body.get(r.as_str()) else {
+            continue;
+        };
+        let rb = Some(whole).filter(|b| b.len() >= 8);
+        let mut near: Vec<&String> = rb
+            .and_then(|b| by_whole.get(b))
+            .into_iter()
+            .chain(lines.iter().filter_map(|l| by_line.get(l.as_str())))
+            .flatten()
+            .copied()
+            .collect();
+        near.sort_unstable();
+        near.dedup();
+        for a in near {
             let exact = rb.is_some() && new_body.get(a.as_str()).map(|(w, _)| *w) == rb;
             if !exact && !alike(&old_body, r, &new_body, a) {
                 continue;
@@ -948,34 +970,81 @@ fn relocations(
     added: &[String],
     ren: &HashMap<String, String>,
 ) -> HashMap<String, String> {
+    let bodies = Bodies::of(fs);
     added
         .iter()
         .filter(|a| !ren.contains_key(*a))
-        .filter_map(|a| Some((a.clone(), relocation_source(fs, a)?)))
+        .filter_map(|a| Some((a.clone(), relocation_source(fs, &bodies, a)?)))
         .collect()
+}
+
+/// A file's def bodies indexed once for `relocation_source`, which is asked
+/// about every added def: scanning every old def's lines per added def is
+/// quadratic, and a lock file adds thousands of keys.
+struct Bodies<'a> {
+    /// a def's name → its first new-side body's lines
+    new_lines: HashMap<&'a str, &'a [String]>,
+    /// a body line → each old def (by index in `old_body`) holding it, once
+    /// per time it holds it
+    old_holding: HashMap<&'a String, Vec<usize>>,
+}
+
+impl<'a> Bodies<'a> {
+    fn of(fs: &'a FileSymbols) -> Bodies<'a> {
+        let mut new_lines = HashMap::new();
+        for (nm, _, _, l) in &fs.new_body {
+            new_lines.entry(nm.as_str()).or_insert(l.as_slice());
+        }
+        let mut old_holding: HashMap<&String, Vec<usize>> = HashMap::new();
+        for (k, (_, _, _, l)) in fs.old_body.iter().enumerate() {
+            for line in l {
+                old_holding.entry(line).or_default().push(k);
+            }
+        }
+        Bodies {
+            new_lines,
+            old_holding,
+        }
+    }
 }
 
 /// The still-present old def sharing the most body lines with the added `a`:
 /// at least three of them, and at least half of `a`.
-fn relocation_source(fs: &FileSymbols, a: &str) -> Option<String> {
-    let al = match fs.new_body.iter().find(|(nm, _, _, _)| nm == a) {
-        Some((_, _, _, l)) if l.len() >= 3 => l,
+fn relocation_source(fs: &FileSymbols, bodies: &Bodies, a: &str) -> Option<String> {
+    let al = match bodies.new_lines.get(a) {
+        Some(l) if l.len() >= 3 => *l,
         _ => return None,
     };
     let aset: HashSet<&String> = al.iter().collect();
+    // how many of each old def's lines `a` holds: an upper bound on what it
+    // shares, so only a def that could clear the bar is looked at closely
+    let mut held: HashMap<usize, usize> = HashMap::new();
+    for line in &aset {
+        for &k in bodies.old_holding.get(*line).map_or(&[][..], Vec::as_slice) {
+            *held.entry(k).or_default() += 1;
+        }
+    }
+    let enough = |shared: usize| shared >= 3 && shared * 2 >= al.len();
+    let mut candidates: Vec<usize> = held
+        .into_iter()
+        .filter(|&(_, n)| enough(n))
+        .map(|(k, _)| k)
+        .collect();
+    candidates.sort_unstable();
     // What the source still has. An extraction takes code OUT of it, so a
     // shared line that is still there was not extracted: a new function
     // modelled on an existing one shares its shape without touching it, and
     // used to be reported as extracted from the function it resembles.
     let kept = |x: &str| -> HashSet<&String> {
-        fs.new_body
-            .iter()
-            .find(|(nm, _, _, _)| nm == x)
-            .map(|(_, _, _, l)| l.iter().collect())
+        bodies
+            .new_lines
+            .get(x)
+            .map(|l| l.iter().collect())
             .unwrap_or_default()
     };
-    fs.old_body
-        .iter()
+    candidates
+        .into_iter()
+        .map(|k| &fs.old_body[k])
         .filter(|(x, _, _, _)| x != a && fs.new_defs.contains(x))
         .map(|(x, _, _, xl)| {
             let still = kept(x);
@@ -986,7 +1055,7 @@ fn relocation_source(fs: &FileSymbols, a: &str) -> Option<String> {
                     .count(),
             )
         })
-        .filter(|(_, shared)| *shared >= 3 && shared * 2 >= al.len())
+        .filter(|&(_, shared)| enough(shared))
         // the first of equally good candidates wins
         .fold(None, |best: Option<(&String, usize)>, (x, shared)| {
             if best.is_none_or(|(_, s)| shared > s) {
@@ -1196,17 +1265,31 @@ fn incomplete_rename(
     changes: &[Change],
     symbols: &[FileSymbols],
 ) {
-    for e in ledger.iter().filter(|e| e.change == SymbolChange::Renamed) {
+    // a renamed name nothing in the change defines any more
+    let orphan = |e: &&LedgerEntry| {
+        e.from
+            .as_deref()
+            .is_some_and(|old| !symbols.iter().any(|s| s.new_defs.contains(old)))
+    };
+    let renamed: Vec<&LedgerEntry> = ledger
+        .iter()
+        .filter(|e| e.change == SymbolChange::Renamed)
+        .filter(orphan)
+        .collect();
+    if renamed.is_empty() {
+        return;
+    }
+    let uses = uses_of(
+        changes,
+        &renamed.iter().filter_map(|e| e.from.as_deref()).collect(),
+    );
+    for e in renamed {
         let Some(old) = e.from.as_deref() else {
             continue;
         };
-        if symbols.iter().any(|s| s.new_defs.contains(old)) {
-            continue; // the old name still defines something; not an orphan
-        }
-        let left = uses_of(changes, old);
-        if left.is_empty() {
+        let Some(left) = uses.get(old).filter(|l| !l.is_empty()) else {
             continue;
-        }
+        };
         let more = if left.len() > 3 {
             format!(" and {} more", left.len() - 3)
         } else {
@@ -1227,17 +1310,20 @@ fn incomplete_rename(
     }
 }
 
-/// `path:Lrow` for every identifier `name` on the new side of the change.
-fn uses_of(changes: &[Change], name: &str) -> Vec<String> {
-    changes
-        .iter()
-        .filter_map(|c| Some((c, lang::for_path(&c.path)?, c.new.as_deref()?)))
-        .flat_map(|(c, spec, new)| {
-            extract::identifier_rows(spec, new, name)
-                .into_iter()
-                .map(move |row| format!("{}:L{}", c.path, row + 1))
-        })
-        .collect()
+/// `path:Lrow` for every identifier among `names` on the new side of the
+/// change, by name: one walk of each file for all of them.
+fn uses_of(changes: &[Change], names: &HashSet<&str>) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for c in changes {
+        let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
+            continue;
+        };
+        for (name, rows) in extract::identifier_rows_of(spec, new, names) {
+            let at = rows.iter().map(|row| format!("{}:L{}", c.path, row + 1));
+            out.entry(name).or_default().extend(at);
+        }
+    }
+    out
 }
 
 /// P23.1: what happened to each *symbol*, rather than to each hunk. Every field
@@ -2412,9 +2498,25 @@ fn fill_details(
         .map(|o| extract::member_rows(spec, o))
         .unwrap_or_default();
     let old_defs = old.map(|o| extract::def_spans(spec, o)).unwrap_or_default();
+    // a hunk reads only the members on its own rows: cloning the file's every
+    // member per hunk is quadratic, and a lock file has tens of thousands
+    let by_row = |m: &[extract::MemberRow]| -> Vec<usize> {
+        let mut ix: Vec<usize> = (0..m.len()).collect();
+        ix.sort_by_key(|&i| m[i].0);
+        ix
+    };
+    // the members on 1-based rows `r0..=r1`, in the order `member_rows` gave them
+    let on_rows = |m: &[extract::MemberRow], ix: &[usize], [r0, r1]: [usize; 2]| {
+        let a = ix.partition_point(|&i| m[i].0 + 1 < r0);
+        let b = ix.partition_point(|&i| m[i].0 < r1).max(a);
+        let mut pick = ix[a..b].to_vec();
+        pick.sort_unstable();
+        pick.into_iter().map(|i| m[i].clone()).collect::<Vec<_>>()
+    };
+    let old_ix = by_row(&old_members);
     // read lazily: only a hunk that adds a definition beside other lines needs
     // to know which of its members sit inside it
-    let mut new_facts: Option<(Vec<extract::MemberRow>, Vec<extract::DefSpan>)> = None;
+    let mut new_facts: Option<(Vec<extract::MemberRow>, Vec<usize>, Vec<extract::DefSpan>)> = None;
     let phrases: Vec<(Vec<String>, Vec<String>)> = raw
         .iter()
         .zip(sems.iter())
@@ -2442,32 +2544,22 @@ fn fill_details(
                     (*d0..=*d1).contains(&(row + 1)) && !(row + 1 == *d0 && member == name)
                 })
             };
-            let members: Cow<[extract::MemberRow]> = if gone.is_empty() {
-                Cow::Borrowed(&old_members)
-            } else {
-                old_members
-                    .iter()
-                    .filter(|(row, n, ..)| !inside(&gone, (*row, n)))
-                    .cloned()
-                    .collect()
-            };
+            let mut members = on_rows(&old_members, &old_ix, h.old_range);
+            members.retain(|(row, n, ..)| !inside(&gone, (*row, n)));
             let mut arrived: Cow<[(String, String, Option<String>)]> = Cow::Borrowed(&sem.members);
             if h.old_range[0] <= h.old_range[1] && !sem.members.is_empty() {
-                let (new_members, new_defs) = new_facts.get_or_insert_with(|| {
-                    (
-                        extract::member_rows(spec, new),
-                        extract::def_spans(spec, new),
-                    )
+                let (new_members, new_ix, new_defs) = new_facts.get_or_insert_with(|| {
+                    let m = extract::member_rows(spec, new);
+                    let ix = by_row(&m);
+                    (m, ix, extract::def_spans(spec, new))
                 });
                 let came: Vec<extract::DefSpan> = within(new_defs, h.new_range)
                     .into_iter()
                     .filter(|(name, ..)| !old_here.iter().any(|(o, ..)| o == name))
                     .collect();
                 if !came.is_empty() {
-                    let born: Vec<&extract::MemberRow> = new_members
-                        .iter()
-                        .filter(|(row, n, ..)| inside(&came, (*row, n)))
-                        .collect();
+                    let mut born = on_rows(new_members, new_ix, h.new_range);
+                    born.retain(|(row, n, ..)| inside(&came, (*row, n)));
                     arrived = sem
                         .members
                         .iter()

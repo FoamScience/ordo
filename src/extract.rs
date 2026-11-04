@@ -282,6 +282,9 @@ struct Collected {
     def_rows: HashSet<usize>,
     type_rows: HashSet<usize>,
     defs: Vec<DefRec>,
+    /// the `defs` (by index) that limit what a def inside them is seen from,
+    /// so `visibility` need not scan a data file's thousands of keys per key
+    scoping: Vec<usize>,
     /// (start_row, end_row, name); a plain declaration has start == end, an
     /// import spans its whole statement (see `import_like`) stored once
     /// rather than once per row
@@ -1786,17 +1789,25 @@ impl Collected {
     /// is a container that is the def itself under another node (python's
     /// `decorated_definition`), which does not hide it.
     fn visibility(&self, row: usize, wrapper: Option<&String>) -> Option<(usize, usize)> {
-        self.defs
+        self.scoping
             .iter()
+            .map(|&k| &self.defs[k])
             .filter(|d| d.s <= row && row <= d.e)
             .filter(|d| wrapper != Some(&d.name))
-            .filter(|d| match d.kind {
-                ContainerKind::Test | ContainerKind::Call => true,
-                ContainerKind::Definition => d.callable,
-                _ => false,
-            })
             .min_by_key(|d| d.e - d.s)
             .map(|d| (d.s, d.e))
+    }
+
+    fn push_def(&mut self, d: DefRec) {
+        let scopes = match d.kind {
+            ContainerKind::Test | ContainerKind::Call => true,
+            ContainerKind::Definition => d.callable,
+            _ => false,
+        };
+        if scopes {
+            self.scoping.push(self.defs.len());
+        }
+        self.defs.push(d);
     }
 
     /// a one-row declaration of `name` with symbol identity
@@ -2179,7 +2190,7 @@ impl<'a> Walker<'a> {
             }
         }
         let rec = self.container(node, name, self.stack.len(), ContainerKind::Binding);
-        self.c.defs.push(rec);
+        self.c.push_def(rec);
     }
 
     // a region names itself and nothing else: no `def_rows` (it declares
@@ -2206,7 +2217,7 @@ impl<'a> Walker<'a> {
             self.stack.push(rec.name.clone());
             rec.name = lang::scope_join(self.spec, &self.stack);
         }
-        self.c.defs.push(rec);
+        self.c.push_def(rec);
         self.walk_children(node);
         if scopes {
             self.stack.pop();
@@ -2240,7 +2251,7 @@ impl<'a> Walker<'a> {
         self.stack.push(label);
         let name = lang::scope_join(self.spec, &self.stack);
         let rec = self.container(node, name, depth, ContainerKind::Test);
-        self.c.defs.push(rec);
+        self.c.push_def(rec);
         self.walk_children(node);
         self.stack.pop();
         if let Some(p) = parent {
@@ -2253,7 +2264,7 @@ impl<'a> Walker<'a> {
     fn visit_call_container(&mut self, node: Node) {
         if let Some(name) = call_statement_container(node, self.src, self.spec, &self.stack) {
             let rec = self.container(node, name, self.stack.len(), ContainerKind::Call);
-            self.c.defs.push(rec);
+            self.c.push_def(rec);
         }
     }
 
@@ -2356,7 +2367,7 @@ impl<'a> Walker<'a> {
         if !dup {
             self.stack.push(own);
         }
-        self.c.defs.push(DefRec {
+        self.c.push_def(DefRec {
             s: sr,
             e: rst
                 .as_ref()
@@ -3955,22 +3966,43 @@ fn result_unused_or_tested(call: Node) -> bool {
 /// Used by the incomplete-rename check (P23.2) to find a name that should have
 /// stopped existing.
 pub fn identifier_rows(spec: &LangSpec, content: &str, name: &str) -> Vec<usize> {
-    let mut out = vec![];
+    identifier_rows_of(spec, content, &HashSet::from([name]))
+        .remove(name)
+        .unwrap_or_default()
+}
+
+/// `identifier_rows` for several names in one walk of the tree.
+pub fn identifier_rows_of(
+    spec: &LangSpec,
+    content: &str,
+    names: &HashSet<&str>,
+) -> HashMap<String, Vec<usize>> {
+    let mut out = HashMap::new();
     let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
     let src = content.as_bytes();
-    fn walk(node: Node, src: &[u8], name: &str, out: &mut Vec<usize>) {
-        if lang::is_ident(node.kind()) && node.utf8_text(src).map(str::trim) == Ok(name) {
-            out.push(node.start_position().row);
+    fn walk(node: Node, src: &[u8], names: &HashSet<&str>, out: &mut HashMap<String, Vec<usize>>) {
+        if lang::is_ident(node.kind()) {
+            if let Some(name) = node
+                .utf8_text(src)
+                .ok()
+                .map(str::trim)
+                .filter(|n| names.contains(n))
+            {
+                let rows: &mut Vec<usize> = out.entry(name.to_string()).or_default();
+                let row = node.start_position().row;
+                if rows.last() != Some(&row) {
+                    rows.push(row);
+                }
+            }
         }
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
-            walk(ch, src, name, out);
+            walk(ch, src, names, out);
         }
     }
-    walk(tree.root_node(), src, name, &mut out);
-    out.dedup();
+    walk(tree.root_node(), src, names, &mut out);
     out
 }
 
