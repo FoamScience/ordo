@@ -224,8 +224,8 @@ pub enum Label {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Verdict {
-    /// every hunk proves it: formatting, a comment, a rename, a move, an
-    /// extraction
+    /// every hunk proves it: formatting, a comment, a rename, a move, a
+    /// reordering, an extraction, a literal named as its constant
     Preserving,
     /// some hunk shows an edit pattern or a value that changes behaviour
     Changes,

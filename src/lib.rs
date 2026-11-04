@@ -1844,6 +1844,22 @@ pub fn pack(out: &Output) -> String {
     );
     // changeset-level signals lead: they are about the change as a whole, so
     // they frame the reading order rather than sitting after it
+    if let Some(sum) = &out.summary {
+        let word = |v: serde_json::Result<serde_json::Value>| {
+            v.ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default()
+        };
+        let _ = writeln!(
+            s,
+            "\n## summary\nlabel: {}; verdict: {}",
+            word(serde_json::to_value(sum.label)),
+            word(serde_json::to_value(sum.verdict))
+        );
+        for line in &sum.sentences {
+            let _ = writeln!(s, "{line}");
+        }
+    }
     if !out.notes.is_empty() {
         let _ = writeln!(s, "\n## notes");
         for n in &out.notes {

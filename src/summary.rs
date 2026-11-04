@@ -81,7 +81,12 @@ enum Kind {
     Comment,
     Rename,
     Move,
+    /// a definition moved, whole, elsewhere in its own file
+    Reorder,
     Extract,
+    /// a literal replaced by the constant that holds it, or that constant's
+    /// definition
+    Constant,
     /// a pattern that changes what the code does
     Pattern,
     /// a literal or config value replaced by another
@@ -94,7 +99,13 @@ impl Kind {
     fn preserves(self) -> bool {
         matches!(
             self,
-            Kind::Format | Kind::Comment | Kind::Rename | Kind::Move | Kind::Extract
+            Kind::Format
+                | Kind::Comment
+                | Kind::Rename
+                | Kind::Move
+                | Kind::Reorder
+                | Kind::Extract
+                | Kind::Constant
         )
     }
 }
@@ -123,8 +134,12 @@ struct Evidence<'a> {
     /// old name → new name, every rename in the change
     renames: HashMap<&'a str, &'a str>,
     moved: HashSet<&'a str>,
-    /// per file, the old-side rows a moved definition left from
-    moved_rows: Vec<Vec<usize>>,
+    /// per file, the definitions that left it (old side) and arrived in it
+    /// (new side) from another file
+    moved_here: Vec<[HashSet<&'a str>; 2]>,
+    /// constant name → the literal it holds, for each literal the change
+    /// replaced by a constant whose every binding in the change holds it
+    constants: HashMap<&'a str, &'a str>,
     /// extracted name → the definition it came out of
     extracted: HashMap<&'a str, &'a str>,
     /// removed lines (renames applied) per file, and added lines per file
@@ -135,13 +150,41 @@ struct Evidence<'a> {
     extracted_lines: HashMap<(usize, &'a str), HashSet<String>>,
     source_lines: HashMap<(usize, &'a str), HashSet<String>>,
     changes: &'a [Change],
-    /// per file, the 1-based old and new rows inside a string that spans
-    /// lines: whitespace there is text. Parsed only for a file one of whose
-    /// hunks looks like a reformat.
-    strings: Vec<OnceCell<[HashSet<usize>; 2]>>,
+    /// per file, what each side's syntax tree says about its rows. Parsed
+    /// only for a file one of whose hunks needs it.
+    sides: Vec<OnceCell<[Side; 2]>>,
+    /// per file, the definitions whose place may change and whose lines did
+    /// not
+    intact: Vec<OnceCell<HashSet<String>>>,
+}
+
+/// One side of a file, row by row (1-based).
+#[derive(Default)]
+struct Side {
+    /// inside a string that spans lines: whitespace there is text
+    strings: HashSet<usize>,
+    /// nothing but a comment
+    comments: HashSet<usize>,
+    /// nothing but a decorator or attribute on the definition below it
+    decorations: HashSet<usize>,
+    defs: Vec<Def>,
+}
+
+struct Def {
+    name: String,
+    kind: String,
+    rows: [usize; 2],
+    /// the nearest definition it lies in, by its index in `Side::defs`
+    parent: Option<usize>,
+    /// inside another definition
+    nested: bool,
+    /// inside a function: no caller outside it can reach it
+    local: bool,
 }
 
 struct Facts<'a> {
+    /// index into the change's files
+    fi: usize,
     path: &'a str,
     kind: PathKind,
     hunks: Vec<(Kind, &'a HunkSem)>,
@@ -189,17 +232,22 @@ pub(crate) fn summarize(
                 )
             })
             .collect(),
-        moved_rows: changed
+        moved_here: changed
             .iter()
             .zip(&code)
-            .map(|(c, code)| {
-                c.removals
-                    .iter()
-                    .filter(|r| *code && matches!(r.kind, RemovalKind::MovedTo(_)))
-                    .map(|r| r.row)
-                    .collect()
+            .map(|(c, code)| match code {
+                true => [
+                    c.removals
+                        .iter()
+                        .filter(|r| matches!(r.kind, RemovalKind::MovedTo(_)))
+                        .map(|r| r.name.as_str())
+                        .collect(),
+                    c.moved_in.keys().map(String::as_str).collect(),
+                ],
+                false => Default::default(),
             })
             .collect(),
+        constants: constants(changes, hunks, &code),
         extracted: code_changes()
             .flat_map(|c| c.relocated.iter().map(|(n, f)| (n.as_str(), f.as_str())))
             .collect(),
@@ -208,7 +256,8 @@ pub(crate) fn summarize(
         extracted_lines: HashMap::new(),
         source_lines: HashMap::new(),
         changes,
-        strings: changes.iter().map(|_| OnceCell::new()).collect(),
+        sides: changes.iter().map(|_| OnceCell::new()).collect(),
+        intact: changes.iter().map(|_| OnceCell::new()).collect(),
     };
     for (fi, f) in hunks.iter().enumerate() {
         let [old, new] = &lines[fi];
@@ -269,6 +318,7 @@ pub(crate) fn summarize(
                 })
                 .collect();
             Facts {
+                fi,
                 path: &c.path,
                 kind: path_kind(&c.path),
                 hunks,
@@ -286,7 +336,14 @@ pub(crate) fn summarize(
         .map(|e| e.name.as_str())
         .collect();
     let label = label(&files, &added);
-    let sentences = vec![what(label, &files, &added, &ev), why(verdict, &files)];
+    let exposed = match verdict {
+        Verdict::Preserving => ev.exposed_renames(changed, &code, &lines),
+        _ => vec![],
+    };
+    let sentences = vec![
+        what(label, &files, &added, &ev),
+        why(verdict, &files, &exposed),
+    ];
     Some(Summary {
         label,
         verdict,
@@ -381,11 +438,18 @@ impl Evidence<'_> {
         if code && s.category == Category::Import {
             return self.import_kind(s);
         }
-        if code && self.moves(fi, s, &o, &n) {
+        let sides = [old.as_slice(), new.as_slice()];
+        if code && self.moves(fi, h, sides, &o, &n) {
             return Kind::Move;
+        }
+        if code && self.reorders(fi, h, sides, &o, &n) {
+            return Kind::Reorder;
         }
         if code && self.extracts(fi, s, &o, &n) {
             return Kind::Extract;
+        }
+        if code && self.names_constant(fi, h, s, new, [&o, &n]) {
+            return Kind::Constant;
         }
         if s.intent.as_ref().is_some_and(changes_behaviour) {
             return Kind::Pattern;
@@ -402,21 +466,68 @@ impl Evidence<'_> {
         Kind::Edit
     }
 
-    /// Either side of the hunk lies in a string that spans lines.
-    fn in_string(&self, fi: usize, h: &RawHunk) -> bool {
-        let [old, new] = self.strings[fi].get_or_init(|| {
+    /// `old → new` for each rename of a definition callers outside the
+    /// change may reach: nothing in it, or in the language's way of marking
+    /// one, keeps it to its own file, module or crate.
+    fn exposed_renames(
+        &self,
+        changed: &[FileChanges],
+        code: &[bool],
+        lines: &[[Vec<&str>; 2]],
+    ) -> Vec<String> {
+        let mut out = vec![];
+        for (fi, c) in changed.iter().enumerate().filter(|(fi, _)| code[*fi]) {
+            let Some(spec) = lang::for_path(&self.changes[fi].path) else {
+                continue;
+            };
+            for (new, old) in &c.rename {
+                let new_lines = &lines[fi][1];
+                let defs = &self.sides(fi)[1].defs;
+                let reachable = defs.iter().filter(|d| d.name == *new).any(|d| {
+                    // a rust trait's items are as public as the trait
+                    let d = match d.parent.map(|p| &defs[p]) {
+                        Some(t) if spec.name == "rust" && t.kind == "trait_item" => t,
+                        _ => d,
+                    };
+                    // the definition's own lines up to its name: its
+                    // modifiers, wherever its decorations put them
+                    let span = new_lines.get(d.rows[0] - 1..d.rows[1]).unwrap_or_default();
+                    let end = span
+                        .iter()
+                        .position(|l| has_word(l, &d.name))
+                        .map_or(span.len(), |i| i + 1);
+                    !private(spec.name, &d.name, d, &span[..end].join(" "), new_lines)
+                });
+                if reachable {
+                    out.push(format!("{old} → {new}"));
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn sides(&self, fi: usize) -> &[Side; 2] {
+        self.sides[fi].get_or_init(|| {
             let c = &self.changes[fi];
-            let rows = |text: Option<&str>| {
+            let side = |text: Option<&str>| {
                 lang::for_path(&c.path)
                     .zip(text)
-                    .and_then(|(spec, t)| lang::parse(spec, t))
-                    .map(|t| string_rows(t.root_node()))
+                    .and_then(|(spec, t)| {
+                        Some(side_facts(spec, t, lang::parse(spec, t)?.root_node()))
+                    })
                     .unwrap_or_default()
             };
-            [rows(c.old.as_deref()), rows(c.new.as_deref())]
-        });
+            [side(c.old.as_deref()), side(c.new.as_deref())]
+        })
+    }
+
+    /// Either side of the hunk lies in a string that spans lines.
+    fn in_string(&self, fi: usize, h: &RawHunk) -> bool {
+        let [old, new] = self.sides(fi);
         let within = |rows: &HashSet<usize>, [a, b]: [usize; 2]| (a..=b).any(|r| rows.contains(&r));
-        within(old, h.old_range) || within(new, h.new_range)
+        within(&old.strings, h.old_range) || within(&new.strings, h.new_range)
     }
 
     /// An import that follows a rename, move or extraction elsewhere in the
@@ -429,7 +540,11 @@ impl Evidence<'_> {
                 || self.renames.contains_key(n)
                 || self.renames.values().any(|v| *v == n)
         };
-        if !s.imports.is_empty() && s.imports.iter().all(known) {
+        if !s.imports.is_empty()
+            && s.imports
+                .iter()
+                .all(|n| known(n) || self.constants.contains_key(n.as_str()))
+        {
             Kind::Move
         } else {
             Kind::Edit
@@ -471,20 +586,147 @@ impl Evidence<'_> {
         out
     }
 
-    /// A hunk carrying a moved definition, whose every line left (or arrived
-    /// in) another file of the change.
-    fn moves(&self, fi: usize, s: &HunkSem, o: &[&str], n: &[&str]) -> bool {
-        let [a, b] = s.old_range;
-        let touches = s.defines.iter().any(|d| self.moved.contains(d.as_str()))
-            || self.moved_rows[fi].iter().any(|r| (a..=b).contains(r));
+    /// A hunk of nothing but definitions that moved to (or from) another file
+    /// and their comments and decorations, whose every line left (or arrived
+    /// in) another file of the change. A statement beside them is not part of
+    /// the move, even when its line moved too.
+    fn moves(&self, fi: usize, h: &RawHunk, lines: [&[&str]; 2], o: &[&str], n: &[&str]) -> bool {
+        let names = &self.moved_here[fi];
+        if names.iter().all(HashSet::is_empty) {
+            return false;
+        }
         let elsewhere = |sets: &[HashSet<String>], l: String| {
             sets.iter()
                 .enumerate()
                 .any(|(fj, set)| fj != fi && set.contains(&l))
         };
-        touches
-            && n.iter().all(|l| elsewhere(&self.removed, l.to_string()))
+        self.made_of(
+            fi,
+            h,
+            lines,
+            |k, d| names[k].contains(d.name.as_str()),
+            true,
+        ) && n.iter().all(|l| elsewhere(&self.removed, l.to_string()))
             && o.iter().all(|l| elsewhere(&self.added, self.renamed(l)))
+    }
+
+    /// A hunk of nothing but definitions whose lines are the same on both
+    /// sides, and their comments: what it changed is where they stand. A decorator may
+    /// register what it decorates, in the order the file runs it: a decorated
+    /// definition moving is not proven to keep behaviour.
+    fn reorders(
+        &self,
+        fi: usize,
+        h: &RawHunk,
+        lines: [&[&str]; 2],
+        o: &[&str],
+        n: &[&str],
+    ) -> bool {
+        o.iter().all(|l| self.added[fi].contains(&self.renamed(l)))
+            && n.iter().all(|l| self.removed[fi].contains(*l))
+            && {
+                let names = self.intact(fi, lines);
+                !names.is_empty()
+                    && self.made_of(fi, h, lines, |_, d| names.contains(&d.name), false)
+            }
+    }
+
+    /// Every non-blank changed row of the hunk lies in a definition `pick`
+    /// accepts, or is a comment (or, when `decorated`, a decoration), and at
+    /// least one lies in such a definition.
+    fn made_of(
+        &self,
+        fi: usize,
+        h: &RawHunk,
+        lines: [&[&str]; 2],
+        pick: impl Fn(usize, &Def) -> bool,
+        decorated: bool,
+    ) -> bool {
+        let sides = self.sides(fi);
+        let mut any = false;
+        for (k, [a, b]) in [h.old_range, h.new_range].into_iter().enumerate() {
+            let side = &sides[k];
+            for r in
+                (a.max(1)..=b.min(lines[k].len())).filter(|r| !lines[k][r - 1].trim().is_empty())
+            {
+                if side
+                    .defs
+                    .iter()
+                    .any(|d| (d.rows[0]..=d.rows[1]).contains(&r) && pick(k, d))
+                {
+                    any = true;
+                } else if !side.comments.contains(&r)
+                    && !(decorated && side.decorations.contains(&r))
+                {
+                    return false;
+                }
+            }
+        }
+        any
+    }
+
+    /// The definitions of a file whose place among their siblings nothing
+    /// reads, found once on each side, in the same container, with the same
+    /// lines indented the same.
+    fn intact(&self, fi: usize, [old, new]: [&[&str]; 2]) -> &HashSet<String> {
+        self.intact[fi].get_or_init(|| {
+            let sides = self.sides(fi);
+            fn once<'s>(side: &'s Side, name: &str) -> Option<&'s Def> {
+                let mut it = side.defs.iter().filter(|d| d.name == name);
+                it.next().filter(|_| it.next().is_none())
+            }
+            fn parent<'s>(side: &'s Side, d: &Def) -> Option<&'s str> {
+                d.parent.map(|p| side.defs[p].name.as_str())
+            }
+            fn body<'l>(lines: &[&'l str], d: &Def) -> Vec<&'l str> {
+                lines
+                    .get(d.rows[0] - 1..d.rows[1])
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|l| l.trim_end())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            }
+            let lang = lang::for_path(&self.changes[fi].path).map_or("", |s| s.name);
+            sides[0]
+                .defs
+                .iter()
+                .filter(|d| order_free(lang, d))
+                .filter_map(|d| {
+                    let (a, b) = (once(&sides[0], &d.name)?, once(&sides[1], &d.name)?);
+                    (parent(&sides[0], a) == parent(&sides[1], b) && body(old, a) == body(new, b))
+                        .then(|| d.name.clone())
+                })
+                .collect()
+        })
+    }
+
+    /// A literal replaced by the constant that holds it; or a hunk adding
+    /// nothing but such constants' bindings and comments.
+    fn names_constant(
+        &self,
+        fi: usize,
+        h: &RawHunk,
+        s: &HunkSem,
+        new: &[&str],
+        [o, n]: [&[&str]; 2],
+    ) -> bool {
+        if let Some(Intent::NamesLiteral { literal, name }) = &s.intent {
+            return self.constants.get(name.as_str()) == Some(&literal.as_str());
+        }
+        let binds = |l: &str| {
+            self.constants
+                .iter()
+                .any(|(nm, lit)| binding(l, nm) == Some(*lit))
+        };
+        if !o.is_empty() || !n.iter().any(|l| binds(l)) {
+            return false;
+        }
+        let comments = &self.sides(fi)[1].comments;
+        let [a, b] = h.new_range;
+        (a.max(1)..=b.min(new.len()))
+            .filter(|r| !new[r - 1].trim().is_empty())
+            .all(|r| comments.contains(&r) || binds(new[r - 1]))
     }
 
     /// The extracted definition, every line of it either taken from the old
@@ -526,28 +768,194 @@ impl Evidence<'_> {
     }
 }
 
-/// 1-based rows of every string literal, template or heredoc that spans more
-/// than one line.
-fn string_rows(node: tree_sitter::Node) -> HashSet<usize> {
-    let mut rows = HashSet::new();
-    let mut cursor = node.walk();
-    let mut stack = vec![node];
+const DECORATIONS: &[&str] = &[
+    "decorator",
+    "attribute_item",
+    "annotation",
+    "marker_annotation",
+];
+
+/// What one side's tree says about its rows: strings spanning lines,
+/// comment and decoration rows, and its definitions.
+fn side_facts(spec: &lang::LangSpec, text: &str, root: tree_sitter::Node) -> Side {
+    let lines: Vec<&str> = text.lines().collect();
+    // a node that is all its rows hold: a trailing comment shares its row
+    // with code
+    let alone = |n: tree_sitter::Node| {
+        let (s, e) = (n.start_position(), n.end_position());
+        let line = |r: usize| lines.get(r).copied().unwrap_or("");
+        s.column == indent(line(s.row)).len() && e.column >= line(e.row).trim_end().len()
+    };
+    let mut side = Side::default();
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
     while let Some(n) = stack.pop() {
-        let (a, b) = (n.start_position().row, n.end_position().row);
-        if a == b {
+        let (a, b) = (n.start_position().row + 1, n.end_position().row + 1);
+        let k = n.kind();
+        if k.contains("comment") {
+            if alone(n) {
+                side.comments.extend(a..=b);
+            }
             continue;
         }
-        let k = n.kind();
-        if ["string", "template", "heredoc", "block_scalar"]
-            .iter()
-            .any(|w| k.contains(w))
+        if DECORATIONS.contains(&k) {
+            if alone(n) {
+                side.decorations.extend(a..=b);
+            }
+            continue;
+        }
+        if a != b
+            && ["string", "template", "heredoc", "block_scalar"]
+                .iter()
+                .any(|w| k.contains(w))
         {
-            rows.extend(a + 1..=b + 1);
+            side.strings.extend(a..=b);
             continue;
         }
         stack.extend(n.children(&mut cursor));
     }
-    rows
+    let nodes = crate::extract::def_nodes(root, spec, text.as_bytes());
+    let index: HashMap<usize, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, (_, n))| (n.id(), i))
+        .collect();
+    side.defs = nodes
+        .iter()
+        .map(|(name, n)| {
+            let mut up = n.parent();
+            let (mut parent, mut local) = (None, false);
+            while let Some(p) = up {
+                if let Some(&i) = index.get(&p.id()) {
+                    parent.get_or_insert(i);
+                    let k = p.kind();
+                    local |= k.contains("function") || k.contains("method");
+                }
+                up = p.parent();
+            }
+            Def {
+                name: name.clone(),
+                kind: n.kind().to_string(),
+                rows: [n.start_position().row + 1, n.end_position().row + 1],
+                nested: parent.is_some(),
+                parent,
+                local,
+            }
+        })
+        .collect();
+    side
+}
+
+/// Every literal the change replaced by an unqualified constant, by the
+/// constant's name, when each line of the change's code that binds that name
+/// binds it to that literal. A qualified one (`Config.TIMEOUT`) may be bound
+/// in a container the lines do not show.
+fn constants<'a>(
+    changes: &'a [Change],
+    hunks: &'a [PerFileHunks],
+    code: &[bool],
+) -> HashMap<&'a str, &'a str> {
+    let named: HashMap<&str, &str> = hunks
+        .iter()
+        .zip(code)
+        .filter(|(_, c)| **c)
+        .flat_map(|(f, _)| &f.sem)
+        .filter_map(|s| match &s.intent {
+            Some(Intent::NamesLiteral { literal, name }) if !name.contains(['.', ':']) => {
+                Some((name.as_str(), literal.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    named
+        .into_iter()
+        .filter(|(name, literal)| {
+            let mut bound = changes
+                .iter()
+                .zip(code)
+                .filter(|(_, c)| **c)
+                .filter_map(|(c, _)| c.new.as_deref())
+                .flat_map(str::lines)
+                .filter_map(|l| binding(l, name))
+                .peekable();
+            bound.peek().is_some() && bound.all(|v| v == *literal)
+        })
+        .collect()
+}
+
+/// A definition whose place among its siblings nothing reads: items the
+/// compiler resolves wherever they stand, hoisted functions, methods. Not a
+/// css rule, whose order is the cascade, nor a module-level function in a
+/// language that runs the module top to bottom.
+fn order_free(lang: &str, d: &Def) -> bool {
+    let callable = ["function", "method", "constructor"]
+        .iter()
+        .any(|w| d.kind.contains(w));
+    !d.local
+        && match lang {
+            // a macro_rules! is in scope only below where it stands
+            "rust" => !d.kind.contains("macro"),
+            // package-level variables initialise in the order they stand
+            "go" | "java" | "c" | "cpp" => callable,
+            "python" | "xonsh" => d.nested && d.kind == "function_definition",
+            "javascript" | "typescript" | "tsx" => {
+                matches!(
+                    d.kind.as_str(),
+                    "function_declaration" | "method_definition"
+                )
+            }
+            _ => false,
+        }
+}
+
+/// Marked, by convention or by keyword, as out of reach of callers outside
+/// its file, module or crate; a local definition is out of reach of any.
+fn private(lang: &str, name: &str, d: &Def, head: &str, lines: &[&str]) -> bool {
+    if d.local || name.starts_with(['_', '#']) {
+        return true;
+    }
+    let exported = || {
+        lines
+            .iter()
+            .any(|l| has_word(l, name) && (has_word(l, "export") || l.contains("module.exports")))
+    };
+    match lang {
+        "rust" => !has_word(head, "pub") || head.contains("pub("),
+        "go" => name.starts_with(char::is_lowercase),
+        "c" | "cpp" => has_word(head, "static") && !d.nested,
+        "lua" => has_word(head, "local"),
+        "javascript" | "typescript" | "tsx" if !d.nested => !exported(),
+        _ => has_word(head, "private"),
+    }
+}
+
+/// The value a line binds `name` to, when it declares it: `const NAME = v;`,
+/// `pub const NAME: u32 = v;`, `#define NAME v`, or `NAME = v` at file level.
+/// Indented and with no keyword, `NAME=v,` may be a keyword argument.
+fn binding<'l>(line: &'l str, name: &str) -> Option<&'l str> {
+    let t = line.trim();
+    let indented = line.starts_with(char::is_whitespace);
+    t.match_indices(name).find_map(|(i, _)| {
+        let (pre, rest) = (&t[..i], &t[i + name.len()..]);
+        let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+        if pre.chars().next_back().is_some_and(ident) || rest.chars().next().is_some_and(ident) {
+            return None;
+        }
+        if pre.trim() == "#define" {
+            return Some(rest.trim());
+        }
+        let pre = pre.trim_start().strip_prefix("pub(crate)").unwrap_or(pre);
+        if !pre.chars().all(|c| ident(c) || c.is_whitespace()) || indented && pre.trim().is_empty()
+        {
+            return None;
+        }
+        let eq = rest.find('=')?;
+        let (ty, value) = (&rest[..eq], &rest[eq + 1..]);
+        // a type may stand between the name and `=`; an operator may not
+        let typed = ty.chars().all(|c| ident(c) || " :<>[]&*.".contains(c));
+        (typed && !value.starts_with('=') && !ty.ends_with(['<', '>', '*']))
+            .then(|| value.trim().trim_end_matches([';', ',']).trim_end())
+    })
 }
 
 /// A hunk enclosed by `within` sits in the definition `def`: the same name,
@@ -723,14 +1131,40 @@ fn what(label: Label, files: &[Facts], added: &[&str], ev: &Evidence) -> String 
             if !renames.is_empty() {
                 parts.push(format!("renames {}", list(&renames)));
             }
+            let (mut reordered, mut constants) = (vec![], vec![]);
+            let code = files.iter().filter(|f| f.kind == PathKind::Code);
+            for (f, (k, s)) in code.flat_map(|f| f.hunks.iter().map(move |h| (f, h))) {
+                match (k, &s.intent) {
+                    (Kind::Reorder, _) => {
+                        let intact = ev.intact[f.fi].get();
+                        reordered.extend(
+                            s.defines
+                                .iter()
+                                .filter(|d| intact.is_some_and(|set| set.contains(*d)))
+                                .map(String::as_str),
+                        )
+                    }
+                    (Kind::Constant, Some(Intent::NamesLiteral { literal, name })) => {
+                        constants.push(format!("{literal} as {name}"))
+                    }
+                    _ => {}
+                }
+            }
+            constants.sort();
+            constants.dedup();
             for (verb, mut names) in [
                 ("moves", ev.moved.iter().copied().collect::<Vec<&str>>()),
+                ("reorders", reordered),
                 ("extracts", ev.extracted.keys().copied().collect()),
             ] {
                 names.sort_unstable();
+                names.dedup();
                 if !names.is_empty() {
                     parts.push(format!("{verb} {}", list(&names)));
                 }
+            }
+            if !constants.is_empty() {
+                parts.push(format!("names {}", list(&constants)));
             }
             let formats = code_hunks(files)
                 .filter(|(k, _)| *k == Kind::Format)
@@ -784,7 +1218,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// The second sentence: the verdict and what it rests on.
-fn why(verdict: Verdict, files: &[Facts]) -> String {
+fn why(verdict: Verdict, files: &[Facts], exposed: &[String]) -> String {
     let hunks = || {
         files
             .iter()
@@ -800,6 +1234,8 @@ fn why(verdict: Verdict, files: &[Facts]) -> String {
                     Kind::Comment => "a comment",
                     Kind::Rename => "a rename",
                     Kind::Move => "a move",
+                    Kind::Reorder => "a reordering",
+                    Kind::Constant => "a literal named as its constant",
                     _ => "an extraction",
                 };
                 if !kinds.contains(&word) {
@@ -809,10 +1245,17 @@ fn why(verdict: Verdict, files: &[Facts]) -> String {
             if kinds.is_empty() {
                 return "Behaviour-preserving: only documentation changed.".to_string();
             }
-            format!(
-                "Behaviour-preserving: every hunk is {}.",
-                kinds.join(" or ")
-            )
+            match exposed {
+                [] => format!(
+                    "Behaviour-preserving: every hunk is {}.",
+                    kinds.join(" or ")
+                ),
+                _ => format!(
+                    "Behaviour-preserving within this change: every hunk is {}, but the API changes for callers outside it: {}.",
+                    kinds.join(" or "),
+                    list(exposed)
+                ),
+            }
         }
         Verdict::Changes => {
             let (f, k, s) = hunks()

@@ -4735,17 +4735,22 @@ pub type DefSpan = (String, usize, usize);
 
 /// Every definition with its 1-based first and last row.
 pub fn def_spans(spec: &LangSpec, content: &str) -> Vec<DefSpan> {
-    let mut out = vec![];
     let Some(tree) = lang::parse(spec, content) else {
-        return out;
+        return vec![];
     };
-    let mut stack = vec![tree.root_node()];
+    def_nodes(tree.root_node(), spec, content.as_bytes())
+        .into_iter()
+        .map(|(name, n)| (name, n.start_position().row + 1, n.end_position().row + 1))
+        .collect()
+}
+
+/// Every named definition node under `root`.
+pub fn def_nodes<'t>(root: Node<'t>, spec: &LangSpec, src: &[u8]) -> Vec<(String, Node<'t>)> {
+    let mut out = vec![];
+    let mut stack = vec![root];
     while let Some(n) = stack.pop() {
-        if let Some(name) = is_def_node(n, spec)
-            .then(|| node_name(n, content.as_bytes()))
-            .flatten()
-        {
-            out.push((name, n.start_position().row + 1, n.end_position().row + 1));
+        if let Some(name) = is_def_node(n, spec).then(|| node_name(n, src)).flatten() {
+            out.push((name, n));
         }
         let mut cur = n.walk();
         stack.extend(n.named_children(&mut cur));

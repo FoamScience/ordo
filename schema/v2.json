@@ -709,7 +709,7 @@
                 "changes",
                 "unknown"
               ],
-              "description": "preserving only when every hunk proves it (formatting, a comment, a rename, a move, an extraction); changes when an edit pattern or a changed value shows it; unknown otherwise"
+              "description": "preserving only when every hunk proves it (formatting, a comment, a rename, a move, a reordering, an extraction, a literal named as its constant); changes when an edit pattern or a changed value shows it; unknown otherwise"
             },
             "sentences": {
               "type": "array",

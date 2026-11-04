@@ -36,8 +36,54 @@ fn a_rename_followed_at_its_call_site_preserves_behaviour() {
     assert_eq!(s.sentences[0], "Refactor: renames parse_cfg → load_cfg.");
     assert_eq!(
         s.sentences[1],
-        "Behaviour-preserving: every hunk is a rename."
+        "Behaviour-preserving within this change: every hunk is a rename, but the API changes for callers outside it: parse_cfg → load_cfg."
     );
+}
+
+#[test]
+fn a_rename_no_outside_caller_can_reach_keeps_the_plain_wording() {
+    for (path, old, new) in [
+        (
+            "a.rs",
+            "fn parse(p: u8) -> u8 {\n    p + 1\n}\n\nfn main() {\n    parse(1);\n}\n",
+            "fn load(p: u8) -> u8 {\n    p + 1\n}\n\nfn main() {\n    load(1);\n}\n",
+        ),
+        (
+            "a.py",
+            "def _parse(p):\n    return p.strip()\n\ndef main():\n    return _parse('x')\n",
+            "def _load(p):\n    return p.strip()\n\ndef main():\n    return _load('x')\n",
+        ),
+    ] {
+        let s = is(
+            json!([{"path": path, "old": old, "new": new}]),
+            Label::Refactor,
+            Verdict::Preserving,
+        );
+        assert_eq!(
+            s.sentences[1],
+            "Behaviour-preserving: every hunk is a rename."
+        );
+    }
+    let s = summary(json!([{"path": "a.rs",
+        "old": "pub fn parse(p: u8) -> u8 {\n    p + 1\n}\n\nfn main() {\n    parse(1);\n}\n",
+        "new": "pub fn load(p: u8) -> u8 {\n    p + 1\n}\n\nfn main() {\n    load(1);\n}\n"}]));
+    assert!(
+        s.sentences[1].ends_with("callers outside it: parse → load."),
+        "{:?}",
+        s.sentences
+    );
+    // a pub trait's methods carry no `pub` of their own
+    for (vis, exposed) in [("pub ", true), ("", false)] {
+        let s = summary(json!([{"path": "a.rs",
+            "old": format!("{vis}trait Cfg {{\n    fn parse() -> u8 {{\n        let total = 40 + 2;\n        total\n    }}\n}}\n\nfn main<T: Cfg>() {{\n    T::parse();\n}}\n"),
+            "new": format!("{vis}trait Cfg {{\n    fn load() -> u8 {{\n        let total = 40 + 2;\n        total\n    }}\n}}\n\nfn main<T: Cfg>() {{\n    T::load();\n}}\n")}]));
+        assert_eq!(
+            s.sentences[1].ends_with("callers outside it: parse → load."),
+            exposed,
+            "{:?}",
+            s.sentences
+        );
+    }
 }
 
 #[test]
@@ -306,6 +352,132 @@ fn a_definition_moved_to_another_file_preserves_behaviour() {
         Verdict::Preserving,
     );
     assert_eq!(s.sentences[0], "Refactor: moves helper.");
+}
+
+#[test]
+fn a_statement_moved_beside_a_definition_is_not_part_of_the_move() {
+    let helper = "def helper(x):\n    total = x * 2\n    return total + 1\n";
+    let s = summary(json!([
+        {"path": "a.py",
+         "old": format!("def main():\n    return 1\n\n\nregister('a')\n{helper}"),
+         "new": "def main():\n    return 1\n"},
+        {"path": "b.py",
+         "old": "def other():\n    return 2\n",
+         "new": format!("def other():\n    return 2\n\n\nregister('a')\n{helper}")}
+    ]));
+    assert_ne!(s.verdict, Verdict::Preserving, "{:?}", s.sentences);
+}
+
+#[test]
+fn a_definition_moved_within_its_file_preserves_behaviour() {
+    let (a, b, c) = (
+        "    def a(self, x):\n        y = x * 2\n        return y + 1\n",
+        "    def b(self, x):\n        return x - 1\n",
+        "    def c(self, x):\n        z = x + 3\n        return z * z\n",
+    );
+    let s = is(
+        json!([{"path": "m.py",
+            "old": format!("class K:\n{a}\n{b}\n{c}"),
+            "new": format!("class K:\n{b}\n{c}\n{a}")}]),
+        Label::Refactor,
+        Verdict::Preserving,
+    );
+    assert_eq!(s.sentences[0], "Refactor: reorders a.");
+    assert_eq!(
+        s.sentences[1],
+        "Behaviour-preserving: every hunk is a reordering."
+    );
+    let f = "fn f() -> u8 {\n    let y = 2;\n    y + 1\n}\n";
+    let g = "fn g() -> u8 {\n    0\n}\n";
+    is(
+        json!([{"path": "m.rs", "old": format!("{f}\n{g}"), "new": format!("{g}\n{f}")}]),
+        Label::Refactor,
+        Verdict::Preserving,
+    );
+    let unproven = |path: &str, old: String, new: String| {
+        let s = summary(json!([{"path": path, "old": old, "new": new}]));
+        assert_ne!(s.verdict, Verdict::Preserving, "{:?}", s.sentences);
+    };
+    // a decorator may register in file order, and a definition that changed
+    // on the way did not only move
+    unproven(
+        "m.py",
+        format!("class K:\n    @route\n{a}\n{b}\n{c}"),
+        format!("class K:\n{b}\n{c}\n    @route\n{a}"),
+    );
+    unproven(
+        "m.py",
+        format!("class K:\n{a}\n{b}\n{c}"),
+        format!("class K:\n{b}\n{c}\n{}", a.replace("+ 1", "+ 2")),
+    );
+    // a module runs top to bottom: a function moved below a statement that
+    // calls it is not defined yet when it does; a css rule's place is the cascade
+    let top = |d: &str| d.lines().map(|l| &l[4..]).collect::<Vec<_>>().join("\n") + "\n";
+    unproven(
+        "m.py",
+        format!("{}\nx = a(1)\n\n{}", top(a), top(b)),
+        format!("x = a(1)\n\n{}\n{}", top(b), top(a)),
+    );
+    unproven(
+        "m.css",
+        ".a {\n  color: red;\n}\n\n.b {\n  color: blue;\n}\n".into(),
+        ".b {\n  color: blue;\n}\n\n.a {\n  color: red;\n}\n".into(),
+    );
+    // the same lines in another container are another definition
+    let f = "    fn f(&self) -> u8 {\n        let y = 2;\n        y + 1\n    }\n";
+    unproven(
+        "m.rs",
+        format!("impl A {{\n{f}}}\n\nimpl B {{\n    fn g(&self) -> u8 {{\n        0\n    }}\n}}\n"),
+        format!("impl A {{\n}}\n\nimpl B {{\n    fn g(&self) -> u8 {{\n        0\n    }}\n{f}}}\n"),
+    );
+}
+
+#[test]
+fn a_literal_named_by_the_constant_that_holds_it_preserves_behaviour() {
+    let s = is(
+        json!([{"path": "a.rs",
+            "old": "fn wait() -> u64 {\n    let t = 30;\n    t\n}\n",
+            "new": "const TIMEOUT: u64 = 30;\n\nfn wait() -> u64 {\n    let t = TIMEOUT;\n    t\n}\n"}]),
+        Label::Refactor,
+        Verdict::Preserving,
+    );
+    assert_eq!(s.sentences[0], "Refactor: names 30 as TIMEOUT.");
+    // a constant holding another value, or bound twice, proves nothing
+    for consts in [
+        "const TIMEOUT: u64 = 31;\n",
+        "const TIMEOUT: u64 = 30;\nmod m {\n    const TIMEOUT: u64 = 5;\n}\n",
+    ] {
+        let s = summary(json!([{"path": "a.rs",
+            "old": "fn wait() -> u64 {\n    let t = 30;\n    t\n}\n",
+            "new": format!("{consts}\nfn wait() -> u64 {{\n    let t = TIMEOUT;\n    t\n}}\n")}]));
+        assert_ne!(s.verdict, Verdict::Preserving, "{:?}", s.sentences);
+    }
+    // a keyword argument spelling the name binds nothing, and a qualified
+    // constant may live where the lines do not show
+    for (old, new) in [
+        (
+            "def wait():\n    return 30\n\ncall(\n    TIMEOUT=30,\n)\n",
+            "def wait():\n    return TIMEOUT\n\ncall(\n    TIMEOUT=30,\n)\n",
+        ),
+        (
+            "TIMEOUT = 30\n\ndef wait():\n    return 30\n",
+            "TIMEOUT = 30\n\ndef wait():\n    return cfg.TIMEOUT\n",
+        ),
+    ] {
+        let s = summary(json!([{"path": "a.py", "old": old, "new": new}]));
+        assert_ne!(s.verdict, Verdict::Preserving, "{:?}", s.sentences);
+    }
+}
+
+#[test]
+fn the_review_pack_carries_the_summary() {
+    let out = run_json(json!({"changes": [{"path": "src/a.py",
+        "old": "def f():\n    return 1\n", "new": "def f():\n    return 2\n"}]}));
+    let p = ordo::pack(&out);
+    assert!(
+        p.contains("## summary\nlabel: change; verdict: changes\nEdits f, with no test touched.\nChanges behaviour: a value changed in f.\n"),
+        "{p}"
+    );
 }
 
 #[test]

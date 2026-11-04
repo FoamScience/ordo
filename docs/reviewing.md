@@ -346,10 +346,14 @@ changed alongside — `fix-candidate`; otherwise `change`.
 The verdict is `preserving` only when every hunk proves it from its own lines:
 whitespace that separates no tokens (and never indentation where it is
 syntax), a comment, a rename whose substitution turns each removed line into
-its added one, a moved definition whose lines left another file, an extraction
-whose lines left the definition it came out of. A hunk nothing explains makes
-it `unknown`; an edit pattern or a changed literal makes it `changes`. A wrong
-"preserving" is the costly mistake, so the verdict never guesses it.
+its added one, a moved definition whose lines left another file, a definition
+whose place among its siblings nothing reads moved whole within its file, an
+extraction whose lines left the definition it came out of, a literal replaced
+by the constant every binding in the change gives it. A hunk nothing explains
+makes it `unknown`; an edit pattern or a changed literal makes it `changes`. A
+wrong "preserving" is the costly mistake, so the verdict never guesses it.
+When a renamed definition is one callers outside the change may reach, the
+second sentence says the API changes for them, and names each such rename.
 
 ### The change ledger
 
