@@ -4,9 +4,10 @@
 `ordo` states its own limits rather than guessing past them:
 
 - **Very large commits are slow** — over the newest 30 commits of 50
-  repositories (`corpus/census.md`, from `scripts/census.py`), 99.73% complete
-  within 60 s and 4 GB; the rest change thousands to hundreds of thousands of
-  lines, and none crash. The median commit takes about 120 ms.
+  repositories (`corpus/census.md`, from `scripts/census.py`), every one
+  completes within 60 s and 4 GB and none crash, but a commit changing hundreds
+  of thousands of lines comes close to that: files are analysed one at a time.
+  The median commit takes about 60 ms.
 
 - **Symbol resolution is approximate** — name match with an optional
   cross-file union, no full scope/type analysis. `cross_file` is a toggle.
