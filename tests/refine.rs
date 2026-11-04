@@ -91,8 +91,44 @@ fn multi_line_hunks_pair_line_by_line_in_order() {
 }
 
 #[test]
-fn an_unsupported_path_refuses_rather_than_guessing() {
-    assert!(Refiner::new("a.png", &lines("x\n"), &lines("y\n")).is_none());
+fn a_path_no_grammar_reads_is_compared_word_by_word() {
+    let old = lines("EXTRA_DIST = a.pl b.pl\n");
+    let new = lines("EXTRA_DIST = a.pl c.pl\n");
+    let r = Refiner::new("Makefile.am", &old, &new).expect("words");
+    let d = r.refine([1, 1], [1, 1]);
+    assert_eq!(texts(&old[0], &d.removed[0]), vec!["b"]);
+    assert_eq!(texts(&new[0], &d.added[0]), vec!["c"]);
+}
+
+#[test]
+fn an_extensionless_script_takes_its_shebang_grammar() {
+    let old = lines("#!/bin/sh\necho \"$a\" # old note\n");
+    let new = lines("#!/bin/sh\necho \"$b\" # old note\n");
+    let r = Refiner::new("bin/tool", &old, &new).unwrap();
+    let d = r.refine([2, 2], [2, 2]);
+    assert_eq!(texts(&new[1], &d.added[0]), vec!["b"]);
+}
+
+#[test]
+fn a_statement_split_over_two_lines_marks_only_what_changed() {
+    let old = lines("let (a, _) = self.ig.add(ent.path());\n");
+    let new = lines("let (a, _) =\n    self.ig.add_more(ent.path(), &[]);\n");
+    let r = Refiner::new("a.rs", &old, &new).unwrap();
+    let d = r.refine([1, 1], [1, 2]);
+    assert_eq!(texts(&old[0], &d.removed[0]), vec!["add"]);
+    assert_eq!(d.added[0], Some(vec![]), "the wrapped head is unchanged");
+    assert_eq!(texts(&new[1], &d.added[1]), vec!["add_more", ", &[]"]);
+    assert!(d.moved_added.iter().all(Vec::is_empty));
+}
+
+#[test]
+fn a_rewrite_keeps_no_lone_shared_word() {
+    let old = lines("self.a = compute(x)\n");
+    let new = lines("return render(self, y, z)\n");
+    let r = Refiner::new("a.py", &old, &new).unwrap();
+    let d = r.refine([1, 1], [1, 1]);
+    assert_eq!(d.removed, vec![None]);
+    assert_eq!(d.added, vec![None]);
 }
 
 #[test]

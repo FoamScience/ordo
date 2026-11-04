@@ -110,7 +110,8 @@ The unit of comparison is the tree-sitter **leaf node**, never a character or a
 whitespace-split word, so `AgentNode` → `AgentNodeRef` reads as one identifier
 replaced rather than a three-character suffix appended. A comment, a string or
 prose is the exception: its leaf is a run of words, so it is compared word by
-word and a bumped year marks the year. Lines with too little in
+word and a bumped year marks the year. A file no grammar reads, by name or by
+its `#!` line, is compared word by word throughout. Lines with too little in
 common are left unrefined and render whole, so a rewrite is never dressed up as
 a small edit. The algorithm is `ordo::refine`, a public library module — a
 leaf-level LCS, deliberately not a full tree alignment (difftastic's
@@ -121,8 +122,9 @@ added".
 Text the pairing leaves unmatched on both sides that is the same text — two
 arguments swapped, a statement moved a few lines down — is marked **moved**,
 with a dashed outline, rather than as one thing deleted and another added. Text
-that only re-wraps (a call split over three lines) keeps its place among what
-did match and is not called moved.
+that only re-wraps (a call split over three lines, a comment reflowed) keeps its
+place among what did match: it is unchanged, not moved, even on a line that was
+otherwise left whole.
 
 `corpus/refine_gold.jsonl` holds hunks whose changed and moved text a person
 marked; `tests/refine_gold.rs` scores the refiner against them char by char
