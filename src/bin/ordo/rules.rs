@@ -209,33 +209,6 @@ fn silencer(disables: &[String]) -> globset::GlobSet {
     set.build().unwrap_or_else(|_| globset::GlobSet::empty())
 }
 
-/// How many rules can fire in a file of `lang`, as (built-in catalog, the
-/// rules files'). `own` is already layered and disabled; the catalog is not.
-pub(super) fn rules_for(
-    own: &[ordo_diff::model::Rule],
-    catalog: bool,
-    disables: &[String],
-    lang: Option<&str>,
-) -> (usize, usize) {
-    let applies = |r: &&ordo_diff::model::Rule| {
-        r.when
-            .lang
-            .as_ref()
-            .is_none_or(|ls| ls.iter().any(|l| Some(l.as_str()) == lang))
-    };
-    let silenced = silencer(disables);
-    let built_in = if catalog {
-        ordo_diff::catalog::rules()
-            .iter()
-            .filter(applies)
-            .filter(|r| !silenced.is_match(&r.name))
-            .count()
-    } else {
-        0
-    };
-    (built_in, own.iter().filter(applies).count())
-}
-
 /// Merge one parsed rules document into the layered list: its `include`s first
 /// (a bundled preset by name, or a path relative to the file), then its own
 /// rules, where a name already present is *replaced* in place. Disables are
