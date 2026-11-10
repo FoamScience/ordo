@@ -124,12 +124,12 @@ share a name but differ in kind and/or scope, so they're different symbols.
 ## Library API
 
 ```js
-const { order, review } = require("@ordo/cli");
+const { order, review } = require("ordo-diff");
 const out = order({ changes: [{ path: "a.py", old, new }] });
 ```
 
 ```python
-from ordo import order, review
+from ordo_diff import order, review
 out = order({"changes": [{"path": "a.py", "old": old, "new": new}]})
 ```
 

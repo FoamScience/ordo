@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "b1a0e73045f390aa66250588f8d2d6a5c67151e8",
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "package-name": "ordo-diff",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "packaging/npm/package.json", "jsonpath": "$.version" },
+        { "type": "toml", "path": "packaging/pypi/pyproject.toml", "jsonpath": "$.project.version" }
+      ]
+    }
+  }
+}
