@@ -51,6 +51,13 @@ pub enum Intent {
     Async { added: bool, func: Option<String> },
     /// the same call, made to another function
     SwapsCall { old: String, new: String },
+    /// a loop done in place replaced by one call that the old lines did not
+    /// make: the loop when it was the only one, else how many lines went
+    ReplacedByCall {
+        call: String,
+        construct: Option<&'static str>,
+        lines: usize,
+    },
 }
 
 /// How a guard leaves.
@@ -106,6 +113,8 @@ struct Spelling {
     /// moving any caller's argument (python's `**kwargs`)
     keyword_rest: &'static [&'static str],
     async_kw: Option<&'static str>,
+    /// loop statements, and what a headline calls each
+    loops: &'static [(&'static str, &'static str)],
 }
 
 /// How a language spells a try statement.
@@ -152,6 +161,10 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &["default_parameter", "typed_default_parameter"],
         keyword_rest: &["dictionary_splat_pattern"],
         async_kw: Some("async"),
+        loops: &[
+            ("for_statement", "for loop"),
+            ("while_statement", "while loop"),
+        ],
     },
     Spelling {
         langs: &["javascript", "typescript", "tsx"],
@@ -182,6 +195,12 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &["assignment_pattern", "optional_parameter", "value"],
         keyword_rest: &[],
         async_kw: Some("async"),
+        loops: &[
+            ("for_statement", "for loop"),
+            ("for_in_statement", "for loop"),
+            ("while_statement", "while loop"),
+            ("do_statement", "do/while loop"),
+        ],
     },
     Spelling {
         langs: &["rust"],
@@ -206,6 +225,11 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &[],
         keyword_rest: &[],
         async_kw: Some("async"),
+        loops: &[
+            ("for_expression", "for loop"),
+            ("while_expression", "while loop"),
+            ("loop_expression", "loop"),
+        ],
     },
     Spelling {
         langs: &["go"],
@@ -230,6 +254,7 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &[],
         keyword_rest: &[],
         async_kw: None,
+        loops: &[("for_statement", "for loop")],
     },
     Spelling {
         langs: &["c"],
@@ -254,6 +279,11 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &[],
         keyword_rest: &[],
         async_kw: None,
+        loops: &[
+            ("for_statement", "for loop"),
+            ("while_statement", "while loop"),
+            ("do_statement", "do/while loop"),
+        ],
     },
     Spelling {
         langs: &["cpp"],
@@ -284,6 +314,12 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &["optional_parameter_declaration"],
         keyword_rest: &[],
         async_kw: None,
+        loops: &[
+            ("for_statement", "for loop"),
+            ("for_range_loop", "for loop"),
+            ("while_statement", "while loop"),
+            ("do_statement", "do/while loop"),
+        ],
     },
     Spelling {
         langs: &["java"],
@@ -314,6 +350,12 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &[],
         keyword_rest: &[],
         async_kw: None,
+        loops: &[
+            ("for_statement", "for loop"),
+            ("enhanced_for_statement", "for loop"),
+            ("while_statement", "while loop"),
+            ("do_statement", "do/while loop"),
+        ],
     },
     Spelling {
         langs: &["lua"],
@@ -337,6 +379,11 @@ static SPELLINGS: &[Spelling] = &[
         defaulted: &[],
         keyword_rest: &[],
         async_kw: None,
+        loops: &[
+            ("for_statement", "for loop"),
+            ("while_statement", "while loop"),
+            ("repeat_statement", "repeat loop"),
+        ],
     },
 ];
 
@@ -675,9 +722,9 @@ fn hunk_intent(sp: &Spelling, h: &RawHunk, sides: &[Side; 2]) -> Option<Intent> 
     let new = rows(h.new_range)?;
     match rows(h.old_range) {
         None => guard(sp, sides[1], new).or_else(|| default_param(sp, sides, None, new)),
-        Some(old) => {
-            wraps_try(sp, sides, old, new).or_else(|| default_param(sp, sides, Some(old), new))
-        }
+        Some(old) => wraps_try(sp, sides, old, new)
+            .or_else(|| default_param(sp, sides, Some(old), new))
+            .or_else(|| replaced_by_call(sp, sides, old, new)),
     }
 }
 
@@ -807,6 +854,44 @@ fn wraps_try(
         } else {
             tries.word
         },
+    })
+}
+
+/// The new side is one statement making a call the old lines did not make,
+/// and the old side held a loop: work done in place, now done elsewhere.
+/// Without the loop, several statements becoming one call is as often logging
+/// or cleanup as it is an extraction.
+fn replaced_by_call(
+    sp: &Spelling,
+    sides: &[Side; 2],
+    old: (usize, usize),
+    new: (usize, usize),
+) -> Option<Intent> {
+    let [stmt] = statements_in(sp, sides[1].root, new)?[..] else {
+        return None;
+    };
+    let call = first_call(sp, sides[1], stmt)?;
+    let gone = statements_in(sp, sides[0].root, old)?;
+    let loops: Vec<&'static str> = gone
+        .iter()
+        .filter_map(|n| {
+            sp.loops
+                .iter()
+                .find(|(k, _)| *k == n.kind())
+                .map(|(_, w)| *w)
+        })
+        .collect();
+    let callee = call.rsplit(['.', ':']).next().unwrap_or(&call);
+    if loops.is_empty() || crate::extract::makes_call(&sides[0].src[sides[0].rows(old)?], callee) {
+        return None;
+    }
+    Some(Intent::ReplacedByCall {
+        call,
+        construct: match loops[..] {
+            [one] => Some(one),
+            _ => None,
+        },
+        lines: old.1 - old.0 + 1,
     })
 }
 
@@ -1038,4 +1123,22 @@ fn unparen<'t>(sp: &Spelling, mut n: Node<'t>) -> Node<'t> {
 /// only in layout.
 fn unspaced(t: &str) -> String {
     t.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_loop_kind_is_one_its_grammar_has() {
+        for sp in SPELLINGS {
+            for name in sp.langs {
+                let spec = lang::all().iter().find(|s| s.name == *name).unwrap();
+                let language = (spec.language)();
+                for (kind, _) in sp.loops {
+                    assert_ne!(language.id_for_node_kind(kind, true), 0, "{name}: {kind}");
+                }
+            }
+        }
+    }
 }
