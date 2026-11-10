@@ -180,6 +180,17 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .fileband .base { flex: none; color: var(--fg); font-weight: 600; }
 .fileband > span:last-child { flex: none; font-size: var(--fs-tiny); }
 .gap { height: var(--space-xs); }
+.change-summary {
+  padding: var(--space-sm) var(--space-xs) var(--space-sm) calc(var(--rail) + var(--space-md));
+  border-bottom: var(--rule-heavy) solid var(--line);
+  font-size: var(--fs-small); color: var(--dim);
+}
+.change-summary .line { display: flex; gap: var(--space-xs); align-items: baseline; flex-wrap: wrap; }
+.change-summary .label { color: var(--fg); font-weight: 600; text-transform: capitalize; }
+.change-summary .verdict { font-size: var(--fs-tiny); color: var(--faint); }
+.change-summary.preserving .verdict { color: var(--reviewed); }
+.change-summary.changes .verdict { color: var(--warn); }
+.change-summary p { margin: var(--space-3xs) 0 0; }
 .symhead {
   display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-xs);
   padding: var(--space-xs) var(--space-xs) var(--space-3xs) calc(var(--rail) + var(--space-md));

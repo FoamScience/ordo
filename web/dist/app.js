@@ -4401,7 +4401,7 @@ function renderList() {
       rows.append(el);
     }
   }
-  replace(body, rows);
+  replace(body, changeSummary(r.summary), rows);
   drawArcs(rows, dots);
   if (selEl) {
     const el = selEl;
@@ -4582,6 +4582,20 @@ function renderReading(it2) {
     ),
     next && h("button", { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` }, "Next"),
     next && h("span", { class: "said" }, prose(sentence(next.rationale)))
+  );
+}
+var VERDICT = {
+  preserving: "behaviour-preserving",
+  changes: "changes behaviour",
+  unknown: "behaviour change not ruled out"
+};
+function changeSummary(s) {
+  if (!s) return null;
+  return h(
+    "div",
+    { class: `change-summary ${s.verdict}` },
+    h("div", { class: "line" }, h("span", { class: "label" }, s.label.replace("-", " ")), h("span", { class: "verdict" }, VERDICT[s.verdict])),
+    s.sentences.map((t) => h("p", null, t))
   );
 }
 function sentence(s) {

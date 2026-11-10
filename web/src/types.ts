@@ -67,6 +67,13 @@ export interface Command {
   help: string;
 }
 
+export interface ChangeSummary {
+  label: "refactor" | "fix-candidate" | "feature" | "test" | "docs" | "chore" | "change";
+  verdict: "preserving" | "changes" | "unknown";
+  /** what the label rests on, then what the verdict rests on */
+  sentences: string[];
+}
+
 export interface Review {
   state: "ready";
   version: number;
@@ -93,6 +100,8 @@ export interface Review {
   delta: { first_run: boolean; new: number; changed: number; moved: number; gone: number };
   rules: { catalog: boolean; own: number; includes: string[]; disabled: string[]; report: string[] };
   file_churn: Record<string, number>;
+  /** the engine's verdict on the whole change */
+  summary: ChangeSummary | null;
   /** every line comment on a file in the review */
   comments: (LineComment & { path: string })[];
   sel: number;

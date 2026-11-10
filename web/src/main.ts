@@ -11,7 +11,7 @@ import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } fro
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
-import type { ActResult, FileData, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
+import type { ActResult, ChangeSummary, FileData, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
 
 type Pane = "list" | "code" | "why";
 const PANES: Pane[] = ["list", "code", "why"];
@@ -404,7 +404,7 @@ function renderList(): void {
       rows.append(el);
     }
   }
-  replace(body, rows);
+  replace(body, changeSummary(r.summary), rows);
   drawArcs(rows, dots);
   if (selEl) {
     const el = selEl as HTMLElement;
@@ -607,6 +607,23 @@ function renderReading(it: Item | undefined): void {
     ),
     next && h("button", { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` }, "Next"),
     next && h("span", { class: "said" }, prose(sentence(next.rationale))),
+  );
+}
+
+const VERDICT: Record<ChangeSummary["verdict"], string> = {
+  preserving: "behaviour-preserving",
+  changes: "changes behaviour",
+  unknown: "behaviour change not ruled out",
+};
+
+/** What the whole change is, by ordo's fixed rules, above the hunks it rests on. */
+function changeSummary(s: ChangeSummary | null): HTMLElement | null {
+  if (!s) return null;
+  return h(
+    "div",
+    { class: `change-summary ${s.verdict}` },
+    h("div", { class: "line" }, h("span", { class: "label" }, s.label.replace("-", " ")), h("span", { class: "verdict" }, VERDICT[s.verdict])),
+    s.sentences.map((t) => h("p", null, t)),
   );
 }
 
