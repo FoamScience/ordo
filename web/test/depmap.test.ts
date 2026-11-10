@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "../src/depmap.ts";
+import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "../src/depmap.ts";
 import type { Item } from "../src/types.ts";
 
 /** Hunks whose `needs` lists what each one needs, by index. */
@@ -74,4 +74,11 @@ test("a path rounds its corners and ends on the last point", () => {
     ]),
     "M 0 0 Q 0 10 5 10 L 10 10",
   );
+});
+
+test("the cascade shows only when it reaches past the direct dependents", () => {
+  assert.deepEqual(cascadeBeyond([2, 3], [3, 2]), []);
+  assert.deepEqual(cascadeBeyond([2], [2, 5]), [2, 5]);
+  assert.deepEqual(cascadeBeyond([], []), []);
+  assert.deepEqual(cascadeBeyond([null, 2], [2]), []);
 });

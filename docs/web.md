@@ -61,10 +61,11 @@ opened at the hunk's first row with three rows above. Below the code, *Mark as
 read* (`x`) marks it and moves on, and *Next* names the hunk that follows.
 
 The **margin** on the right says why the hunk is here: what it needs, what
-needs it, and what rejecting it would strand — three of each, every one once
-the column is maximised (press its number, `3`, again, or the button in its
-corner) — then its findings (with none, which rules were checked), test
-coverage, and how often the file and these lines changed before.
+needs it, and what rejecting it would strand beyond those — three of each,
+every one once the column is maximised (press its number, `3`, again, or the
+button in its corner) — then its findings, test coverage, and how often the
+file and these lines changed before. A section with nothing to say is left
+out.
 
 The header carries the review's state:
 

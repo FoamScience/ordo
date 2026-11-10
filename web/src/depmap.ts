@@ -70,6 +70,15 @@ export function cascadeOf(items: Item[], view: number[], i: number): Set<number>
   return reach(adjacency(needPairs(items, view), false), i);
 }
 
+/**
+ * The cascade worth showing beside a hunk's direct dependents: all of it when
+ * it reaches past them, else nothing, since it would only repeat them.
+ */
+export function cascadeBeyond(neededBy: (number | null)[], cascade: number[]): number[] {
+  const direct = new Set(neededBy);
+  return cascade.some((t) => !direct.has(t)) ? cascade : [];
+}
+
 /** What `i` stands on: what it needs, and what those need. */
 export function groundOf(items: Item[], view: number[], i: number): Set<number> {
   return reach(adjacency(needPairs(items, view), true), i);
