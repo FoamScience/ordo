@@ -781,10 +781,48 @@ fn p16_extraction_from_present_def() {
     let new = "fn read_input() -> Input {\n    let mut buf = String::new();\n    io::stdin().read_to_string(&mut buf).unwrap();\n    log::debug!(\"got input\");\n    serde_json::from_str(&buf).unwrap()\n}\nfn order() {\n    emit(run(read_input()));\n}\n";
     let rats =
         rationales(serde_json::json!({ "changes": [{ "path": "m.rs", "old": old, "new": new }] }));
+    // read_input is its own insertion rather than lined up with order's old
+    // body (see extract::compute_hunks_in), so order's hunk names the call
     assert_eq!(
         rats,
-        vec!["adds read_input, extracted from order", "edits order"]
+        vec![
+            "adds read_input, extracted from order, used by order below",
+            "uses read_input, added above"
+        ]
     );
+}
+
+#[test]
+fn a_loop_extracted_into_a_helper_next_to_it_reads_as_an_extraction() {
+    // the helper's body matches the loop line for line; aligned that way the
+    // change read as scattered edits of the helper and a few removed lines
+    let old = "def build(names, dim):\n    init()\n    found = []\n    for name in names:\n        tags = lookup(name)\n        add_group(dim=dim, tags=tags, name=name)\n        found.extend(tags)\n    finish(found)\n\n\ndef finish(found):\n    print(found)\n";
+    let helper = "def add_groups(names, dim):\n    found = []\n    for name in names:\n        tags = lookup(name)\n        add_group(dim=dim, tags=tags, name=name)\n        found.extend(tags)\n    return found\n\n\n";
+    let caller = "def build(names, dim):\n    init()\n    found = add_groups(names, dim)\n    finish(found)\n\n\n";
+    let finish = "def finish(found):\n    print(found)\n";
+    for (new, rats) in [
+        (
+            format!("{helper}{caller}{finish}"),
+            [
+                "adds add_groups, extracted from build, used by build below",
+                "replaces a for loop with a call to add_groups in build",
+            ],
+        ),
+        (
+            format!("{caller}{helper}{finish}"),
+            [
+                "replaces a for loop with a call to add_groups in build",
+                "adds add_groups, extracted from build, used by build above",
+            ],
+        ),
+    ] {
+        assert_eq!(
+            rationales(
+                serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] })
+            ),
+            rats
+        );
+    }
 }
 
 #[test]
