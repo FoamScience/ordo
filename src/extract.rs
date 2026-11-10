@@ -257,6 +257,85 @@ fn split_insertions(defs: &[DefRec], hunks: &[RawHunk]) -> Vec<RawHunk> {
     out
 }
 
+/// The line diff anchors a removal at the top of its run of changed lines, so
+/// a definition added right above one whose header changed arrives inside that
+/// edit: the old header reads as removed above the new definition, and the
+/// whole change as one edit of it. Cut such a hunk where the edited definition
+/// starts on the new side, so what sits above it reads as the insertion it is.
+///
+/// Only when the first removed line names that definition, and everything
+/// above the cut is whole new definitions or blank lines.
+fn split_leading_insertions(
+    defs: &[DefRec],
+    old_lines: &[&str],
+    new_lines: &[&str],
+    hunks: &[RawHunk],
+) -> Vec<RawHunk> {
+    let mut out = Vec::with_capacity(hunks.len());
+    for h in hunks {
+        match leading_insertion_cut(defs, old_lines, new_lines, h) {
+            Some(k) => {
+                let r0 = h.new_r0.expect("an edit has a new side");
+                let o = h.old_range[0];
+                out.push(RawHunk {
+                    old_range: [o, o - 1],
+                    new_range: [r0 + 1, k],
+                    new_r0: Some(r0),
+                    new_r1: k - 1,
+                });
+                out.push(RawHunk {
+                    old_range: h.old_range,
+                    new_range: [k + 1, h.new_r1 + 1],
+                    new_r0: Some(k),
+                    new_r1: h.new_r1,
+                });
+            }
+            None => out.push(h.clone()),
+        }
+    }
+    out
+}
+
+/// The 0-based new row to cut `h` at, per `split_leading_insertions`.
+fn leading_insertion_cut(
+    defs: &[DefRec],
+    old_lines: &[&str],
+    new_lines: &[&str],
+    h: &RawHunk,
+) -> Option<usize> {
+    let r0 = h.new_r0?;
+    let [o0, o1] = h.old_range;
+    if o0 > o1 {
+        return None;
+    }
+    let first_removed = old_lines
+        .get(o0 - 1..o1)?
+        .iter()
+        .find(|l| !l.trim().is_empty())?;
+    let edited = defs
+        .iter()
+        .filter(|d| d.s > r0 && d.s <= h.new_r1 && names_word(first_removed, &d.name))
+        .map(|d| d.s)
+        .min()?;
+    let mut above = defs.iter().filter(|d| d.s >= r0 && d.s < edited);
+    let whole = (r0..edited).all(|r| {
+        new_lines.get(r).is_some_and(|l| l.trim().is_empty())
+            || defs
+                .iter()
+                .any(|d| d.s >= r0 && d.s <= r && r <= d.e && d.e < edited)
+    });
+    (whole && above.next().is_some()).then_some(edited)
+}
+
+/// `name` appears in `line` as a whole identifier.
+fn names_word(line: &str, name: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    line.match_indices(name).any(|(i, _)| {
+        !line[..i].chars().next_back().is_some_and(ident)
+            && !line[i + name.len()..].chars().next().is_some_and(ident)
+    })
+}
+
 /// Cut one hunk into consecutive pieces at `cuts` (0-based rows, all inside the
 /// hunk). Every piece keeps the original's empty old range: each is still an
 /// insertion at the same point in the old file.
@@ -399,10 +478,12 @@ const MANY_PARAMS: usize = 6;
 /// Parse `new`, walk once, then classify each hunk. Returns None when the
 /// grammar can't parse (caller falls back to file order).
 /// Returns the hunks the review is built from — the caller's, cut where an
-/// insertion covers more than one construct (see `split_insertions`) — paired
-/// with one `HunkSem` each.
+/// insertion covers more than one construct (see `split_insertions`) or sits
+/// above an edited definition (see `split_leading_insertions`) — paired with
+/// one `HunkSem` each.
 pub fn analyze(
     spec: &LangSpec,
+    old: &str,
     new: &str,
     hunks: &[RawHunk],
     path: &str,
@@ -412,7 +493,10 @@ pub fn analyze(
     let mut w = Walker::new(spec, src);
     w.walk(tree.root_node());
     let adv = crate::advisories::advise(spec, tree.root_node(), src, path);
-    let hunks = split_insertions(&w.c.defs, hunks);
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let hunks = split_leading_insertions(&w.c.defs, &old_lines, &new_lines, hunks);
+    let hunks = split_insertions(&w.c.defs, &hunks);
     let parsed = Parsed {
         c: &w.c,
         spec,
