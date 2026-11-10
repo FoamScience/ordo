@@ -154,8 +154,8 @@ fn cache_home() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let home = std::env::var("HOME").ok()?;
-    (!home.trim().is_empty()).then(|| PathBuf::from(home).join(".cache"))
+    let home = std::env::home_dir()?;
+    (!home.as_os_str().is_empty()).then(|| home.join(".cache"))
 }
 
 /// `${XDG_CACHE_HOME:-$HOME/.cache}/ordo/reviewed/<repo>.json` — cache, not

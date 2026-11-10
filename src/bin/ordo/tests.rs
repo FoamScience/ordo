@@ -3638,7 +3638,8 @@ fn the_review_prompt_anchors_notes_and_adds_ordo_only_with_all() {
 fn send_pipes_to_the_configured_command() {
     let out = std::env::temp_dir().join(format!("ordo-send-{}", std::process::id()));
     // SAFETY: no other test reads or writes ORDO_SEND
-    unsafe { std::env::set_var(crate::handoff::SEND_ENV, format!("cat > {}", out.display())) };
+    // quoted: an unquoted windows path loses its backslashes to the shell
+    unsafe { std::env::set_var(crate::handoff::SEND_ENV, format!("cat > '{}'", out.display())) };
     assert!(send("the review").is_ok());
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "the review");
     unsafe { std::env::set_var(crate::handoff::SEND_ENV, "echo nope >&2; exit 3") };
