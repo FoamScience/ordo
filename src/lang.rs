@@ -1332,6 +1332,9 @@ thread_local! {
     #[cfg(test)]
     static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TREE_CACHE: RefCell<Vec<CacheEntry>> = const { RefCell::new(Vec::new()) };
+    /// this thread's share of `TREE_CACHE_BYTES`: all of it, unless it is one
+    /// of a run's workers (see `seed`)
+    static TREE_BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(TREE_CACHE_BYTES) };
     /// path → the language its `#!` line named, for this `run` (see `learn_shebangs`)
     static SHEBANGS: RefCell<std::collections::HashMap<String, &'static LangSpec>> =
         RefCell::new(std::collections::HashMap::new());
@@ -1393,17 +1396,67 @@ pub(crate) fn parse(spec: &LangSpec, content: &str) -> Option<Tree> {
             len: content.len(),
             tree: tree.clone(),
         });
-        // drop from the front (least recently used) until the budget holds.
-        // The just-parsed entry always stays, even if it alone exceeds the
-        // budget: evicting it would guarantee a re-parse on the next pass,
-        // which is the behaviour this cache exists to prevent.
-        let mut held: usize = c.iter().map(|e| e.len).sum();
-        while held > TREE_CACHE_BYTES && c.len() > 1 {
-            held -= c.remove(0).len;
-        }
+        evict(&mut c);
     });
 
     Some(tree)
+}
+
+/// Drop from the front (least recently used) until the budget holds. The
+/// newest entry always stays, even if it alone exceeds the budget: evicting it
+/// would guarantee a re-parse on the next pass, which is the behaviour this
+/// cache exists to prevent.
+fn evict(c: &mut Vec<CacheEntry>) {
+    let budget = TREE_BUDGET.with(|b| b.get());
+    let mut held: usize = c.iter().map(|e| e.len).sum();
+    while held > budget && c.len() > 1 {
+        held -= c.remove(0).len;
+    }
+}
+
+/// What one thread of a `run` has parsed and learned, for another to adopt:
+/// the cache and the shebang languages are per thread, and a worker that
+/// analyses some of the files must start from what the run already knows and
+/// hand back the trees it built.
+pub(crate) struct ThreadState {
+    trees: Vec<CacheEntry>,
+    shebangs: std::collections::HashMap<String, &'static LangSpec>,
+    budget: Option<usize>,
+}
+
+/// What each of `workers` threads starts from: this thread's shebang
+/// languages, and an equal share of the cache budget, so the workers together
+/// hold no more trees than one thread would. Its trees stay here; a worker
+/// parses what it reads.
+pub(crate) fn seed(workers: usize) -> ThreadState {
+    ThreadState {
+        trees: vec![],
+        shebangs: SHEBANGS.with(|m| m.borrow().clone()),
+        budget: Some(TREE_CACHE_BYTES / workers.max(1)),
+    }
+}
+
+/// Take what another thread knew: its shebang languages, and its trees, most
+/// recently used last, under this thread's cache budget.
+pub(crate) fn adopt(state: ThreadState) {
+    if let Some(b) = state.budget {
+        TREE_BUDGET.with(|t| t.set(b));
+    }
+    SHEBANGS.with(|m| m.borrow_mut().extend(state.shebangs));
+    TREE_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        c.extend(state.trees);
+        evict(&mut c);
+    });
+}
+
+/// Everything this thread holds, emptied: a worker's hand-back.
+pub(crate) fn take() -> ThreadState {
+    ThreadState {
+        trees: TREE_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut())),
+        shebangs: SHEBANGS.with(|m| std::mem::take(&mut *m.borrow_mut())),
+        budget: None,
+    }
 }
 
 #[cfg(test)]

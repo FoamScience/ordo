@@ -75,6 +75,10 @@ use crate::rules::RuleSet;
 use crate::watch::{Drift, Fingerprint, Stale, WatchMode};
 use ordo_diff::model::{Change, Input, Output, Symbol};
 use tree_sitter::Tree;
+
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod commands;
 mod comments;
 mod config;
