@@ -2,6 +2,9 @@
 use std::io::Read;
 use std::process::exit;
 
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "usage:
   ordo-engine order  [--only-comments] [--sarif] --json < input.json > output.json
   ordo-engine pack   [--only-comments] --json < input.json  # compact LLM-ready review context

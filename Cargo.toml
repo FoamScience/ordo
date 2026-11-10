@@ -105,6 +105,9 @@ tiny_http = { version = "0.12", default-features = false, optional = true }
 # the palette finder's hunk ranking (Okapi BM25), with ordo's own tokenizer
 bm25 = { version = "2.3.2", default-features = false, optional = true }
 model2vec-rs = { version = "0.4", default-features = false, features = ["onig"], optional = true }
+# the binaries' allocator: files are analysed on several threads, and glibc's
+# per-thread arenas kept ~60% more memory than the work needs
+mimalloc = { version = "0.1.52", default-features = false }
 
 [build-dependencies]
 # builds the in-tree go-template grammar (see grammars/ and build.rs)

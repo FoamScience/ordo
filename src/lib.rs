@@ -516,25 +516,71 @@ fn fill_sides(input: &mut Input) -> Vec<String> {
 
 /// Hunks and semantics for every changed file, with the drops the caller asked
 /// for already taken out.
+///
+/// Files are independent here, and this is the heaviest per-file pass, so they
+/// are spread over the machine's cores: each worker takes the next file until
+/// none are left, and hands the trees it parsed back for the passes after.
 fn build_hunks(input: &Input, templates: &[TemplateFacts]) -> Vec<PerFileHunks> {
-    input
-        .changes
-        .iter()
-        .zip(templates)
-        .map(|(change, facts)| file_hunks(change, facts, &input.options))
-        .collect()
+    let n = input.changes.len();
+    let workers = std::thread::available_parallelism()
+        .map_or(1, |p| p.get())
+        .min(n);
+    let built: Vec<PerFileHunks> = if workers <= 1 {
+        input
+            .changes
+            .iter()
+            .zip(templates)
+            .map(|(change, facts)| file_hunks(change, facts, &input.options))
+            .collect()
+    } else {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut slots: Vec<Option<PerFileHunks>> = (0..n).map(|_| None).collect();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let seed = lang::seed(workers);
+                    let next = &next;
+                    scope.spawn(move || {
+                        lang::adopt(seed);
+                        let mut done = vec![];
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(change) = input.changes.get(i) else {
+                                break;
+                            };
+                            done.push((i, file_hunks(change, &templates[i], &input.options)));
+                        }
+                        (done, lang::take())
+                    })
+                })
+                .collect();
+            for handle in handles {
+                let (done, state) = handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                for (i, f) in done {
+                    slots[i] = Some(f);
+                }
+                lang::adopt(state);
+            }
+        });
+        slots.into_iter().flatten().collect()
+    };
+    for (change, f) in input.changes.iter().zip(&built) {
+        if f.degraded {
+            eprintln!(
+                "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
+                change.path
+            );
+        }
+    }
+    built
 }
 
 /// One file's hunks: built, told what its template said, and sieved.
 fn file_hunks(change: &Change, facts: &TemplateFacts, options: &Options) -> PerFileHunks {
     let (raw, mut sem, degraded, com, sw) = build_change(change, options.full_context);
     apply_template_facts(facts, &change.path, &raw, &mut sem);
-    if degraded {
-        eprintln!(
-            "ordo: {}: diff lacks full context — positional order only (use old/new, or pass a full-context patch with `full_context`/`--full-context`)",
-            change.path
-        );
-    }
     let mut f = PerFileHunks {
         raw: vec![],
         sem: vec![],
