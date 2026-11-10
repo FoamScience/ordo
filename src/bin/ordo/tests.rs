@@ -4100,17 +4100,3 @@ fn the_rules_report_counts_the_built_in_catalog_it_runs() {
     assert!(with.iter().any(|l| l.ends_with("built-in catalog: python")));
     assert_eq!(r.lines(false)[0], "0 rules active");
 }
-
-#[test]
-fn rules_for_a_language_count_only_what_can_fire_there() {
-    let (py, _) = crate::rules::rules_for(&[], true, &[], Some("python"));
-    let (go, _) = crate::rules::rules_for(&[], true, &[], Some("go"));
-    assert!(py > go, "python {py}, go {go}");
-    let (silenced, _) =
-        crate::rules::rules_for(&[], true, &["magic-*".to_string()], Some("python"));
-    assert!(silenced < py);
-    assert_eq!(
-        crate::rules::rules_for(&[], false, &[], Some("python")).0,
-        0
-    );
-}

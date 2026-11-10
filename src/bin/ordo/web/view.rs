@@ -67,7 +67,6 @@ pub(crate) fn review(app: &App) -> Value {
                 "what": what,
                 "details": it.details,
                 "gist": gist(app, it),
-                "rules_for": rules_here(app, &it.path),
                 "notes": it.notes,
                 "edges": it.edges.iter().map(|e| json!({
                     "label": e.label,
@@ -198,14 +197,6 @@ pub(crate) fn keys(km: &Keymap) -> Vec<Value> {
             Some(json!({ "prefix": pre.map(key_label), "key": key_label(*key), "action": name }))
         })
         .collect()
-}
-
-/// The rules that can fire in this file, by its language — what the findings
-/// note says was checked, so an empty list does not read as no rules.
-fn rules_here(app: &App, path: &str) -> Value {
-    let lang = ordo_diff::lang_name_for_path(path);
-    let (catalog, own) = crate::rules::rules_for(&app.rules, app.catalog, &app.disables, lang);
-    json!({ "lang": lang, "catalog": catalog, "own": own })
 }
 
 /// The hunk's first changed line that says anything, trimmed — what the list
