@@ -60,7 +60,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.90
+      # the version as an input, not a ref: dependabot reads a `@1.90` ref as
+      # an action version and "bumps" it
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked --all-targets --features web
 
