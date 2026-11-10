@@ -2,7 +2,7 @@
 //! node kinds, so what needs pinning is that ordo *reaches* them — the spec
 //! resolves by extension, imports bind the names python binds, `#` is a
 //! comment, and `$FOO = …` names a binding python's `assignment` never sees.
-use ordo::model::{Category, FindingSource};
+use ordo_diff::model::{Category, FindingSource};
 mod fixture;
 use fixture::{rationales_of as rationales, run_file as one, run_json};
 

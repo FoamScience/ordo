@@ -1,5 +1,5 @@
 //! ordo — a reviewer that is a pure client of the ordo engine, served to a
-//! browser. It owns git (shells out for a commit's blobs), calls `ordo::run`,
+//! browser. It owns git (shells out for a commit's blobs), calls `ordo_diff::run`,
 //! and serves the change in comprehension order: the full file with the
 //! changed hunk in context, plus rationale, advisories and def→use edges. The
 //! engine stays git-free; gated behind the `web` feature so
@@ -73,7 +73,7 @@ use crate::reload::{place_of, restore, Place};
 use crate::rules::load_rules_report;
 use crate::rules::RuleSet;
 use crate::watch::{Drift, Fingerprint, Stale, WatchMode};
-use ordo::model::{Change, Input, Output, Symbol};
+use ordo_diff::model::{Change, Input, Output, Symbol};
 use tree_sitter::Tree;
 mod commands;
 mod comments;
@@ -236,7 +236,7 @@ enum FileDrop {
 impl Filter {
     /// The drop decision itself: `None` keeps the path.
     fn reject(&self, path: &str) -> Option<FileDrop> {
-        if self.skip_generated && ordo::is_generated_path(path) {
+        if self.skip_generated && ordo_diff::is_generated_path(path) {
             return Some(FileDrop::Generated);
         }
         (!self.globs.is_match(path)).then_some(FileDrop::Globbed)
@@ -693,7 +693,7 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
                 println!(
                     "ordo {} (ordo schema {})",
                     env!("CARGO_PKG_VERSION"),
-                    ordo::SCHEMA_VERSION
+                    ordo_diff::SCHEMA_VERSION
                 );
                 return Err(0);
             }
@@ -899,7 +899,7 @@ fn main() -> std::io::Result<()> {
 }
 
 /// What the worker thread reports back over the channel while `gather` and
-/// `ordo::run` do their work.
+/// `ordo_diff::run` do their work.
 enum LoadMsg {
     /// one line of progress, replacing whatever was shown before
     Progress(String),
@@ -912,7 +912,7 @@ enum LoadMsg {
 
 struct LoadResult {
     items: Vec<Item>,
-    /// exactly what `ordo::run` was given, kept so `:strategy` can re-run the
+    /// exactly what `ordo_diff::run` was given, kept so `:strategy` can re-run the
     /// engine on it. Rebuilding it from `sources` was lossy — `.lines()` drops
     /// the trailing newline and turns an absent side into an empty one, so a
     /// deleted file came back as an emptied file and the group reasons changed
@@ -943,11 +943,11 @@ struct LoadResult {
     ledger: Ledger,
     /// the engine's change ledger (P23.1) — what the list defaults to being a
     /// list of; distinct from `ledger`, which is the `:audit` one
-    symbol_ledger: Vec<ordo::model::LedgerEntry>,
+    symbol_ledger: Vec<ordo_diff::model::LedgerEntry>,
     notes: HashMap<u64, String>,
     notes_path: Option<PathBuf>,
     /// the engine's one-line verdict on the whole change
-    summary: Option<ordo::model::Summary>,
+    summary: Option<ordo_diff::model::Summary>,
     comments: Vec<LineComment>,
     comments_path: Option<PathBuf>,
     deltas: Vec<Delta>,
@@ -968,8 +968,8 @@ fn group_reasons(out: &Output) -> HashMap<String, String> {
         .collect()
 }
 
-/// Everything `gather`/`ordo::run` need, run on a worker thread.
-/// `ordo::run` itself can `eprintln!` when a change is degraded to
+/// Everything `gather`/`ordo_diff::run` need, run on a worker thread.
+/// `ordo_diff::run` itself can `eprintln!` when a change is degraded to
 /// positional order — unreachable here, since every `Change` this file
 /// builds always sets `new` (see `gather_range`/`gather_uncommitted`), which
 /// is the one branch in `build_change` that never degrades.
@@ -1051,7 +1051,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     input.options.levels = rules.levels;
     input.options.docs_last = docs_last;
     let changes = input.changes.clone();
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     let mut ledger = filter.tally.get();
     count_engine_drops(&out, &mut ledger);
     let mut items = build_items(&out);
@@ -1176,7 +1176,7 @@ fn split_sources(input: &Input) -> Sources {
 fn count_engine_drops(out: &Output, ledger: &mut Ledger) {
     for d in out.files.iter().flat_map(|f| f.dropped.iter()) {
         match d.reason {
-            ordo::model::DropReason::NonComment => ledger.hunks_non_comment += 1,
+            ordo_diff::model::DropReason::NonComment => ledger.hunks_non_comment += 1,
         }
     }
     // an import hunk is no longer dropped: it is noise, counted with the rest
@@ -1184,7 +1184,7 @@ fn count_engine_drops(out: &Output, ledger: &mut Ledger) {
         .files
         .iter()
         .flat_map(|f| f.hunks.iter())
-        .filter(|h| h.category == ordo::model::Category::Import)
+        .filter(|h| h.category == ordo_diff::model::Category::Import)
         .count();
 }
 
@@ -1232,7 +1232,7 @@ fn empty_message(rev: &str, only_comments: bool, filter: &Filter) -> String {
 /// so the note written against the old identity finds its way to the new one.
 /// True when any note moved.
 fn migrate_notes(
-    ledger: &[ordo::model::LedgerEntry],
+    ledger: &[ordo_diff::model::LedgerEntry],
     items: &[Item],
     notes: &mut HashMap<u64, String>,
 ) -> bool {
@@ -1269,7 +1269,7 @@ struct Item {
     path: String,
     old_range: [usize; 2],
     new_range: [usize; 2],
-    cat: ordo::model::Category,
+    cat: ordo_diff::model::Category,
     rationale: String,
     details: Vec<String>,
     notes: Vec<String>,
@@ -1297,19 +1297,19 @@ struct Item {
     group: String,
     /// everything anyone noticed about this hunk: the engine's catalog
     /// advisories and rule hits, plus any analyzer result placed here
-    findings: Vec<ordo::model::Finding>,
+    findings: Vec<ordo_diff::model::Finding>,
     /// where the names this hunk introduces are used — marked in the code
     /// gutter and stepped through with `]`/`[`, rather than listed as line
     /// numbers in the why pane
-    uses_at: Vec<ordo::model::UseSite>,
+    uses_at: Vec<ordo_diff::model::UseSite>,
     /// (executed, executable) counts for the lines this hunk changed, when a
     /// coverage tracefile covers them
     executed: Option<(usize, usize)>,
-    /// intra-line refinement (`ordo::refine`), parallel to the hunk's lines on
+    /// intra-line refinement (`ordo_diff::refine`), parallel to the hunk's lines on
     /// each side: `Some(spans)` means the line was paired with its counterpart
     /// and only those char spans changed; `None` means it renders whole. Empty
     /// when the file has no grammar or the hunk was too large to refine.
-    refined: ordo::refine::Refined,
+    refined: ordo_diff::refine::Refined,
     /// the wave that last changed this hunk's lines (see `waves::hunk_wave`);
     /// `None` outside a review of waves
     wave: Option<usize>,
@@ -1422,7 +1422,7 @@ struct App {
     /// silence catalog entries as well as the caller's own rules
     disables: Vec<String>,
     /// `[levels]` from every rules file, forwarded to the engine
-    levels: BTreeMap<String, ordo::model::Level>,
+    levels: BTreeMap<String, ordo_diff::model::Level>,
     /// bundled rulesets named by `include` — what `:config` shows as on
     includes: Vec<String>,
     /// `:config`'s open state; `None` when it is closed
@@ -1479,11 +1479,11 @@ struct App {
     reload_requested: bool,
     /// the engine's change ledger, kept so `:mode` can rebuild the headers.
     /// Named apart from `ledger`, which is the unrelated `:audit` ledger.
-    symbol_ledger: Vec<ordo::model::LedgerEntry>,
+    symbol_ledger: Vec<ordo_diff::model::LedgerEntry>,
     /// see `LoadResult::waves`
     waves: waves::Waves,
     /// see `LoadResult::summary`
-    summary: Option<ordo::model::Summary>,
+    summary: Option<ordo_diff::model::Summary>,
     /// group ids whose hunks are folded away under their header (`za` and
     /// friends); empty means everything is expanded
     collapsed: HashSet<String>,
@@ -1493,7 +1493,7 @@ struct App {
     rules_report: Vec<String>,
     /// the reviewer's own rules, carried so a re-order or an `:e` reload keeps
     /// applying them
-    rules: Vec<ordo::model::Rule>,
+    rules: Vec<ordo_diff::model::Rule>,
     /// the ordering strategy the current `items`/`view` were built with
     /// (`"comprehension"`, `"defs-first"`, `"file"`) — set by `:strategy`,
     /// otherwise the engine's own default
@@ -1502,7 +1502,7 @@ struct App {
 
 fn build_items(out: &Output) -> Vec<Item> {
     let (ledger_at, ledger_named) = ledger_index(out);
-    let by_id: HashMap<&str, (&str, &ordo::model::HunkOut)> = out
+    let by_id: HashMap<&str, (&str, &ordo_diff::model::HunkOut)> = out
         .files
         .iter()
         .flat_map(|f| {
@@ -1559,7 +1559,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 findings: h.findings.clone(),
                 uses_at: h.uses_at.clone(),
                 executed: None,
-                refined: ordo::refine::Refined::default(),
+                refined: ordo_diff::refine::Refined::default(),
                 wave: None,
             })
         })
@@ -1599,8 +1599,8 @@ fn ledger_index(out: &Output) -> LedgerIndex<'_> {
 /// the def→use edges touching `h`, each labelled from this hunk's side
 fn hunk_edges(
     out: &Output,
-    h: &ordo::model::HunkOut,
-    by_id: &HashMap<&str, (&str, &ordo::model::HunkOut)>,
+    h: &ordo_diff::model::HunkOut,
+    by_id: &HashMap<&str, (&str, &ordo_diff::model::HunkOut)>,
     item_index: &HashMap<&str, usize>,
 ) -> Vec<EdgeRef> {
     let own = by_id.get(h.id.as_str()).map(|(p, _)| *p);
@@ -1638,14 +1638,14 @@ fn hunk_edges(
 /// hunk: it parses both sides, which is the expensive part, and a file usually
 /// carries several hunks.
 fn refine_items(items: &mut [Item], sources: &Sources) {
-    let mut by_path: HashMap<String, Option<ordo::refine::Refiner>> = HashMap::new();
+    let mut by_path: HashMap<String, Option<ordo_diff::refine::Refiner>> = HashMap::new();
     for it in items.iter_mut() {
         let Some((ol, nl)) = sources.get(&it.path) else {
             continue;
         };
         let refiner = by_path
             .entry(it.path.clone())
-            .or_insert_with(|| ordo::refine::Refiner::new(&it.path, ol, nl));
+            .or_insert_with(|| ordo_diff::refine::Refiner::new(&it.path, ol, nl));
         if let Some(r) = refiner {
             it.refined = r.refine(it.old_range, it.new_range);
         }
@@ -1814,10 +1814,10 @@ fn bucket_key(
     mode: ViewMode,
     ledger: Option<usize>,
     group: &str,
-    cat: ordo::model::Category,
+    cat: ordo_diff::model::Category,
 ) -> String {
     match (mode, ledger) {
-        _ if cat == ordo::model::Category::Import => group.to_string(),
+        _ if cat == ordo_diff::model::Category::Import => group.to_string(),
         (ViewMode::Hunks, _) => group.to_string(),
         (ViewMode::Ledger, Some(i)) => format!("L{i}"),
         (ViewMode::Ledger, None) => "L-".to_string(),
@@ -1828,13 +1828,13 @@ fn bucket_key(
 /// top-level code. A removed symbol is not named — there is no definition
 /// left to read, and the row's rationale already says what went — so a hunk
 /// anchoring a removal is named by what it defines instead, if anything.
-fn group_symbol(mode: ViewMode, it: &Item, ledger: &[ordo::model::LedgerEntry]) -> String {
-    if it.cat == ordo::model::Category::Import {
+fn group_symbol(mode: ViewMode, it: &Item, ledger: &[ordo_diff::model::LedgerEntry]) -> String {
+    if it.cat == ordo_diff::model::Category::Import {
         return "imports".to_string();
     }
     match mode {
         ViewMode::Ledger => it.ledger.and_then(|l| ledger.get(l)).and_then(|e| {
-            if e.change != ordo::model::SymbolChange::Removed {
+            if e.change != ordo_diff::model::SymbolChange::Removed {
                 Some(e.name.clone())
             } else {
                 it.symbols.first().map(|s| s.name.clone())
@@ -1849,7 +1849,7 @@ fn group_symbol(mode: ViewMode, it: &Item, ledger: &[ordo::model::LedgerEntry]) 
 /// symbol each group shows; groups are forced on in ledger mode, where they
 /// *are* the ledger. Fold state belonged to the old keys, so it starts over:
 /// imports folded, everything else open.
-fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo::model::LedgerEntry]) {
+fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo_diff::model::LedgerEntry]) {
     app.mode = mode;
     app.groups.clear();
     for it in &mut app.items {
@@ -1863,7 +1863,7 @@ fn set_mode(app: &mut App, mode: ViewMode, ledger: &[ordo::model::LedgerEntry]) 
     app.collapsed = app
         .items
         .iter()
-        .filter(|it| it.cat == ordo::model::Category::Import)
+        .filter(|it| it.cat == ordo_diff::model::Category::Import)
         .map(|it| it.bucket.clone())
         .collect();
 }
@@ -2310,7 +2310,7 @@ mod tests;
 /// Renders the parts of `README.md` and `docs/` that the code owns, and checks
 /// the committed text still matches. A block is delimited by an
 /// `ordo:begin <key>` / `ordo:end <key>` HTML comment pair; `UPDATE_DOCS=1
-/// cargo test` rewrites them in place, the same contract `UPDATE_GOLDEN=1` has
+/// cargo test --features web` rewrites them in place, the same contract `UPDATE_GOLDEN=1` has
 /// for the golden fixtures.
 ///
 /// The point is not to save typing. It is that the language list, the command

@@ -6,7 +6,7 @@
 //! them is detected, so membership is the claim being made. Pinning those to a
 //! full list would make every one of them fail whenever an unrelated advisory
 //! is added — churn with no signal.
-use ordo::model::{FindingSource, Level};
+use ordo_diff::model::{FindingSource, Level};
 mod fixture;
 use fixture::{rationales_json as rationales, run_json};
 
@@ -530,7 +530,7 @@ fn p12_pack_renders_sections() {
             { "path": "util.py", "old": "# u\n", "new": "# u\ndef helper():\n    return 1\n" }
         ]
     }));
-    let p = ordo::pack(&out);
+    let p = ordo_diff::pack(&out);
     assert!(p.contains("# ordo review pack"), "header:\n{p}");
     assert!(p.contains("## reading order"), "order section");
     assert!(p.contains("## dependencies"), "edges section");
@@ -1065,7 +1065,7 @@ fn rust_const_and_static_are_definitions() {
     }));
     let hunks = &out.files[0].hunks;
     let const_hunk = &hunks[0];
-    assert_eq!(const_hunk.category, ordo::model::Category::Definition);
+    assert_eq!(const_hunk.category, ordo_diff::model::Category::Definition);
     assert_eq!(const_hunk.defines, vec!["NAME", "WINDOW_MINS"]);
     assert!(!const_hunk.uses.contains(&"WINDOW_MINS".to_string()));
     assert!(
@@ -1091,7 +1091,7 @@ fn java_field_is_a_definition() {
     }));
     let hunks = &out.files[0].hunks;
     let field_hunk = &hunks[0];
-    assert_eq!(field_hunk.category, ordo::model::Category::Definition);
+    assert_eq!(field_hunk.category, ordo_diff::model::Category::Definition);
     assert_eq!(field_hunk.defines, vec!["WINDOW"]);
     assert!(!field_hunk.uses.contains(&"WINDOW".to_string()));
     let use_hunk = &hunks[1];
@@ -1248,7 +1248,7 @@ fn only_comments_keeps_just_the_comment_hunks_with_a_consistent_order() {
         ],
         "options": { "only_comments": true }
     }));
-    let all_hunks: Vec<&ordo::model::HunkOut> =
+    let all_hunks: Vec<&ordo_diff::model::HunkOut> =
         out.files.iter().flat_map(|f| f.hunks.iter()).collect();
     assert_eq!(
         all_hunks.len(),

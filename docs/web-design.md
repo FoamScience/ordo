@@ -40,7 +40,7 @@ Both clients benefit, so they go in before any web code.
 ```
 ordo <rev>
   └─ review layer
-       gather (git / GitButler) → ordo::run → items → overlays (SARIF, lcov,
+       gather (git / GitButler) → ordo_diff::run → items → overlays (SARIF, lcov,
        waves) → derived facts (delta, cascade, grouping, churn)
        persistence: marks, notes, comments, run snapshots (~/.cache/ordo)
   └─ server (tiny_http, feature `web`)

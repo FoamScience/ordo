@@ -2,7 +2,7 @@
 //! definition a hunk introduces (mirrors `defines`, minus imports).
 mod fixture;
 use fixture::{hunks, run_json};
-use ordo::model::Symbol;
+use ordo_diff::model::Symbol;
 
 fn one(path: &str, old: &str, new: &str) -> Vec<Symbol> {
     hunks(path, old, new)

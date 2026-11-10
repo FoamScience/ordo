@@ -3,7 +3,7 @@
 //! error, so most of the cases below are ones that must not get it.
 mod fixture;
 use fixture::run_json;
-use ordo::model::{Label, Summary, Verdict};
+use ordo_diff::model::{Label, Summary, Verdict};
 use serde_json::{json, Value};
 
 fn summary(changes: Value) -> Summary {
@@ -473,7 +473,7 @@ fn a_literal_named_by_the_constant_that_holds_it_preserves_behaviour() {
 fn the_review_pack_carries_the_summary() {
     let out = run_json(json!({"changes": [{"path": "src/a.py",
         "old": "def f():\n    return 1\n", "new": "def f():\n    return 2\n"}]}));
-    let p = ordo::pack(&out);
+    let p = ordo_diff::pack(&out);
     assert!(
         p.contains("## summary\nlabel: change; verdict: changes\nEdits f, with no test touched.\nChanges behaviour: a value changed in f.\n"),
         "{p}"

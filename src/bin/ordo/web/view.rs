@@ -29,7 +29,7 @@ pub(super) fn slot(slot: &Slot) -> Value {
     }
 }
 
-fn level(l: Option<ordo::model::Level>) -> Value {
+fn level(l: Option<ordo_diff::model::Level>) -> Value {
     l.map_or(Value::Null, |l| l.as_str().into())
 }
 
@@ -203,7 +203,7 @@ pub(crate) fn keys(km: &Keymap) -> Vec<Value> {
 /// The rules that can fire in this file, by its language — what the findings
 /// note says was checked, so an empty list does not read as no rules.
 fn rules_here(app: &App, path: &str) -> Value {
-    let lang = ordo::lang_name_for_path(path);
+    let lang = ordo_diff::lang_name_for_path(path);
     let (catalog, own) = crate::rules::rules_for(&app.rules, app.catalog, &app.disables, lang);
     json!({ "lang": lang, "catalog": catalog, "own": own })
 }

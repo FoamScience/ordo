@@ -5,7 +5,7 @@ use crate::marks::note_key;
 use crate::view_pos;
 use crate::App;
 use crate::Item;
-use ordo::model::Level;
+use ordo_diff::model::Level;
 use std::collections::HashSet;
 
 /// The hardest-pressing finding level on a hunk, if anything was found.
@@ -28,7 +28,7 @@ pub(super) fn draft_rule(app: &App, i: usize) -> Vec<String> {
     let it = &app.items[i];
     let mut when: Vec<String> = vec![];
 
-    if let Some(spec) = ordo::lang_name_for_path(&it.path) {
+    if let Some(spec) = ordo_diff::lang_name_for_path(&it.path) {
         when.push(format!("lang = \"{spec}\""));
     }
     let mut kinds: Vec<String> = it.symbols.iter().map(|s| s.kind.clone()).collect();
@@ -163,7 +163,7 @@ pub(super) fn coverage(app: &App) -> (usize, usize, usize, usize) {
 
 /// The header a ledger entry shows in the list — the same sentence `pack`
 /// prints, minus the location the row already carries.
-fn ledger_label(e: &ordo::model::LedgerEntry) -> String {
+fn ledger_label(e: &ordo_diff::model::LedgerEntry) -> String {
     let change = format!("{:?}", e.change).to_lowercase();
     let from = match e.from.as_deref() {
         Some(f) => format!(" from {f}"),

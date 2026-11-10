@@ -7,7 +7,7 @@ use fixture::run_json;
 
 fn sarif(v: serde_json::Value) -> serde_json::Value {
     let out = run_json(v);
-    serde_json::from_str(&ordo::sarif(&out)).expect("valid json")
+    serde_json::from_str(&ordo_diff::sarif(&out)).expect("valid json")
 }
 
 fn run(results: &serde_json::Value) -> &serde_json::Value {

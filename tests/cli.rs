@@ -84,7 +84,7 @@ fn documented_flags_are_accepted() {
 
 #[test]
 fn pack_renders_a_review_pack() {
-    // the `pack` subcommand's argument wiring had no test; ordo::pack was only
+    // the `pack` subcommand's argument wiring had no test; ordo_diff::pack was only
     // ever reached through the library
     let (out, code) = run(
         &["pack", "--json"],

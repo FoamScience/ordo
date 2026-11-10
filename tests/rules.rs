@@ -1,6 +1,6 @@
 //! Reviewing rules: the caller's own conventions, matched against the facts the
 //! engine computes. Data in, deterministic annotations and ordering out.
-use ordo::model::{FindingSource, Level, Output};
+use ordo_diff::model::{FindingSource, Level, Output};
 mod fixture;
 use fixture::run_json as run;
 

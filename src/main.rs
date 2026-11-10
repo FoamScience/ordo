@@ -28,7 +28,7 @@ fn main() {
             println!(
                 "ordo-engine {} (schema {})",
                 env!("CARGO_PKG_VERSION"),
-                ordo::SCHEMA_VERSION
+                ordo_diff::SCHEMA_VERSION
             );
         }
         "-h" | "--help" | "help" => println!("{USAGE}"),
@@ -66,26 +66,26 @@ fn review(args: &[String]) {
         }),
         None => read_stdin(),
     };
-    let changes = ordo::split_patch(&src)
+    let changes = ordo_diff::split_patch(&src)
         .into_iter()
-        .map(|(path, diff)| ordo::model::Change {
+        .map(|(path, diff)| ordo_diff::model::Change {
             path,
             old: None,
             new: None,
             diff: Some(diff),
         })
         .collect();
-    let input = ordo::model::Input {
+    let input = ordo_diff::model::Input {
         changes,
-        options: ordo::model::Options {
+        options: ordo_diff::model::Options {
             full_context,
             ..Default::default()
         },
         consumers: vec![],
     };
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     if as_sarif {
-        println!("{}", ordo::sarif(&out));
+        println!("{}", ordo_diff::sarif(&out));
     } else {
         emit(out);
     }
@@ -117,9 +117,9 @@ fn only_comments_flag(args: &[String], sarif_ok: bool) -> bool {
     args.iter().any(|a| a == "--only-comments")
 }
 
-fn read_input(only_comments: bool) -> ordo::model::Input {
+fn read_input(only_comments: bool) -> ordo_diff::model::Input {
     let buf = read_stdin();
-    let mut input: ordo::model::Input = serde_json::from_str(&buf).unwrap_or_else(|e| {
+    let mut input: ordo_diff::model::Input = serde_json::from_str(&buf).unwrap_or_else(|e| {
         eprintln!("ordo-engine: invalid input json: {e}");
         exit(1);
     });
@@ -132,9 +132,9 @@ fn read_input(only_comments: bool) -> ordo::model::Input {
 fn order(args: &[String]) {
     let as_sarif = args.iter().any(|a| a == "--sarif");
     let input = read_input(only_comments_flag(args, true));
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     if as_sarif {
-        println!("{}", ordo::sarif(&out));
+        println!("{}", ordo_diff::sarif(&out));
     } else {
         emit(out);
     }
@@ -143,10 +143,10 @@ fn order(args: &[String]) {
 /// `ordo-engine pack --json < input.json` — compact, LLM-ready review context.
 fn pack(args: &[String]) {
     let input = read_input(only_comments_flag(args, false));
-    print!("{}", ordo::pack(&ordo::run(input)));
+    print!("{}", ordo_diff::pack(&ordo_diff::run(input)));
 }
 
-fn emit(out: ordo::model::Output) {
+fn emit(out: ordo_diff::model::Output) {
     match serde_json::to_string_pretty(&out) {
         Ok(s) => println!("{s}"),
         Err(e) => {

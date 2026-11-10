@@ -1,7 +1,7 @@
 //! Hunks that sit outside any definition — the single structural cause of a
 //! bare "change" rationale. Each test here pins one container the engine now
 //! recognises.
-use ordo::model::Category;
+use ordo_diff::model::Category;
 mod fixture;
 use fixture::{rationales_of as rationales, run_file as one, run_json as run};
 
@@ -169,7 +169,10 @@ fn a_conditional_compilation_block_names_the_region_it_guards() {
     );
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("#ifdef CURL_DISABLE_HTTP"));
-    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Region));
+    assert_eq!(
+        h.enclosing_kind,
+        Some(ordo_diff::model::ContainerKind::Region)
+    );
     assert_eq!(h.rationale, "changes 1 → 2 in #ifdef CURL_DISABLE_HTTP");
 }
 
@@ -369,7 +372,7 @@ fn front_matter_is_named_as_such() {
     assert_eq!(h.enclosing.as_deref(), Some("front matter"));
     assert_eq!(
         h.enclosing_kind,
-        Some(ordo::model::ContainerKind::FrontMatter)
+        Some(ordo_diff::model::ContainerKind::FrontMatter)
     );
     assert_eq!(h.rationale, "edits front matter");
 }
@@ -385,7 +388,10 @@ fn a_line_inside_a_top_level_table_belongs_to_the_binding() {
     );
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("ALLOWED"));
-    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Binding));
+    assert_eq!(
+        h.enclosing_kind,
+        Some(ordo_diff::model::ContainerKind::Binding)
+    );
     // a pure insertion says which entry arrived, not "edits ALLOWED"
     assert_eq!(h.rationale, "adds \"typing_extensions\" to ALLOWED");
     assert_eq!(h.details, vec!["adds \"typing_extensions\" to ALLOWED"]);
@@ -612,7 +618,10 @@ fn a_rust_test_macro_names_its_test() {
     );
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("rgtest! r428_style"));
-    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Test));
+    assert_eq!(
+        h.enclosing_kind,
+        Some(ordo_diff::model::ContainerKind::Test)
+    );
 }
 
 #[test]
@@ -629,16 +638,20 @@ fn an_ordinary_macro_is_not_a_test_block() {
 fn a_generated_file_is_recognised_by_its_name() {
     // lazy.nvim writes `_generated.lua`; the `.generated.` infix and go's
     // `_generated.go` are the same convention
-    assert!(ordo::is_generated_path("lua/lazy/community/_generated.lua"));
-    assert!(ordo::is_generated_path("src/api.generated.ts"));
-    assert!(ordo::is_generated_path("pkg/mock_generated.go"));
-    assert!(!ordo::is_generated_path("src/generator.lua"));
-    assert!(!ordo::is_generated_path("src/generated_test_helper.rs"));
+    assert!(ordo_diff::is_generated_path(
+        "lua/lazy/community/_generated.lua"
+    ));
+    assert!(ordo_diff::is_generated_path("src/api.generated.ts"));
+    assert!(ordo_diff::is_generated_path("pkg/mock_generated.go"));
+    assert!(!ordo_diff::is_generated_path("src/generator.lua"));
+    assert!(!ordo_diff::is_generated_path(
+        "src/generated_test_helper.rs"
+    ));
     // a test runner's snapshots
-    assert!(ordo::is_generated_path(
+    assert!(ordo_diff::is_generated_path(
         "packages/app/__snapshots__/App.test.tsx.snap"
     ));
-    assert!(!ordo::is_generated_path("src/snapshot.ts"));
+    assert!(!ordo_diff::is_generated_path("src/snapshot.ts"));
 }
 
 #[test]
@@ -704,7 +717,10 @@ fn a_top_level_call_with_multi_line_arguments_is_a_container() {
     );
     let h = &out.files[0].hunks[0];
     assert_eq!(h.enclosing.as_deref(), Some("execa('unicorns')"));
-    assert_eq!(h.enclosing_kind, Some(ordo::model::ContainerKind::Call));
+    assert_eq!(
+        h.enclosing_kind,
+        Some(ordo_diff::model::ContainerKind::Call)
+    );
 }
 
 #[test]
@@ -718,7 +734,7 @@ fn a_test_block_is_named_as_a_test_not_as_a_call() {
     );
     assert_eq!(
         out.files[0].hunks[0].enclosing_kind,
-        Some(ordo::model::ContainerKind::Test)
+        Some(ordo_diff::model::ContainerKind::Test)
     );
 }
 

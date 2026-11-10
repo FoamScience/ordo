@@ -9,7 +9,7 @@
 //! rule silently stops flagging code for everyone.
 mod fixture;
 use fixture::run_json;
-use ordo::model::{FindingSource, Level};
+use ordo_diff::model::{FindingSource, Level};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -22,9 +22,9 @@ fn fired(path: &Path) -> BTreeSet<String> {
     }));
     assert!(out.problems.is_empty(), "{}: {:?}", name, out.problems);
     assert!(
-        ordo::catalog::problem().is_none(),
+        ordo_diff::catalog::problem().is_none(),
         "{:?}",
-        ordo::catalog::problem()
+        ordo_diff::catalog::problem()
     );
     out.files
         .iter()
@@ -50,7 +50,7 @@ fn every_catalog_rule_fires_on_a_sample() {
     }
     // the walkers in `src/advisories.rs` emit catalog findings too, and a
     // sample may trip one in passing — only the rules have to be covered
-    let want: BTreeSet<String> = ordo::catalog::rules()
+    let want: BTreeSet<String> = ordo_diff::catalog::rules()
         .iter()
         .map(|r| r.name.clone())
         .collect();

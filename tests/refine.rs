@@ -1,5 +1,5 @@
 //! Intra-line refinement: only the part of a line that changed is reported.
-use ordo::refine::Refiner;
+use ordo_diff::refine::Refiner;
 
 fn lines(s: &str) -> Vec<String> {
     s.lines().map(String::from).collect()

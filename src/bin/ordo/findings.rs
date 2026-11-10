@@ -17,7 +17,7 @@ pub(super) struct Finding {
     pub(super) rule: String,
     /// `Warn` for error/warning, `Note` for note/none, so an analyzer result
     /// presses exactly as hard as a rule hit saying the same thing
-    pub(super) level: ordo::model::Level,
+    pub(super) level: ordo_diff::model::Level,
     message: String,
     pub(super) path: String,
     /// 1-based, as SARIF writes it and as hunk ranges are kept
@@ -64,8 +64,8 @@ pub(super) fn parse_sarif(text: &str) -> Vec<Finding> {
             .to_string();
         for r in run["results"].as_array().into_iter().flatten() {
             let level = match r["level"].as_str().unwrap_or("warning") {
-                "error" | "warning" => ordo::model::Level::Warn,
-                _ => ordo::model::Level::Note,
+                "error" | "warning" => ordo_diff::model::Level::Warn,
+                _ => ordo_diff::model::Level::Note,
             };
             let rule = r["ruleId"].as_str().unwrap_or("").to_string();
             let review = r["kind"].as_str() == Some("review");
@@ -126,11 +126,11 @@ pub(super) fn place_findings(items: &mut [Item], findings: &[Finding]) -> usize 
             unplaced += 1;
             continue;
         };
-        it.findings.push(ordo::model::Finding {
+        it.findings.push(ordo_diff::model::Finding {
             source: if f.review {
-                ordo::model::FindingSource::Review
+                ordo_diff::model::FindingSource::Review
             } else {
-                ordo::model::FindingSource::Analyzer
+                ordo_diff::model::FindingSource::Analyzer
             },
             name: if f.rule.is_empty() {
                 f.tool.clone()

@@ -3,7 +3,7 @@
 //! use in main.py (listed first).
 mod fixture;
 use fixture::run_json;
-use ordo::model::Input;
+use ordo_diff::model::Input;
 
 fn input(cross_file: bool) -> Input {
     let j = serde_json::json!({
@@ -16,13 +16,13 @@ fn input(cross_file: bool) -> Input {
     serde_json::from_value(j).unwrap()
 }
 
-fn pos(out: &ordo::model::Output, path: &str) -> usize {
+fn pos(out: &ordo_diff::model::Output, path: &str) -> usize {
     out.order.iter().position(|o| o.path == path).unwrap()
 }
 
 #[test]
 fn cross_file_orders_def_before_use() {
-    let out = ordo::run(input(true));
+    let out = ordo_diff::run(input(true));
     assert!(
         pos(&out, "util.py") < pos(&out, "main.py"),
         "with cross_file, util.py's helper definition must precede its use in main.py; order: {:?}",
@@ -34,7 +34,7 @@ fn cross_file_orders_def_before_use() {
 
 #[test]
 fn cross_file_off_keeps_input_file_order() {
-    let out = ordo::run(input(false));
+    let out = ordo_diff::run(input(false));
     assert!(
         pos(&out, "main.py") < pos(&out, "util.py"),
         "without cross_file, files keep input order; order: {:?}",
@@ -49,7 +49,7 @@ fn cross_file_off_keeps_input_file_order() {
 
 #[test]
 fn cross_file_rationale_names_the_other_file() {
-    let out = ordo::run(input(true));
+    let out = ordo_diff::run(input(true));
     let rats: Vec<&str> = out
         .files
         .iter()
@@ -340,7 +340,7 @@ fn a_doc_fence_orders_the_doc_without_joining_its_cluster() {
     assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
 }
 
-fn two(a: (&str, &str), b: (&str, &str)) -> ordo::model::Output {
+fn two(a: (&str, &str), b: (&str, &str)) -> ordo_diff::model::Output {
     run_json(serde_json::json!({ "changes": [
         { "path": a.0, "old": "const x0 = 0;\n", "new": format!("const x0 = 0;\n{}", a.1) },
         { "path": b.0, "old": "const y0 = 0;\n", "new": format!("const y0 = 0;\n{}", b.1) }
@@ -404,7 +404,7 @@ fn a_file_that_binds_the_name_itself_does_not_reach_out() {
     assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
 }
 
-fn cpp(a: (&str, &str), b: (&str, &str)) -> ordo::model::Output {
+fn cpp(a: (&str, &str), b: (&str, &str)) -> ordo_diff::model::Output {
     run_json(serde_json::json!({ "changes": [
         { "path": a.0, "old": "int x0;\n", "new": format!("int x0;\n{}", a.1) },
         { "path": b.0, "old": "int y0;\n", "new": format!("int y0;\n{}", b.1) }
@@ -452,7 +452,7 @@ fn only_a_class_qualifier_scopes_an_out_of_class_definition() {
     assert_eq!(why, vec!["def→use: toSubField"], "{why:?}");
 }
 
-fn edges_of(out: &ordo::model::Output) -> Vec<&str> {
+fn edges_of(out: &ordo_diff::model::Output) -> Vec<&str> {
     out.edges.iter().map(|e| e.why.as_str()).collect()
 }
 
@@ -519,7 +519,7 @@ fn a_nested_module_exports_object_stays_at_file_scope() {
 }
 
 /// One function per file whose `return fetch(url)` line became `to`.
-fn fetches(paths: &[&str], to: &[&str]) -> ordo::model::Output {
+fn fetches(paths: &[&str], to: &[&str]) -> ordo_diff::model::Output {
     let changes: Vec<serde_json::Value> = paths
         .iter()
         .zip(to)
@@ -533,7 +533,7 @@ fn fetches(paths: &[&str], to: &[&str]) -> ordo::model::Output {
     run_json(serde_json::json!({ "changes": changes }))
 }
 
-fn same_edit_groups(out: &ordo::model::Output) -> Vec<&ordo::model::Group> {
+fn same_edit_groups(out: &ordo_diff::model::Output) -> Vec<&ordo_diff::model::Group> {
     out.groups.iter().filter(|g| !g.files.is_empty()).collect()
 }
 
@@ -569,7 +569,7 @@ fn similar_but_different_edits_stay_apart() {
 }
 
 /// One function per file whose `old` line became `new`.
-fn lines(paths: &[&str], old: &[&str], new: &[&str]) -> ordo::model::Output {
+fn lines(paths: &[&str], old: &[&str], new: &[&str]) -> ordo_diff::model::Output {
     let changes: Vec<serde_json::Value> = (0..paths.len())
         .map(|i| {
             serde_json::json!({ "path": paths[i],
@@ -637,7 +637,7 @@ fn a_different_or_trivial_token_swap_stays_apart() {
 
 /// Defs `f`, `h`, `g` of one file, twelve lines apart; `f` and `g` make the
 /// same edit, `h` another.
-fn one_file(f: &str, h: &str, g: &str) -> ordo::model::Output {
+fn one_file(f: &str, h: &str, g: &str) -> ordo_diff::model::Output {
     let pad = "\n".repeat(12);
     let src = |f: &str, h: &str, g: &str| {
         format!("def f(url):\n    return {f}\n{pad}def h(url):\n    return {h}\n{pad}def g(url):\n    return {g}\n")
@@ -803,8 +803,8 @@ fn the_file_strategy_keeps_a_same_edit_in_file_order() {
         { "path": "c.py", "old": "def f2(url):\n    return fetch(url)\n", "new": format!("def f2(url):\n    return {to}\n") }
     ]}))
     .unwrap();
-    input.options.strategy = ordo::model::Strategy::File;
-    let out = ordo::run(input);
+    input.options.strategy = ordo_diff::model::Strategy::File;
+    let out = ordo_diff::run(input);
     assert!(same_edit_groups(&out).is_empty(), "{:?}", out.groups);
     let paths: Vec<&str> = out.order.iter().map(|o| o.path.as_str()).collect();
     assert_eq!(paths, vec!["a.py", "b.py", "c.py"]);

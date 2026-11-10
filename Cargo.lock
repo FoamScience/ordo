@@ -561,7 +561,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ordo"
+name = "ordo-diff"
 version = "0.5.0"
 dependencies = [
  "bm25",

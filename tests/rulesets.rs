@@ -2,7 +2,7 @@
 //! `problems`, and every rule fires at least once. A rule that never fires
 //! looks exactly like a convention nobody breaks — this is what keeps the
 //! shipped sets honest as grammars and the engine move.
-use ordo::model::{FindingSource, Input, Output, Rule, When};
+use ordo_diff::model::{FindingSource, Input, Output, Rule, When};
 use std::path::Path;
 
 /// The rules files are kebab-case and flat; the engine's `Rule` nests its
@@ -77,19 +77,19 @@ fn every_shipped_ruleset_loads_and_every_rule_fires_on_its_sample() {
             .unwrap_or_else(|| panic!("{}: no sample under rulesets/samples/", set.display()));
         let rules = load(&set);
         let input = Input {
-            changes: vec![ordo::model::Change {
+            changes: vec![ordo_diff::model::Change {
                 path: sample.file_name().unwrap().to_string_lossy().into_owned(),
                 old: Some(String::new()),
                 new: Some(std::fs::read_to_string(&sample).unwrap()),
                 diff: None,
             }],
-            options: ordo::model::Options {
+            options: ordo_diff::model::Options {
                 rules: rules.clone(),
                 ..Default::default()
             },
             consumers: vec![],
         };
-        let out: Output = ordo::run(input);
+        let out: Output = ordo_diff::run(input);
         assert!(
             out.problems.is_empty(),
             "{}: {:?}",
@@ -127,19 +127,19 @@ fn mutable_global_state_reports_the_assignment_and_spares_imports() {
     let set = Path::new(env!("CARGO_MANIFEST_DIR")).join("rulesets/python-google-style.toml");
     let rows = |src: &str| -> Vec<usize> {
         let input = Input {
-            changes: vec![ordo::model::Change {
+            changes: vec![ordo_diff::model::Change {
                 path: "m.py".into(),
                 old: Some(String::new()),
                 new: Some(src.into()),
                 diff: None,
             }],
-            options: ordo::model::Options {
+            options: ordo_diff::model::Options {
                 rules: load(&set),
                 ..Default::default()
             },
             consumers: vec![],
         };
-        let out: Output = ordo::run(input);
+        let out: Output = ordo_diff::run(input);
         out.files
             .iter()
             .flat_map(|f| f.hunks.iter())

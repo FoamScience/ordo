@@ -1,6 +1,6 @@
 //! Language injection: a fenced code block in a prose file is parsed with the
 //! fence's own grammar, not left as opaque text.
-use ordo::model::Output;
+use ordo_diff::model::Output;
 mod fixture;
 use fixture::run_json as run;
 

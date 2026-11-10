@@ -1,10 +1,28 @@
 [package]
-name = "ordo"
+name = "ordo-diff"
 version = "0.5.0"
 edition = "2021"
+rust-version = "1.90"
 description = "Comprehension-optimized ordering of code-change hunks"
 license = "MIT"
 repository = "https://github.com/FoamScience/ordo"
+homepage = "https://github.com/FoamScience/ordo"
+documentation = "https://docs.rs/ordo-diff"
+readme = "README.md"
+keywords = ["diff", "code-review", "tree-sitter", "git"]
+categories = ["development-tools", "command-line-utilities", "parser-implementations"]
+include = [
+    "/src/**/*.rs",
+    "/src/catalog.generated.json",
+    "/build.rs",
+    "/grammars/tree-sitter-go-template/src/**",
+    "/grammars/tree-sitter-go-template/LICENSE*",
+    "/docs/*.md",
+    "/rulesets/*.toml",
+    "/web/dist/**",
+    "/README.md",
+    "/LICENSE",
+]
 
 # The engine CLI — the JSON API (`ordo-engine order --json`), what the npm and
 # pypi wrappers shell to. Pure: no git, no config.
@@ -13,8 +31,8 @@ name = "ordo-engine"
 path = "src/main.rs"
 
 # The reviewer — `ordo`. A first-party client of the engine that shells to git,
-# reads config and serves the review to a browser; on by default,
-# `--no-default-features` builds the engine alone.
+# reads config and serves the review to a browser; behind `web` so library
+# users get the engine alone.
 [[bin]]
 name = "ordo"
 path = "src/bin/ordo/main.rs"
@@ -24,12 +42,15 @@ required-features = ["web"]
 name = "corpus"
 harness = false
 
+[[test]]
+name = "web"
+required-features = ["web"]
+
 [lib]
-name = "ordo"
 path = "src/lib.rs"
 
 [features]
-default = ["web"]
+default = []
 # `ordo`: the reviewer, served to a browser from the same binary
 web = ["dep:tree-sitter-highlight", "dep:toml", "dep:tiny_http", "dep:bm25"]
 # experiment: static-embedding similarity between hunks (examples/m2v.rs only)
@@ -91,6 +112,9 @@ cc = "1"
 
 [dev-dependencies]
 toml = "1"
+
+[package.metadata.docs.rs]
+features = ["web"]
 
 [profile.release]
 opt-level = 3

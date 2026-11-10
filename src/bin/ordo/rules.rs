@@ -9,7 +9,7 @@ use crate::theme::theme_names;
 use crate::theme::theme_role_color;
 use crate::theme::Color;
 use crate::theme::THEME_ROLES;
-use ordo::model::Level;
+use ordo_diff::model::Level;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 /// its rules are reported after the user's on a hunk they both match.
 ///
 /// Rule *files* are the client's business: the engine reads nothing (see
-/// `ordo::model::Options::rules`), which is what keeps `ordo order --json` a
+/// `ordo_diff::model::Options::rules`), which is what keeps `ordo order --json` a
 /// function of its arguments and the corpus tests meaningful.
 /// The rulesets shipped with ordo, bundled so `include = ["go-uber-guide"]`
 /// (or `--rules go-uber-guide`) needs no path. `rulesets/` is the source of
@@ -97,7 +97,7 @@ pub(super) fn rule_sources(repo_root: &str) -> Vec<PathBuf> {
 /// built-in catalog runs beside them, and what to silence in either.
 #[derive(Clone, Default)]
 pub(super) struct RuleSet {
-    pub(super) rules: Vec<ordo::model::Rule>,
+    pub(super) rules: Vec<ordo_diff::model::Rule>,
     pub(super) catalog: bool,
     pub(super) disables: Vec<String>,
     /// `[levels]`, forwarded to the engine like `disables`
@@ -108,7 +108,7 @@ pub(super) struct RuleSet {
 }
 
 pub(super) struct RulesReport {
-    pub(super) rules: Vec<ordo::model::Rule>,
+    pub(super) rules: Vec<ordo_diff::model::Rule>,
     pub(super) problems: Vec<String>,
     /// (origin, active rules from it), in load order
     pub(super) origins: Vec<(String, usize)>,
@@ -144,7 +144,7 @@ impl RulesReport {
     pub(super) fn lines(&self, catalog: bool) -> Vec<String> {
         let silenced = silencer(&self.disables);
         let sections: Vec<(&str, usize)> = if catalog {
-            ordo::catalog::sections()
+            ordo_diff::catalog::sections()
                 .iter()
                 .map(|s| {
                     let on = s.rules.iter().filter(|n| !silenced.is_match(n)).count();
@@ -212,12 +212,12 @@ fn silencer(disables: &[String]) -> globset::GlobSet {
 /// How many rules can fire in a file of `lang`, as (built-in catalog, the
 /// rules files'). `own` is already layered and disabled; the catalog is not.
 pub(super) fn rules_for(
-    own: &[ordo::model::Rule],
+    own: &[ordo_diff::model::Rule],
     catalog: bool,
     disables: &[String],
     lang: Option<&str>,
 ) -> (usize, usize) {
-    let applies = |r: &&ordo::model::Rule| {
+    let applies = |r: &&ordo_diff::model::Rule| {
         r.when
             .lang
             .as_ref()
@@ -225,7 +225,7 @@ pub(super) fn rules_for(
     };
     let silenced = silencer(disables);
     let built_in = if catalog {
-        ordo::catalog::rules()
+        ordo_diff::catalog::rules()
             .iter()
             .filter(applies)
             .filter(|r| !silenced.is_match(&r.name))
@@ -247,7 +247,7 @@ pub(super) fn rules_for(
 /// catalog was switched off, and anything that went wrong.
 #[derive(Default)]
 struct Layering {
-    layered: Vec<(ordo::model::Rule, String)>,
+    layered: Vec<(ordo_diff::model::Rule, String)>,
     disables: Vec<String>,
     replaced: Vec<String>,
     problems: Vec<String>,
@@ -351,7 +351,7 @@ pub(super) fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesRepo
         layer_rules(&text, &name, &base, 0, &mut acc);
     }
     // a level for a rule some file disabled is not a misspelling
-    acc.problems.extend(ordo::level_problems(
+    acc.problems.extend(ordo_diff::level_problems(
         &acc.levels,
         acc.layered.iter().map(|(r, _)| r),
     ));
@@ -401,7 +401,7 @@ pub(super) fn report_from(implicit: Vec<PathBuf>, extra: &[String]) -> RulesRepo
 pub(super) fn load_rules(
     repo_root: &str,
     extra: &[String],
-) -> (Vec<ordo::model::Rule>, Vec<String>) {
+) -> (Vec<ordo_diff::model::Rule>, Vec<String>) {
     let r = load_rules_report(repo_root, extra);
     (r.rules, r.problems)
 }
@@ -425,7 +425,7 @@ fn string_or_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<St
 }
 
 /// Flat TOML shape of one `[[rule]]` block: the file keeps rule fields and
-/// `when` conditions in one table, while `ordo::model::Rule` nests the
+/// `when` conditions in one table, while `ordo_diff::model::Rule` nests the
 /// conditions under `when` — this is the shape that gets converted.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -451,7 +451,7 @@ pub(super) struct RuleToml {
     #[serde(default, deserialize_with = "string_or_vec")]
     lang: Option<Vec<String>>,
     #[serde(default)]
-    category: Option<ordo::model::Category>,
+    category: Option<ordo_diff::model::Category>,
     #[serde(default)]
     enclosing_kind: Option<String>,
     #[serde(default)]
@@ -506,7 +506,7 @@ fn rule_from_toml(
     idx: usize,
     base: &Path,
     problems: &mut Vec<String>,
-) -> Option<ordo::model::Rule> {
+) -> Option<ordo_diff::model::Rule> {
     let label = v
         .get("name")
         .and_then(|n| n.as_str())
@@ -519,7 +519,7 @@ fn rule_from_toml(
             return None;
         }
     };
-    let mut when = ordo::model::When {
+    let mut when = ordo_diff::model::When {
         // the TOML layer reports its own unknown keys (see `RuleToml`), so
         // nothing reaches the engine's catch-all from here
         unknown: Default::default(),
@@ -555,7 +555,7 @@ fn rule_from_toml(
             Err(e) => problems.push(format!("{label}: {qf}: {e}")),
         }
     }
-    Some(ordo::model::Rule {
+    Some(ordo_diff::model::Rule {
         unknown: Default::default(),
         name: parsed.name,
         when,
@@ -575,7 +575,7 @@ fn rule_from_toml(
 /// the rest (see `rule_from_toml`).
 /// One rules file, read: its rules, what it includes, what it disables.
 pub(super) struct RulesDoc {
-    pub(super) rules: Vec<ordo::model::Rule>,
+    pub(super) rules: Vec<ordo_diff::model::Rule>,
     include: Vec<String>,
     disable: Vec<String>,
     levels: BTreeMap<String, Level>,
@@ -589,7 +589,7 @@ pub(super) struct RulesDoc {
 
 /// Could these two rules ever fire on one file? An unscoped rule applies to
 /// every language, so it overlaps with anything.
-fn langs_overlap(a: &ordo::model::Rule, b: &ordo::model::Rule) -> bool {
+fn langs_overlap(a: &ordo_diff::model::Rule, b: &ordo_diff::model::Rule) -> bool {
     match (&a.when.lang, &b.when.lang) {
         (Some(x), Some(y)) => x.iter().any(|l| y.contains(l)),
         _ => true,
@@ -627,7 +627,7 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
         Ok(d) => d,
         Err(e) => return empty(vec![e.to_string()]),
     };
-    let mut rules: Vec<ordo::model::Rule> = vec![];
+    let mut rules: Vec<ordo_diff::model::Rule> = vec![];
     let mut problems = vec![];
     for (i, v) in doc.rule.into_iter().enumerate() {
         if let Some(r) = rule_from_toml(v, i, base, &mut problems) {
@@ -673,7 +673,7 @@ pub(super) fn parse_rules_doc(text: &str, base: &Path) -> RulesDoc {
 }
 
 #[cfg(test)]
-pub(super) fn parse_rules(text: &str, base: &Path) -> (Vec<ordo::model::Rule>, Vec<String>) {
+pub(super) fn parse_rules(text: &str, base: &Path) -> (Vec<ordo_diff::model::Rule>, Vec<String>) {
     let d = parse_rules_doc(text, base);
     (d.rules, d.problems)
 }

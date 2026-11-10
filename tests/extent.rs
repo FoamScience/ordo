@@ -1,7 +1,7 @@
 //! How much of a hunk changed, as `extent` names it.
 mod fixture;
 use fixture::hunks;
-use ordo::model::Extent;
+use ordo_diff::model::Extent;
 
 fn extent(path: &str, old: &str, new: &str) -> Vec<Option<Extent>> {
     hunks(path, old, new).iter().map(|h| h.extent).collect()

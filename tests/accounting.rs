@@ -1,7 +1,7 @@
 //! Hunk accounting: every hunk the diff produced is either ordered or recorded
 //! as dropped, with the reason. Without this a consumer cannot tell a hunk the
 //! engine deliberately removed from one it never found.
-use ordo::model::DropReason;
+use ordo_diff::model::DropReason;
 mod fixture;
 use fixture::run_json as run;
 
@@ -89,7 +89,7 @@ fn a_deleted_import_is_an_import_hunk_too() {
         }]
     }));
     let h = &out.files[0].hunks[0];
-    assert_eq!(h.category, ordo::model::Category::Import);
+    assert_eq!(h.category, ordo_diff::model::Category::Import);
     assert!(h.noise, "as skippable as the addition it mirrors");
     // and the wording still comes from the removal path, which knows what left
     assert_eq!(h.rationale, "removes import logger");
@@ -105,7 +105,7 @@ fn a_deleted_definition_is_not_mistaken_for_an_import() {
         }]
     }));
     let h = &out.files[0].hunks[0];
-    assert_eq!(h.category, ordo::model::Category::Other);
+    assert_eq!(h.category, ordo_diff::model::Category::Other);
     assert!(!h.noise);
     assert_eq!(h.rationale, "removes gone");
 }
