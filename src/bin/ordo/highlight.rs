@@ -91,7 +91,7 @@ const HL: &[(&str, Role)] = &[
 /// The grammar and highlights query for a path.
 ///
 /// The path→language question is the engine's, and is asked through
-/// `ordo::lang_name_for_path` so there is one answer to it: this used to carry
+/// `ordo_diff::lang_name_for_path` so there is one answer to it: this used to carry
 /// its own copy of the extension table plus the by-filename cases, and had
 /// already drifted — `.C`, `.H` (C++ by the GNU/OpenFOAM convention) and
 /// `.zsh` got full engine semantics and no highlighting at all. What stays
@@ -99,7 +99,7 @@ const HL: &[(&str, Role)] = &[
 /// language. A language with no query highlights as plain text, which is what
 /// a bare `.j2` did before and still does.
 pub(super) fn highlight_spec(path: &str) -> Option<(tree_sitter::Language, String)> {
-    highlight_for_lang(ordo::lang_name_for_path(path)?)
+    highlight_for_lang(ordo_diff::lang_name_for_path(path)?)
 }
 
 /// Languages the engine reads but nothing here paints. The template grammars

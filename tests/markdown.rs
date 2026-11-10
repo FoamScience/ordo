@@ -98,7 +98,7 @@ fn a_hunk_with_a_heading_is_a_definition_category() {
     let h = hs
         .iter()
         .find(|h| h.defines.contains(&"Install".to_string()));
-    assert_eq!(h.unwrap().category, ordo::model::Category::Definition);
+    assert_eq!(h.unwrap().category, ordo_diff::model::Category::Definition);
 }
 
 #[test]

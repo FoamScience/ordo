@@ -2,7 +2,7 @@
 //! one shape from a silver or gold hunk, reduced to the lines that mattered.
 mod fixture;
 use fixture::{hunks, rationales_of as rationales, run_file as one, run_json as run};
-use ordo::model::Category;
+use ordo_diff::model::Category;
 use serde_json::json;
 
 /// openfoam cb1e00ab dimensionSetI.H: `const T&` returns named every function
@@ -360,7 +360,7 @@ fn a_rule_stops_repeating_itself_within_a_file() {
         .collect();
     let hs = hunks("a.cpp", &old.join("\n\n"), &new.join("\n\n"));
     assert!(hs.len() > 3, "{} hunks", hs.len());
-    let found: Vec<&ordo::model::Finding> = hs
+    let found: Vec<&ordo_diff::model::Finding> = hs
         .iter()
         .flat_map(|h| &h.findings)
         .filter(|f| f.name == "raw-new-delete")

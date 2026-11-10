@@ -18,7 +18,7 @@ Both apply. Yours are read first, the repo's second, so on a hunk they both
 match the project's rule reads last. A repo file being checked in also means CI
 and a reviewer see the same rules.
 
-The **engine reads neither**. `ordo::run` takes rules in `Options.rules`; a
+The **engine reads neither**. `ordo_diff::run` takes rules in `Options.rules`; a
 client (`ordo`) collects the files and passes them in. That keeps
 `ordo-engine order --json` a function of its arguments.
 

@@ -33,7 +33,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use model2vec_rs::model::StaticModel;
-use ordo::model::{Input, Output};
+use ordo_diff::model::{Input, Output};
 
 #[path = "../tests/common/mod.rs"]
 mod common;
@@ -86,7 +86,7 @@ fn extract(input: Input) -> (Run, Vec<String>, Output) {
             (c.path.clone(), (side(&c.old), side(&c.new)))
         })
         .collect();
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     let cluster_of: HashMap<&str, usize> = out
         .clusters
         .iter()

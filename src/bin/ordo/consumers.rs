@@ -5,7 +5,7 @@
 //! consumers, so the contract checks can name the call that has to follow.
 
 use crate::git::git;
-use ordo::model::{Change, Consumer};
+use ordo_diff::model::{Change, Consumer};
 use std::path::{Path, PathBuf};
 
 /// A monorepo next door must not turn one review into reading all of it.

@@ -18,7 +18,7 @@ use crate::theme::Color;
 use crate::theme::THEME_ROLES;
 use crate::App;
 use crate::Popup;
-use ordo::model::Level;
+use ordo_diff::model::Level;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -57,7 +57,7 @@ pub(super) struct ConfigSection {
 
 /// The whole settings surface, derived from the tables the program already
 /// reads: `KEYMAP_NAMES`, `theme_names`, `THEME_ROLES`, the live `Keymap`,
-/// `ACTION_NAMES`, `PRESETS` and `ordo::catalog::sections`.
+/// `ACTION_NAMES`, `PRESETS` and `ordo_diff::catalog::sections`.
 ///
 /// Nothing here is a hand-written list. A new theme role, key action, bundled
 /// ruleset or catalog rule appears in `:config` because it appears in the table
@@ -117,7 +117,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
         help: "the built-in advisories; off leaves only your own rules".to_string(),
         kind: FieldKind::Flag(app.catalog),
     }];
-    for sec in ordo::catalog::sections() {
+    for sec in ordo_diff::catalog::sections() {
         let all_off = sec.rules.iter().all(|r| disabled(r));
         catalog.push(ConfigField {
             key: format!("section:{}", sec.name),
@@ -146,7 +146,7 @@ pub(super) fn config_schema(app: &App) -> Vec<ConfigSection> {
     out.push(ConfigSection {
         title: "levels".to_string(),
         file: rules_file.clone(),
-        fields: ordo::catalog::sections()
+        fields: ordo_diff::catalog::sections()
             .iter()
             .flat_map(|s| &s.rules)
             .filter(|r| seen.insert(r.as_str()))
@@ -347,7 +347,7 @@ impl ConfigUi {
 
     /// Set every rule of one catalog section.
     fn set_section(&mut self, section: &str, on: bool) {
-        let names: Vec<String> = ordo::catalog::sections()
+        let names: Vec<String> = ordo_diff::catalog::sections()
             .iter()
             .find(|s| s.name == section)
             .map(|s| s.rules.clone())
@@ -364,7 +364,7 @@ impl ConfigUi {
 
     /// A section reads on while any of its rules is on.
     fn sync_sections(&mut self) {
-        let on: Vec<(String, bool)> = ordo::catalog::sections()
+        let on: Vec<(String, bool)> = ordo_diff::catalog::sections()
             .iter()
             .map(|s| {
                 let any = s.rules.iter().any(|r| {

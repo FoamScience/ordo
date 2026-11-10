@@ -17,9 +17,9 @@ use crate::marks::*;
 use crate::rules::*;
 use crate::theme::*;
 use crate::watch::*;
-use ordo::model::HunkOut;
-use ordo::model::Options;
-use ordo::model::Strategy;
+use ordo_diff::model::HunkOut;
+use ordo_diff::model::Options;
+use ordo_diff::model::Strategy;
 use std::path::Path;
 use tree_sitter::Parser;
 use tree_sitter::Point;
@@ -162,13 +162,13 @@ fn sarif_results_become_findings() {
     assert_eq!(f[0].rule, "no-eval");
     assert_eq!(
         f[0].level,
-        ordo::model::Level::Warn,
+        ordo_diff::model::Level::Warn,
         "error maps to the warn half"
     );
     assert_eq!((f[0].path.as_str(), f[0].line), ("src/a.py", 10));
     assert_eq!(
         f[1].level,
-        ordo::model::Level::Note,
+        ordo_diff::model::Level::Note,
         "note maps to the note half"
     );
     assert_eq!(f[1].path, "/repo/src/a.py", "file:// is stripped");
@@ -202,8 +202,8 @@ fn a_finding_lands_on_the_hunk_that_contains_its_line() {
     assert_eq!(items[0].findings.len(), 1, "line 10 is in 1..=20");
     assert_eq!(items[1].findings.len(), 1, "line 50 is in 40..=60");
     assert_eq!(unplaced, 0);
-    assert_eq!(top_level(&items[0]), Some(ordo::model::Level::Warn));
-    assert_eq!(top_level(&items[1]), Some(ordo::model::Level::Note));
+    assert_eq!(top_level(&items[0]), Some(ordo_diff::model::Level::Warn));
+    assert_eq!(top_level(&items[1]), Some(ordo_diff::model::Level::Note));
 }
 
 #[test]
@@ -217,9 +217,9 @@ fn a_review_comment_tints_its_row_by_level_like_any_finding() {
     place_findings(&mut items, &parse_sarif(review));
     assert_eq!(
         items[0].findings[0].source,
-        ordo::model::FindingSource::Review
+        ordo_diff::model::FindingSource::Review
     );
-    assert_eq!(top_level(&items[0]), Some(ordo::model::Level::Warn));
+    assert_eq!(top_level(&items[0]), Some(ordo_diff::model::Level::Warn));
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn audit_accounts_for_findings_that_landed_outside_the_change() {
 /// got full semantics and no colour — which nothing could have noticed.
 #[test]
 fn every_engine_language_is_painted_or_listed() {
-    for (name, _) in ordo::languages() {
+    for (name, _) in ordo_diff::languages() {
         assert!(
             highlight_for_lang(name).is_some() || NO_HIGHLIGHT.contains(&name),
             "engine language `{name}` has no highlights query and is not in NO_HIGHLIGHT"
@@ -606,7 +606,7 @@ fn test_hunk(rationale: &str, enclosing: Option<&str>, symbols: Vec<Symbol>) -> 
         id: "h1".to_string(),
         old_range: [0, 0],
         new_range: [1, 1],
-        category: ordo::model::Category::Definition,
+        category: ordo_diff::model::Category::Definition,
         enclosing: enclosing.map(str::to_string),
         enclosing_kind: None,
         defines: vec![],
@@ -978,7 +978,7 @@ fn test_item(path: &str) -> Item {
         path: path.to_string(),
         old_range: [0, 0],
         new_range: [0, 0],
-        cat: ordo::model::Category::Other,
+        cat: ordo_diff::model::Category::Other,
         rationale: String::new(),
         details: vec![],
         notes: vec![],
@@ -991,7 +991,7 @@ fn test_item(path: &str) -> Item {
         group: String::new(),
         findings: vec![],
         executed: None,
-        refined: ordo::refine::Refined::default(),
+        refined: ordo_diff::refine::Refined::default(),
         wave: None,
     }
 }
@@ -1014,8 +1014,8 @@ fn id_hunk(id: &str) -> HunkOut {
     h
 }
 
-fn test_file_out(path: &str, hunks: Vec<HunkOut>) -> ordo::model::FileOut {
-    ordo::model::FileOut {
+fn test_file_out(path: &str, hunks: Vec<HunkOut>) -> ordo_diff::model::FileOut {
+    ordo_diff::model::FileOut {
         path: path.to_string(),
         hunks,
         degraded: false,
@@ -1029,11 +1029,11 @@ fn build_items_resolves_edge_targets_within_the_review_and_flags_ones_outside_it
     let out = Output {
         schema: 1,
         order: vec![
-            ordo::model::OrderItem {
+            ordo_diff::model::OrderItem {
                 path: "a.rs".to_string(),
                 hunk: "h1".to_string(),
             },
-            ordo::model::OrderItem {
+            ordo_diff::model::OrderItem {
                 path: "a.rs".to_string(),
                 hunk: "h2".to_string(),
             },
@@ -1042,14 +1042,14 @@ fn build_items_resolves_edge_targets_within_the_review_and_flags_ones_outside_it
         groups: vec![],
         edges: vec![
             // resolves: h2 is item index 1
-            ordo::model::Edge {
+            ordo_diff::model::Edge {
                 from: "h1".to_string(),
                 to: "h2".to_string(),
                 why: "uses it".to_string(),
             },
             // doesn't resolve: "ghost" was never built into an item (e.g.
             // filtered out, or a cross-file edge to an unreviewed file)
-            ordo::model::Edge {
+            ordo_diff::model::Edge {
                 from: "h1".to_string(),
                 to: "ghost".to_string(),
                 why: "calls it".to_string(),
@@ -1315,7 +1315,7 @@ fn the_config_view_does_not_lose_its_keys_when_the_preset_changes() {
 #[test]
 fn a_catalog_section_carries_its_rules() {
     let mut ui = ConfigUi::open(&test_app());
-    let sections = ordo::catalog::sections();
+    let sections = ordo_diff::catalog::sections();
     let first = &sections[0];
     let at = |ui: &ConfigUi, key: &str| {
         ui.rows
@@ -1377,7 +1377,7 @@ fn the_config_schema_is_generated_from_the_live_tables() {
     assert_eq!(by("rulesets").fields.len(), PRESETS.len());
     assert_eq!(by("theme roles").fields.len(), THEME_ROLES.len());
     assert_eq!(by("keys").fields.len(), app.keys.binds.len());
-    let sections = ordo::catalog::sections();
+    let sections = ordo_diff::catalog::sections();
     let rules: usize = sections.iter().map(|s| s.rules.len()).sum();
     assert_eq!(by("catalog").fields.len(), 1 + sections.len() + rules);
     let names: HashSet<&String> = sections.iter().flat_map(|s| &s.rules).collect();
@@ -1579,13 +1579,13 @@ fn the_list_defaults_to_symbols_and_mode_switches_it_back() {
     let mut app = test_app();
     app.items = vec![grouped_item("a.rs", "g0"), grouped_item("b.rs", "g1")];
     app.items[0].ledger = Some(0);
-    let led = vec![ordo::model::LedgerEntry {
+    let led = vec![ordo_diff::model::LedgerEntry {
         name: "fetch".to_string(),
         kind: Some("function_definition".to_string()),
         scope: None,
         path: "a.rs".to_string(),
         at: "h0".to_string(),
-        change: ordo::model::SymbolChange::Signature,
+        change: ordo_diff::model::SymbolChange::Signature,
         from: None,
         used_by: vec!["h1".to_string()],
     }];
@@ -1878,7 +1878,7 @@ fn a_dep_into_another_wave_is_labelled_and_followed_across() {
 /// with, so the browser can say which way it moved.
 #[test]
 fn a_moved_level_names_where_it_came_from() {
-    use ordo::model::Level;
+    use ordo_diff::model::Level;
     let mut app = test_app();
     let mut lowered = finding(Level::Note);
     lowered.original_level = Some(Level::Warn);
@@ -2673,9 +2673,9 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
     assert_eq!(
         levels.into_iter().collect::<Vec<_>>(),
         vec![
-            ("eval/exec".to_string(), ordo::model::Level::Warn),
-            ("magic-number".to_string(), ordo::model::Level::Warn),
-            ("magic-numbr".to_string(), ordo::model::Level::Note),
+            ("eval/exec".to_string(), ordo_diff::model::Level::Warn),
+            ("magic-number".to_string(), ordo_diff::model::Level::Warn),
+            ("magic-numbr".to_string(), ordo_diff::model::Level::Note),
         ],
         "a later file wins, and a bad level is dropped"
     );
@@ -2696,15 +2696,19 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
     assert!(r.lines(false).iter().any(|l| l == "  magic-number → warn"));
 
     // and the engine applies them: the finding moves and keeps where it was
-    let out = ordo::run(ordo::model::Input {
-        changes: vec![ordo::model::Change {
+    let out = ordo_diff::run(ordo_diff::model::Input {
+        changes: vec![ordo_diff::model::Change {
             path: "a.py".to_string(),
             old: Some(String::new()),
             new: Some("def f(x):\n    assert x > 0\n".to_string()),
             diff: None,
         }],
         options: Options {
-            levels: [("assert-validation".to_string(), ordo::model::Level::Note)].into(),
+            levels: [(
+                "assert-validation".to_string(),
+                ordo_diff::model::Level::Note,
+            )]
+            .into(),
             ..Options::default()
         },
         consumers: vec![],
@@ -2714,8 +2718,8 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
         .iter()
         .find(|f| f.name == "assert-validation")
         .expect("assert-validation fired");
-    assert_eq!(f.level, ordo::model::Level::Note);
-    assert_eq!(f.original_level, Some(ordo::model::Level::Verdict));
+    assert_eq!(f.level, ordo_diff::model::Level::Note);
+    assert_eq!(f.original_level, Some(ordo_diff::model::Level::Verdict));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2724,7 +2728,7 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
 #[test]
 fn a_level_row_changes_the_session_and_writes_to_the_levels_table() {
     let mut app = test_app();
-    app.levels = [("magic-number".to_string(), ordo::model::Level::Verdict)].into();
+    app.levels = [("magic-number".to_string(), ordo_diff::model::Level::Verdict)].into();
     app.config = Some(ConfigUi::open(&app));
     let at = |app: &App, key: &str| {
         let c = app.config.as_ref().unwrap();
@@ -2737,7 +2741,7 @@ fn a_level_row_changes_the_session_and_writes_to_the_levels_table() {
     config_toggle(&mut app);
     assert_eq!(
         app.levels.get("assert-validation"),
-        Some(&ordo::model::Level::Note),
+        Some(&ordo_diff::model::Level::Note),
         "default → note"
     );
     // verdict wraps round to default: the override goes
@@ -3164,7 +3168,7 @@ fn re_running_the_current_strategy_keeps_the_group_reasons() {
         },
         consumers: vec![],
     };
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     let mut app = test_app();
     app.changes = changes;
     app.items = build_items(&out);
@@ -3428,7 +3432,7 @@ fn with_groups_off_every_row_names_its_own_symbol_and_nothing_folds() {
 fn imports_fold_by_default_in_either_mode_and_groups_name_their_symbol() {
     let mut app = test_app();
     let mut import = grouped_item("a.rs", "gi");
-    import.cat = ordo::model::Category::Import;
+    import.cat = ordo_diff::model::Category::Import;
     let mut defined = grouped_item("a.rs", "gd");
     defined.ledger = Some(0);
     defined.enclosing = Some("run".to_string());
@@ -3437,7 +3441,7 @@ fn imports_fold_by_default_in_either_mode_and_groups_name_their_symbol() {
     app.items = vec![import, defined, gone, grouped_item("a.rs", "gt")];
     app.view = vec![0, 1, 2, 3];
     app.reviewed = vec![false; 4];
-    let entry = |name: &str, change| ordo::model::LedgerEntry {
+    let entry = |name: &str, change| ordo_diff::model::LedgerEntry {
         name: name.to_string(),
         kind: None,
         scope: None,
@@ -3448,8 +3452,8 @@ fn imports_fold_by_default_in_either_mode_and_groups_name_their_symbol() {
         used_by: vec![],
     };
     let ledger = vec![
-        entry("run", ordo::model::SymbolChange::Added),
-        entry("old", ordo::model::SymbolChange::Removed),
+        entry("run", ordo_diff::model::SymbolChange::Added),
+        entry("old", ordo_diff::model::SymbolChange::Removed),
     ];
 
     set_mode(&mut app, ViewMode::Ledger, &ledger);
@@ -3551,7 +3555,7 @@ fn a_sibling_that_imports_the_changed_module_becomes_a_consumer() {
             .status()
             .unwrap();
     }
-    let changes = vec![ordo::model::Change {
+    let changes = vec![ordo_diff::model::Change {
         path: "script/run.py".into(),
         old: Some("def main(a):\n    pass\n".into()),
         new: Some("def main(a, b):\n    pass\n".into()),
@@ -3697,9 +3701,9 @@ fn comment_adds_replaces_and_deletes_on_the_selection() {
 }
 
 /// Five hunks: warn, none, verdict, verdict, note — in that view order.
-fn finding(level: ordo::model::Level) -> ordo::model::Finding {
-    ordo::model::Finding {
-        source: ordo::model::FindingSource::Rule,
+fn finding(level: ordo_diff::model::Level) -> ordo_diff::model::Finding {
+    ordo_diff::model::Finding {
+        source: ordo_diff::model::FindingSource::Rule,
         name: "r".to_string(),
         message: "m".to_string(),
         level,
@@ -3709,7 +3713,7 @@ fn finding(level: ordo::model::Level) -> ordo::model::Finding {
 }
 
 fn findings_app() -> App {
-    use ordo::model::Level;
+    use ordo_diff::model::Level;
     let mut app = test_app();
     let levels = [
         Some(Level::Warn),
@@ -3834,13 +3838,13 @@ fn a_reload_follows_a_renamed_symbol() {
     select(&mut old, 1);
     let place = place_of(&old);
     let mut new = review_of(&["a", "c", "load"]);
-    new.symbol_ledger = vec![ordo::model::LedgerEntry {
+    new.symbol_ledger = vec![ordo_diff::model::LedgerEntry {
         name: "load".to_string(),
         kind: None,
         scope: None,
         path: "f.py".to_string(),
         at: "h2".to_string(),
-        change: ordo::model::SymbolChange::Renamed,
+        change: ordo_diff::model::SymbolChange::Renamed,
         from: Some("parse".to_string()),
         used_by: vec![],
     }];
@@ -4091,7 +4095,7 @@ fn a_range_end_takes_a_gitbutler_branch_or_commit_id() {
 fn the_rules_report_counts_the_built_in_catalog_it_runs() {
     let r = report_from(vec![], &[]);
     let with = r.lines(true);
-    let catalog: usize = ordo::catalog::rules().len();
+    let catalog: usize = ordo_diff::catalog::rules().len();
     assert_eq!(with[0], format!("{catalog} rules active"));
     assert!(with.iter().any(|l| l.ends_with("built-in catalog: python")));
     assert_eq!(r.lines(false)[0], "0 rules active");

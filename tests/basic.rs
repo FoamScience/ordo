@@ -3,7 +3,7 @@
 //! comprehension order must put the definition before its use.
 mod fixture;
 use fixture::run_json;
-use ordo::model::{Category, Input};
+use ordo_diff::model::{Category, Input};
 
 const OLD: &str = "# a\n# b\n# c\n# d\n# e\n";
 const NEW: &str =
@@ -19,7 +19,7 @@ fn input(strategy: &str) -> Input {
 
 #[test]
 fn permutation_nothing_lost() {
-    let out = ordo::run(input("comprehension"));
+    let out = ordo_diff::run(input("comprehension"));
     let total: usize = out.files.iter().map(|f| f.hunks.len()).sum();
     // the import hunk is skipped; the helper def + its use remain
     assert!(total >= 2, "expected >=2 non-import hunks, got {total}");
@@ -40,7 +40,7 @@ fn permutation_nothing_lost() {
 
 #[test]
 fn imports_are_noise_and_defs_come_before_uses() {
-    let out = ordo::run(input("comprehension"));
+    let out = ordo_diff::run(input("comprehension"));
     let hunks = &out.files[0].hunks;
 
     // an import hunk is visible but skippable: it follows from the real change
@@ -68,7 +68,7 @@ fn imports_are_noise_and_defs_come_before_uses() {
 
 #[test]
 fn def_edge_derived() {
-    let out = ordo::run(input("comprehension"));
+    let out = ordo_diff::run(input("comprehension"));
     let why: Vec<&str> = out.edges.iter().map(|e| e.why.as_str()).collect();
     assert_eq!(why, vec!["def→use: helper"]);
 }
@@ -101,14 +101,14 @@ fn lua_def_before_use() {
 
 #[test]
 fn deterministic() {
-    let a = serde_json::to_string(&ordo::run(input("comprehension"))).unwrap();
-    let b = serde_json::to_string(&ordo::run(input("comprehension"))).unwrap();
+    let a = serde_json::to_string(&ordo_diff::run(input("comprehension"))).unwrap();
+    let b = serde_json::to_string(&ordo_diff::run(input("comprehension"))).unwrap();
     assert_eq!(a, b, "output must be deterministic");
 }
 
 #[test]
 fn file_strategy_keeps_position() {
-    let out = ordo::run(input("file"));
+    let out = ordo_diff::run(input("file"));
     let hunks = &out.files[0].hunks;
     // in file order, order_index tracks new_range start ascending
     let mut prev = 0usize;

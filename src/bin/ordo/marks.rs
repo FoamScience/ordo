@@ -46,7 +46,7 @@ fn symbol_identity_key(item: &Item) -> String {
 
 /// name + kind + scope for each symbol, order-independent — the identity both
 /// `mark_key` and `note_key` are built on.
-fn symbols_identity(symbols: &[ordo::model::Symbol]) -> String {
+fn symbols_identity(symbols: &[ordo_diff::model::Symbol]) -> String {
     let mut syms = symbols.to_vec();
     syms.sort();
     syms.iter()

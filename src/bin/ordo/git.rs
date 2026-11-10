@@ -2,9 +2,9 @@
 use crate::read_progress;
 use crate::Filter;
 use crate::EMPTY_TREE;
-use ordo::model::Change;
-use ordo::model::Input;
-use ordo::model::Options;
+use ordo_diff::model::Change;
+use ordo_diff::model::Input;
+use ordo_diff::model::Options;
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;

@@ -1,7 +1,7 @@
 //! P23.1: one entry per *symbol* the change touches, rather than per hunk. A
 //! projection of data the engine already has — `symbols`, the per-file status
 //! maps, and every hunk's `uses` — never new analysis.
-use ordo::model::{LedgerEntry, SymbolChange};
+use ordo_diff::model::{LedgerEntry, SymbolChange};
 mod fixture;
 use fixture::run_json as run;
 
@@ -138,7 +138,7 @@ fn the_pack_leads_with_the_ledger() {
         {"path": "a.py",
          "old": "def f(x):\n    return x\n",
          "new": "def f(x, y):\n    return x\n"}]}));
-    let p = ordo::pack(&out);
+    let p = ordo_diff::pack(&out);
     let (led, order) = (p.find("## ledger"), p.find("## reading order"));
     assert!(led.is_some(), "{p}");
     assert!(led < order, "the ledger is read before the hunks:\n{p}");

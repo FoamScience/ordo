@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ordo::model::{Category, Output};
+use ordo_diff::model::{Category, Output};
 
 mod common;
 use common::{commit_input, corpus_dir, git, parse_manifest, range_input, update_requested, Repo};
@@ -45,7 +45,7 @@ const PROVENANCE: &[&str] = &[
 fn check_coverage(label: &str, dir: &Path, parent: &str, sha: &str, out: &Output) {
     // `-U0` so each header's range is exactly the changed lines, nothing else
     let diff = git(dir, &["diff", "-U0", parent, sha]);
-    let spans = |file: &ordo::model::FileOut, old: bool| -> Vec<[usize; 2]> {
+    let spans = |file: &ordo_diff::model::FileOut, old: bool| -> Vec<[usize; 2]> {
         let kept = file
             .hunks
             .iter()
@@ -68,7 +68,7 @@ fn check_coverage(label: &str, dir: &Path, parent: &str, sha: &str, out: &Output
                 .map_or(p.to_string(), |(_, r)| r.to_string())
         })
     };
-    let by_path: BTreeMap<&str, &ordo::model::FileOut> =
+    let by_path: BTreeMap<&str, &ordo_diff::model::FileOut> =
         out.files.iter().map(|f| (f.path.as_str(), f)).collect();
 
     let (mut a_path, mut b_path) = (None, None);
@@ -298,7 +298,7 @@ fn is_fix_subject(subject: &str) -> bool {
 /// code hunk at all (docs, comments, pure noise) can satisfy neither and is
 /// left out of both buckets.
 fn fix_signals(out: &Output, m: &mut Metrics, fix: bool) {
-    let by_id: BTreeMap<&str, &ordo::model::HunkOut> = out
+    let by_id: BTreeMap<&str, &ordo_diff::model::HunkOut> = out
         .files
         .iter()
         .flat_map(|f| f.hunks.iter())
@@ -315,7 +315,7 @@ fn fix_signals(out: &Output, m: &mut Metrics, fix: bool) {
     if fix {
         m.fix_commits += 1;
         m.fix_with_finding += has_finding as usize;
-        m.fix_code_first += !ordo::is_test_path(&first.path) as usize;
+        m.fix_code_first += !ordo_diff::is_test_path(&first.path) as usize;
     } else {
         m.other_commits += 1;
         m.other_with_finding += has_finding as usize;
@@ -359,7 +359,7 @@ fn pair_signals(
     let Some(input) = range_input(dir, parent, child) else {
         return;
     };
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     let mut from_child: BTreeMap<&str, bool> = BTreeMap::new();
     for f in &out.files {
         let mine = child_ranges(&f.path);
@@ -433,7 +433,7 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
             child = None;
             continue;
         };
-        let out = ordo::run(input);
+        let out = ordo_diff::run(input);
         let label = format!("{} {}", repo.name, &sha[..8]);
         check_invariants(&label, &out);
         check_coverage(&label, dir, &parent, sha, &out);

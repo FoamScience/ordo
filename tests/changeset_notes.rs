@@ -70,7 +70,7 @@ fn a_quiet_file_earns_no_churn_note() {
 #[test]
 fn the_review_pack_leads_with_them() {
     let out = run_json(serde_json::json!({ "changes": [code_change()] }));
-    let p = ordo::pack(&out);
+    let p = ordo_diff::pack(&out);
     let (notes_at, order_at) = (p.find("## notes"), p.find("## reading order"));
     assert!(notes_at.is_some(), "{p}");
     assert!(

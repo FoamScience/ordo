@@ -16,7 +16,7 @@ for. The pages are compiled into the binary, so they can never describe a
 different version than the one running.
 
 The server is the review: Rust reads the diff (it owns git, and shells out for
-a commit's blobs), calls `ordo::run`, and builds the view model; the page only
+a commit's blobs), calls `ordo_diff::run`, and builds the view model; the page only
 lays it out and sends back what you did. The engine never learns what git is.
 Marks, notes and comments land in files under the cache directory, merged
 rather than overwritten, so two tabs or two servers open on the same revision
@@ -117,7 +117,7 @@ prose is the exception: its leaf is a run of words, so it is compared word by
 word and a bumped year marks the year. A file no grammar reads, by name or by
 its `#!` line, is compared word by word throughout. Lines with too little in
 common are left unrefined and render whole, so a rewrite is never dressed up as
-a small edit. The algorithm is `ordo::refine`, a public library module — a
+a small edit. The algorithm is `ordo_diff::refine`, a public library module — a
 leaf-level LCS, deliberately not a full tree alignment (difftastic's
 Dijkstra-over-graphs, or `syndiff`): those buy accuracy on moved and
 restructured code at a cost this does not need to pay to say "an argument was
@@ -474,5 +474,5 @@ npm test         # node --test test/*.test.ts
 ORDO_WEB_DIST=$PWD/web/dist ordo   # serve assets from disk, no rebuild of ordo
 ```
 
-`cargo test --test web` drives a real server over a socket; its view-model
+`cargo test --features web --test web` drives a real server over a socket; its view-model
 snapshot is `tests/web/review.json` (`UPDATE_GOLDEN=1` to regenerate).

@@ -1,5 +1,23 @@
 //! ordo — comprehension-optimized ordering of code-change hunks.
-//! Public entry: [`run`] takes an [`Input`] and returns the v1 [`Output`].
+//! Public entry: [`run`] takes an [`Input`] and returns the schema v2 [`Output`].
+//!
+//! ```
+//! let input: ordo_diff::model::Input = serde_json::from_value(serde_json::json!({
+//!     "changes": [{
+//!         "path": "m.py",
+//!         "old": "x = 1\n",
+//!         "new": "def helper():\n    return 1\nx = helper()\n",
+//!     }]
+//! }))
+//! .unwrap();
+//! let out = ordo_diff::run(input);
+//! for o in &out.order {
+//!     println!("{} {}", o.path, o.hunk);
+//! }
+//! ```
+//!
+//! The `ordo-engine` binary speaks the same contract as JSON; the `ordo`
+//! browser reviewer is behind the `web` feature.
 mod advisories;
 pub mod catalog;
 mod contract;

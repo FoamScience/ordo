@@ -70,7 +70,7 @@ hunks.
 ## Install
 
 ```sh
-cargo install --path .          # from source: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI)
+cargo install --path . --features web   # from source: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI)
 npm  install -g @ordo/cli       # node wrapper (vendors a prebuilt binary)
 pip  install ordo               # python wrapper (vendors a prebuilt binary)
 ```
@@ -122,9 +122,9 @@ own. The full list is [`docs/ceilings.md`](docs/ceilings.md).
 ## Development
 
 ```sh
-cargo test                     # unit + property + golden + cross-file
-UPDATE_GOLDEN=1 cargo test     # regenerate tests/golden/*/expected.json
-UPDATE_DOCS=1   cargo test     # regenerate the marked blocks in README/docs
+cargo test --features web                     # unit + property + golden + cross-file + docs
+UPDATE_GOLDEN=1 cargo test --features web     # regenerate tests/golden/*/expected.json
+UPDATE_DOCS=1   cargo test --features web     # regenerate the marked blocks in README/docs
 ```
 
 Blocks fenced by a pair of `ordo:begin <key>` / `ordo:end <key>` HTML

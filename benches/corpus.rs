@@ -1,4 +1,4 @@
-//! CPU-time bench for `ordo::run` over the real corpora.
+//! CPU-time bench for `ordo_diff::run` over the real corpora.
 //!
 //! Opt-in exactly like `tests/corpus.rs`: set `$ORDO_CORPUS` to a directory
 //! populated by `scripts/corpus-fetch.sh`, or this returns early.
@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use ordo::model::{Change, Input, Options};
+use ordo_diff::model::{Change, Input, Options};
 
 #[path = "../tests/common/mod.rs"]
 mod common;
@@ -164,7 +164,7 @@ fn cpu_time() -> Duration {
 }
 
 /// Median CPU time, plus the hunk count the run produced. Inputs are rebuilt
-/// outside the clock so only `ordo::run` is measured.
+/// outside the clock so only `ordo_diff::run` is measured.
 ///
 /// `reps` is a floor, not a count. `/proc/self/stat` only has 10ms
 /// resolution (100 ticks/sec), so a scenario that finishes in tens of
@@ -181,7 +181,7 @@ fn measure(job: &Job, reps: usize) -> (Duration, usize) {
     {
         let inputs: Vec<Input> = job.commits.iter().map(to_input).collect();
         let start = cpu_time();
-        let outs: Vec<_> = inputs.into_iter().map(ordo::run).collect();
+        let outs: Vec<_> = inputs.into_iter().map(ordo_diff::run).collect();
         times.push(cpu_time() - start);
         hunks = outs
             .iter()

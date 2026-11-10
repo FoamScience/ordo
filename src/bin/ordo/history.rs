@@ -2,11 +2,11 @@
 use crate::git::git;
 use crate::App;
 use crate::Item;
-use ordo::model::Change;
-use ordo::model::HunkOut;
-use ordo::model::Input;
-use ordo::model::Options;
-use ordo::model::Symbol;
+use ordo_diff::model::Change;
+use ordo_diff::model::HunkOut;
+use ordo_diff::model::Input;
+use ordo_diff::model::Options;
+use ordo_diff::model::Symbol;
 use std::collections::HashMap;
 
 // bound on how many candidate commits per direction (earlier/later) get run
@@ -81,7 +81,7 @@ fn symbol_identity(
     kind: &str,
     row: usize,
 ) -> Option<Symbol> {
-    let out = ordo::run(Input {
+    let out = ordo_diff::run(Input {
         changes: vec![Change {
             path: path.to_string(),
             old: Some(String::new()),
@@ -135,7 +135,7 @@ fn classify_commit(sha: &str, path: &str, target: &Symbol) -> Option<String> {
         git(&["show", &format!("{parent}:{path}")])
     };
     let new = git(&["show", &format!("{sha}:{path}")]);
-    let out = ordo::run(Input {
+    let out = ordo_diff::run(Input {
         changes: vec![Change {
             path: path.to_string(),
             old: Some(old),

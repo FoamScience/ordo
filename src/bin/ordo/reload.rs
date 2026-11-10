@@ -9,7 +9,7 @@ use crate::commands::set_filters;
 use crate::keys::ViewMode;
 use crate::marks::snap_key;
 use crate::{select, set_mode, App, Item, PathGlobs};
-use ordo::model::{LedgerEntry, SymbolChange};
+use ordo_diff::model::{LedgerEntry, SymbolChange};
 
 /// A hunk named so it can be found in another load: its snapshot key and
 /// which of the hunks sharing that key it is, and — for when the key no longer

@@ -28,9 +28,9 @@ use crate::Item;
 use crate::Ledger;
 use crate::PathGlobs;
 use crate::Popup;
-use ordo::model::Input;
-use ordo::model::Options;
-use ordo::model::Strategy;
+use ordo_diff::model::Input;
+use ordo_diff::model::Options;
+use ordo_diff::model::Strategy;
 
 /// One `:` command — name, a short argument hint for `:help` (empty when it
 /// takes none), and the help line itself.
@@ -291,7 +291,7 @@ fn parse_strategy(s: &str) -> Option<Strategy> {
     }
 }
 
-/// `:strategy <name>` — re-runs `ordo::run` synchronously on the calling
+/// `:strategy <name>` — re-runs `ordo_diff::run` synchronously on the calling
 /// thread rather than the worker-thread path `load` uses. The
 /// content is already fully in memory (no git, and the only re-parsing is
 /// the engine's own hunk analysis, which the task explicitly allows for this
@@ -323,7 +323,7 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
         },
         consumers: vec![],
     };
-    let out = ordo::run(input);
+    let out = ordo_diff::run(input);
     let mut items = build_items(&out);
     crate::waves::tag(&mut items, &app.waves.lines);
     let groups = group_reasons(&out);

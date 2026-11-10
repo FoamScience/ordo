@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use std::process::Command;
 
-use ordo::model::{Change, Input, Options};
+use ordo_diff::model::{Change, Input, Options};
 
 /// Whether an environment switch — `UPDATE_GOLDEN`, `UPDATE_CATALOG`,
 /// `ORDO_CORPUS_REQUIRED` — is actually on. The `UPDATE_*` ones rewrite the

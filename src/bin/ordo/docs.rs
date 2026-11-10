@@ -53,7 +53,7 @@ fn cell(s: &str) -> String {
 }
 
 fn langs() -> Vec<&'static str> {
-    ordo::languages().into_iter().map(|(n, _)| n).collect()
+    ordo_diff::languages().into_iter().map(|(n, _)| n).collect()
 }
 
 /// The `| | vim | vscode |` table: one row per action, grouped by the same
@@ -111,7 +111,7 @@ fn keys_table() -> String {
 /// when this table was written by hand.
 fn members_table() -> String {
     let mut groups: Vec<(Vec<&'static str>, &'static [&'static str])> = vec![];
-    for (name, members) in ordo::languages() {
+    for (name, members) in ordo_diff::languages() {
         if members.is_empty() {
             continue;
         }
@@ -325,7 +325,7 @@ fn rule_table(conditions: bool) -> String {
 /// and the match is exhaustive, so a new container kind cannot be added
 /// without this table gaining a row.
 fn container_kinds_table() -> String {
-    use ordo::model::ContainerKind::{self, *};
+    use ordo_diff::model::ContainerKind::{self, *};
     const ALL: &[ContainerKind] = ContainerKind::ALL;
     let describe = |k: ContainerKind| -> (&'static str, &'static str) {
         match k {
@@ -479,7 +479,7 @@ fn build_catalog_json() -> (String, Vec<String>) {
     #[derive(serde::Serialize)]
     struct Compiled {
         name: String,
-        rules: Vec<ordo::model::Rule>,
+        rules: Vec<ordo_diff::model::Rule>,
     }
     let mut out: Vec<Compiled> = vec![];
     let mut problems = vec![];
@@ -528,7 +528,7 @@ fn the_compiled_catalog_matches_the_toml_it_is_built_from() {
 /// exactly like a construct nobody writes.
 #[test]
 fn every_catalog_rule_compiles_for_the_language_it_names() {
-    let engine = ordo::rules::Rules::with_catalog(ordo::catalog::rules(), &[]);
+    let engine = ordo_diff::rules::Rules::with_catalog(ordo_diff::catalog::rules(), &[]);
     assert!(
         engine.catalog_problems.is_empty(),
         "{:?}",
@@ -536,9 +536,9 @@ fn every_catalog_rule_compiles_for_the_language_it_names() {
     );
     assert!(engine.problems.is_empty(), "{:?}", engine.problems);
     assert!(
-        ordo::catalog::problem().is_none(),
+        ordo_diff::catalog::problem().is_none(),
         "{:?}",
-        ordo::catalog::problem()
+        ordo_diff::catalog::problem()
     );
 }
 
@@ -570,7 +570,7 @@ fn generated_blocks_match_the_code_that_owns_them() {
     }
     assert!(
         stale.is_empty(),
-        "generated doc blocks are stale in {stale:?} — run `UPDATE_DOCS=1 cargo test`"
+        "generated doc blocks are stale in {stale:?} — run `UPDATE_DOCS=1 cargo test --features web`"
     );
 }
 
@@ -599,7 +599,8 @@ fn when_accepts(field: &str) -> bool {
         serde_json::json!([]),
         serde_json::json!("import"),
     ] {
-        if let Ok(w) = serde_json::from_value::<ordo::model::When>(serde_json::json!({ field: v }))
+        if let Ok(w) =
+            serde_json::from_value::<ordo_diff::model::When>(serde_json::json!({ field: v }))
         {
             if w.unknown.is_empty() {
                 return true;

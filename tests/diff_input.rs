@@ -2,7 +2,7 @@
 //! degradation when a diff can't be applied.
 mod fixture;
 use fixture::run_json;
-use ordo::model::SymbolChange;
+use ordo_diff::model::SymbolChange;
 
 fn run_pretty(v: serde_json::Value) -> String {
     serde_json::to_string_pretty(&run_json(v)).unwrap()
@@ -140,7 +140,7 @@ fn a_reconstructed_old_side_reaches_the_ledger() {
     let by_content = run_json(serde_json::json!({
         "changes": [{ "path": "a.py", "old": old, "new": new }]
     }));
-    let names = |o: &ordo::model::Output| -> Vec<(String, SymbolChange)> {
+    let names = |o: &ordo_diff::model::Output| -> Vec<(String, SymbolChange)> {
         o.ledger
             .iter()
             .map(|l| (l.name.clone(), l.change))

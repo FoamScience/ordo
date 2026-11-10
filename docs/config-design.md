@@ -10,8 +10,8 @@ others:
 | surface | declared in | read by | generated from |
 | --- | --- | --- | --- |
 | `~/.config/ordo/ordo.toml` (`preset`, `theme`, `[binds]`, `[theme]` roles) | `KeyConfig`, a hand-rolled line parser (`parse_key_config`) | `ordo` | `init_config`, hand-written prose + two tables (`keymap`, `THEME_ROLES`) |
-| `rules.toml` / presets | `ordo::model::Rule` + `RuleToml` (real TOML since P21) | `ordo` | nothing — `docs/rules.md` is hand-kept |
-| engine `Options` (`strategy`, `cross_file`, …) | `ordo::model::Options`, serde | `ordo-engine order --json`, `ordo` | `schema/v2.json`, hand-kept |
+| `rules.toml` / presets | `ordo_diff::model::Rule` + `RuleToml` (real TOML since P21) | `ordo` | nothing — `docs/rules.md` is hand-kept |
+| engine `Options` (`strategy`, `cross_file`, …) | `ordo_diff::model::Options`, serde | `ordo-engine order --json`, `ordo` | `schema/v2.json`, hand-kept |
 
 And a fourth that isn't configurable at all: the engine's tuning constants —
 `LARGE_LINES = 60`, `DEEP_NESTING = 4`, `MANY_PARAMS = 6` (`extract.rs`),
@@ -87,7 +87,7 @@ struct OrdoConfig {
     colors: BTreeMap<String, String>,
     /// What the engine is asked for. Same fields as `options` in `ordo-engine order --json`.
     #[serde(default)]
-    engine: ordo::model::Options,
+    engine: ordo_diff::model::Options,
 }
 ```
 
@@ -95,7 +95,7 @@ struct OrdoConfig {
   breaking rename. For one release the loader accepts a `[theme]` table, uses it,
   and reports `` `[theme]` is now `[colors]` `` as a problem — the same channel
   `:rules` uses.
-- `[engine]` is `ordo::model::Options` **itself**, not a copy — one struct, one set of
+- `[engine]` is `ordo_diff::model::Options` **itself**, not a copy — one struct, one set of
   docs, the same names as the JSON API. `rules` is skipped in the file
   (`#[serde(skip)]` on the config side, or documented as "from rules.toml"); rules
   keep their own files and their own `include`/`disable` layering.

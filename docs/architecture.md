@@ -4,7 +4,7 @@ Where the seams are, for someone changing the code. The other docs describe
 what ordo does; this one says where each thing lives and what it may depend on.
 
 The one rule that shapes everything else: **the engine is a function of its
-arguments.** `ordo::run` takes an `Input` and returns an `Output`. It shells to
+arguments.** `ordo_diff::run` takes an `Input` and returns an `Output`. It shells to
 nothing, reads no files, and knows nothing about git. Everything that touches a
 repository, a config file or a terminal lives in the client.
 
@@ -87,5 +87,5 @@ fourth copy of something is tempting.
   you if you miss one.
 - **Something derived from a repository** → the client. If the engine would
   have to shell out to know it, it belongs on the other side of the seam.
-- **A number in a doc** → generate it. `UPDATE_DOCS=1 cargo test --bin ordo
+- **A number in a doc** → generate it. `UPDATE_DOCS=1 cargo test --features web --bin ordo
   docs::` rewrites every generated block.

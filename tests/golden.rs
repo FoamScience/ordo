@@ -10,8 +10,8 @@ use common::update_requested;
 fn run_case(dir: &Path) {
     let input = fs::read_to_string(dir.join("input.json"))
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
-    let inp: ordo::model::Input = serde_json::from_str(&input).expect("parse input.json");
-    let got = serde_json::to_string_pretty(&ordo::run(inp)).unwrap();
+    let inp: ordo_diff::model::Input = serde_json::from_str(&input).expect("parse input.json");
+    let got = serde_json::to_string_pretty(&ordo_diff::run(inp)).unwrap();
     let exp_path = dir.join("expected.json");
     if update_requested("UPDATE_GOLDEN") {
         fs::write(&exp_path, format!("{got}\n")).unwrap();

@@ -5,7 +5,7 @@
 //! `when.rules` was declared carrying the description of that very output field.
 //! Both directions are checked here, so the next drift fails a test rather than
 //! reaching a consumer.
-use ordo::model::{Input, When};
+use ordo_diff::model::{Input, When};
 use serde_json::Value;
 
 fn schema() -> Value {
@@ -122,10 +122,10 @@ fn the_schema_declares_everything_the_engine_emits() {
     };
 
     for out in [
-        serde_json::to_value(ordo::run(rich())).expect("output serializes"),
-        serde_json::to_value(ordo::run(advisory())).expect("output serializes"),
-        serde_json::to_value(ordo::run(dropped())).expect("output serializes"),
-        serde_json::to_value(ordo::run(same_edit())).expect("output serializes"),
+        serde_json::to_value(ordo_diff::run(rich())).expect("output serializes"),
+        serde_json::to_value(ordo_diff::run(advisory())).expect("output serializes"),
+        serde_json::to_value(ordo_diff::run(dropped())).expect("output serializes"),
+        serde_json::to_value(ordo_diff::run(same_edit())).expect("output serializes"),
     ] {
         check("", &out);
         for f in out["files"].as_array().expect("files") {
@@ -170,7 +170,7 @@ fn the_schema_declares_everything_the_engine_emits() {
 /// it would pass by emitting nothing.
 #[test]
 fn the_fixture_reaches_the_optional_output_fields() {
-    let out = serde_json::to_value(ordo::run(rich())).expect("output serializes");
+    let out = serde_json::to_value(ordo_diff::run(rich())).expect("output serializes");
     let hunks: Vec<&Value> = out["files"]
         .as_array()
         .expect("files")
@@ -188,7 +188,7 @@ fn the_fixture_reaches_the_optional_output_fields() {
 
     // the other two fixtures own the paths this one cannot reach; without them
     // the schema check walks those objects zero times and passes on nothing
-    let adv = serde_json::to_value(ordo::run(advisory())).expect("serializes");
+    let adv = serde_json::to_value(ordo_diff::run(advisory())).expect("serializes");
     assert!(
         adv["files"]
             .as_array()
@@ -205,7 +205,7 @@ fn the_fixture_reaches_the_optional_output_fields() {
                             && f.get("original_level").is_some()))))),
         "advisory fixture carries no re-levelled catalog finding with a row: {adv}"
     );
-    let drp = serde_json::to_value(ordo::run(dropped())).expect("serializes");
+    let drp = serde_json::to_value(ordo_diff::run(dropped())).expect("serializes");
     assert!(
         drp["files"]
             .as_array()
@@ -214,7 +214,7 @@ fn the_fixture_reaches_the_optional_output_fields() {
             .any(|f| f.get("dropped").is_some()),
         "dropped fixture drops no hunk: {drp}"
     );
-    let same = serde_json::to_value(ordo::run(same_edit())).expect("serializes");
+    let same = serde_json::to_value(ordo_diff::run(same_edit())).expect("serializes");
     assert!(
         same["groups"]
             .as_array()
@@ -275,8 +275,8 @@ fn every_container_kind_is_declared_in_the_schema() {
             .pointer(path)
             .and_then(|v| v.as_array())
             .unwrap_or_else(|| panic!("schema has no enum at {path}"));
-        for kind in ordo::model::ContainerKind::ALL {
-            if skip_definition && *kind == ordo::model::ContainerKind::Definition {
+        for kind in ordo_diff::model::ContainerKind::ALL {
+            if skip_definition && *kind == ordo_diff::model::ContainerKind::Definition {
                 continue;
             }
             let name = serde_json::to_value(kind).expect("kind serialises");

@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ordo::refine::{Refined, Refiner};
+use ordo_diff::refine::{Refined, Refiner};
 use serde::Deserialize;
 
 mod common;

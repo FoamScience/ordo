@@ -14,7 +14,7 @@
 //! switched off) silently replaces the baseline with its output.
 //!
 //! Opt-in on `$ORDO_CORPUS`, like `tests/corpus.rs`.
-use ordo::model::FindingSource;
+use ordo_diff::model::FindingSource;
 use std::path::Path;
 
 mod common;
@@ -36,7 +36,7 @@ fn sweep(dir: &Path, repo: &Repo, out: &mut Vec<String>) {
         let Some((_, input)) = commit_input(dir, sha) else {
             continue;
         };
-        for f in &ordo::run(input).files {
+        for f in &ordo_diff::run(input).files {
             for h in &f.hunks {
                 for hit in h
                     .findings

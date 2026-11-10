@@ -13,7 +13,7 @@
 //! These were written out again in roughly eighteen files, in five spellings
 //! that all meant the same thing.
 #![allow(dead_code)]
-use ordo::model::{HunkOut, Input, Output};
+use ordo_diff::model::{HunkOut, Input, Output};
 
 /// One changed file, as the engine takes it.
 pub fn input(path: &str, old: &str, new: &str) -> Input {
@@ -25,12 +25,12 @@ pub fn input(path: &str, old: &str, new: &str) -> Input {
 
 /// Run a hand-written `Input` json value.
 pub fn run_json(v: serde_json::Value) -> Output {
-    ordo::run(serde_json::from_value::<Input>(v).expect("fixture input parses"))
+    ordo_diff::run(serde_json::from_value::<Input>(v).expect("fixture input parses"))
 }
 
 /// Run a single changed file.
 pub fn run_file(path: &str, old: &str, new: &str) -> Output {
-    ordo::run(input(path, old, new))
+    ordo_diff::run(input(path, old, new))
 }
 
 /// Every hunk of a single changed file, in engine order.
