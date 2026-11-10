@@ -38,6 +38,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # tree-sitter-scss passes gcc's -Wno-unused-parameter to every compiler,
+      # and msvc's cl rejects it; clang-cl takes it
+      CC_x86_64_pc_windows_msvc: clang-cl
     steps:
       # goldens and generated doc blocks are compared byte for byte
       - run: git config --global core.autocrlf false
