@@ -2514,6 +2514,14 @@ fn fill_details(
         pick.into_iter().map(|i| m[i].clone()).collect::<Vec<_>>()
     };
     let old_ix = by_row(&old_members);
+    let (old_lines, new_lines): (Vec<&str>, Vec<&str>) =
+        (old.unwrap_or("").lines().collect(), new.lines().collect());
+    let side_text = |lines: &[&str], [r0, r1]: [usize; 2]| -> String {
+        (r0 >= 1 && r0 <= r1)
+            .then(|| lines.get(r0 - 1..r1.min(lines.len())))
+            .flatten()
+            .map_or(String::new(), |ls| ls.join("\n"))
+    };
     // read lazily: only a hunk that adds a definition beside other lines needs
     // to know which of its members sit inside it
     let mut new_facts: Option<(Vec<extract::MemberRow>, Vec<usize>, Vec<extract::DefSpan>)> = None;
@@ -2546,6 +2554,25 @@ fn fill_details(
             };
             let mut members = on_rows(&old_members, &old_ix, h.old_range);
             members.retain(|(row, n, ..)| !inside(&gone, (*row, n)));
+            // Likewise a call the hunk took out whole took its arguments with
+            // it: "removes dim, tags from gmsh.model.addPhysicalGroup" under a
+            // hunk that no longer makes the call reads as an edit of it.
+            if members.iter().any(|(.., c)| c.is_some()) {
+                let (old_text, new_text) = (
+                    side_text(&old_lines, h.old_range),
+                    side_text(&new_lines, h.new_range),
+                );
+                members.retain(|(.., container)| {
+                    let Some(callee) = container
+                        .as_deref()
+                        .map(|c| c.split('(').next().unwrap_or(c))
+                    else {
+                        return true;
+                    };
+                    !extract::makes_call(&old_text, callee)
+                        || extract::makes_call(&new_text, callee)
+                });
+            }
             let mut arrived: Cow<[(String, String, Option<String>)]> = Cow::Borrowed(&sem.members);
             if h.old_range[0] <= h.old_range[1] && !sem.members.is_empty() {
                 let (new_members, new_ix, new_defs) = new_facts.get_or_insert_with(|| {

@@ -843,6 +843,63 @@ fn a_removed_line_that_names_no_new_def_keeps_the_edit_whole() {
 }
 
 #[test]
+fn a_loop_replaced_by_a_call_names_both() {
+    // the loop's calls went with it: their keyword arguments are not what the
+    // hunk removed
+    let old = "def build(names, dim):\n    init()\n    found = []\n    for name in names:\n        tags = lookup(name)\n        add_group(dim=dim, tags=tags, name=name)\n        found.extend(tags)\n    finish(found)\n";
+    let new = "def build(names, dim):\n    init()\n    found = add_groups(names, dim)\n    finish(found)\n";
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    let h = &out.files[0].hunks[0];
+    assert_eq!(
+        h.rationale,
+        "replaces a for loop with a call to add_groups in build"
+    );
+    assert!(h.details.is_empty(), "{:?}", h.details);
+}
+
+#[test]
+fn statements_replaced_by_a_call_without_a_loop_are_no_extraction() {
+    // debug lines swapped for one log call: several statements became a call,
+    // but nothing was done in place that is now done elsewhere
+    let old = "def build(names):\n    init()\n    print(names)\n    print(len(names))\n    finish(names)\n";
+    let new = "def build(names):\n    init()\n    logger.debug(names)\n    finish(names)\n";
+    let rats =
+        rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    assert!(!rats[0].starts_with("replaces"), "{rats:?}");
+}
+
+#[test]
+fn a_call_inside_a_longer_name_is_not_the_same_call() {
+    // `padd(` is not a call to `add`: the loop still counts as replaced
+    let old = "def build(xs):\n    out = []\n    for x in xs:\n        out.append(padd(x))\n    finish(out)\n";
+    let new = "def build(xs):\n    out = add(xs)\n    finish(out)\n";
+    let rats =
+        rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    assert_eq!(
+        rats,
+        vec!["replaces a for loop with a call to add in build"]
+    );
+}
+
+#[test]
+fn an_edited_call_keeps_its_argument_detail() {
+    // the call is still made: dropping its argument is the change
+    let old = "def build(dim):\n    add_group(dim=dim, name=\"a\")\n";
+    let new = "def build(dim):\n    add_group(dim=dim)\n";
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    assert!(
+        out.files[0].hunks[0]
+            .details
+            .iter()
+            .any(|d| d.starts_with("removes name from add_group")),
+        "{:?}",
+        out.files[0].hunks[0].details
+    );
+}
+
+#[test]
 fn placeholder_defs_suppressed() {
     // `_`-bound / anonymous closures carry no navigational signal → dropped from wording.
     let rats = rationales(serde_json::json!({ "changes": [{

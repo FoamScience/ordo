@@ -1087,6 +1087,7 @@ fn intent_noun(i: &Intent, nm: &str) -> String {
         Intent::Async { added: true, .. } => format!("an async function in {nm}"),
         Intent::Async { .. } => format!("a function made synchronous in {nm}"),
         Intent::SwapsCall { new, .. } => format!("a call swapped for {new} in {nm}"),
+        Intent::ReplacedByCall { call, .. } => format!("inline code replaced by {call} in {nm}"),
     }
 }
 

@@ -329,11 +329,25 @@ fn leading_insertion_cut(
 
 /// `name` appears in `line` as a whole identifier.
 fn names_word(line: &str, name: &str) -> bool {
-    let ident = |c: char| c.is_alphanumeric() || c == '_';
-    line.match_indices(name).any(|(i, _)| {
-        !line[..i].chars().next_back().is_some_and(ident)
-            && !line[i + name.len()..].chars().next().is_some_and(ident)
-    })
+    word_starts(line, name).any(|end| !line[end..].chars().next().is_some_and(ident_char))
+}
+
+/// `text` makes a call to `callee` — as a whole identifier, however the call
+/// is spaced before its parenthesis.
+pub(crate) fn makes_call(text: &str, callee: &str) -> bool {
+    word_starts(text, callee).any(|end| text[end..].trim_start().starts_with('('))
+}
+
+/// Where each occurrence of `word` in `text` that no identifier character
+/// precedes ends.
+fn word_starts<'a>(text: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    text.match_indices(word)
+        .filter(|(i, _)| !text[..*i].chars().next_back().is_some_and(ident_char))
+        .map(move |(i, _)| i + word.len())
+}
+
+fn ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// Cut one hunk into consecutive pieces at `cuts` (0-based rows, all inside the

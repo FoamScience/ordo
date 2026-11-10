@@ -2250,12 +2250,18 @@ fn defined_elsewhere<'a>(
 // add_argument(...)") where "uses action, add_argument, help" would only list
 // the identifiers
 fn scope_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
-    // a `let … else` binds what its guard tests: the guard is the point
+    // a `let … else` binds what its guard tests: the guard is the point; and
+    // the call that replaced inline code is the point of whatever it binds
     let guard = s
         .enclosing
         .as_ref()
         .zip(s.intent.as_ref())
-        .filter(|(_, i)| matches!(i, crate::intent::Intent::Guard { .. }));
+        .filter(|(_, i)| {
+            matches!(
+                i,
+                crate::intent::Intent::Guard { .. } | crate::intent::Intent::ReplacedByCall { .. }
+            )
+        });
     guard
         .and_then(|(nm, i)| intent_phrase(i, &short_container(nm)))
         .or_else(|| binding_rationale(s, &ctx.symbols[my_file]))
@@ -2529,6 +2535,17 @@ fn intent_phrase(i: &crate::intent::Intent, nm: &str) -> Option<String> {
         }
         Intent::SwapsCall { old, new } if fits(old) && fits(new) => {
             format!("calls {new} instead of {old} in {nm}")
+        }
+        Intent::ReplacedByCall {
+            call,
+            construct,
+            lines,
+        } if fits(call) => {
+            let what = match construct {
+                Some(c) => format!("a {c}"),
+                None => format!("{lines} lines"),
+            };
+            format!("replaces {what} with a call to {call} in {nm}")
         }
         _ => return None,
     })
