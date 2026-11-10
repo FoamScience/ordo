@@ -131,8 +131,15 @@ fn changes_behaviour(i: &Intent) -> bool {
 
 /// What the whole change knows about names and lines, for the per-hunk checks.
 struct Evidence<'a> {
-    /// old name → new name, every rename in the change
+    /// old name → new name, every rename in the change that gives an old
+    /// name one new one: two files renaming `foo` differently say nothing
+    /// about which a reference elsewhere followed
     renames: HashMap<&'a str, &'a str>,
+    /// per file, old name → new name for the renames made in it, which its own
+    /// lines follow whatever another file did
+    renames_in: Vec<HashMap<&'a str, &'a str>>,
+    /// every distinct (old, new) rename in the change
+    rename_pairs: Vec<(&'a str, &'a str)>,
     moved: HashSet<&'a str>,
     /// per file, the definitions that left it (old side) and arrived in it
     /// (new side) from another file
@@ -218,10 +225,40 @@ pub(crate) fn summarize(
             .filter(|(_, c)| **c)
             .map(|(f, _)| f)
     };
+    let mut rename_pairs: Vec<(&str, &str)> = code_changes()
+        .flat_map(|c| c.rename.iter().map(|(n, o)| (o.as_str(), n.as_str())))
+        .collect();
+    rename_pairs.sort_unstable();
+    rename_pairs.dedup();
+    let mut renames: HashMap<&str, Option<&str>> = HashMap::new();
+    for &(o, n) in &rename_pairs {
+        renames
+            .entry(o)
+            .and_modify(|e| {
+                if *e != Some(n) {
+                    *e = None;
+                }
+            })
+            .or_insert(Some(n));
+    }
     let mut ev = Evidence {
-        renames: code_changes()
-            .flat_map(|c| c.rename.iter().map(|(n, o)| (o.as_str(), n.as_str())))
+        renames: renames
+            .into_iter()
+            .filter_map(|(o, n)| Some((o, n?)))
             .collect(),
+        renames_in: changed
+            .iter()
+            .zip(&code)
+            .map(|(c, code)| match code {
+                true => c
+                    .rename
+                    .iter()
+                    .map(|(n, o)| (o.as_str(), n.as_str()))
+                    .collect(),
+                false => HashMap::new(),
+            })
+            .collect(),
+        rename_pairs,
         moved: code_changes()
             .flat_map(|c| {
                 c.moved_in.keys().map(String::as_str).chain(
@@ -266,7 +303,7 @@ pub(crate) fn summarize(
             let (o, n): (Vec<String>, Vec<String>) = (
                 side(old, h.old_range)
                     .into_iter()
-                    .map(|l| ev.renamed(l))
+                    .map(|l| ev.renamed(fi, l))
                     .collect(),
                 side(new, h.new_range)
                     .into_iter()
@@ -341,7 +378,7 @@ pub(crate) fn summarize(
         _ => vec![],
     };
     let sentences = vec![
-        what(label, &files, &added, &ev),
+        what(label, &files, &added, &ev, &lines),
         why(verdict, &files, &exposed),
     ];
     Some(Summary {
@@ -429,9 +466,9 @@ impl Evidence<'_> {
             return Kind::Format;
         }
         if code
-            && !self.renames.is_empty()
+            && !self.rename_pairs.is_empty()
             && o.len() == n.len()
-            && o.iter().zip(&n).all(|(a, b)| self.renamed(a) == *b)
+            && o.iter().zip(&n).all(|(a, b)| self.renamed(fi, a) == *b)
         {
             return Kind::Rename;
         }
@@ -537,8 +574,7 @@ impl Evidence<'_> {
             let n = n.as_str();
             self.moved.contains(n)
                 || self.extracted.contains_key(n)
-                || self.renames.contains_key(n)
-                || self.renames.values().any(|v| *v == n)
+                || self.rename_pairs.iter().any(|(o, v)| *o == n || *v == n)
         };
         if !s.imports.is_empty()
             && s.imports
@@ -551,15 +587,23 @@ impl Evidence<'_> {
         }
     }
 
-    /// The line with every renamed identifier spelled its new way.
-    fn renamed(&self, line: &str) -> String {
-        if self.renames.is_empty() {
+    /// A line of file `fi` with every renamed identifier spelled its new way:
+    /// as that file renamed it, else as the change renamed it everywhere.
+    fn renamed(&self, fi: usize, line: &str) -> String {
+        let here = &self.renames_in[fi];
+        if self.renames.is_empty() && here.is_empty() {
             return line.to_string();
         }
         let mut out = String::with_capacity(line.len());
         let mut word = String::new();
         let flush = |word: &mut String, out: &mut String| {
-            out.push_str(self.renames.get(word.as_str()).copied().unwrap_or(word));
+            let w = word.as_str();
+            out.push_str(
+                here.get(w)
+                    .or_else(|| self.renames.get(w))
+                    .copied()
+                    .unwrap_or(w),
+            );
             word.clear();
         };
         // a string that spells the old name is text, not a reference
@@ -607,7 +651,8 @@ impl Evidence<'_> {
             |k, d| names[k].contains(d.name.as_str()),
             true,
         ) && n.iter().all(|l| elsewhere(&self.removed, l.to_string()))
-            && o.iter().all(|l| elsewhere(&self.added, self.renamed(l)))
+            && o.iter()
+                .all(|l| elsewhere(&self.added, self.renamed(fi, l)))
     }
 
     /// A hunk of nothing but definitions whose lines are the same on both
@@ -622,7 +667,8 @@ impl Evidence<'_> {
         o: &[&str],
         n: &[&str],
     ) -> bool {
-        o.iter().all(|l| self.added[fi].contains(&self.renamed(l)))
+        o.iter()
+            .all(|l| self.added[fi].contains(&self.renamed(fi, l)))
             && n.iter().all(|l| self.removed[fi].contains(*l))
             && {
                 let names = self.intact(fi, lines);
@@ -763,7 +809,7 @@ impl Evidence<'_> {
         };
         !into.is_empty()
             && !o.is_empty()
-            && o.iter().all(|l| holds(self.renamed(l)))
+            && o.iter().all(|l| holds(self.renamed(fi, l)))
             && n.iter().all(|l| into.iter().any(|nm| named(l, nm)))
     }
 }
@@ -1107,7 +1153,13 @@ fn tests_clause(files: &[Facts]) -> String {
 }
 
 /// The first sentence: what the label rests on.
-fn what(label: Label, files: &[Facts], added: &[&str], ev: &Evidence) -> String {
+fn what(
+    label: Label,
+    files: &[Facts],
+    added: &[&str],
+    ev: &Evidence,
+    lines: &[[Vec<&str>; 2]],
+) -> String {
     match label {
         Label::Docs => format!(
             "Edits documentation and comments in {}.",
@@ -1123,12 +1175,11 @@ fn what(label: Label, files: &[Facts], added: &[&str], ev: &Evidence) -> String 
         ),
         Label::Refactor => {
             let mut parts = vec![];
-            let mut renames: Vec<String> = ev
-                .renames
+            let renames: Vec<String> = ev
+                .rename_pairs
                 .iter()
                 .map(|(o, n)| format!("{o} → {n}"))
                 .collect();
-            renames.sort();
             if !renames.is_empty() {
                 parts.push(format!("renames {}", list(&renames)));
             }
@@ -1137,11 +1188,12 @@ fn what(label: Label, files: &[Facts], added: &[&str], ev: &Evidence) -> String 
             for (f, (k, s)) in code.flat_map(|f| f.hunks.iter().map(move |h| (f, h))) {
                 match (k, &s.intent) {
                     (Kind::Reorder, _) => {
-                        let intact = ev.intact[f.fi].get();
+                        let [old, new] = &lines[f.fi];
+                        let intact = ev.intact(f.fi, [old, new]);
                         reordered.extend(
                             s.defines
                                 .iter()
-                                .filter(|d| intact.is_some_and(|set| set.contains(*d)))
+                                .filter(|d| intact.contains(*d))
                                 .map(String::as_str),
                         )
                     }
