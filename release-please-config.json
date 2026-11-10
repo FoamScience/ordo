@@ -5,6 +5,7 @@
   "packages": {
     ".": {
       "release-type": "rust",
+      "bump-minor-pre-major": true,
       "package-name": "ordo-diff",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
