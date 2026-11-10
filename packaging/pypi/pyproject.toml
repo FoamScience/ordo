@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ordo"
+name = "ordo-diff"
 version = "0.5.0"
-description = "Comprehension-optimized ordering of code-change hunks — thin wrapper over the ordo-engine binary"
+description = "Review a code change in reading order: definitions before their uses"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -14,7 +14,13 @@ license = { text = "MIT" }
 Homepage = "https://github.com/FoamScience/ordo"
 
 [project.scripts]
-ordo-engine = "ordo.__main__:main"
+ordo = "ordo_diff.__main__:ordo"
+ordo-engine = "ordo_diff.__main__:engine"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ordo"]
+packages = ["ordo_diff"]
+# the release workflow drops the platform's binaries here before building,
+# with ORDO_WHEEL_PLATFORM naming the platform tag they are for
+artifacts = ["ordo_diff/vendor/*"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
