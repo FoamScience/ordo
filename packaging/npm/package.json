@@ -1,13 +1,24 @@
 {
   "name": "ordo-diff",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Review a code change in reading order: definitions before their uses",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/FoamScience/ordo.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FoamScience/ordo.git"
+  },
   "homepage": "https://github.com/FoamScience/ordo",
   "main": "index.js",
-  "bin": { "ordo": "bin/ordo.js", "ordo-engine": "bin/ordo-engine.js" },
-  "files": ["index.js", "bin/"],
-  "engines": { "node": ">=16" },
+  "bin": {
+    "ordo": "bin/ordo.js",
+    "ordo-engine": "bin/ordo-engine.js"
+  },
+  "files": [
+    "index.js",
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
   "optionalDependencies": {}
 }
