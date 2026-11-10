@@ -1081,10 +1081,28 @@ fn default_param(
     None
 }
 
-/// The nodes of one of `kinds` overlapping rows `r0..=r1`.
+/// The smallest node holding every row `r0..=r1`. Whatever lies on those rows
+/// is it, one of its ancestors or one of its descendants, so a walk for them
+/// starts here rather than expanding every top-level node once per hunk.
+fn holding<'t>(root: Node<'t>, (r0, r1): (usize, usize)) -> Node<'t> {
+    root.descendant_for_point_range(Point::new(r0, 0), Point::new(r1 + 1, 0))
+        .unwrap_or(root)
+}
+
+/// The nodes of one of `kinds` overlapping rows `r0..=r1`, outermost first.
 fn overlapping<'t>(root: Node<'t>, (r0, r1): (usize, usize), kinds: &[&str]) -> Vec<Node<'t>> {
-    let mut out = vec![];
-    let mut stack = vec![root];
+    let start = holding(root, (r0, r1));
+    let mut above = vec![];
+    let mut at = start.parent();
+    while let Some(n) = at {
+        if kinds.contains(&n.kind()) {
+            above.push(n);
+        }
+        at = n.parent();
+    }
+    above.reverse();
+    let mut out = above;
+    let mut stack = vec![start];
     while let Some(n) = stack.pop() {
         if last_row(n) < r0 || n.start_position().row > r1 {
             continue;
@@ -1136,8 +1154,15 @@ fn statements<'t>(sp: &Spelling, n: Node<'t>) -> Vec<Node<'t>> {
 /// `None` when a syntax error, or a token of something larger, lies there
 /// too: the rows are then not a run of whole statements.
 fn spanned<'t>(root: Node<'t>, (r0, r1): (usize, usize)) -> Option<Vec<Node<'t>>> {
+    let within = |n: Node| r0 <= n.start_position().row && last_row(n) <= r1;
+    // when the holding node already lies on the rows, the outermost such
+    // ancestor is the one statement they hold
+    let mut start = holding(root, (r0, r1));
+    while let Some(p) = start.parent().filter(|p| p.id() != root.id() && within(*p)) {
+        start = p;
+    }
     let mut out = vec![];
-    let mut stack = vec![root];
+    let mut stack = vec![start];
     while let Some(n) = stack.pop() {
         let (a, b) = (n.start_position().row, last_row(n));
         if b < r0 || a > r1 {

@@ -296,6 +296,7 @@ pub(crate) fn summarize(
         sides: changes.iter().map(|_| OnceCell::new()).collect(),
         intact: changes.iter().map(|_| OnceCell::new()).collect(),
     };
+    let sources: HashSet<&str> = ev.extracted.values().copied().collect();
     for (fi, f) in hunks.iter().enumerate() {
         let [old, new] = &lines[fi];
         let (mut rm, mut ad) = (HashSet::new(), HashSet::new());
@@ -310,14 +311,19 @@ pub(crate) fn summarize(
                     .map(str::to_string)
                     .collect(),
             );
-            for (nm, from) in &ev.extracted {
-                if s.defines.iter().any(|d| d == nm) {
+            for d in &s.defines {
+                if let Some((nm, _)) = ev.extracted.get_key_value(d.as_str()) {
                     ev.extracted_lines
                         .entry((fi, nm))
                         .or_default()
                         .extend(n.iter().cloned());
                 }
-                if s.enclosing.as_deref().is_some_and(|e| inside(e, from)) {
+            }
+            // `inside`: the enclosing name itself, or one of its qualified tails
+            if let Some(e) = s.enclosing.as_deref() {
+                let tails =
+                    std::iter::once(e).chain(e.match_indices('.').map(|(i, _)| &e[i + 1..]));
+                for from in tails.filter_map(|t| sources.get(t)) {
                     ev.source_lines
                         .entry((fi, from))
                         .or_default()
@@ -517,10 +523,25 @@ impl Evidence<'_> {
             let Some(spec) = lang::for_path(&self.changes[fi].path) else {
                 continue;
             };
+            if c.rename.is_empty() {
+                continue;
+            }
+            let new_lines = &lines[fi][1];
+            let defs = &self.sides(fi)[1].defs;
+            let mut by_name: HashMap<&str, Vec<&Def>> = HashMap::new();
+            for d in defs {
+                by_name.entry(d.name.as_str()).or_default().push(d);
+            }
+            // the names on a line that exports: what a js/ts definition needs
+            // to be reachable from outside its module
+            let exported: HashSet<&str> = new_lines
+                .iter()
+                .filter(|l| has_word(l, "export") || l.contains("module.exports"))
+                .flat_map(|l| words(l))
+                .collect();
             for (new, old) in &c.rename {
-                let new_lines = &lines[fi][1];
-                let defs = &self.sides(fi)[1].defs;
-                let reachable = defs.iter().filter(|d| d.name == *new).any(|d| {
+                let named = by_name.get(new.as_str()).map_or(&[][..], Vec::as_slice);
+                let reachable = named.iter().any(|&d| {
                     // a rust trait's items are as public as the trait
                     let d = match d.parent.map(|p| &defs[p]) {
                         Some(t) if spec.name == "rust" && t.kind == "trait_item" => t,
@@ -533,7 +554,7 @@ impl Evidence<'_> {
                         .iter()
                         .position(|l| has_word(l, &d.name))
                         .map_or(span.len(), |i| i + 1);
-                    !private(spec.name, &d.name, d, &span[..end].join(" "), new_lines)
+                    !private(spec.name, &d.name, d, &span[..end].join(" "), &exported)
                 });
                 if reachable {
                     out.push(format!("{old} → {new}"));
@@ -913,20 +934,42 @@ fn constants<'a>(
             _ => None,
         })
         .collect();
+    if named.is_empty() {
+        return named;
+    }
+    // every value each name is bound to, from one pass over the lines: a
+    // line can only bind a name it holds as a whole word
+    let mut bound: HashMap<&str, Vec<&str>> = HashMap::new();
+    for line in changes
+        .iter()
+        .zip(code)
+        .filter(|(_, c)| **c)
+        .filter_map(|(c, _)| c.new.as_deref())
+        .flat_map(str::lines)
+    {
+        let mut words: Vec<&str> = words(line).filter(|w| named.contains_key(w)).collect();
+        words.sort_unstable();
+        words.dedup();
+        for w in words {
+            if let Some(v) = binding(line, w) {
+                bound.entry(w).or_default().push(v);
+            }
+        }
+    }
     named
         .into_iter()
         .filter(|(name, literal)| {
-            let mut bound = changes
-                .iter()
-                .zip(code)
-                .filter(|(_, c)| **c)
-                .filter_map(|(c, _)| c.new.as_deref())
-                .flat_map(str::lines)
-                .filter_map(|l| binding(l, name))
-                .peekable();
-            bound.peek().is_some() && bound.all(|v| v == *literal)
+            bound
+                .get(name)
+                .is_some_and(|vs| vs.iter().all(|v| v == literal))
         })
         .collect()
+}
+
+/// The identifiers in `line`, as `binding` and `has_word` delimit them.
+fn words(line: &str) -> impl Iterator<Item = &str> {
+    line.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .filter(|w| !w.is_empty())
 }
 
 /// A definition whose place among its siblings nothing reads: items the
@@ -956,21 +999,16 @@ fn order_free(lang: &str, d: &Def) -> bool {
 
 /// Marked, by convention or by keyword, as out of reach of callers outside
 /// its file, module or crate; a local definition is out of reach of any.
-fn private(lang: &str, name: &str, d: &Def, head: &str, lines: &[&str]) -> bool {
+fn private(lang: &str, name: &str, d: &Def, head: &str, exported: &HashSet<&str>) -> bool {
     if d.local || name.starts_with(['_', '#']) {
         return true;
     }
-    let exported = || {
-        lines
-            .iter()
-            .any(|l| has_word(l, name) && (has_word(l, "export") || l.contains("module.exports")))
-    };
     match lang {
         "rust" => !has_word(head, "pub") || head.contains("pub("),
         "go" => name.starts_with(char::is_lowercase),
         "c" | "cpp" => has_word(head, "static") && !d.nested,
         "lua" => has_word(head, "local"),
-        "javascript" | "typescript" | "tsx" if !d.nested => !exported(),
+        "javascript" | "typescript" | "tsx" if !d.nested => !exported.contains(name),
         _ => has_word(head, "private"),
     }
 }
