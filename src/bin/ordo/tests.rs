@@ -1553,6 +1553,7 @@ fn test_app() -> App {
         group_reasons: HashMap::new(),
         mode: ViewMode::Hunks,
         symbol_ledger: vec![],
+        summary: None,
         notes: HashMap::new(),
         notes_path: None,
         comments: vec![],

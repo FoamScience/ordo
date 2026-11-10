@@ -267,6 +267,15 @@ fn the_review_reads_as_its_snapshot() {
         v["rules"]["catalog"], false,
         "--no-catalog reached the review"
     );
+    // the engine's verdict on the whole change reaches the client
+    assert!(
+        v["summary"]["label"].is_string()
+            && v["summary"]["sentences"]
+                .as_array()
+                .is_some_and(|s| s.len() == 2),
+        "{}",
+        v["summary"]
+    );
     let path = v["items"][0]["path"].as_str().unwrap().to_string();
     let f = s.get(&format!("/api/file?rev=HEAD&path={path}"));
     assert!(

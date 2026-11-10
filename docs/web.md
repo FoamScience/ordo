@@ -54,6 +54,9 @@ a hollow square is unread, a filled one read, a red or amber outline a finding. 
 selected hunk stays centred unless the thread runs out above or below it, and
 its dependencies are drawn as arcs off the thread — solid to what it needs,
 dashed to what needs it.
+Above it sits ordo's verdict on the whole change: what kind of change it is
+(refactor, fix candidate, feature, …), whether its behaviour is preserved, and
+the two sentences those rest on.
 
 The **reading column** in the middle is one hunk: where it is, what it does in
 a sentence with its names set as code, what it is grouped by, and the file

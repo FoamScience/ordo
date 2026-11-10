@@ -346,6 +346,7 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
     // the reviewer is in, against this run's own ledger
     app.group_reasons = groups;
     app.symbol_ledger = out.ledger.clone();
+    app.summary = out.summary.clone();
     let led = app.symbol_ledger.clone();
     set_mode(app, app.mode, &led);
     app.popup = None;

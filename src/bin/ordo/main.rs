@@ -946,6 +946,8 @@ struct LoadResult {
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
     notes: HashMap<u64, String>,
     notes_path: Option<PathBuf>,
+    /// the engine's one-line verdict on the whole change
+    summary: Option<ordo::model::Summary>,
     comments: Vec<LineComment>,
     comments_path: Option<PathBuf>,
     deltas: Vec<Delta>,
@@ -1139,6 +1141,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         groups,
         ledger,
         symbol_ledger: out.ledger.clone(),
+        summary: out.summary.clone(),
         notes,
         notes_path,
         comments,
@@ -1479,6 +1482,8 @@ struct App {
     symbol_ledger: Vec<ordo::model::LedgerEntry>,
     /// see `LoadResult::waves`
     waves: waves::Waves,
+    /// see `LoadResult::summary`
+    summary: Option<ordo::model::Summary>,
     /// group ids whose hunks are folded away under their header (`za` and
     /// friends); empty means everything is expanded
     collapsed: HashSet<String>,
@@ -2109,6 +2114,7 @@ impl Session {
             groups,
             ledger,
             symbol_ledger,
+            summary,
             notes,
             notes_path,
             comments,
@@ -2161,6 +2167,7 @@ impl Session {
             groups,
             mode: ViewMode::default(),
             symbol_ledger,
+            summary,
             waves,
             notes,
             notes_path,
