@@ -7,8 +7,8 @@
 use crate::extract::{self, DefFacts};
 use crate::lang;
 use crate::model::{Change, Consumer, FileOut, LedgerEntry, SymbolChange};
-use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 pub(crate) fn run(
     files: &mut [FileOut],
@@ -37,52 +37,65 @@ pub(crate) fn run(
 }
 
 fn check(files: &mut [FileOut], ix: &Index) {
-    let changes = ix.changes;
-    for (fi, c) in changes.iter().enumerate() {
-        let (Some(spec), Some(old), Some(new)) =
-            (spec_for(&c.path), c.old.as_deref(), c.new.as_deref())
-        else {
-            continue;
-        };
-        if old == new {
-            continue;
-        }
-        for (note, row) in enum_values_changed(spec, old, new) {
-            note_on(files, &c.path, None, (row, row), note);
-        }
-        let (olds, news) = (ix.old_defs(fi), ix.defs(fi));
-        for d in news.iter().filter(|d| {
-            d.is_abstract
-                && !olds
-                    .iter()
-                    .any(|o| o.is_abstract && o.name == d.name && o.owner == d.owner)
-        }) {
-            if let Some(note) = unimplemented_abstract(d, ix) {
-                note_on(files, &c.path, None, d.rows, note);
-            }
-        }
-        for (was, now) in pairs(olds, news) {
-            let site = Site {
-                path: &c.path,
-                name: &was.name,
-            };
-            for note in [
-                became_async(&site, was, now, ix),
-                getter_flipped(&site, was, now, ix),
-                positions_shifted(&site, was, now, ix),
-                keywords_dropped(&site, was, now, ix),
-                default_changed(&site, was, now, ix),
-                overrides_left(&site, was, now, ix),
-                handlers_missed(&site, was, now, ix),
-                guarantee_dropped(&site, was, now),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                note_on(files, &c.path, Some(was.rows), now.rows, note);
-            }
+    let notes = lang::par_map(0..ix.changes.len(), |fi| file_notes(fi, ix));
+    for (c, notes) in ix.changes.iter().zip(notes) {
+        for (was, now, note) in notes {
+            note_on(files, &c.path, was, now, note);
         }
     }
+}
+
+/// A note, with the old rows (when it has them) and the new rows it is about.
+type Note = (Option<(usize, usize)>, (usize, usize), String);
+
+/// What `check` says about file `fi`.
+fn file_notes(fi: usize, ix: &Index) -> Vec<Note> {
+    let mut out = vec![];
+    let c = &ix.changes[fi];
+    let (Some(spec), Some(old), Some(new)) =
+        (spec_for(&c.path), c.old.as_deref(), c.new.as_deref())
+    else {
+        return out;
+    };
+    if old == new {
+        return out;
+    }
+    for (note, row) in enum_values_changed(spec, old, new) {
+        out.push((None, (row, row), note));
+    }
+    let (olds, news) = (ix.old_defs(fi), ix.defs(fi));
+    for d in news.iter().filter(|d| {
+        d.is_abstract
+            && !olds
+                .iter()
+                .any(|o| o.is_abstract && o.name == d.name && o.owner == d.owner)
+    }) {
+        if let Some(note) = unimplemented_abstract(d, ix) {
+            out.push((None, d.rows, note));
+        }
+    }
+    for (was, now) in pairs(olds, news) {
+        let site = Site {
+            path: &c.path,
+            name: &was.name,
+        };
+        for note in [
+            became_async(&site, was, now, ix),
+            getter_flipped(&site, was, now, ix),
+            positions_shifted(&site, was, now, ix),
+            keywords_dropped(&site, was, now, ix),
+            default_changed(&site, was, now, ix),
+            overrides_left(&site, was, now, ix),
+            handlers_missed(&site, was, now, ix),
+            guarantee_dropped(&site, was, now),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            out.push((Some(was.rows), now.rows, note));
+        }
+    }
+    out
 }
 
 /// The languages these checks know the shapes of: async, properties, keyword
@@ -524,22 +537,22 @@ struct Caller {
 struct Index<'a> {
     changes: &'a [Change],
     /// (callee, through `self.`) → its calls
-    calls: OnceCell<HashMap<(String, bool), Vec<Caller>>>,
+    calls: OnceLock<HashMap<(String, bool), Vec<Caller>>>,
     /// every class, with its file
-    classes: OnceCell<Vec<(usize, extract::ClassFacts)>>,
+    classes: OnceLock<Vec<(usize, extract::ClassFacts)>>,
     /// per file, each side's callables
-    defs: Vec<OnceCell<Vec<DefFacts>>>,
-    old_defs: Vec<OnceCell<Vec<DefFacts>>>,
+    defs: Vec<OnceLock<Vec<DefFacts>>>,
+    old_defs: Vec<OnceLock<Vec<DefFacts>>>,
 }
 
 impl<'a> Index<'a> {
     fn new(changes: &'a [Change]) -> Self {
         Index {
             changes,
-            calls: OnceCell::new(),
-            classes: OnceCell::new(),
-            defs: changes.iter().map(|_| OnceCell::new()).collect(),
-            old_defs: changes.iter().map(|_| OnceCell::new()).collect(),
+            calls: OnceLock::new(),
+            classes: OnceLock::new(),
+            defs: changes.iter().map(|_| OnceLock::new()).collect(),
+            old_defs: changes.iter().map(|_| OnceLock::new()).collect(),
         }
     }
 
@@ -554,8 +567,7 @@ impl<'a> Index<'a> {
 
     fn calls(&self) -> &HashMap<(String, bool), Vec<Caller>> {
         self.calls.get_or_init(|| {
-            let mut out: HashMap<(String, bool), Vec<Caller>> = HashMap::new();
-            for (file, c, spec, new) in self.sources() {
+            let per_file = lang::par_map(self.sources(), |(file, c, spec, new)| {
                 let before: HashSet<(String, bool, String)> = c
                     .old
                     .as_deref()
@@ -563,15 +575,23 @@ impl<'a> Index<'a> {
                     .into_iter()
                     .map(|(n, r, k)| (n, r, k.text))
                     .collect();
-                for (name, recv, call) in extract::all_calls(spec, new) {
-                    let untouched = before.contains(&(name.clone(), recv, call.text.clone()));
-                    out.entry((name, recv)).or_default().push(Caller {
-                        file,
-                        at: format!("{}:L{}", c.path, call.row + 1),
-                        call,
-                        untouched,
-                    });
-                }
+                let calls = extract::all_calls(spec, new).into_iter();
+                calls
+                    .map(|(name, recv, call)| {
+                        let untouched = before.contains(&(name.clone(), recv, call.text.clone()));
+                        let caller = Caller {
+                            file,
+                            at: format!("{}:L{}", c.path, call.row + 1),
+                            call,
+                            untouched,
+                        };
+                        ((name, recv), caller)
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let mut out: HashMap<(String, bool), Vec<Caller>> = HashMap::new();
+            for (key, caller) in per_file.into_iter().flatten() {
+                out.entry(key).or_default().push(caller);
             }
             out
         })
@@ -599,12 +619,12 @@ impl<'a> Index<'a> {
     ) -> impl Iterator<Item = (usize, &'s extract::ClassFacts)> {
         self.classes
             .get_or_init(|| {
-                self.sources()
-                    .flat_map(|(i, _, spec, new)| {
-                        extract::class_facts(spec, new)
-                            .into_iter()
-                            .map(move |k| (i, k))
-                    })
+                let per_file = lang::par_map(self.sources(), |(i, _, spec, new)| {
+                    (i, extract::class_facts(spec, new))
+                });
+                per_file
+                    .into_iter()
+                    .flat_map(|(i, ks)| ks.into_iter().map(move |k| (i, k)))
                     .collect()
             })
             .iter()
