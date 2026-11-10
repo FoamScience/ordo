@@ -1414,11 +1414,64 @@ fn evict(c: &mut Vec<CacheEntry>) {
     }
 }
 
+/// `f` over every item, spread over the machine's cores, results in item
+/// order. Each worker takes the next item until none are left, starts from
+/// what this thread knows (see `seed`) and hands the trees it parsed back for
+/// the passes after.
+pub(crate) fn par_map<I: Send, T: Send>(
+    items: impl IntoIterator<Item = I>,
+    f: impl Fn(I) -> T + Sync,
+) -> Vec<T> {
+    let items: Vec<I> = items.into_iter().collect();
+    let n = items.len();
+    let workers = std::thread::available_parallelism()
+        .map_or(1, |p| p.get())
+        .min(n);
+    if workers <= 1 {
+        return items.into_iter().map(f).collect();
+    }
+    let queue = std::sync::Mutex::new(items.into_iter().enumerate());
+    let mut slots: Vec<Option<T>> = (0..n).map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let seed = seed(workers);
+                let (queue, f) = (&queue, &f);
+                scope.spawn(move || {
+                    adopt(seed);
+                    let mut done = vec![];
+                    loop {
+                        let next = queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .next();
+                        let Some((i, item)) = next else {
+                            break;
+                        };
+                        done.push((i, f(item)));
+                    }
+                    (done, take())
+                })
+            })
+            .collect();
+        for handle in handles {
+            let (done, state) = handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            for (i, t) in done {
+                slots[i] = Some(t);
+            }
+            adopt(state);
+        }
+    });
+    slots.into_iter().flatten().collect()
+}
+
 /// What one thread of a `run` has parsed and learned, for another to adopt:
 /// the cache and the shebang languages are per thread, and a worker that
 /// analyses some of the files must start from what the run already knows and
 /// hand back the trees it built.
-pub(crate) struct ThreadState {
+struct ThreadState {
     trees: Vec<CacheEntry>,
     shebangs: std::collections::HashMap<String, &'static LangSpec>,
     budget: Option<usize>,
@@ -1428,7 +1481,7 @@ pub(crate) struct ThreadState {
 /// languages, and an equal share of the cache budget, so the workers together
 /// hold no more trees than one thread would. Its trees stay here; a worker
 /// parses what it reads.
-pub(crate) fn seed(workers: usize) -> ThreadState {
+fn seed(workers: usize) -> ThreadState {
     ThreadState {
         trees: vec![],
         shebangs: SHEBANGS.with(|m| m.borrow().clone()),
@@ -1438,7 +1491,7 @@ pub(crate) fn seed(workers: usize) -> ThreadState {
 
 /// Take what another thread knew: its shebang languages, and its trees, most
 /// recently used last, under this thread's cache budget.
-pub(crate) fn adopt(state: ThreadState) {
+fn adopt(state: ThreadState) {
     if let Some(b) = state.budget {
         TREE_BUDGET.with(|t| t.set(b));
     }
@@ -1451,7 +1504,7 @@ pub(crate) fn adopt(state: ThreadState) {
 }
 
 /// Everything this thread holds, emptied: a worker's hand-back.
-pub(crate) fn take() -> ThreadState {
+fn take() -> ThreadState {
     ThreadState {
         trees: TREE_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut())),
         shebangs: SHEBANGS.with(|m| std::mem::take(&mut *m.borrow_mut())),

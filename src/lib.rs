@@ -151,7 +151,7 @@ pub fn run(input: Input) -> Output {
     let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
     // per-file old/new symbol data (rows for positions, sets for membership,
     // bodies for rename/move matching) — drives #3/#5/#7 and P12.1 moves.
-    let symbols: Vec<FileSymbols> = input.changes.iter().map(FileSymbols::of).collect();
+    let symbols: Vec<FileSymbols> = lang::par_map(&input.changes, FileSymbols::of);
 
     let changed = detect_changes(&symbols, &paths);
 
@@ -282,26 +282,27 @@ fn apply_rules(hunks: &mut [PerFileHunks], input: &Input) -> (Vec<Vec<Vec<Findin
     let mut catalog_problems = vec![];
     let catalog = catalog_for(&input.options, &mut catalog_problems);
     let mut engine = rules::Rules::with_catalog(&catalog, &input.options.rules);
-    let mut rule_hits: Vec<Vec<Vec<Finding>>> = vec![];
-    for (fi, change) in input.changes.iter().enumerate() {
-        let query_rows = match (lang::for_path(&change.path), change.new.as_deref()) {
-            (Some(spec), Some(new)) => engine.query_rows(spec, new),
-            _ => HashMap::new(),
-        };
-        let file_lines = (
-            change.old.as_deref().map(|o| o.lines().count()),
-            change.new.as_deref().map_or(0, |n| n.lines().count()),
-        );
-        let per_file: Vec<Vec<Finding>> = (0..hunks[fi].raw.len())
-            .map(|li| {
-                engine.hits(
-                    &hunk_facts(&hunks[fi], li, &change.path, file_lines),
-                    &query_rows,
-                )
-            })
-            .collect();
-        rule_hits.push(cap_repeats(per_file));
+    for change in &input.changes {
+        if let (Some(spec), Some(_)) = (lang::for_path(&change.path), &change.new) {
+            engine.prepare(spec);
+        }
     }
+    let prepared = &engine;
+    let mut rule_hits: Vec<Vec<Vec<Finding>>> =
+        lang::par_map(input.changes.iter().zip(&*hunks), |(change, f)| {
+            let query_rows = match (lang::for_path(&change.path), change.new.as_deref()) {
+                (Some(spec), Some(new)) => prepared.query_rows(spec, new),
+                _ => HashMap::new(),
+            };
+            let file_lines = (
+                change.old.as_deref().map(|o| o.lines().count()),
+                change.new.as_deref().map_or(0, |n| n.lines().count()),
+            );
+            let per_file: Vec<Vec<Finding>> = (0..f.raw.len())
+                .map(|li| prepared.hits(&hunk_facts(f, li, &change.path, file_lines), &query_rows))
+                .collect();
+            cap_repeats(per_file)
+        });
     engine.finish();
     let levels = &input.options.levels;
     for (fi, per_file) in rule_hits.iter_mut().enumerate() {
@@ -517,55 +518,11 @@ fn fill_sides(input: &mut Input) -> Vec<String> {
 /// Hunks and semantics for every changed file, with the drops the caller asked
 /// for already taken out.
 ///
-/// Files are independent here, and this is the heaviest per-file pass, so they
-/// are spread over the machine's cores: each worker takes the next file until
-/// none are left, and hands the trees it parsed back for the passes after.
+/// Files are independent here, so they are spread over the machine's cores.
 fn build_hunks(input: &Input, templates: &[TemplateFacts]) -> Vec<PerFileHunks> {
-    let n = input.changes.len();
-    let workers = std::thread::available_parallelism()
-        .map_or(1, |p| p.get())
-        .min(n);
-    let built: Vec<PerFileHunks> = if workers <= 1 {
-        input
-            .changes
-            .iter()
-            .zip(templates)
-            .map(|(change, facts)| file_hunks(change, facts, &input.options))
-            .collect()
-    } else {
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        let mut slots: Vec<Option<PerFileHunks>> = (0..n).map(|_| None).collect();
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..workers)
-                .map(|_| {
-                    let seed = lang::seed(workers);
-                    let next = &next;
-                    scope.spawn(move || {
-                        lang::adopt(seed);
-                        let mut done = vec![];
-                        loop {
-                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some(change) = input.changes.get(i) else {
-                                break;
-                            };
-                            done.push((i, file_hunks(change, &templates[i], &input.options)));
-                        }
-                        (done, lang::take())
-                    })
-                })
-                .collect();
-            for handle in handles {
-                let (done, state) = handle
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-                for (i, f) in done {
-                    slots[i] = Some(f);
-                }
-                lang::adopt(state);
-            }
-        });
-        slots.into_iter().flatten().collect()
-    };
+    let built = lang::par_map(input.changes.iter().zip(templates), |(change, facts)| {
+        file_hunks(change, facts, &input.options)
+    });
     for (change, f) in input.changes.iter().zip(&built) {
         if f.degraded {
             eprintln!(
@@ -629,12 +586,13 @@ fn classify_imports(
     symbols: &[FileSymbols],
     changed: &[FileChanges],
 ) {
-    for fi in 0..changes.len() {
-        name_deleted_imports(&mut hunks[fi], &changes[fi], &symbols[fi]);
-        mark_moved_imports(&mut hunks[fi], &changes[fi]);
-        mark_import_residue(&mut hunks[fi], &changes[fi], &symbols[fi], &changed[fi]);
-        keep_removed_definitions(&mut hunks[fi], &changed[fi]);
-    }
+    let files = hunks.iter_mut().zip(changes).zip(symbols).zip(changed);
+    lang::par_map(files, |(((f, change), symbols), changed)| {
+        name_deleted_imports(f, change, symbols);
+        mark_moved_imports(f, change);
+        mark_import_residue(f, change, symbols, changed);
+        keep_removed_definitions(f, changed);
+    });
 }
 
 /// A hunk is classified from its new side, so one that deletes a definition
@@ -1234,18 +1192,20 @@ struct CallTable {
 fn signature_table(changes: &[Change]) -> CallTable {
     let mut sigs: HashMap<String, Option<extract::SigInfo>> = HashMap::new();
     let mut calls: Vec<(usize, extract::CallSite)> = vec![];
-    for (fi, c) in changes.iter().enumerate() {
-        let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
-            continue;
-        };
-        for s in extract::signatures(spec, new) {
+    let per_file = lang::par_map(changes, |c| {
+        match (lang::for_path(&c.path), c.new.as_deref()) {
+            (Some(spec), Some(new)) => (
+                extract::signatures(spec, new),
+                extract::call_sites(spec, new),
+            ),
+            _ => (vec![], vec![]),
+        }
+    });
+    for (fi, (file_sigs, file_calls)) in per_file.into_iter().enumerate() {
+        for s in file_sigs {
             record_signature(&mut sigs, s);
         }
-        calls.extend(
-            extract::call_sites(spec, new)
-                .into_iter()
-                .map(|cs| (fi, cs)),
-        );
+        calls.extend(file_calls.into_iter().map(|cs| (fi, cs)));
     }
     CallTable { sigs, calls }
 }
@@ -1377,12 +1337,15 @@ fn incomplete_rename(
 /// `path:Lrow` for every identifier among `names` on the new side of the
 /// change, by name: one walk of each file for all of them.
 fn uses_of(changes: &[Change], names: &HashSet<&str>) -> HashMap<String, Vec<String>> {
+    let per_file = lang::par_map(changes, |c| {
+        match (lang::for_path(&c.path), c.new.as_deref()) {
+            (Some(spec), Some(new)) => extract::identifier_rows_of(spec, new, names),
+            _ => Default::default(),
+        }
+    });
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
-    for c in changes {
-        let (Some(spec), Some(new)) = (lang::for_path(&c.path), c.new.as_deref()) else {
-            continue;
-        };
-        for (name, rows) in extract::identifier_rows_of(spec, new, names) {
+    for (c, found) in changes.iter().zip(per_file) {
+        for (name, rows) in found {
             let at = rows.iter().map(|row| format!("{}:L{}", c.path, row + 1));
             out.entry(name).or_default().extend(at);
         }

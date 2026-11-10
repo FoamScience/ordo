@@ -261,65 +261,65 @@ impl<'r> Rules<'r> {
             .collect()
     }
 
-    /// Run every query rule against one file, returning the rows each matched.
-    /// Rows are 1-based, to line up with hunk ranges.
-    pub fn query_rows(&mut self, spec: &LangSpec, content: &str) -> HashMap<usize, Vec<usize>> {
-        let mut out: HashMap<usize, Vec<usize>> = HashMap::new();
-        // A query is written against one grammar. A rule that names its
-        // language is only tried there — and a failure there is the author's
-        // bug, so it is reported. A rule that names none is tried everywhere,
-        // and a grammar it doesn't parse simply doesn't match: complaining
-        // that a Rust query "does not compile for markdown" would bury the
-        // real errors in noise.
-        let applies = |c: &Compiled| {
-            c.rule
-                .when
-                .lang
-                .as_ref()
-                .is_none_or(|ls| ls.iter().any(|l| l == spec.name))
-        };
-        let queries: Vec<(usize, &'r str, &'r str, bool)> = self
-            .compiled
+    /// The query rules that apply to `spec`'s language, with their names,
+    /// sources and whether they named the language.
+    fn queries(&self, spec: &LangSpec) -> Vec<(usize, &'r str, &'r str, bool)> {
+        self.compiled
             .iter()
             .enumerate()
-            .filter(|(_, c)| applies(c))
+            .filter(|(_, c)| applies(c, spec))
             .filter_map(|(i, c)| {
                 let q = c.rule.when.query.as_deref()?;
                 Some((i, c.rule.name.as_str(), q, c.rule.when.lang.is_some()))
             })
-            .collect();
+            .collect()
+    }
+
+    /// Compile, once, every query rule that applies to `spec`'s language: the
+    /// part of reading a file that learns, so `query_rows` can then read the
+    /// files on any thread.
+    pub fn prepare(&mut self, spec: &LangSpec) {
+        let language = (spec.language)();
+        for (i, name, src, explicit) in self.queries(spec) {
+            if self.query_cache.contains_key(&(i, spec.name)) {
+                continue;
+            }
+            let compiled = Query::new(&language, src).map_err(|e| e.to_string());
+            match &compiled {
+                Ok(_) if !explicit => {
+                    self.tried.insert(i, (true, String::new()));
+                }
+                Ok(_) => {}
+                Err(e) => self.query_failed(i, name, spec.name, explicit, e.clone()),
+            }
+            self.query_cache.insert((i, spec.name), compiled);
+        }
+    }
+
+    /// Run every query rule against one file, returning the rows each matched.
+    /// Rows are 1-based, to line up with hunk ranges. The queries are the ones
+    /// `prepare` compiled for the file's language.
+    pub fn query_rows(&self, spec: &LangSpec, content: &str) -> HashMap<usize, Vec<usize>> {
+        let mut out: HashMap<usize, Vec<usize>> = HashMap::new();
+        let queries = self.queries(spec);
         let kind_rules: Vec<(usize, &Compiled)> = self
             .compiled
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.rule.when.kind.is_some() && applies(c))
+            .filter(|(_, c)| c.rule.when.kind.is_some() && applies(c, spec))
             .collect();
         if queries.is_empty() && kind_rules.is_empty() {
             return out;
         }
-        let language = (spec.language)();
         let Some(tree) = lang::parse(spec, content) else {
             return out;
         };
         let by_kind = kind_rows(&kind_rules, tree.root_node(), content.as_bytes());
         let mut by_query: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (i, name, src, explicit) in queries {
-            let compiled = self
-                .query_cache
-                .entry((i, spec.name))
-                .or_insert_with(|| Query::new(&language, src).map_err(|e| e.to_string()));
-            let rows = match compiled {
-                Ok(q) => query_matches(q, tree.root_node(), content.as_bytes()),
-                Err(e) => {
-                    let e = e.clone();
-                    self.query_failed(i, name, spec.name, explicit, e);
-                    continue;
-                }
-            };
-            if !explicit {
-                self.tried.insert(i, (true, String::new()));
+        for (i, ..) in queries {
+            if let Some(Ok(q)) = self.query_cache.get(&(i, spec.name)) {
+                by_query.insert(i, query_matches(q, tree.root_node(), content.as_bytes()));
             }
-            by_query.insert(i, rows);
         }
         // `When`'s conditions are ANDed, and `kind` and `query` are two of
         // them: a rule carrying both used to fire on the union of what each
@@ -349,6 +349,19 @@ impl<'r> Rules<'r> {
             self.problems.push(msg);
         }
     }
+}
+
+/// A query is written against one grammar. A rule that names its language is
+/// only tried there — and a failure there is the author's bug, so it is
+/// reported. A rule that names none is tried everywhere, and a grammar it
+/// doesn't parse simply doesn't match: complaining that a Rust query "does not
+/// compile for markdown" would bury the real errors in noise.
+fn applies(c: &Compiled, spec: &LangSpec) -> bool {
+    c.rule
+        .when
+        .lang
+        .as_ref()
+        .is_none_or(|ls| ls.iter().any(|l| l == spec.name))
 }
 
 /// kind rules: "this hunk introduces a node of kind K, with children X and
