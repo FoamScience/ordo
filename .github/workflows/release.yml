@@ -17,7 +17,7 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -34,7 +34,7 @@ jobs:
           ext=""; [ "${{ matrix.os }}" = "windows-latest" ] && ext=".exe"
           # both binaries: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI the wrappers shell to)
           tar -czf "ordo-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" "ordo$ext" "ordo-engine$ext"
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             ordo-${{ matrix.target }}*
