@@ -3888,6 +3888,10 @@ function adjacency(pairs, up) {
 function cascadeOf(items, view, i) {
   return reach(adjacency(needPairs(items, view), false), i);
 }
+function cascadeBeyond(neededBy, cascade) {
+  const direct = new Set(neededBy);
+  return cascade.some((t) => !direct.has(t)) ? cascade : [];
+}
 function groundOf(items, view, i) {
   return reach(adjacency(needPairs(items, view), true), i);
 }
@@ -4843,12 +4847,13 @@ function edgeRows(targets, limit) {
 function basename(p) {
   return p.slice(p.lastIndexOf("/") + 1);
 }
-function table(title, hint, targets, empty) {
+function table(title, hint, targets) {
+  if (!targets.length) return [];
   const limit = tableLimit(targets.length, st2.zoom && st2.focus === "why");
   const more = targets.length - limit;
   return [
     h("h3", null, title, hint && h("small", null, hint)),
-    targets.length ? h("div", { class: "links" }, edgeRows(targets, limit)) : h("p", { class: "muted" }, empty),
+    h("div", { class: "links" }, edgeRows(targets, limit)),
     more > 0 && h(
       "button",
       {
@@ -4863,15 +4868,6 @@ function table(title, hint, targets, empty) {
     )
   ];
 }
-function rulesChecked(r, it2) {
-  const { lang, catalog, own } = it2.rules_for;
-  const n = (k) => `${k} rule${k === 1 ? "" : "s"}`;
-  const parts = [];
-  parts.push(r.rules.catalog ? `${n(catalog)} from the built-in catalog` : "no built-in catalog (switched off)");
-  const presets = r.rules.includes.length ? `, with ${r.rules.includes.join(", ")}` : "";
-  if (own) parts.push(`${n(own)} from your rules files${presets}`);
-  return `${n(catalog + own)} that apply to ${lang ?? "this file"}: ${parts.join(" and ")}`;
-}
 function renderWhy() {
   const pane = $("#why");
   const r = st2.review;
@@ -4883,6 +4879,7 @@ function renderWhy() {
   const facts = st2.facts && st2.facts.i === st2.sel ? st2.facts : null;
   const needs = it2.edges.filter((e) => e.needs);
   const neededBy = it2.edges.filter((e) => !e.needs);
+  const cascade = facts ? cascadeBeyond(neededBy.map((e) => e.target), facts.cascade) : [];
   const findings = [...it2.findings].sort((a, b) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level));
   const churn = r.file_churn[it2.path];
   const lc = facts?.line_churn;
@@ -4901,30 +4898,31 @@ function renderWhy() {
         h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
         h("div", { class: "links" }, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length))
       ],
-      table("Needs", "what this hunk uses", needs, "Nothing in this change."),
-      table("Needed by", "what uses this hunk", neededBy, "Nothing in this change."),
-      facts && table(
+      table("Needs", "what this hunk uses", needs),
+      table("Needed by", "what uses this hunk", neededBy),
+      table(
         "If you reject it",
         "what loses its footing, in reading order",
-        facts.cascade.map((t) => ({ target: t, label: "" })),
-        "Rejecting it strands nothing."
+        cascade.map((t) => ({ target: t, label: "" }))
       ),
-      h("h3", null, "Findings", findings.length > 0 && h("small", null, "the most pressing first")),
-      findings.length ? findings.map(
-        (f) => h(
-          "div",
-          { class: "finding" },
-          h(
+      findings.length > 0 && [
+        h("h3", null, "Findings", h("small", null, "the most pressing first")),
+        findings.map(
+          (f) => h(
             "div",
-            { class: "h" },
-            h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
-            h("span", { class: "name" }, f.name),
-            f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`)
-          ),
-          h("p", null, f.message),
-          h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
+            { class: "finding" },
+            h(
+              "div",
+              { class: "h" },
+              h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
+              h("span", { class: "name" }, f.name),
+              f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`)
+            ),
+            h("p", null, f.message),
+            h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
+          )
         )
-      ) : h("p", { class: "muted" }, `None. Checked against ${rulesChecked(r, it2)}.`),
+      ],
       it2.executed && [
         h("h3", null, "Test coverage"),
         h(
@@ -5759,7 +5757,7 @@ async function renderCanvas() {
       excerpt(files2[k + 1], i, 1, 14)
     );
   };
-  const side = (needs) => h(
+  const side = (needs) => c.cards.some((x) => x.needs === needs) && h(
     "div",
     { class: "side" },
     h("h3", null, needs ? "Needs: what this hunk uses" : "Needed by: what uses this hunk"),

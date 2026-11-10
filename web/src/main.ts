@@ -7,7 +7,7 @@ import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { foldedText, rowText, withSymbols } from "./list.ts";
-import { cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
+import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
@@ -916,12 +916,13 @@ function basename(p: string): string {
   return p.slice(p.lastIndexOf("/") + 1);
 }
 
-function table(title: string, hint: string, targets: { target: number | null; label: string }[], empty: string): (HTMLElement | false)[] {
+function table(title: string, hint: string, targets: { target: number | null; label: string }[]): (HTMLElement | false)[] {
+  if (!targets.length) return [];
   const limit = tableLimit(targets.length, st.zoom && st.focus === "why");
   const more = targets.length - limit;
   return [
     h("h3", null, title, hint && h("small", null, hint)),
-    targets.length ? h("div", { class: "links" }, edgeRows(targets, limit)) : h("p", { class: "muted" }, empty),
+    h("div", { class: "links" }, edgeRows(targets, limit)),
     more > 0 &&
       h(
         "button",
@@ -938,16 +939,6 @@ function table(title: string, hint: string, targets: { target: number | null; la
   ];
 }
 
-function rulesChecked(r: Review, it: Item): string {
-  const { lang, catalog, own } = it.rules_for;
-  const n = (k: number) => `${k} rule${k === 1 ? "" : "s"}`;
-  const parts: string[] = [];
-  parts.push(r.rules.catalog ? `${n(catalog)} from the built-in catalog` : "no built-in catalog (switched off)");
-  const presets = r.rules.includes.length ? `, with ${r.rules.includes.join(", ")}` : "";
-  if (own) parts.push(`${n(own)} from your rules files${presets}`);
-  return `${n(catalog + own)} that apply to ${lang ?? "this file"}: ${parts.join(" and ")}`;
-}
-
 function renderWhy(): void {
   const pane = $("#why");
   const r = st.review!;
@@ -959,6 +950,7 @@ function renderWhy(): void {
   const facts = st.facts && st.facts.i === st.sel ? st.facts : null;
   const needs = it.edges.filter((e) => e.needs);
   const neededBy = it.edges.filter((e) => !e.needs);
+  const cascade = facts ? cascadeBeyond(neededBy.map((e) => e.target), facts.cascade) : [];
   const findings = [...it.findings].sort((a, b) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level));
   const churn = r.file_churn[it.path];
   const lc = facts?.line_churn;
@@ -977,18 +969,16 @@ function renderWhy(): void {
         h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
         h("div", { class: "links" }, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length)),
       ],
-      table("Needs", "what this hunk uses", needs, "Nothing in this change."),
-      table("Needed by", "what uses this hunk", neededBy, "Nothing in this change."),
-      facts &&
-        table(
-          "If you reject it",
-          "what loses its footing, in reading order",
-          facts.cascade.map((t) => ({ target: t, label: "" })),
-          "Rejecting it strands nothing.",
-        ),
-      h("h3", null, "Findings", findings.length > 0 && h("small", null, "the most pressing first")),
-      findings.length
-        ? findings.map((f) =>
+      table("Needs", "what this hunk uses", needs),
+      table("Needed by", "what uses this hunk", neededBy),
+      table(
+        "If you reject it",
+        "what loses its footing, in reading order",
+        cascade.map((t) => ({ target: t, label: "" })),
+      ),
+      findings.length > 0 && [
+        h("h3", null, "Findings", h("small", null, "the most pressing first")),
+        findings.map((f) =>
             h(
               "div",
               { class: "finding" },
@@ -1002,8 +992,8 @@ function renderWhy(): void {
               h("p", null, f.message),
               h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : "")),
             ),
-          )
-        : h("p", { class: "muted" }, `None. Checked against ${rulesChecked(r, it)}.`),
+          ),
+      ],
       it.executed && [
         h("h3", null, "Test coverage"),
         h(
@@ -1929,6 +1919,7 @@ async function renderCanvas(): Promise<void> {
     );
   };
   const side = (needs: boolean) =>
+    c.cards.some((x) => x.needs === needs) &&
     h(
       "div",
       { class: "side" },

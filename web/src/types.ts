@@ -30,7 +30,6 @@ export interface Item {
   /** the first changed line with anything on it, trimmed; the old one for a removal */
   gist: string | null;
   /** the rules that can fire in this file, by its language */
-  rules_for: { lang: string | null; catalog: number; own: number };
   notes: string[];
   edges: Edge[];
   symbol: string | null;
