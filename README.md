@@ -70,14 +70,23 @@ hunks.
 ## Install
 
 ```sh
-cargo install --path . --features web   # from source: `ordo` (the reviewer) and `ordo-engine` (the JSON CLI)
-npm  install -g @ordo/cli       # node wrapper (vendors a prebuilt binary)
-pip  install ordo               # python wrapper (vendors a prebuilt binary)
+curl -fsSL https://raw.githubusercontent.com/FoamScience/ordo/main/install.sh | sh
+cargo binstall ordo-diff                     # prebuilt, through cargo-binstall
+cargo install ordo-diff --features web       # from crates.io, built locally
+npm install -g ordo-diff                     # node wrapper with the prebuilt binaries
+pip install ordo-diff                        # python wrapper with the prebuilt binaries
 ```
 
-The npm/pypi packages are thin wrappers around one prebuilt binary (the
-ruff/esbuild pattern). Set `ORDO_BIN=/path/to/ordo-engine` to point them at a local
+Each installs two commands: `ordo`, the reviewer, and `ordo-engine`, the JSON
+engine. The prebuilt binaries are on every [GitHub
+release](https://github.com/FoamScience/ordo/releases) for linux (static, any
+distribution), macOS and windows, with their SHA-256 sums. `install.sh` puts
+them in `~/.local/bin` (`ORDO_INSTALL_DIR` to change it, `ORDO_VERSION` to pin
+one). The npm and pypi wrappers look in `ORDO_BIN_DIR` first, for a local
 build.
+
+Building from source on windows needs `clang-cl` (LLVM) as the C compiler, set
+with `CC=clang-cl`: one grammar passes a flag msvc's `cl` rejects.
 
 
 ## Quickstart
