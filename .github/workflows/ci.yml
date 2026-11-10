@@ -3,21 +3,23 @@ on:
   push:
     branches: [main]
   pull_request:
+env:
+  CARGO_TERM_COLOR: always
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo build --locked
-      - run: cargo test --locked
-      # the library and the engine must build and pass without the `web`
-      # feature's server dependencies
-      - run: cargo test --locked --no-default-features
+      - run: cargo clippy --locked --all-targets --features web -- -D warnings
+      - run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
+      - run: cargo doc --locked --no-deps --features web
+        env:
+          RUSTDOCFLAGS: -D warnings
       # the shipped rulesets are user-facing conventions; a rule that stops
       # firing looks exactly like a convention nobody breaks
       - run: |
@@ -28,3 +30,38 @@ jobs:
             [ -n "$s" ] || { echo "no sample for $b"; exit 1; }
             python3 scripts/ruleset-check.py "$f" "$s" ./target/debug/ordo-engine
           done
+      - run: cargo package --locked --features web
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # goldens and generated doc blocks are compared byte for byte
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # the generated doc blocks, and every other check that lives in the
+      # `ordo` binary's test module, are behind the `web` feature; without
+      # it a docs/ or README drift ships green
+      - run: cargo test --locked --features web
+      # the library and the engine must build and pass without the `web`
+      # feature's server dependencies
+      - run: cargo test --locked --no-default-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets --features web
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
