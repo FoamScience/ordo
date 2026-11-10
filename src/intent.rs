@@ -423,27 +423,41 @@ pub(crate) fn fill(
         .filter(|_| !old.is_empty())
         .and_then(|_| Some((lang::parse(spec, old)?, lang::parse(spec, new)?)));
     let starts = [line_starts(old), line_starts(new)];
-    for (h, sem) in raw.iter().zip(sems) {
+    let sides = trees.as_ref().map(|(ot, nt)| {
+        [
+            Side {
+                root: ot.root_node(),
+                src: old,
+                starts: &starts[0],
+            },
+            Side {
+                root: nt.root_node(),
+                src: new,
+                starts: &starts[1],
+            },
+        ]
+    });
+    for (h, sem) in raw.iter().zip(sems.iter_mut()) {
         let swapped = sem.single.as_ref().and_then(swapped_call);
         sem.intent = swapped.or_else(|| {
-            let (sp, (ot, nt)) = (spelling?, trees.as_ref()?);
-            let sides = [
-                Side {
-                    root: ot.root_node(),
-                    src: old,
-                    starts: &starts[0],
-                },
-                Side {
-                    root: nt.root_node(),
-                    src: new,
-                    starts: &starts[1],
-                },
-            ];
+            let (sp, sides) = (spelling?, sides.as_ref()?);
             sem.single
                 .as_ref()
-                .and_then(|c| token_intent(sp, c, &sides))
-                .or_else(|| hunk_intent(sp, h, &sides))
+                .and_then(|c| token_intent(sp, c, sides))
+                .or_else(|| hunk_intent(sp, h, sides))
         });
+    }
+    let (Some(sp), Some(sides)) = (spelling, sides.as_ref()) else {
+        return;
+    };
+    for i in 1..raw.len() {
+        if sems[i - 1].intent.is_some() || sems[i].intent.is_some() {
+            continue;
+        }
+        if let Some(wrap) = split_try(sp, sides, &raw[i - 1], &raw[i]) {
+            sems[i - 1].intent = Some(wrap.clone());
+            sems[i].intent = Some(wrap);
+        }
     }
 }
 
@@ -718,7 +732,6 @@ fn is_function(kind: &str) -> bool {
 
 /// A pattern in a hunk's whole shape: what it inserted, or what it wrapped.
 fn hunk_intent(sp: &Spelling, h: &RawHunk, sides: &[Side; 2]) -> Option<Intent> {
-    let rows = |[a, b]: [usize; 2]| (a >= 1 && b >= a).then(|| (a - 1, b - 1));
     let new = rows(h.new_range)?;
     match rows(h.old_range) {
         None => guard(sp, sides[1], new).or_else(|| default_param(sp, sides, None, new)),
@@ -726,6 +739,11 @@ fn hunk_intent(sp: &Spelling, h: &RawHunk, sides: &[Side; 2]) -> Option<Intent> 
             .or_else(|| default_param(sp, sides, Some(old), new))
             .or_else(|| replaced_by_call(sp, sides, old, new)),
     }
+}
+
+/// A hunk side's 1-based line range as 0-based rows; `None` when it is empty.
+fn rows([a, b]: [usize; 2]) -> Option<(usize, usize)> {
+    (a >= 1 && b >= a).then(|| (a - 1, b - 1))
 }
 
 /// An inserted `if` with no `else`, testing a value it does not bind, whose
@@ -819,13 +837,62 @@ fn wraps_try(
         return None;
     }
     let body = t.child_by_field_name("body")?;
-    let mut cur = body.walk();
-    let inner: Vec<Node> = body.named_children(&mut cur).collect();
-    let (first, last) = (inner.first()?, inner.last()?);
+    let (first, last) = ends(body)?;
     let wrapped = &new_side.src[first.start_byte()..last.end_byte()];
     if unspaced(wrapped) != unspaced(&sides[0].src[sides[0].rows(old)?]) {
         return None;
     }
+    Some(try_intent(sp, tries, new_side, t, body, old.1 - old.0 + 1))
+}
+
+/// A try added around lines left as they were, not reindented: the diff
+/// inserts its head and its handlers as two hunks, and the unchanged lines
+/// between them are its body.
+fn split_try(sp: &Spelling, sides: &[Side; 2], head: &RawHunk, tail: &RawHunk) -> Option<Intent> {
+    let tries = sp.tries.as_ref()?;
+    let inserted = |h: &RawHunk| {
+        rows(h.old_range)
+            .is_none()
+            .then(|| rows(h.new_range))
+            .flatten()
+    };
+    let ((a, b), (c, d)) = (inserted(head)?, inserted(tail)?);
+    if c <= b + 1 || c - b - 1 > TRY_LINES {
+        return None;
+    }
+    let new_side = sides[1];
+    let [t] = spanned(new_side.root, (a, d))?[..] else {
+        return None;
+    };
+    if !tries.kinds.contains(&t.kind()) {
+        return None;
+    }
+    let body = t.child_by_field_name("body")?;
+    let (first, last) = ends(body)?;
+    if first.start_position().row != b + 1 || last_row(last) != c - 1 {
+        return None;
+    }
+    Some(try_intent(sp, tries, new_side, t, body, c - b - 1))
+}
+
+/// The first and last named nodes in a try's body.
+fn ends(body: Node) -> Option<(Node, Node)> {
+    let mut cur = body.walk();
+    let inner: Vec<Node> = body.named_children(&mut cur).collect();
+    Some((*inner.first()?, *inner.last()?))
+}
+
+/// What try statement `t`, wrapping `lines` existing lines in `body`, says:
+/// the call the body makes when it is one statement, and what the handlers
+/// catch.
+fn try_intent(
+    sp: &Spelling,
+    tries: &Tries,
+    new_side: Side,
+    t: Node,
+    body: Node,
+    lines: usize,
+) -> Intent {
     let call = match statements(sp, body)[..] {
         [one] => first_call(sp, new_side, one),
         _ => None,
@@ -845,16 +912,16 @@ fn wraps_try(
                 .map_or(t.clone(), str::to_string)
         })
         .collect();
-    Some(Intent::WrapsTry {
+    Intent::WrapsTry {
         call,
-        lines: old.1 - old.0 + 1,
+        lines,
         caught: (!caught.is_empty()).then(|| caught.join(", ")),
         word: if handlers.is_empty() {
             "try/finally"
         } else {
             tries.word
         },
-    })
+    }
 }
 
 /// The new side is one statement making a call the old lines did not make,

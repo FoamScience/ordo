@@ -2259,6 +2259,43 @@ fn statements_wrapped_in_a_try_name_the_call_and_what_it_catches() {
 }
 
 #[test]
+fn a_try_added_without_reindenting_is_still_a_wrap() {
+    let two = |path: &str, old: &str, new: &str| {
+        rationales(serde_json::json!({
+            "changes": [{ "path": path, "old": old, "new": new }]
+        }))
+    };
+    // the head and the handlers are two insertions around unchanged lines
+    assert_eq!(
+        two(
+            "a.ts",
+            "function f(a) {\n  const b = 1;\n  g(a);\n  h(b);\n  return b;\n}\n",
+            "function f(a) {\n  const b = 1;\n  try {\n  g(a);\n  h(b);\n  } catch (e) {\n    log(e);\n  }\n  return b;\n}\n",
+        ),
+        ["wraps 2 lines in try/catch in f", "wraps 2 lines in try/catch in f"]
+    );
+    assert_eq!(
+        two(
+            "A.java",
+            "class A {\n  void f() {\n    int a = 1;\n    in.read();\n    a++;\n  }\n}\n",
+            "class A {\n  void f() {\n    int a = 1;\n    try {\n    in.read();\n    } catch (IOException e) {\n      log(e);\n    }\n    a++;\n  }\n}\n",
+        ),
+        [
+            "wraps in.read() in try/catch IOException in A.f",
+            "wraps in.read() in try/catch IOException in A.f"
+        ]
+    );
+    // the head insertion adds a statement of its own besides the try
+    assert!(two(
+        "a.ts",
+        "function f(a) {\n  const b = 1;\n  g(a);\n  return b;\n}\n",
+        "function f(a) {\n  const b = 1;\n  log(a);\n  try {\n  g(a);\n  } catch (e) {\n    log(e);\n  }\n  return b;\n}\n",
+    )
+    .iter()
+    .all(|r| !r.starts_with("wraps")));
+}
+
+#[test]
 fn an_operand_added_to_or_dropped_from_a_condition_narrows_or_widens_it() {
     let rats = edit_rationales(&[
         (

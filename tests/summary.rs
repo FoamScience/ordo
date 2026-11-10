@@ -143,6 +143,21 @@ fn a_guard_with_a_test_is_a_fix_candidate_that_changes_behaviour() {
 }
 
 #[test]
+fn a_try_split_over_two_hunks_is_named_once() {
+    let s = is(
+        json!([{"path": "src/a.ts",
+                "old": "function f(a) {\n  const b = 1;\n  g(a);\n  return b;\n}\n",
+                "new": "function f(a) {\n  const b = 1;\n  try {\n  g(a);\n  } catch (e) {\n    log(e);\n  }\n  return b;\n}\n"}]),
+        Label::FixCandidate,
+        Verdict::Changes,
+    );
+    assert_eq!(
+        s.sentences[0],
+        "Fix candidate: a try/catch around existing code in f, with no test touched."
+    );
+}
+
+#[test]
 fn a_guard_alone_is_still_a_fix_candidate_and_says_no_test_was_touched() {
     let s = is(
         json!([{"path": "src/a.py",
