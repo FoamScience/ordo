@@ -288,7 +288,7 @@ fn claude_transcript(session: &str) -> Option<std::path::PathBuf> {
     if direct.is_file() {
         return Some(direct);
     }
-    let projects = std::path::PathBuf::from(std::env::var_os("HOME")?).join(".claude/projects");
+    let projects = std::env::home_dir()?.join(".claude/projects");
     std::fs::read_dir(projects)
         .ok()?
         .flatten()
