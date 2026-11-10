@@ -799,10 +799,47 @@ fn p16_multi_extraction_from_same_source_is_grouped() {
     let new = "def read_input():\n    buf = read_stdin()\n    log_debug(buf)\n    parsed = parse(buf)\n    return parsed\n\ndef check_input():\n    validate(parsed)\n    emit(run(parsed))\n    finalize(parsed)\n\ndef order():  # dispatch\n    parsed = read_input()\n    check_input()\n";
     let rats =
         rationales(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    // the helpers are added above the edited `order`, so they are their own
+    // insertion rather than part of the edit (see split_leading_insertions)
     assert_eq!(
         rats,
-        vec!["adds check_input, read_input, extracted from order; changes signature of order"]
+        vec![
+            "adds check_input, read_input, extracted from order, used by order below",
+            "changes signature of order"
+        ]
     );
+}
+
+#[test]
+fn a_def_added_above_an_edited_header_is_its_own_insertion() {
+    // the line diff puts the old header's removal at the top of the run, above
+    // the added def; that must not read as one edit of a single function
+    let old =
+        "def create_mesh(stp: str, stl: str):\n    \"\"\"Fallback mesh.\"\"\"\n    run(stp, stl)\n";
+    let new = "def add_groups(names: list[str]) -> list[int]:\n    \"\"\"One group per name.\"\"\"\n    return [add(n) for n in names]\n\n\ndef create_mesh(\n    stp: str,\n    stl: str,\n    names: list[str],\n):\n    \"\"\"Fallback mesh, with the groups Gmsh needs to write it.\"\"\"\n    run(stp, stl)\n";
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    let cut: Vec<_> = out.files[0]
+        .hunks
+        .iter()
+        .map(|h| (h.old_range, h.new_range, h.rationale.as_str()))
+        .collect();
+    assert_eq!(
+        cut,
+        vec![
+            ([1, 0], [1, 5], "adds add_groups"),
+            ([1, 2], [6, 11], "changes signature of create_mesh"),
+        ]
+    );
+}
+
+#[test]
+fn a_removed_line_that_names_no_new_def_keeps_the_edit_whole() {
+    let old = "def f():\n    x = 1\n    return x\n";
+    let new = "def f():\n    def g():\n        return 1\n    x = g()\n    return x\n";
+    let out =
+        run_json(serde_json::json!({ "changes": [{ "path": "m.py", "old": old, "new": new }] }));
+    assert_eq!(out.files[0].hunks.len(), 1);
 }
 
 #[test]

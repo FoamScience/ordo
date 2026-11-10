@@ -2203,7 +2203,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     // `analyze` hands back the hunks it read: an added file arrives as one hunk
     // however long it is, and comes back cut at the constructs inside it
     let (raw, mut sems) = match lang::for_path(&change.path)
-        .and_then(|spec| analyze(spec, &new, &raw, &change.path))
+        .and_then(|spec| analyze(spec, old.unwrap_or(""), &new, &raw, &change.path))
     {
         Some(pair) => pair,
         None => {
