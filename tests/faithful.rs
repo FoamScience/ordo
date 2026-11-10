@@ -512,3 +512,19 @@ fn a_small_insertion_still_edits_its_container() {
     assert_eq!(at(3), "edits run");
     assert_eq!(at(4), "adds 4 lines to run");
 }
+
+/// tasks-3uv.104: a pure deletion is placed by its new-side row like every
+/// other hunk. Read at its old row, a deletion below a large insertion sat
+/// inside it and joined its part of the change.
+#[test]
+fn a_deletion_below_an_insertion_is_placed_on_the_new_side() {
+    let unchanged: String = (0..10).map(|i| format!("x{i} = {i}\n")).collect();
+    let fresh: String = std::iter::once("def fresh():\n".to_string())
+        .chain((0..28).map(|i| format!("    v{i} = {i}\n")))
+        .chain(std::iter::once("    return 0\n".to_string()))
+        .collect();
+    let old = format!("{unchanged}def gone():\n    return 1\n");
+    let new = format!("{fresh}{unchanged}");
+    let out = run(json!({"changes": [{"path": "m.py", "old": old, "new": new}]}));
+    assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
+}

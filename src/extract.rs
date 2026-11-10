@@ -101,6 +101,8 @@ pub struct HunkSem {
     /// see `lang::LangSpec::locals`), with where each is used elsewhere in the
     /// file. Rationale wording only; never added to `defines`/`symbols`.
     pub bindings: Vec<BindingUse>,
+    /// 0-based first new-side row; for a pure deletion, the new row it sits
+    /// before, so every hunk of a file is placed on the same side
     pub start_row: usize,
     /// 1-based inclusive old-line range (for #5/#7 removal matching)
     pub old_range: [usize; 2],
@@ -168,7 +170,7 @@ impl HunkSem {
             import_moved: false,
             priority: 0,
             bindings: vec![],
-            start_row: h.new_r0.unwrap_or_else(|| h.old_range[0].saturating_sub(1)),
+            start_row: h.new_r0.unwrap_or_else(|| h.new_range[0].saturating_sub(1)),
             old_range: h.old_range,
             new_empty: h.new_r0.is_none(),
             whole_old_file: false,

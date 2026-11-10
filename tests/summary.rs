@@ -20,6 +20,27 @@ fn is(changes: Value, label: Label, verdict: Verdict) -> Summary {
 }
 
 #[test]
+fn two_files_renaming_one_name_differently_are_both_renames() {
+    // each file follows its own rename, whatever the other one did
+    let s = is(
+        json!([
+            {"path": "a.py",
+             "old": "def helper(p):\n    return p.strip()\n",
+             "new": "def load(p):\n    return p.strip()\n"},
+            {"path": "b.py",
+             "old": "def helper(p):\n    return p.lower()\n",
+             "new": "def read(p):\n    return p.lower()\n"}
+        ]),
+        Label::Refactor,
+        Verdict::Preserving,
+    );
+    assert_eq!(
+        s.sentences[0],
+        "Refactor: renames helper → load, helper → read."
+    );
+}
+
+#[test]
 fn a_rename_followed_at_its_call_site_preserves_behaviour() {
     let s = is(
         json!([
