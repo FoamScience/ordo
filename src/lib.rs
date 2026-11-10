@@ -31,7 +31,7 @@ pub mod refine;
 pub mod rules;
 mod summary;
 
-use extract::{analyze, compute_hunks, HunkSem, RawHunk};
+use extract::{analyze, compute_hunks_in, HunkSem, RawHunk};
 use lang::LangSpec;
 use model::*;
 use std::borrow::Cow;
@@ -2205,7 +2205,12 @@ fn apply_template_facts(f: &TemplateFacts, path: &str, raw: &[RawHunk], sem: &mu
 fn build_change(change: &Change, full_context: bool) -> ChangeParts {
     let old = change.old.as_deref();
     let (raw, new, degraded): (Vec<RawHunk>, String, bool) = if let Some(new) = &change.new {
-        (compute_hunks(old.unwrap_or(""), new), new.clone(), false)
+        let spec = lang::for_path(&change.path);
+        (
+            compute_hunks_in(spec, old.unwrap_or(""), new),
+            new.clone(),
+            false,
+        )
     } else if let Some(diff) = &change.diff {
         // `fill_sides` rebuilds both sides whenever the diff allows it, so a
         // change still carrying only a diff here is one it could not rebuild:

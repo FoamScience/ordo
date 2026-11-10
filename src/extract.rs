@@ -3,7 +3,7 @@
 //! tree-sitter, exactly as gitplay's `order.lua` does.
 use crate::lang::{self, LangSpec};
 use crate::model::{Category, ContainerKind, Finding, Symbol};
-use similar::TextDiff;
+use similar::{DiffOp, TextDiff};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -216,6 +216,134 @@ pub fn compute_hunks(old: &str, new: &str) -> Vec<RawHunk> {
         });
     }
     hunks
+}
+
+/// `compute_hunks`, unless the line diff lined a new definition's body up with
+/// lines of an old definition that is still there: a helper extracted next to
+/// the code it came from. Its lines then match the code they replaced line for
+/// line, and the change reads as scattered edits of both. Diffing again with
+/// that definition's lines matching nothing keeps it an insertion, and the old
+/// code a change to the definition it left.
+///
+/// A rename is not this — its old name is gone — and its body lining up is
+/// what makes it read as one.
+pub fn compute_hunks_in(spec: Option<&LangSpec>, old: &str, new: &str) -> Vec<RawHunk> {
+    let hunks = compute_hunks(old, new);
+    let Some(spec) = spec.filter(|_| !old.is_empty() && !hunks.is_empty()) else {
+        return hunks;
+    };
+    let new_defs = def_spans(spec, new);
+    let old_defs = def_spans(spec, old);
+    let old_names: HashSet<&str> = old_defs.iter().map(|d| d.0.as_str()).collect();
+    let new_names: HashSet<&str> = new_defs.iter().map(|d| d.0.as_str()).collect();
+    let (old_lines, new_lines): (Vec<&str>, Vec<&str>) =
+        (old.lines().collect(), new.lines().collect());
+    // the innermost definition on each 0-based row, among `defs` kept by `keep`
+    let innermost = |defs: &[DefSpan], rows: usize, keep: &dyn Fn(&DefSpan) -> bool| {
+        let mut at: Vec<Option<usize>> = vec![None; rows];
+        let mut order: Vec<usize> = (0..defs.len()).filter(|&i| keep(&defs[i])).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(defs[i].2 - defs[i].1));
+        for i in order {
+            let (_, a, b) = &defs[i];
+            if let Some(span) = at.get_mut(a - 1..(*b).min(rows)) {
+                span.fill(Some(i));
+            }
+        }
+        at
+    };
+    let fresh = innermost(&new_defs, new_lines.len(), &|d| {
+        !old_names.contains(d.0.as_str())
+    });
+    if fresh.iter().all(Option::is_none) {
+        return hunks;
+    }
+    let holder = innermost(&old_defs, old_lines.len(), &|d| {
+        new_names.contains(d.0.as_str())
+    });
+    let mut matched: HashMap<usize, usize> = HashMap::new();
+    for op in TextDiff::from_lines(old, new).ops() {
+        let DiffOp::Equal {
+            old_index,
+            new_index,
+            len,
+        } = *op
+        else {
+            continue;
+        };
+        for k in 0..len {
+            let (o, n) = (old_index + k, new_index + k);
+            let (Some(Some(f)), Some(Some(c))) = (fresh.get(n), holder.get(o)) else {
+                continue;
+            };
+            if new_defs[*f].0 != old_defs[*c].0 && !new_lines[n].trim().is_empty() {
+                *matched.entry(*f).or_default() += 1;
+            }
+        }
+    }
+    let masked: HashSet<usize> = matched
+        .into_iter()
+        .filter(|&(_, n)| n >= 2)
+        .flat_map(|(f, _)| new_defs[f].1 - 1..new_defs[f].2)
+        .collect();
+    if masked.is_empty() {
+        return hunks;
+    }
+    // the same rows, each masked one unlike any other line
+    let unmatched: String = new
+        .split_inclusive('\n')
+        .enumerate()
+        .map(|(row, line)| match masked.contains(&row) {
+            true => format!(
+                "\u{1}ordo-masked-{row}{}",
+                if line.ends_with('\n') { "\n" } else { "" }
+            ),
+            false => line.to_string(),
+        })
+        .collect();
+    let blank = |row: usize| new_lines.get(row).is_none_or(|l| l.trim().is_empty());
+    compute_hunks(old, &unmatched)
+        .iter()
+        .flat_map(|h| split_masked(h, &masked, &blank))
+        .collect()
+}
+
+/// A masked definition sharing a hunk with the edit that now calls it, cut out
+/// as its own insertion: before the edit when it leads the hunk, after it when
+/// it trails. Blank rows between the two go with the definition.
+fn split_masked(
+    h: &RawHunk,
+    masked: &HashSet<usize>,
+    blank: &dyn Fn(usize) -> bool,
+) -> Vec<RawHunk> {
+    let (Some(r0), r1, [o0, o1]) = (h.new_r0, h.new_r1, h.old_range) else {
+        return vec![h.clone()];
+    };
+    let quiet = |row: usize| masked.contains(&row) || blank(row);
+    let code = |row: usize| !quiet(row);
+    let (Some(first), Some(last)) = (
+        (r0..=r1).find(|r| masked.contains(r)),
+        (r0..=r1).rev().find(|r| masked.contains(r)),
+    ) else {
+        return vec![h.clone()];
+    };
+    if o0 > o1 || (r0..=r1).all(|r| !code(r)) {
+        return vec![h.clone()];
+    }
+    let piece = |old_range: [usize; 2], a: usize, b: usize| RawHunk {
+        old_range,
+        new_range: [a + 1, b + 1],
+        new_r0: Some(a),
+        new_r1: b,
+    };
+    if (r0..=last).all(quiet) {
+        let k = (last + 1..=r1).find(|&r| code(r)).unwrap_or(r1 + 1);
+        return vec![piece([o0, o0 - 1], r0, k - 1), piece(h.old_range, k, r1)];
+    }
+    if (first..=r1).all(quiet) {
+        let k = (r0..first).rev().find(|&r| code(r)).map_or(r0, |r| r + 1);
+        return vec![piece(h.old_range, r0, k - 1), piece([o1 + 1, o1], k, r1)];
+    }
+    vec![h.clone()]
 }
 
 /// A pure insertion is one contiguous run of added lines, so a whole added file
