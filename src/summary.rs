@@ -1231,12 +1231,13 @@ fn what(
             format!("Refactor: {}.", parts.join("; "))
         }
         Label::FixCandidate => {
-            let nouns: Vec<String> = files
+            let mut nouns: Vec<String> = files
                 .iter()
                 .filter(|f| f.kind == PathKind::Code)
                 .flat_map(|f| f.hunks.iter().map(move |(k, s)| (f.path, *k, *s)))
                 .filter_map(|(p, k, s)| Some(intent_noun(fix_pattern(k, s)?, &place(s, p))))
                 .collect();
+            nouns.dedup();
             let what = match nouns.is_empty() {
                 true => format!("edits {}", list(&edited(files))),
                 false => list(&nouns),
