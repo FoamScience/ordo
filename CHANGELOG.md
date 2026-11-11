@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/FoamScience/ordo/compare/v0.6.0...v0.6.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* slide ambiguous insert/delete hunks onto syntax boundaries ([407cd96](https://github.com/FoamScience/ordo/commit/407cd9631f58e8b1142e55d9476dfed1e98d4d63))
+
 ## [0.6.0](https://github.com/FoamScience/ordo/compare/v0.5.0...v0.6.0) (2026-11-10)
 
 
