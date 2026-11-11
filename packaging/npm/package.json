@@ -1,6 +1,6 @@
 {
   "name": "ordo-diff",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Review a code change in reading order: definitions before their uses",
   "license": "MIT",
   "repository": {
