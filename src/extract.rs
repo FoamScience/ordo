@@ -218,6 +218,118 @@ pub fn compute_hunks(old: &str, new: &str) -> Vec<RawHunk> {
     hunks
 }
 
+/// `compute_hunks` aware of the grammar: an extracted helper stays one
+/// insertion (`unscattered_hunks`), and pure insertions and deletions are slid
+/// onto syntax boundaries (`slide_to_syntax`).
+pub fn compute_hunks_in(spec: Option<&LangSpec>, old: &str, new: &str) -> Vec<RawHunk> {
+    let hunks = unscattered_hunks(spec, old, new);
+    match spec {
+        Some(spec) => slide_to_syntax(spec, old, new, hunks),
+        None => hunks,
+    }
+}
+
+/// The line diff picks any one of the equally short scripts. A block whose
+/// last line repeats the line just above it (or whose first line repeats the
+/// one just below) can sit anywhere along that run; `similar` puts it where
+/// the scan happened to land, often straddling two siblings:
+///
+/// ```text
+///      f(
+/// +        "--new",
+/// +    )
+/// +    f(
+///          "--old",
+/// ```
+///
+/// Each pure insertion (deletion) is moved within its run to the position
+/// that cuts the fewest nodes of the new (old) side's tree, staying put on a
+/// tie. Lines keep their endings, as the line diff compared them.
+fn slide_to_syntax(spec: &LangSpec, old: &str, new: &str, mut hunks: Vec<RawHunk>) -> Vec<RawHunk> {
+    let (old_lines, new_lines): (Vec<&str>, Vec<&str>) = (
+        old.split_inclusive('\n').collect(),
+        new.split_inclusive('\n').collect(),
+    );
+    // 0-based half-open [start, end) of a 1-based inclusive range
+    let span = |r: [usize; 2]| (r[0] - 1, r[1].max(r[0] - 1));
+    for i in 0..hunks.len() {
+        let (os, oe) = span(hunks[i].old_range);
+        let (ns, ne) = span(hunks[i].new_range);
+        let inserted = os == oe && ns < ne;
+        if !inserted && !(ns == ne && os < oe) {
+            continue;
+        }
+        let (lines, side, s, e) = match inserted {
+            true => (&new_lines, new, ns, ne),
+            false => (&old_lines, old, os, oe),
+        };
+        let pick = |h: &RawHunk| span(if inserted { h.new_range } else { h.old_range });
+        let floor = i.checked_sub(1).map_or(0, |j| pick(&hunks[j]).1);
+        let ceil = hunks.get(i + 1).map_or(lines.len(), |h| pick(h).0);
+        let mut up = 0;
+        while s - up > floor && lines[s - up - 1] == lines[e - up - 1] {
+            up += 1;
+        }
+        let mut down = 0;
+        while e + down < ceil && lines[s + down] == lines[e + down] {
+            down += 1;
+        }
+        if up == 0 && down == 0 {
+            continue;
+        }
+        let Some(tree) = lang::parse(spec, side) else {
+            continue;
+        };
+        let nodes = multiline_nodes(tree.root_node(), s - up, e + down);
+        let cuts = |d: isize| {
+            let (a, b) = (s.wrapping_add_signed(d), e.wrapping_add_signed(d) - 1);
+            nodes
+                .iter()
+                .filter(|&&(lo, hi)| lo <= b && hi >= a)
+                .filter(|&&(lo, hi)| !(a <= lo && hi <= b) && !(lo <= a && b <= hi))
+                .count()
+        };
+        let d = (-(up as isize)..=down as isize)
+            .min_by_key(|&d| (cuts(d), d.unsigned_abs()))
+            .unwrap_or(0);
+        if d == 0 {
+            continue;
+        }
+        let shift = |r: [usize; 2]| [r[0].wrapping_add_signed(d), r[1].wrapping_add_signed(d)];
+        let h = &mut hunks[i];
+        h.old_range = shift(h.old_range);
+        h.new_range = shift(h.new_range);
+        if let Some(r0) = h.new_r0 {
+            h.new_r0 = Some(r0.wrapping_add_signed(d));
+            h.new_r1 = h.new_r1.wrapping_add_signed(d);
+        }
+    }
+    hunks
+}
+
+/// Inclusive 0-based row spans of the nodes spanning more than one row that
+/// overlap rows `[a, b)`. A node's trailing newline does not count as a row.
+fn multiline_nodes(root: Node, a: usize, b: usize) -> Vec<(usize, usize)> {
+    let mut out = vec![];
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let (s, end) = (n.start_position(), n.end_position());
+        let e = match end.column == 0 && end.row > s.row {
+            true => end.row - 1,
+            false => end.row,
+        };
+        if e < a || s.row >= b {
+            continue;
+        }
+        if e > s.row {
+            out.push((s.row, e));
+        }
+        let mut cur = n.walk();
+        stack.extend(n.children(&mut cur));
+    }
+    out
+}
+
 /// `compute_hunks`, unless the line diff lined a new definition's body up with
 /// lines of an old definition that is still there: a helper extracted next to
 /// the code it came from. Its lines then match the code they replaced line for
@@ -227,7 +339,7 @@ pub fn compute_hunks(old: &str, new: &str) -> Vec<RawHunk> {
 ///
 /// A rename is not this — its old name is gone — and its body lining up is
 /// what makes it read as one.
-pub fn compute_hunks_in(spec: Option<&LangSpec>, old: &str, new: &str) -> Vec<RawHunk> {
+fn unscattered_hunks(spec: Option<&LangSpec>, old: &str, new: &str) -> Vec<RawHunk> {
     let hunks = compute_hunks(old, new);
     let Some(spec) = spec.filter(|_| !old.is_empty() && !hunks.is_empty()) else {
         return hunks;

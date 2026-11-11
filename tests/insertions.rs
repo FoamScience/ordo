@@ -82,3 +82,57 @@ fn splitting_an_added_file_keeps_its_def_use_edges() {
         out.edges
     );
 }
+
+const ARGS_OLD: &str = "def main(parser):\n    parser.add_argument(\n        \"--a\",\n        help=\"A.\",\n    )\n    parser.add_argument(\n        \"--b\",\n        help=\"B.\",\n    )\n";
+const ARGS_NEW: &str = "def main(parser):\n    parser.add_argument(\n        \"--a\",\n        help=\"A.\",\n    )\n    parser.add_argument(\n        \"--new\",\n        help=\"New.\",\n    )\n    parser.add_argument(\n        \"--b\",\n        help=\"B.\",\n    )\n";
+
+#[test]
+fn an_inserted_call_is_the_whole_call_not_a_straddle_of_two() {
+    // the line diff alone takes `"--new",` .. `parser.add_argument(`: the tail
+    // of one call and the head of the next
+    let hs = one("a.py", ARGS_OLD, ARGS_NEW);
+    assert_eq!(hs.len(), 1);
+    assert_eq!(
+        hs[0].new_range,
+        [6, 9],
+        "the added `parser.add_argument(` .. `)`"
+    );
+}
+
+#[test]
+fn a_deleted_call_is_the_whole_call_not_a_straddle_of_two() {
+    let hs = one("a.py", ARGS_NEW, ARGS_OLD);
+    assert_eq!(hs.len(), 1);
+    assert_eq!(
+        hs[0].old_range,
+        [6, 9],
+        "the removed `parser.add_argument(` .. `)`"
+    );
+}
+
+#[test]
+fn a_slide_never_crosses_a_line_ending_the_diff_saw_as_different() {
+    // the context `parser.add_argument(` ends in CRLF, the inserted one in LF:
+    // they are different lines, so the insertion cannot move onto the context
+    let crlf = |s: &str| {
+        s.replacen(
+            "    )\n    parser.add_argument(\n",
+            "    )\n    parser.add_argument(\r\n",
+            1,
+        )
+    };
+    let (old, new) = (crlf(ARGS_OLD), crlf(ARGS_NEW));
+    let hs = one("a.py", &old, &new);
+    assert_eq!(hs.len(), 1);
+    assert_eq!(hs[0].new_range, [7, 10], "stays where the line diff put it");
+}
+
+#[test]
+fn an_inserted_function_between_blank_lines_stays_where_the_diff_put_it() {
+    // with the blanks above or below, `c` is whole either way: no slide
+    let old = "def a():\n    return 1\n\n\ndef b():\n    return 2\n";
+    let new = "def a():\n    return 1\n\n\ndef c():\n    return 3\n\n\ndef b():\n    return 2\n";
+    let hs = one("a.py", old, new);
+    assert_eq!(hs.len(), 1);
+    assert_eq!(hs[0].new_range, [5, 8]);
+}
