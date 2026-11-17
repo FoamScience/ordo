@@ -50,7 +50,8 @@ def with_features(repo, sha, inp):
     history of the files it changes: `sha`'s ancestors, never `sha` itself or
     what came after. The engine keeps only the ancestors inside its window,
     reaching back from `sha`'s own commit time; the cutoff here, a day wider,
-    only bounds the log. A shallow clone whose
+    only bounds the log. A file `sha` itself renames, which `range_input` shows
+    as brand-new, takes its history from the old name. A shallow clone whose
     boundary falls inside that window would undercount, so its commits get no
     history at all, as a stdin diff does."""
     at = int(git(repo, "show", "-s", "--format=%ct", sha).strip())
@@ -63,15 +64,26 @@ def with_features(repo, sha, inp):
             return inp
     log = git(repo, "-c", "core.quotePath=false", "log", "-M", "--topo-order", "--name-status", "--format=%x1e%ct%x09%s",
               f"--max-age={since}", f"{sha}^")
-    return {**inp, "history": {"at": at, "commits": followed(log, [c["path"] for c in inp["changes"]])}}
+    renamed = own_renames(repo, sha)
+    heads = {c["path"]: renamed.get(c["path"], c["path"]) for c in inp["changes"]}
+    return {**inp, "history": {"at": at, "commits": followed(log, heads)}}
 
 
-def followed(log, paths):
-    """The commits of a `git log -M --topo-order --name-status` that touch
-    `paths`, each listing them by their name at `paths`, so a file renamed
-    inside the window keeps the history from before the rename. The log is
-    unfiltered because a pathspec would hide the rename's old side."""
-    current = {p: p for p in paths}
+def own_renames(repo, sha):
+    """new path -> old path for the files `sha` renames, against its parent."""
+    out = git(repo, "-c", "core.quotePath=false", "diff", "-M", "--name-status", "--diff-filter=R", f"{sha}^", sha)
+    return {new: old for _, old, new in (l.split("\t") for l in out.splitlines())}
+
+
+def followed(log, heads):
+    """The commits of a `git log -M --topo-order --name-status` that touch the
+    files of `heads` (path -> its name at the log's newest commit), each
+    listing them by path, so a file renamed inside the window keeps the
+    history from before the rename. The log is unfiltered because a pathspec
+    would hide the rename's old side."""
+    current = {}
+    for p, n in heads.items():
+        current.setdefault(n, []).append(p)
     commits = []
     for rec in log.split("\x1e")[1:]:
         head, *entries = rec.strip("\n").split("\n")
@@ -79,11 +91,10 @@ def followed(log, paths):
         touched = []
         for e in filter(None, entries):
             status, *names = e.split("\t")
-            if (p := current.get(names[-1])) is not None:
-                touched.append(p)
+            if (ps := current.get(names[-1])) is not None:
+                touched += ps
                 if status.startswith("R"):
-                    del current[names[-1]]
-                    current[names[0]] = p
+                    current.setdefault(names[0], []).extend(current.pop(names[-1]))
         if touched:
             commits.append({"time": int(time), "subject": subject, "paths": touched})
     return commits
