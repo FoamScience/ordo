@@ -45,6 +45,31 @@ def range_input(repo, base, head):
                          "new": git(repo, "show", f"{head}:{p}")} for p in names]}
 
 
+def with_features(repo, sha, inp):
+    """`inp` asking the engine for hunch's per-hunk feature vectors, with the
+    history of the files it changes up to `sha`'s parent. The engine keeps only
+    the commits inside its window, ending at `sha`'s own commit time; the
+    cutoff here, a day wider, only bounds the log. A shallow clone whose
+    boundary falls inside that window would undercount, so its commits get no
+    history at all, as a stdin diff does."""
+    at = int(git(repo, "show", "-s", "--format=%ct", sha).strip())
+    since = at - 91 * 86400
+    inp = {**inp, "options": {**inp.get("options", {}), "features": True}}
+    shallow = Path(repo) / git(repo, "rev-parse", "--git-path", "shallow").strip()
+    if shallow.is_file():
+        edges = shallow.read_text().split()
+        if any(int(t) > since for t in git(repo, "show", "-s", "--format=%ct", *edges).split()):
+            return inp
+    log = git(repo, "log", "--no-renames", "--name-only", "--format=%x1e%ct%x09%s",
+              f"--max-age={since}", f"{sha}^", "--", *(c["path"] for c in inp["changes"]))
+    commits = []
+    for rec in log.split("\x1e")[1:]:
+        head, *paths = rec.strip("\n").split("\n")
+        time, _, subject = head.partition("\t")
+        commits.append({"time": int(time), "subject": subject, "paths": [p for p in paths if p]})
+    return {**inp, "history": {"at": at, "commits": commits}}
+
+
 def engine_output(inp):
     r = subprocess.run([ENGINE, "order", "--json"], input=json.dumps(inp), capture_output=True, text=True)
     return json.loads(r.stdout)

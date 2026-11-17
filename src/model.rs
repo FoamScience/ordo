@@ -13,6 +13,31 @@ pub struct Input {
     /// ordered, and never output.
     #[serde(default)]
     pub consumers: Vec<Consumer>,
+    /// The repository's commits before this change, for hunch's history
+    /// features. Read only when `Options.features` is on; absent for a change
+    /// with no repository behind it, such as a diff on stdin.
+    #[serde(default)]
+    pub history: Option<History>,
+}
+
+/// What the repository did before the change: every commit the caller found,
+/// with the paths it touched. The engine runs no git, so the caller collects
+/// these, and the engine decides which of them count (see `crate::hunch`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct History {
+    /// the change's own commit time, in Unix seconds: the window ends here, so
+    /// a past commit's features never see what came after it
+    pub at: i64,
+    #[serde(default)]
+    pub commits: Vec<PastCommit>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PastCommit {
+    /// commit time, in Unix seconds
+    pub time: i64,
+    pub subject: String,
+    pub paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -77,6 +102,11 @@ pub struct Options {
     /// in `original_level`, so a consumer can say it was moved.
     #[serde(default)]
     pub levels: BTreeMap<String, Level>,
+    /// Internal: put hunch's feature vector on every hunk and its schema on
+    /// the output, for training it offline. Off by default, and not part of
+    /// the published contract.
+    #[serde(default)]
+    pub features: bool,
 }
 
 fn catalog_default() -> bool {
@@ -98,6 +128,7 @@ impl Default for Options {
             docs_last: docs_last_default(),
             disable: vec![],
             levels: BTreeMap::new(),
+            features: false,
         }
     }
 }
@@ -125,6 +156,10 @@ pub enum Category {
     Other,
 }
 
+impl Category {
+    pub const ALL: &'static [Category] = &[Category::Import, Category::Definition, Category::Other];
+}
+
 /// How much of a hunk a reader actually meets: nothing but layout, or the
 /// same lines edited, or new text in place of old.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -143,6 +178,17 @@ pub enum Extent {
     Added,
     /// no new side
     Removed,
+}
+
+impl Extent {
+    pub const ALL: &'static [Extent] = &[
+        Extent::Whitespace,
+        Extent::Formatting,
+        Extent::Edited,
+        Extent::Rewritten,
+        Extent::Added,
+        Extent::Removed,
+    ];
 }
 
 /// Why the engine removed a hunk before ordering — a selection the caller
@@ -193,6 +239,19 @@ pub struct Output {
     /// two sentences saying why. Omitted when the change has no hunks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Summary>,
+    /// Internal: what `hunks[].features` hold, when `Options.features` asked
+    /// for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_schema: Option<FeatureSchema>,
+}
+
+/// The names behind each position of a hunk's feature vector, with the
+/// version and the hash a trained model records to know it still fits.
+#[derive(Debug, Clone, Serialize)]
+pub struct FeatureSchema {
+    pub version: u32,
+    pub hash: String,
+    pub names: Vec<String>,
 }
 
 /// What the change is, read off its hunks' facts by fixed rules.
@@ -732,6 +791,9 @@ pub struct HunkOut {
     /// definition this hunk introduces; omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<Symbol>,
+    /// Internal: hunch's feature vector, in `Output.feature_schema` order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Serialize)]

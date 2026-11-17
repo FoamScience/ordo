@@ -623,6 +623,7 @@ fn test_hunk(rationale: &str, enclosing: Option<&str>, symbols: Vec<Symbol>) -> 
         findings: vec![],
         uses_at: vec![],
         symbols,
+        features: None,
     }
 }
 
@@ -1062,6 +1063,7 @@ fn build_items_resolves_edge_targets_within_the_review_and_flags_ones_outside_it
         notes: vec![],
         ledger: vec![],
         summary: None,
+        feature_schema: None,
     };
     let items = build_items(&out);
     assert_eq!(items.len(), 2);
@@ -2714,6 +2716,7 @@ fn levels_in_rules_toml_reach_the_engine_and_a_bad_name_or_level_is_a_problem() 
             ..Options::default()
         },
         consumers: vec![],
+        history: None,
     });
     let f = out.files[0].hunks[0]
         .findings
@@ -3169,6 +3172,7 @@ fn re_running_the_current_strategy_keeps_the_group_reasons() {
             ..Options::default()
         },
         consumers: vec![],
+        history: None,
     };
     let out = ordo_diff::run(input);
     let mut app = test_app();
@@ -3986,6 +3990,7 @@ fn json_output_is_engine_input() {
         }],
         options: Default::default(),
         consumers: vec![],
+        history: None,
     };
     let back: Input = serde_json::from_value(input_json(&input)).unwrap();
     assert_eq!(back.changes[0].path, "a.rs");

@@ -85,6 +85,7 @@ fn review(args: &[String]) {
             ..Default::default()
         },
         consumers: vec![],
+        history: None,
     };
     let out = ordo_diff::run(input);
     if as_sarif {

@@ -133,6 +133,7 @@ pub fn range_input(dir: &Path, base: &str, head: &str) -> Option<Input> {
         changes,
         options: Options::default(),
         consumers: vec![],
+        history: None,
     })
 }
 

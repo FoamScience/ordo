@@ -125,6 +125,7 @@ fn to_input(blobs: &Blobs) -> Input {
             .collect(),
         options: Options::default(),
         consumers: vec![],
+        history: None,
     }
 }
 

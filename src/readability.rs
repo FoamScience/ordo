@@ -24,10 +24,10 @@ pub struct Metrics {
     pub short_names: usize,
 }
 
-type Metric = fn(&Metrics) -> usize;
+pub(crate) type Metric = fn(&Metrics) -> usize;
 
 /// Every measurement, by the name a report uses for it, with its unit.
-const METRICS: &[(&str, &str, Metric)] = &[
+pub(crate) const METRICS: &[(&str, &str, Metric)] = &[
     ("nesting", "", |m| m.nesting),
     ("cognitive", "", |m| m.cognitive),
     ("branches", "", |m| m.branches),
