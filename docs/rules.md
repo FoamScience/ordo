@@ -326,7 +326,8 @@ qualified name, and speaks on the first hunk that touches it, once. A rule with 
 `-delta` limits fires when one definition grew past all of them. An `else if` or `elif`
 is another arm of its `if`, not a level deeper. A definition the
 change adds or renames has no old version to grow from — `max-lines` and its kin above
-cover it.
+cover it. A finding from a `-delta` limit quotes what grew past it after the rule's
+message: `this made it two levels deeper; return early (schedule: nesting 2 → 5)`.
 
 ## Relationships
 

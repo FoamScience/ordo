@@ -388,6 +388,109 @@ fn max_nesting_delta_measures_a_touched_definition_against_its_old_self() {
 }
 
 #[test]
+fn a_delta_rule_quotes_what_grew_and_the_hunk_carries_both_versions() {
+    let rules = serde_json::json!([{ "name": "deeper", "when": { "max_nesting_delta": 1 }, "warn": "nesting grew" }]);
+    let out = one_with(
+        "a.py",
+        "def f(x):\n    if x:\n        return 1\n    return x\n",
+        "def f(x):\n    if x:\n        for i in x:\n            if i:\n                return i\n    return x\n",
+        rules,
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.findings[0].message, "nesting grew (f: nesting 1 → 3)");
+    assert_eq!(
+        serde_json::to_value(&h.deltas).unwrap(),
+        serde_json::json!([{
+            "name": "f",
+            "nesting": [1, 3],
+            "lines": [4, 6],
+            "params": [1, 1],
+            "branches": [1, 3],
+            "cognitive": [1, 6],
+            "short_names": [0, 0]
+        }])
+    );
+}
+
+#[test]
+fn another_else_if_arm_is_not_a_level_deeper() {
+    let rules = serde_json::json!([{ "name": "deeper", "when": { "max_nesting_delta": 0 }, "warn": "nesting grew" }]);
+    let cases = [
+        (
+            "a.js",
+            "function f(x) {\n  if (x == 1) {\n    return 1;\n  }\n  return 0;\n}\n",
+            "function f(x) {\n  if (x == 1) {\n    return 1;\n  } else if (x == 2) {\n    return 2;\n  } else if (x == 3) {\n    return 3;\n  }\n  return 0;\n}\n",
+        ),
+        (
+            "a.rs",
+            "fn f(x: u8) -> u8 {\n    if x == 1 {\n        return 1;\n    }\n    0\n}\n",
+            "fn f(x: u8) -> u8 {\n    if x == 1 {\n        return 1;\n    } else if x == 2 {\n        return 2;\n    } else if x == 3 {\n        return 3;\n    }\n    0\n}\n",
+        ),
+        (
+            "a.go",
+            "package a\n\nfunc f(x int) int {\n\tif x == 1 {\n\t\treturn 1\n\t}\n\treturn 0\n}\n",
+            "package a\n\nfunc f(x int) int {\n\tif x == 1 {\n\t\treturn 1\n\t} else if x == 2 {\n\t\treturn 2\n\t} else if x == 3 {\n\t\treturn 3\n\t}\n\treturn 0\n}\n",
+        ),
+        (
+            "a.py",
+            "def f(x):\n    if x == 1:\n        if x:\n            return 1\n    return 0\n",
+            "def f(x):\n    if x == 1:\n        if x:\n            return 1\n    elif x == 2:\n        if x:\n            return 2\n    return 0\n",
+        ),
+    ];
+    for (path, old, new) in cases {
+        let out = one_with(path, old, new, rules.clone());
+        assert!(hits(&out, path).is_empty(), "{path}");
+        let deltas = &out.files[0].hunks[0].deltas;
+        assert_eq!(deltas.len(), 1, "{path}");
+        assert_eq!(deltas[0].nesting[0], deltas[0].nesting[1], "{path}");
+    }
+}
+
+#[test]
+fn a_with_or_try_nests_without_adding_cognitive_complexity() {
+    let out = one_with(
+        "a.py",
+        "def f(p):\n    return p\n",
+        "def f(p):\n    with open(p) as fh:\n        return fh\n",
+        serde_json::json!([]),
+    );
+    let d = &out.files[0].hunks[0].deltas[0];
+    assert_eq!(
+        (d.nesting, d.branches, d.cognitive),
+        ([0, 1], [0, 0], [0, 0])
+    );
+}
+
+#[test]
+fn several_delta_limits_need_one_definition_past_them_all() {
+    let rules = serde_json::json!([{
+        "name": "worse",
+        "when": { "max_nesting_delta": 0, "max_params_delta": 0 },
+        "warn": "worse"
+    }]);
+    // f only got deeper and the g inside it only gained a parameter, both on
+    // its first hunk
+    let apart = one_with(
+        "a.py",
+        "def f(x):\n    def g(a):\n        return a\n    return g(x)\n",
+        "def f(x):\n    def g(a, b):\n        return a\n    if x:\n        return g(x, x)\n    return x\n",
+        rules.clone(),
+    );
+    assert_eq!(apart.files[0].hunks[0].deltas.len(), 2);
+    assert!(hits(&apart, "a.py").is_empty());
+    let both = one_with(
+        "a.py",
+        "def f(x):\n    return x\n",
+        "def f(x, y):\n    if x:\n        return y\n",
+        rules,
+    );
+    assert_eq!(
+        both.files[0].hunks[0].findings[0].message,
+        "worse (f: nesting 0 → 1, params 1 → 2)"
+    );
+}
+
+#[test]
 fn readability_deltas_ignore_debt_a_definition_already_carried() {
     let rules = serde_json::json!([{ "name": "deeper", "when": { "max_nesting_delta": 0 }, "warn": "nesting grew" }]);
     let deep = "def f(x):\n    if x:\n        for i in x:\n            if i:\n                return i\n    return x\n";

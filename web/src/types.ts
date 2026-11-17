@@ -31,6 +31,8 @@ export interface Item {
   gist: string | null;
   /** the rules that can fire in this file, by its language */
   notes: string[];
+  /** the definitions this hunk is the first to touch whose readability moved */
+  readability: Readability[];
   edges: Edge[];
   symbol: string | null;
   bucket: string;
@@ -47,6 +49,17 @@ export interface Item {
   reviewed: boolean;
   delta: Delta;
   note: string | null;
+}
+
+/** one definition's readability measurements, each `[old, new]` */
+export interface Readability {
+  name: string;
+  nesting: [number, number];
+  lines: [number, number];
+  params: [number, number];
+  branches: [number, number];
+  cognitive: [number, number];
+  short_names: [number, number];
 }
 
 export type Row =

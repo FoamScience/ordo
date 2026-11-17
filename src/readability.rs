@@ -6,6 +6,7 @@
 //! already carried says nothing.
 
 use crate::extract::RawHunk;
+use crate::model::ReadabilityDelta;
 use std::collections::HashMap;
 
 /// What one version of a callable definition measures.
@@ -61,10 +62,22 @@ impl DefDelta {
         METRICS
             .iter()
             .filter(|(_, _, m)| self.grew(*m) > 0)
-            .map(|(name, unit, m)| {
-                format!("{name} {}{unit} → {}{unit}", m(&self.was), m(&self.now))
-            })
+            .map(|metric| self.moved(metric))
             .collect()
+    }
+
+    /// the measurement `name`, as `nesting 2 → 5`, when it grew by more
+    /// than `limit`
+    pub(crate) fn past(&self, name: &str, limit: usize) -> Option<String> {
+        let metric = METRICS
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .expect("a measurement METRICS names");
+        (self.grew(metric.2) > limit).then(|| self.moved(metric))
+    }
+
+    fn moved(&self, (name, unit, m): &(&str, &str, Metric)) -> String {
+        format!("{name} {}{unit} → {}{unit}", m(&self.was), m(&self.now))
     }
 
     /// Growth in length alone is what adding a feature looks like, not a
@@ -73,6 +86,21 @@ impl DefDelta {
         METRICS
             .iter()
             .any(|(name, _, m)| *name != "lines" && self.grew(*m) > 0)
+    }
+}
+
+impl From<&DefDelta> for ReadabilityDelta {
+    fn from(d: &DefDelta) -> Self {
+        let pair = |m: Metric| [m(&d.was), m(&d.now)];
+        ReadabilityDelta {
+            name: d.name.clone(),
+            nesting: pair(|m| m.nesting),
+            lines: pair(|m| m.lines),
+            params: pair(|m| m.params),
+            branches: pair(|m| m.branches),
+            cognitive: pair(|m| m.cognitive),
+            short_names: pair(|m| m.short_names),
+        }
     }
 }
 

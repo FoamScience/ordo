@@ -1655,8 +1655,8 @@ function codeRows(f) {
   const added = /* @__PURE__ */ new Map();
   for (const h2 of hunks) {
     for (let n = h2.new[0]; n <= h2.new[1]; n++) {
-      const moved = h2.moved_added?.[n - h2.new[0]];
-      added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null, ...moved?.length ? { moved } : {} });
+      const moved2 = h2.moved_added?.[n - h2.new[0]];
+      added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null, ...moved2?.length ? { moved: moved2 } : {} });
     }
   }
   const { folded, edited } = editsInPlace(f, hunks);
@@ -1664,7 +1664,7 @@ function codeRows(f) {
     for (const h2 of startingAt.get(n) ?? []) {
       for (let o = h2.old[0]; o <= h2.old[1]; o++) {
         if (folded.has(o)) continue;
-        const moved = h2.moved_removed?.[o - h2.old[0]];
+        const moved2 = h2.moved_removed?.[o - h2.old[0]];
         rows.push({
           kind: "del",
           o,
@@ -1672,7 +1672,7 @@ function codeRows(f) {
           spans: f.old_spans?.[o - 1] ?? null,
           hunk: h2.i,
           marks: h2.removed[o - h2.old[0]] ?? null,
-          ...moved?.length ? { moved } : {}
+          ...moved2?.length ? { moved: moved2 } : {}
         });
       }
     }
@@ -1788,8 +1788,8 @@ function runs(text, spans, marks, gone = [], movedSpans = []) {
   }
   const changed = new Array(chars.length).fill(false);
   for (const [a, b] of marks ?? []) for (let k = a; k < b && k < chars.length; k++) changed[k] = true;
-  const moved = new Array(chars.length).fill(false);
-  for (const [a, b] of movedSpans) for (let k = a; k < b && k < chars.length; k++) moved[k] = true;
+  const moved2 = new Array(chars.length).fill(false);
+  for (const [a, b] of movedSpans) for (let k = a; k < b && k < chars.length; k++) moved2[k] = true;
   const out = [];
   const lost = (k) => {
     for (const [at2, t] of gone) if (at2 === k) out.push({ text: t, role: null, changed: false, gone: true });
@@ -1797,8 +1797,8 @@ function runs(text, spans, marks, gone = [], movedSpans = []) {
   for (let k = 0; k < chars.length; k++) {
     lost(k);
     const last = out[out.length - 1];
-    if (last && !last.gone && last.role === role[k] && last.changed === changed[k] && !!last.moved === moved[k]) last.text += chars[k];
-    else out.push({ text: chars[k], role: role[k], changed: changed[k], ...moved[k] ? { moved: true } : {} });
+    if (last && !last.gone && last.role === role[k] && last.changed === changed[k] && !!last.moved === moved2[k]) last.text += chars[k];
+    else out.push({ text: chars[k], role: role[k], changed: changed[k], ...moved2[k] ? { moved: true } : {} });
   }
   lost(chars.length);
   return out;
@@ -3958,6 +3958,22 @@ function hitRow(hit) {
   return [`${hit.path}:${hit.line}`, hit.name ?? ""];
 }
 
+// src/readability.ts
+var METRICS = [
+  ["nesting", "nesting", ""],
+  ["cognitive", "cognitive", ""],
+  ["branches", "branches", ""],
+  ["params", "params", ""],
+  ["short_names", "short names", "%"],
+  ["lines", "lines", ""]
+];
+function moved(d) {
+  return METRICS.filter(([k]) => d[k][0] !== d[k][1]).map(([k, name, unit]) => `${name} ${d[k][0]}${unit} \u2192 ${d[k][1]}${unit}`);
+}
+function regressed(d) {
+  return METRICS.some(([k]) => k !== "lines" && d[k][1] > d[k][0]);
+}
+
 // src/summary.ts
 function files(r) {
   const by = /* @__PURE__ */ new Map();
@@ -4137,15 +4153,15 @@ async function refresh() {
   st2.review = slot;
   st2.version = slot.version;
   st2.keymap = new Keymap(slot.keys);
-  const moved = !!prev && prev.generation !== slot.generation;
+  const moved2 = !!prev && prev.generation !== slot.generation;
   const remap = (i) => {
-    if (!prev || !moved) return i;
+    if (!prev || !moved2) return i;
     const id = identity(prev.items[i]);
     return id ? slot.items.findIndex((it2) => identity(it2) === id) : -1;
   };
   let sel = st2.sel >= 0 ? remap(st2.sel) : -1;
   if (sel < 0) sel = prev ? clampToView(Math.min(st2.sel, slot.items.length - 1)) : slot.sel;
-  if (moved) {
+  if (moved2) {
     st2.jumps = st2.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
     if (depmap) {
       depmap.root = remap(depmap.root);
@@ -4947,6 +4963,10 @@ function renderWhy() {
             h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
           )
         )
+      ],
+      it2.readability.length > 0 && [
+        h("h3", null, "Readability", h("small", null, "against each definition's old version")),
+        it2.readability.map((d) => h("p", { class: regressed(d) ? "warnline" : "" }, `${d.name}: ${moved(d).join(", ")}`))
       ],
       it2.executed && [
         h("h3", null, "Test coverage"),

@@ -18,7 +18,7 @@
 //! collected it (per-user and per-repo).
 use crate::lang::{self, LangSpec};
 use crate::model::{Category, ContainerKind, Finding, FindingSource, Level, Rule};
-use crate::readability::{DefDelta, Metrics};
+use crate::readability::DefDelta;
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use std::collections::HashMap;
@@ -259,7 +259,7 @@ impl<'r> Rules<'r> {
                 let row = pattern_rows
                     .get(&i)
                     .and_then(|rs| rs.iter().copied().filter(|r| r0 <= *r && *r <= r1).min());
-                c.findings(row)
+                c.findings(row, c.grown(f.deltas))
             })
             .collect()
     }
@@ -479,12 +479,45 @@ impl<'r> Compiled<'r> {
             // file that was already over it
             && w.max_file_lines.is_none_or(|m| new_lines > m && old_lines.is_none_or(|o| o <= m))
             && w.recursive.is_none_or(|r| r == f.recursive)
-            && grew_past(w.max_nesting_delta, f.deltas, |m| m.nesting)
-            && grew_past(w.max_lines_delta, f.deltas, |m| m.lines)
-            && grew_past(w.max_params_delta, f.deltas, |m| m.params)
-            && grew_past(w.max_branches_delta, f.deltas, |m| m.branches)
-            && grew_past(w.max_cognitive_delta, f.deltas, |m| m.cognitive)
-            && grew_past(w.max_short_names_delta, f.deltas, |m| m.short_names)
+            // one definition crosses every `-delta` limit, against its own old
+            // version, so debt a definition already carried never fires
+            && (self.delta_limits().iter().all(|(limit, _)| limit.is_none())
+                || f.deltas.iter().any(|d| self.crossed(d).is_some()))
+    }
+
+    /// what `d` grew past each `-delta` limit, as `nesting 2 → 5`; `None` when
+    /// it stayed within any of them
+    fn crossed(&self, d: &DefDelta) -> Option<Vec<String>> {
+        self.delta_limits()
+            .iter()
+            .filter_map(|(limit, name)| limit.map(|m| d.past(name, m)))
+            .collect()
+    }
+
+    /// each `-delta` limit, by the measurement it caps
+    fn delta_limits(&self) -> [(Option<usize>, &'static str); 6] {
+        let w = &self.rule.when;
+        [
+            (w.max_nesting_delta, "nesting"),
+            (w.max_lines_delta, "lines"),
+            (w.max_params_delta, "params"),
+            (w.max_branches_delta, "branches"),
+            (w.max_cognitive_delta, "cognitive"),
+            (w.max_short_names_delta, "short names"),
+        ]
+    }
+
+    /// what grew past the rule's `-delta` limits, as `f: nesting 2 → 5`, for
+    /// its findings to quote
+    fn grown(&self, deltas: &[DefDelta]) -> Option<String> {
+        let said: Vec<String> = deltas
+            .iter()
+            .filter_map(|d| {
+                let moved = self.crossed(d)?;
+                (!moved.is_empty()).then(|| format!("{}: {}", d.name, moved.join(", ")))
+            })
+            .collect();
+        (!said.is_empty()).then(|| said.join("; "))
     }
 
     /// the names it defines, uses and imports, and what its container holds
@@ -512,15 +545,19 @@ impl<'r> Compiled<'r> {
             || matched.is_some_and(|rs| rs.iter().any(|r| r0 <= *r && *r <= r1))
     }
 
-    /// What a matching rule says: one finding per message level it carries.
+    /// What a matching rule says: one finding per message level it carries,
+    /// quoting what grew when a `-delta` limit matched.
     /// A rule that only sets `noise` or `priority` still reports itself —
     /// otherwise a hunk sorts oddly with nothing to explain it.
-    fn findings(&self, row: Option<usize>) -> Vec<Finding> {
+    fn findings(&self, row: Option<usize>, grown: Option<String>) -> Vec<Finding> {
         let rule = self.rule;
         let finding = |message: String, level: Level| Finding {
             source: self.source,
             name: rule.name.clone(),
-            message,
+            message: match &grown {
+                Some(g) => format!("{message} ({g})"),
+                None => message,
+            },
             level,
             row,
             original_level: None,
@@ -619,13 +656,6 @@ pub fn priority(hits: &[Finding], rules: &[Rule]) -> i64 {
         .map(|r| r.priority)
         .max()
         .unwrap_or(0)
-}
-
-/// A definition the hunk touched grew by more than `limit` in one
-/// measurement — its old version is the baseline, so debt it already
-/// carried never fires.
-fn grew_past(limit: Option<usize>, deltas: &[DefDelta], metric: fn(&Metrics) -> usize) -> bool {
-    limit.is_none_or(|m| deltas.iter().any(|d| d.grew(metric) > m))
 }
 
 fn node_row(n: Node) -> usize {

@@ -1277,6 +1277,8 @@ struct Item {
     rationale: String,
     details: Vec<String>,
     notes: Vec<String>,
+    /// the engine's `HunkOut::deltas`, shown in the web reviewer's why pane
+    readability: Vec<ordo_diff::model::ReadabilityDelta>,
     edges: Vec<EdgeRef>,
     /// the key the list groups and folds by — a ledger symbol or a group id,
     /// depending on `App::mode`. Swapped in place by `set_mode`, so the two
@@ -1554,6 +1556,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 rationale: h.rationale.clone(),
                 details: h.details.clone(),
                 notes: h.notes.clone(),
+                readability: h.deltas.clone(),
                 edges: hunk_edges(out, h, &by_id, &item_index),
                 noise: h.noise,
                 comment: h.comment,

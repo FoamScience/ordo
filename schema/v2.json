@@ -516,6 +516,82 @@
                         "type": "string"
                       }
                     },
+                    "deltas": {
+                      "type": "array",
+                      "description": "the definitions this hunk is the first to touch whose readability measurements moved, each measurement as [old, new]; what the `max_*_delta` rule conditions compare. A definition the change adds or renames has no old version and is not here. Omitted when empty",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "nesting",
+                          "lines",
+                          "params",
+                          "branches",
+                          "cognitive",
+                          "short_names"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "qualified name, the same on both sides"
+                          },
+                          "nesting": {
+                            "type": "array",
+                            "description": "deepest control flow inside it, counted from its own body",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                          },
+                          "lines": {
+                            "type": "array",
+                            "description": "length in lines",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                          },
+                          "params": {
+                            "type": "array",
+                            "description": "parameter count",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                          },
+                          "branches": {
+                            "type": "array",
+                            "description": "`if`, loops, `match`/`switch`",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                          },
+                          "cognitive": {
+                            "type": "array",
+                            "description": "each branch weighted by how deep it sits, plus each run of `&&`/`||`",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                          },
+                          "short_names": {
+                            "type": "array",
+                            "description": "percent of its local names one or two characters long",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 2,
+                            "maxItems": 2
+                          }
+                        }
+                      }
+                    },
                     "symbols": {
                       "type": "array",
                       "description": "symbol identity (name + tree-sitter node kind + enclosing scope) for each definition this hunk introduces, e.g. distinguishing a method `run` on class `A` from a module-level function `run`; matches `defines` minus imports; omitted when empty",

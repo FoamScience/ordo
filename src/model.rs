@@ -359,6 +359,24 @@ pub struct UseSite {
     pub rows: Vec<usize>,
 }
 
+/// A definition the hunk is the first to touch whose readability measurements
+/// moved, each as `[old, new]` — what a `-delta` rule condition compares.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadabilityDelta {
+    /// qualified name, the same on both sides
+    pub name: String,
+    /// deepest control flow inside it, counted from its own body
+    pub nesting: [usize; 2],
+    pub lines: [usize; 2],
+    pub params: [usize; 2],
+    /// `if`, loops, `match`/`switch`
+    pub branches: [usize; 2],
+    /// each branch weighted by how deep it sits, plus each run of `&&`/`||`
+    pub cognitive: [usize; 2],
+    /// percent of its local names one or two characters long
+    pub short_names: [usize; 2],
+}
+
 /// One reviewing rule: what to match, and what to say or do about it.
 ///
 /// A rule is *data*, evaluated deterministically against a hunk's own facts —
@@ -699,6 +717,10 @@ pub struct HunkOut {
     /// structural smells for a def introduced here (P13.1); omitted when empty
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// the definitions this hunk is the first to touch whose readability
+    /// measurements moved; omitted when empty
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deltas: Vec<ReadabilityDelta>,
     /// everything anyone noticed about this hunk — the engine's construct
     /// catalog, the caller's rules, an analyzer's results — in one list
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
