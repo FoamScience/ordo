@@ -101,7 +101,7 @@ button:disabled { cursor: not-allowed; }
 .split { background: var(--line); cursor: col-resize; position: relative; }
 .split::after { content: ""; position: absolute; inset: 0 -4px; }
 .split:hover, .split.drag { background: var(--accent); }
-.pane { display: grid; grid-template-rows: var(--pane-head) minmax(0, 1fr); min-width: 0; min-height: 0; }
+.pane { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--pane-head) minmax(0, 1fr); min-width: 0; min-height: 0; }
 .pane > .body { overflow: auto; min-height: 0; outline: none; }
 .pane > .head {
   position: relative; display: flex; align-items: center; gap: var(--space-xs);
@@ -131,8 +131,9 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 /* ---- the reading order: a register on a thread ---------------------- */
 
 #list { background: var(--bg); }
-#list .body { position: relative; padding-bottom: 30vh; }
-.rows { position: relative; padding-right: var(--space-sm); --rail: 30px; }
+#list .body { position: relative; padding-bottom: 30vh; --rail: 30px; }
+.rows { position: relative; padding-right: var(--space-sm); }
+.rows:focus-visible { outline-offset: -2px; }
 .rows::before {
   content: ""; position: absolute; left: var(--rail); top: 0; bottom: 0; width: var(--rule-hair);
   background: var(--line);
@@ -351,8 +352,10 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .link {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-xs);
   padding: var(--space-xs) var(--space-sm); margin: 0 calc(var(--space-sm) * -1);
-  border-left: var(--rule-heavy) solid transparent; border-bottom: var(--rule-hair) solid var(--line-2); cursor: pointer;
+  border: 0; border-left: var(--rule-heavy) solid transparent; border-bottom: var(--rule-hair) solid var(--line-2); cursor: pointer;
+  background: none; text-align: left;
 }
+.link:focus-visible { outline-offset: -2px; }
 .link .who { font-size: var(--fs-tiny); font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link .loc { font-size: var(--fs-tiny); color: var(--faint); white-space: nowrap; }
 .link .what { grid-column: 1 / -1; color: var(--dim); font-size: var(--fs-small); line-height: 1.4; }
@@ -389,6 +392,8 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
   background: var(--surface); border: var(--rule-heavy) solid var(--line);
   display: grid; grid-template-rows: auto minmax(0, 1fr);
 }
+/* the sheet takes focus only so Tab starts inside it; its own border already marks it */
+.sheet:focus-visible { outline: none; } /* unslopovich-ignore focus-removed */
 .sheet > header {
   display: flex; align-items: center; gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md); border-bottom: var(--rule-hair) solid var(--line);

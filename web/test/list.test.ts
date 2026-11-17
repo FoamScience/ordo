@@ -52,6 +52,18 @@ test("under a heading a row drops the heading's name from its sentence", () => {
   assert.deepEqual(rowText(a, [a, b]), { text: "adds local seen (2 uses)", code: false });
 });
 
+test("under a heading a row drops the heading's name after its verb", () => {
+  const a = item({ enclosing: "uses", rationale: "changes uses in jobs.lint.steps" });
+  const b = item({ enclosing: "uses", rationale: 'changes uses: "a@v4" → "a@v7"' });
+  const c = item({ enclosing: "uses", rationale: "edits uses" });
+  assert.deepEqual(rowText(a, [a, b, c]), { text: "changes in jobs.lint.steps", code: false });
+  assert.deepEqual(rowText(b, [a, b, c]), { text: 'changes: "a@v4" → "a@v7"', code: false });
+  const twin = 'changes uses: "a@v4" → "a@v7"';
+  const d = item({ enclosing: "uses", rationale: twin, details: ["changes uses in jobs.test.steps"] });
+  const e = item({ enclosing: "uses", rationale: twin, details: ["changes uses in jobs.deny.steps"] });
+  assert.deepEqual(rowText(d, [d, e]), { text: "changes in jobs.test.steps", code: false });
+});
+
 test("a folded row says what it hides", () => {
   const imp = item({ category: "import", rationale: "changes import errors, lazyloader" });
   const fmt = item({ category: "other", rationale: "formatting only" });
