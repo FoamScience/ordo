@@ -4,10 +4,14 @@
 # ///
 """Train hunch's first head, P(should_skip), on the engine's per-hunk features:
 logistic regression and LightGBM, trained on silver, scored on gold and by
-leave-one-repo-out over silver. The trees ship only when they beat the
-regression by MIN_GAIN AUROC on gold. Writes src/hunch.json (model, feature
-schema, metrics, provenance) and prints the comparison against the engine's
-rule-based noise flag at its own hide rate.
+leave-one-repo-out over silver. Training drops every hunk from a gold commit,
+so gold stays held out. A label whose key the engine no longer emits (its hunk
+boundaries drifted) takes the unclaimed hunk of the same file that overlaps it
+by at least OVERLAP_MIN. The trees ship when they beat the regression by
+MIN_GAIN AUROC on gold, or when, leaving one repo out, the regression hides more
+hunks wrongly than the noise flag and the trees do not. Writes src/hunch.json
+(model, feature schema, metrics, provenance) and prints the comparison against
+the engine's rule-based noise flag at its own hide rate.
 
 usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--workers N] [--extra FILE]
 
@@ -21,7 +25,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -39,42 +45,79 @@ SEED = 0
 HISTORY_DROP = 0.2
 HISTORY = ("has_history", "churn", "fixes")
 MIN_GAIN = 0.03
+OVERLAP_MIN = 0.5
 LGBM = dict(n_estimators=200, learning_rate=0.05, num_leaves=15, min_child_samples=20,
             subsample=0.8, subsample_freq=1, colsample_bytree=0.8, random_state=SEED,
             deterministic=True, force_row_wise=True, n_jobs=1, verbose=-1)
 
 
 def commit_features(corpus, repo, sha):
-    """key -> feature vector for one commit's hunks, and the schema."""
+    """(key, old range, new range, feature vector) per hunk of one commit, and
+    the schema."""
     d = str(corpus / repo)
     parent, inp = commit_input(d, sha)
     if not parent:
-        return {}, None
+        return [], None
     out = engine_output(with_features(d, sha, inp))
-    vecs = {f"{repo}:{sha[:8]}:{f['path']}:{h['new_range'][0]}": h["features"]
-            for f in out["files"] for h in f["hunks"] if h.get("features") is not None}
-    return vecs, out.get("feature_schema")
+    hunks = [(f"{repo}:{sha[:8]}:{f['path']}:{h['new_range'][0]}", h["old_range"], h["new_range"], h["features"])
+             for f in out["files"] for h in f["hunks"] if h.get("features") is not None]
+    return hunks, out.get("feature_schema")
+
+
+def changed(diff):
+    """The old and new line ranges a labeled hunk changes, from its header,
+    which gold-sample.py writes as ordo's own ranges; inclusive, empty when
+    start > end."""
+    m = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff)
+    o0, oc, n0, nc = (int(g) if g is not None else 1 for g in m.groups())
+    return (o0, o0 + oc - 1), (n0, n0 + nc - 1)
+
+
+def overlap(a, b):
+    """Jaccard of two hunks' changed lines, old and new side together."""
+    size = lambda r: max(0, r[1] - r[0] + 1)
+    inter = sum(size((max(x[0], y[0]), min(x[1], y[1]))) for x, y in zip(a, b))
+    union = sum(size(x) + size(y) for x, y in zip(a, b)) - inter
+    return inter / union if union else 0.0
 
 
 def load(corpus, records, workers):
+    """Features and labels for `records`, each matched to an engine hunk by
+    key, else by overlap; the counts of both misses and overlap matches."""
     commits = sorted({(r["repo"], r["sha"]) for r in records})
-    vecs, schemas = {}, set()
+    vecs, per_file, schemas = {}, defaultdict(list), set()
     with ThreadPoolExecutor(workers) as ex:
-        for v, s in ex.map(lambda c: commit_features(corpus, *c), commits):
-            vecs.update(v)
+        for hunks, s in ex.map(lambda c: commit_features(corpus, *c), commits):
+            for key, old, new, v in hunks:
+                vecs[key] = v
+                per_file[key.rsplit(":", 1)[0]].append((key, (tuple(old), tuple(new))))
             if s:
                 schemas.add(json.dumps(s, sort_keys=True))
     if len(schemas) != 1:
         sys.exit(f"expected one feature schema, got {len(schemas)}")
-    missing = [r["key"] for r in records if r["key"] not in vecs]
+    claimed = {r["key"] for r in records if r["key"] in vecs}
+    keys, missing, by_overlap = [], [], 0
+    for r in records:
+        key = r["key"] if r["key"] in vecs else None
+        if key is None and r.get("diff"):
+            span = changed(r["diff"])
+            best = max(((overlap(span, rng), k) for k, rng in per_file[r["key"].rsplit(":", 1)[0]]
+                        if k not in claimed), default=(0.0, None))
+            if best[0] >= OVERLAP_MIN:
+                key = best[1]
+                claimed.add(key)
+                by_overlap += 1
+        if key is None:
+            missing.append(r["key"])
+        keys.append(key)
     if missing:
         print(f"{len(missing)} labeled hunks not found in engine output, dropped "
               f"(first: {missing[0]})", file=sys.stderr)
-    kept = [r for r in records if r["key"] in vecs]
-    x = np.array([vecs[r["key"]] for r in kept], dtype=float)
-    y = np.array([bool(r["labels"]["should_skip"]) for r in kept])
-    repos = np.array([r["repo"] for r in kept])
-    return x, y, repos, json.loads(schemas.pop()), len(missing)
+    kept = [(r, k) for r, k in zip(records, keys) if k is not None]
+    x = np.array([vecs[k] for _, k in kept], dtype=float)
+    y = np.array([bool(r["labels"]["should_skip"]) for r, _ in kept])
+    repos = np.array([r["repo"] for r, _ in kept])
+    return x, y, repos, json.loads(schemas.pop()), {"unmatched": len(missing), "matched_by_overlap": by_overlap}
 
 
 def extra_records(path):
@@ -150,15 +193,23 @@ def main():
     corpus = Path(os.environ.get("ORDO_CORPUS", "~/.cache/ordo-corpus")).expanduser()
     gold_path, silver_path = ROOT / "corpus/gold.jsonl", corpus / "silver.jsonl"
     read = lambda p: [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
-    xs, ys, rs, schema, s_missing = load(corpus, read(silver_path), a.workers)
-    xg, yg, rg, gschema, g_missing = load(corpus, read(gold_path), a.workers)
+    gold_records = read(gold_path)
+    gold_commits = {(r["repo"], r["sha"][:8]) for r in gold_records}
+    held_out = lambda records: [r for r in records if (r["repo"], r["sha"][:8]) not in gold_commits]
+    silver_records = read(silver_path)
+    silver_kept = held_out(silver_records)
+    xs, ys, rs, schema, s_match = load(corpus, silver_kept, a.workers)
+    xg, yg, rg, gschema, g_match = load(corpus, gold_records, a.workers)
     if gschema != schema:
         sys.exit("silver and gold feature schemas differ")
     names = schema["names"]
     noise, hist = names.index("noise"), [names.index(c) for c in HISTORY]
-    xt, yt, rt, e_missing = xs, ys, rs, None
+    xt, yt, rt, e_match, e_gold = xs, ys, rs, None, 0
     if a.extra:
-        xe, ye, re_, eschema, e_missing = load(corpus, list(extra_records(a.extra)), a.workers)
+        extra = list(extra_records(a.extra))
+        extra_kept = held_out(extra)
+        e_gold = len(extra) - len(extra_kept)
+        xe, ye, re_, eschema, e_match = load(corpus, extra_kept, a.workers)
         if eschema != schema:
             sys.exit("silver and extra feature schemas differ")
         xt, yt, rt = np.vstack([xs, xe]), np.concatenate([ys, ye]), np.concatenate([rs, re_])
@@ -182,8 +233,10 @@ def main():
                      for r in sorted(set(rs)) if len(set(ys[rs == r])) == 2}
 
     gain = gold["trees"]["auroc"] - gold["lr"]["auroc"]
-    chosen = "trees" if gain >= MIN_GAIN else "lr"
-    if chosen == "lr":
+    wrong = {k: m["at_noise_hide_rate"]["all"]["wrong_hides"] for k, m in loro_ev.items()}
+    fired = ("gold_auroc_gain" if gain >= MIN_GAIN else
+             "loro_wrong_hides" if wrong["lr"] > wrong["noise"] >= wrong["trees"] else None)
+    if fired is None:
         scaler, lr = models["lr"].named_steps.values()
         model = {"type": "logistic", "mean": scaler.mean_.tolist(), "scale": scaler.scale_.tolist(),
                  "coef": lr.coef_[0].tolist(), "intercept": float(lr.intercept_[0])}
@@ -194,19 +247,24 @@ def main():
         "head": "should_skip",
         "model": model,
         "feature_schema": schema,
-        "selection": {"rule": f"lightgbm if gold AUROC gain over logistic >= {MIN_GAIN}",
-                      "gold_auroc_gain": round(gain, 4), "chosen": model["type"]},
+        "selection": {"rule": f"lightgbm if gold AUROC gain over logistic >= {MIN_GAIN}, or if leaving "
+                              "one repo out logistic makes more wrong hides than the noise flag at its "
+                              "hide rate and lightgbm does not",
+                      "gold_auroc_gain": round(gain, 4), "loro_wrong_hides": wrong, "fired": fired,
+                      "chosen": model["type"]},
         "metrics": {"gold": gold, "gold_without_history": gold_nohist,
                     "leave_one_repo_out": loro_ev, "leave_one_repo_out_auroc_per_repo": loro_per_repo},
         "provenance": {
             "label": "labels.should_skip",
             "train": {"file": "silver.jsonl", "sha256": sha256(silver_path), "hunks": len(ys),
-                      "positives": int(ys.sum()), "unmatched": s_missing},
+                      "positives": int(ys.sum()), "dropped_in_gold_commits": len(silver_records) - len(silver_kept),
+                      **s_match},
             "eval": {"file": "corpus/gold.jsonl", "sha256": sha256(gold_path), "hunks": len(yg),
-                     "positives": int(yg.sum()), "unmatched": g_missing},
+                     "positives": int(yg.sum()), **g_match},
             "extra": a.extra and {"file": a.extra.name, "sha256": sha256(a.extra),
                                   "hunks": len(yt) - len(ys), "positives": int(yt.sum() - ys.sum()),
-                                  "unmatched": e_missing},
+                                  "dropped_in_gold_commits": e_gold, **e_match},
+            "overlap_min": OVERLAP_MIN,
             "history_drop": HISTORY_DROP, "seed": SEED, "lightgbm_params": LGBM,
             "versions": {"scikit-learn": sklearn.__version__, "lightgbm": lightgbm.__version__,
                          "numpy": np.__version__},
@@ -216,7 +274,8 @@ def main():
     table(f"gold ({len(yg)} hunks, {int(yg.sum())} skip)", gold)
     table("gold, history zeroed", gold_nohist)
     table(f"leave-one-repo-out on silver ({len(ys)} hunks)", loro_ev)
-    print(f"\ngold AUROC gain trees - lr: {gain:+.4f}; shipping {model['type']} -> {a.out}")
+    print(f"\ngold AUROC gain trees - lr: {gain:+.4f}; LORO wrong hides {wrong}; "
+          f"rule fired: {fired}; shipping {model['type']} -> {a.out}")
 
 
 if __name__ == "__main__":
