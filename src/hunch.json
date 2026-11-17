@@ -1,0 +1,1167 @@
+{
+ "feature_schema": {
+  "hash": "a35a0fd18ad7cd3f",
+  "names": [
+   "noise",
+   "comment",
+   "test_path",
+   "lines_added",
+   "lines_removed",
+   "defines",
+   "uses",
+   "edges_out",
+   "edges_in",
+   "has_history",
+   "churn",
+   "fixes",
+   "moved_defs",
+   "delta_nesting",
+   "delta_cognitive",
+   "delta_branches",
+   "delta_params",
+   "delta_short_names",
+   "delta_lines",
+   "catalog_note",
+   "catalog_warn",
+   "catalog_verdict",
+   "rule_note",
+   "rule_warn",
+   "rule_verdict",
+   "category_import",
+   "category_definition",
+   "category_other",
+   "extent_whitespace",
+   "extent_formatting",
+   "extent_edited",
+   "extent_rewritten",
+   "extent_added",
+   "extent_removed",
+   "extent_none",
+   "enclosing_definition",
+   "enclosing_test",
+   "enclosing_region",
+   "enclosing_namespace",
+   "enclosing_preamble",
+   "enclosing_front_matter",
+   "enclosing_document",
+   "enclosing_binding",
+   "enclosing_call",
+   "enclosing_none",
+   "template_adds",
+   "template_calls",
+   "template_changes",
+   "template_comments",
+   "template_copyright",
+   "template_deletes",
+   "template_edits",
+   "template_formatting",
+   "template_generated",
+   "template_import",
+   "template_moves",
+   "template_removes",
+   "template_renames",
+   "template_replaces",
+   "template_tests",
+   "template_uses",
+   "template_other",
+   "lang_python",
+   "lang_xonsh",
+   "lang_javascript",
+   "lang_rust",
+   "lang_typescript",
+   "lang_tsx",
+   "lang_go",
+   "lang_c",
+   "lang_cpp",
+   "lang_java",
+   "lang_lua",
+   "lang_markdown",
+   "lang_rst",
+   "lang_json",
+   "lang_yaml",
+   "lang_toml",
+   "lang_ini",
+   "lang_cmake",
+   "lang_make",
+   "lang_nix",
+   "lang_jsonnet",
+   "lang_bash",
+   "lang_jinja",
+   "lang_css",
+   "lang_scss",
+   "lang_html",
+   "lang_svelte",
+   "lang_gotmpl",
+   "lang_erb",
+   "lang_none"
+  ],
+  "version": 1
+ },
+ "head": "should_skip",
+ "metrics": {
+  "gold": {
+   "lr": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 47,
+      "missed_skips": 12,
+      "wrong_hides": 7
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 1,
+       "missed_skips": 1,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 2,
+       "wrong_hides": 2
+      },
+      "cobra": {
+       "hidden": 1,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 4,
+       "missed_skips": 1,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 8,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 11,
+       "missed_skips": 2,
+       "wrong_hides": 1
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 9,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "auroc": 0.9593,
+    "brier": 0.0702,
+    "pr_auc": 0.9195
+   },
+   "noise": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 47,
+      "missed_skips": 13,
+      "wrong_hides": 8
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 2,
+       "wrong_hides": 2
+      },
+      "cobra": {
+       "hidden": 0,
+       "missed_skips": 4,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 7,
+       "missed_skips": 1,
+       "wrong_hides": 3
+      },
+      "execa": {
+       "hidden": 8,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 10,
+       "missed_skips": 2,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 7,
+       "missed_skips": 1,
+       "wrong_hides": 1
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "auroc": 0.847,
+    "brier": 0.1077,
+    "pr_auc": 0.689
+   },
+   "trees": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 47,
+      "missed_skips": 11,
+      "wrong_hides": 6
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 2,
+       "missed_skips": 2,
+       "wrong_hides": 1
+      },
+      "cobra": {
+       "hidden": 1,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 5,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 8,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 12,
+       "missed_skips": 1,
+       "wrong_hides": 1
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 7,
+       "missed_skips": 2,
+       "wrong_hides": 2
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "auroc": 0.9665,
+    "brier": 0.0581,
+    "pr_auc": 0.9393
+   }
+  },
+  "gold_without_history": {
+   "lr": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 47,
+      "missed_skips": 12,
+      "wrong_hides": 7
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 1,
+       "missed_skips": 1,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 2,
+       "wrong_hides": 2
+      },
+      "cobra": {
+       "hidden": 1,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 4,
+       "missed_skips": 1,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 8,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 11,
+       "missed_skips": 2,
+       "wrong_hides": 1
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 9,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "auroc": 0.9576,
+    "brier": 0.0708,
+    "pr_auc": 0.9188
+   },
+   "noise": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 47,
+      "missed_skips": 13,
+      "wrong_hides": 8
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 2,
+       "wrong_hides": 2
+      },
+      "cobra": {
+       "hidden": 0,
+       "missed_skips": 4,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 7,
+       "missed_skips": 1,
+       "wrong_hides": 3
+      },
+      "execa": {
+       "hidden": 8,
+       "missed_skips": 0,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 10,
+       "missed_skips": 2,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 7,
+       "missed_skips": 1,
+       "wrong_hides": 1
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "auroc": 0.847,
+    "brier": 0.1077,
+    "pr_auc": 0.689
+   },
+   "trees": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 47,
+      "missed_skips": 10,
+      "wrong_hides": 5
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 1,
+       "wrong_hides": 1
+      },
+      "cobra": {
+       "hidden": 1,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 4,
+       "missed_skips": 1,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 7,
+       "missed_skips": 0,
+       "wrong_hides": 1
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 12,
+       "missed_skips": 1,
+       "wrong_hides": 1
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 8,
+       "missed_skips": 1,
+       "wrong_hides": 2
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "auroc": 0.965,
+    "brier": 0.0617,
+    "pr_auc": 0.9368
+   }
+  },
+  "leave_one_repo_out": {
+   "lr": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 416,
+      "missed_skips": 141,
+      "wrong_hides": 31
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 8,
+       "missed_skips": 19,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 28,
+       "missed_skips": 7,
+       "wrong_hides": 0
+      },
+      "cobra": {
+       "hidden": 33,
+       "missed_skips": 2,
+       "wrong_hides": 1
+      },
+      "curl": {
+       "hidden": 8,
+       "missed_skips": 6,
+       "wrong_hides": 1
+      },
+      "excalidraw": {
+       "hidden": 55,
+       "missed_skips": 13,
+       "wrong_hides": 7
+      },
+      "execa": {
+       "hidden": 36,
+       "missed_skips": 14,
+       "wrong_hides": 4
+      },
+      "junit5": {
+       "hidden": 28,
+       "missed_skips": 4,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 80,
+       "missed_skips": 11,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 4,
+       "missed_skips": 2,
+       "wrong_hides": 2
+      },
+      "openfoam": {
+       "hidden": 45,
+       "missed_skips": 45,
+       "wrong_hides": 4
+      },
+      "ripgrep": {
+       "hidden": 7,
+       "missed_skips": 7,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 84,
+       "missed_skips": 11,
+       "wrong_hides": 12
+      }
+     }
+    },
+    "auroc": 0.9131,
+    "brier": 0.0881,
+    "pr_auc": 0.8712
+   },
+   "noise": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 416,
+      "missed_skips": 133,
+      "wrong_hides": 23
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 11,
+       "missed_skips": 19,
+       "wrong_hides": 3
+      },
+      "click": {
+       "hidden": 26,
+       "missed_skips": 10,
+       "wrong_hides": 1
+      },
+      "cobra": {
+       "hidden": 32,
+       "missed_skips": 3,
+       "wrong_hides": 1
+      },
+      "curl": {
+       "hidden": 7,
+       "missed_skips": 7,
+       "wrong_hides": 1
+      },
+      "excalidraw": {
+       "hidden": 59,
+       "missed_skips": 8,
+       "wrong_hides": 6
+      },
+      "execa": {
+       "hidden": 43,
+       "missed_skips": 5,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 28,
+       "missed_skips": 5,
+       "wrong_hides": 1
+      },
+      "lazy": {
+       "hidden": 80,
+       "missed_skips": 11,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 2,
+       "missed_skips": 2,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 44,
+       "missed_skips": 46,
+       "wrong_hides": 4
+      },
+      "ripgrep": {
+       "hidden": 6,
+       "missed_skips": 8,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 78,
+       "missed_skips": 9,
+       "wrong_hides": 4
+      }
+     }
+    },
+    "auroc": 0.865,
+    "brier": 0.0833,
+    "pr_auc": 0.7768
+   },
+   "trees": {
+    "at_noise_hide_rate": {
+     "all": {
+      "hidden": 416,
+      "missed_skips": 132,
+      "wrong_hides": 22
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 8,
+       "missed_skips": 19,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 25,
+       "missed_skips": 10,
+       "wrong_hides": 0
+      },
+      "cobra": {
+       "hidden": 38,
+       "missed_skips": 1,
+       "wrong_hides": 5
+      },
+      "curl": {
+       "hidden": 8,
+       "missed_skips": 6,
+       "wrong_hides": 1
+      },
+      "excalidraw": {
+       "hidden": 52,
+       "missed_skips": 13,
+       "wrong_hides": 4
+      },
+      "execa": {
+       "hidden": 47,
+       "missed_skips": 3,
+       "wrong_hides": 4
+      },
+      "junit5": {
+       "hidden": 28,
+       "missed_skips": 4,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 80,
+       "missed_skips": 11,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 2,
+       "missed_skips": 2,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 42,
+       "missed_skips": 47,
+       "wrong_hides": 3
+      },
+      "ripgrep": {
+       "hidden": 8,
+       "missed_skips": 7,
+       "wrong_hides": 1
+      },
+      "vue": {
+       "hidden": 78,
+       "missed_skips": 9,
+       "wrong_hides": 4
+      }
+     }
+    },
+    "auroc": 0.9289,
+    "brier": 0.0721,
+    "pr_auc": 0.8926
+   }
+  },
+  "leave_one_repo_out_auroc_per_repo": {
+   "buildtheworld": {
+    "lr": 0.7796,
+    "noise": 0.6236,
+    "trees": 0.7335
+   },
+   "click": {
+    "lr": 0.9069,
+    "noise": 0.8531,
+    "trees": 0.9735
+   },
+   "cobra": {
+    "lr": 0.99,
+    "noise": 0.9515,
+    "trees": 0.979
+   },
+   "curl": {
+    "lr": 0.8914,
+    "noise": 0.7263,
+    "trees": 0.9506
+   },
+   "excalidraw": {
+    "lr": 0.931,
+    "noise": 0.9115,
+    "trees": 0.9586
+   },
+   "execa": {
+    "lr": 0.9733,
+    "noise": 0.9385,
+    "trees": 0.9916
+   },
+   "junit5": {
+    "lr": 0.9776,
+    "noise": 0.9157,
+    "trees": 0.9672
+   },
+   "lazy": {
+    "lr": 0.9834,
+    "noise": 0.9396,
+    "trees": 0.9898
+   },
+   "nvm": {
+    "lr": 0.9247,
+    "noise": 0.75,
+    "trees": 0.8844
+   },
+   "openfoam": {
+    "lr": 0.7868,
+    "noise": 0.7239,
+    "trees": 0.8344
+   },
+   "ripgrep": {
+    "lr": 0.8822,
+    "noise": 0.7143,
+    "trees": 0.9559
+   },
+   "vue": {
+    "lr": 0.9451,
+    "noise": 0.93,
+    "trees": 0.9575
+   }
+  }
+ },
+ "model": {
+  "coef": [
+   1.5822095596548826,
+   0.6005777318472263,
+   0.46587500414569794,
+   -0.38208921867115203,
+   -0.5361763426175706,
+   -0.1181075443473328,
+   -1.9958290249539683,
+   -0.4075113800682651,
+   -0.13719449442731055,
+   -0.13292263344577432,
+   0.23502422434486475,
+   -0.1769012009489341,
+   -0.11131265512430093,
+   0.22790910914887863,
+   -0.06249970011923738,
+   -0.07375358856202843,
+   0.1839569044358391,
+   0.1453178515981699,
+   -0.041319332571015804,
+   -0.05552382696915329,
+   -0.36737945211630635,
+   -0.08953030717659936,
+   0.0,
+   0.0,
+   0.0,
+   0.3749118109637158,
+   0.19493821101728323,
+   -0.4210215080708364,
+   0.6878659733555115,
+   0.0,
+   -0.3922862556045023,
+   0.12600720032397442,
+   -0.30231287819221847,
+   0.4993364478440216,
+   0.0,
+   0.1680795908256962,
+   -0.5283993380707273,
+   -0.19472123935115193,
+   0.03639807440128172,
+   -0.11948544795642227,
+   0.0,
+   0.2640993310726322,
+   -0.7026894121948123,
+   -0.014820232900079186,
+   0.339353039936776,
+   -0.15440465767137831,
+   -0.19792817757640543,
+   0.28949633849488976,
+   -0.05257448232200532,
+   0.11990527372223125,
+   -0.5479702303350283,
+   0.6484362228864792,
+   0.7069009272797613,
+   1.5584587549773183,
+   -0.3662787464952977,
+   -0.5835841859449282,
+   -0.6625778955827745,
+   -0.19174109003314527,
+   -0.4565495985512256,
+   -0.27399242358491865,
+   -0.7227986049032423,
+   -0.26388327897110564,
+   -0.22317351068672026,
+   -0.2593000337850949,
+   -0.20333978999733487,
+   -0.025073729127858477,
+   -0.038766383741750725,
+   0.13095928190740475,
+   -0.35458037627814765,
+   -0.21643083310132694,
+   0.6040964930921474,
+   0.05974772250507507,
+   -0.19483753374443857,
+   0.37187895761171824,
+   0.0,
+   0.09634418952677429,
+   -0.009545835614060486,
+   -0.5112560246893544,
+   0.02188008157559755,
+   0.06824425607459625,
+   -0.13708346044965478,
+   0.0,
+   0.0,
+   0.08694555394612578,
+   0.0,
+   0.0,
+   0.0,
+   -0.022948027586507335,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "intercept": -2.6196221380551292,
+  "mean": [
+   0.2221035771489589,
+   0.02402562733582488,
+   0.17405232247730912,
+   6.7597437266417515,
+   3.6460224239188466,
+   0.5520555258942872,
+   3.233315536572344,
+   0.21462893753336892,
+   0.24399359316604377,
+   0.792845702082221,
+   3.7186332087560063,
+   0.7047517351841964,
+   0.0800854244527496,
+   -0.0005339028296849973,
+   0.002135611318739989,
+   -0.0005339028296849973,
+   0.0010678056593699946,
+   -0.030432461292044848,
+   -0.046983449012279764,
+   0.08382274426054458,
+   0.0058729311265349705,
+   0.0026695141484249867,
+   0.0,
+   0.0,
+   0.0,
+   0.10784837159636947,
+   0.36679124399359314,
+   0.5253603844100374,
+   0.04271222637479979,
+   0.0,
+   0.408435664709023,
+   0.07581420181526963,
+   0.34917245061398827,
+   0.12386545648691938,
+   0.0,
+   0.5467164975974372,
+   0.03363587827015483,
+   0.004271222637479978,
+   0.003203416978109984,
+   0.0005339028296849973,
+   0.0,
+   0.004805125467164976,
+   0.05125467164975974,
+   0.001601708489054992,
+   0.3539775760811532,
+   0.25680726107848373,
+   0.0058729311265349705,
+   0.10784837159636947,
+   0.0005339028296849973,
+   0.001601708489054992,
+   0.012279765082754938,
+   0.15803523758675922,
+   0.04591564335290977,
+   0.06994127068873465,
+   0.002135611318739989,
+   0.07688200747463962,
+   0.09450080085424453,
+   0.027229044313934865,
+   0.03416978109983983,
+   0.006406833956219968,
+   0.09503470368392952,
+   0.004805125467164976,
+   0.07261078483715963,
+   0.022423918846769888,
+   0.06994127068873465,
+   0.03310197544046983,
+   0.1388147357180993,
+   0.05232247730912974,
+   0.04538174052322477,
+   0.05605979711692472,
+   0.16924719701014415,
+   0.04805125467164976,
+   0.07047517351841964,
+   0.06833956219967965,
+   0.0,
+   0.017084890549919914,
+   0.08809396689802455,
+   0.008542445274959957,
+   0.0037373198077949813,
+   0.001601708489054992,
+   0.0010678056593699946,
+   0.0,
+   0.0,
+   0.032568072610784836,
+   0.0,
+   0.0,
+   0.0,
+   0.0005339028296849973,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "scale": [
+   0.4156604120752863,
+   0.15312869282713137,
+   0.37915446920425333,
+   30.55349771245568,
+   34.936891566760906,
+   1.8960118576498366,
+   6.5247093329599375,
+   1.2777029841488694,
+   0.8361477426126959,
+   0.40526706598484874,
+   7.863515395368989,
+   1.8269688323976667,
+   0.27726371241307624,
+   0.16174348086501847,
+   1.4337089430744283,
+   0.512001957343042,
+   0.19606086689697141,
+   1.2637424716083825,
+   6.765299856208541,
+   0.27712179958490635,
+   0.07640968398388981,
+   0.05159833178152573,
+   1.0,
+   1.0,
+   1.0,
+   0.3101888140155661,
+   0.48192886126816087,
+   0.4993564367288877,
+   0.20220754707208002,
+   1.0,
+   0.4915444766272118,
+   0.26470060184741767,
+   0.4767085591283286,
+   0.32942799695260166,
+   1.0,
+   0.49781278494251646,
+   0.1802900606332748,
+   0.06521487019584607,
+   0.05650800914714975,
+   0.02310016834253583,
+   1.0,
+   0.06915226848346685,
+   0.22051673470246203,
+   0.039989286302347236,
+   0.4782023125339928,
+   0.43687216864415596,
+   0.07640968398388985,
+   0.31018881401556553,
+   0.023100168342535962,
+   0.03998928630234721,
+   0.11013161422710468,
+   0.3647740413840593,
+   0.20930216685070008,
+   0.2550480137997114,
+   0.0461633023410935,
+   0.26640413735772334,
+   0.29252418616612724,
+   0.16275018728002638,
+   0.1816650961506642,
+   0.0797858786683305,
+   0.2932628663496858,
+   0.06915226848346727,
+   0.25949654865237987,
+   0.14805771411961136,
+   0.25504801379970954,
+   0.17890286376245762,
+   0.345753098128725,
+   0.2226765270013155,
+   0.20813994847291115,
+   0.23003716278926412,
+   0.3749701098945824,
+   0.21387456977426988,
+   0.25594613385625886,
+   0.2523276965337623,
+   1.0,
+   0.1295877967434336,
+   0.2834315082946743,
+   0.09202973380209421,
+   0.061019277678854705,
+   0.039989286302347195,
+   0.03265984461756971,
+   1.0,
+   1.0,
+   0.17750322041361002,
+   1.0,
+   1.0,
+   1.0,
+   0.023100168342534994,
+   1.0,
+   1.0,
+   1.0,
+   1.0
+  ],
+  "type": "logistic"
+ },
+ "provenance": {
+  "eval": {
+   "file": "corpus/gold.jsonl",
+   "hunks": 195,
+   "positives": 52,
+   "sha256": "a4efdd61ad84bdb4d698ce9039f37c826e323cc7b7fde9402cce75791b4d714c",
+   "unmatched": 5
+  },
+  "extra": null,
+  "history_drop": 0.2,
+  "label": "labels.should_skip",
+  "lightgbm_params": {
+   "colsample_bytree": 0.8,
+   "deterministic": true,
+   "force_row_wise": true,
+   "learning_rate": 0.05,
+   "min_child_samples": 20,
+   "n_estimators": 200,
+   "n_jobs": 1,
+   "num_leaves": 15,
+   "random_state": 0,
+   "subsample": 0.8,
+   "subsample_freq": 1,
+   "verbose": -1
+  },
+  "seed": 0,
+  "train": {
+   "file": "silver.jsonl",
+   "hunks": 1873,
+   "positives": 526,
+   "sha256": "95abe8b0fb6bf23898aabe35738bb785d9de24e4b2018106f348835373046a4d",
+   "unmatched": 127
+  },
+  "versions": {
+   "lightgbm": "4.7.0",
+   "numpy": "2.5.5",
+   "scikit-learn": "1.9.1"
+  }
+ },
+ "selection": {
+  "chosen": "logistic",
+  "gold_auroc_gain": 0.0072,
+  "rule": "lightgbm if gold AUROC gain over logistic >= 0.03"
+ }
+}
