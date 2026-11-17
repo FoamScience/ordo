@@ -233,17 +233,15 @@ pub(crate) fn vector(f: &Facts) -> Vec<f64> {
 }
 
 /// Per path, the commits that touched it in the `HISTORY_DAYS` before the
-/// change, and how many of those a subject calls a fix, each capped.
+/// change, and how many of those a subject calls a fix, each capped. Which
+/// commits came before is topology, settled by the caller (see `History`);
+/// time only bounds the window's start, so a same-second ancestor counts.
 pub(crate) fn file_history(history: &History) -> HashMap<&str, (usize, usize)> {
     static FIX: OnceLock<Regex> = OnceLock::new();
     let fix = FIX.get_or_init(|| Regex::new(r"(?i)\b(fix|bug|regress|revert)").expect("valid"));
     let since = history.at - HISTORY_DAYS * 86_400;
     let mut per: HashMap<&str, (usize, usize)> = HashMap::new();
-    for c in history
-        .commits
-        .iter()
-        .filter(|c| c.time >= since && c.time < history.at)
-    {
+    for c in history.commits.iter().filter(|c| c.time >= since) {
         let is_fix = fix.is_match(&c.subject);
         for p in &c.paths {
             let e = per.entry(p.as_str()).or_default();

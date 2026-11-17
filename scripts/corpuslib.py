@@ -47,9 +47,10 @@ def range_input(repo, base, head):
 
 def with_features(repo, sha, inp):
     """`inp` asking the engine for hunch's per-hunk feature vectors, with the
-    history of the files it changes up to `sha`'s parent. The engine keeps only
-    the commits inside its window, ending at `sha`'s own commit time; the
-    cutoff here, a day wider, only bounds the log. A shallow clone whose
+    history of the files it changes: `sha`'s ancestors, never `sha` itself or
+    what came after. The engine keeps only the ancestors inside its window,
+    reaching back from `sha`'s own commit time; the cutoff here, a day wider,
+    only bounds the log. A shallow clone whose
     boundary falls inside that window would undercount, so its commits get no
     history at all, as a stdin diff does."""
     at = int(git(repo, "show", "-s", "--format=%ct", sha).strip())

@@ -110,16 +110,28 @@ fn history_counts_only_the_window_before_the_change() {
             commit(AT - 10 * DAY, "Revert \"speed up f\"", "src/m.py"),
             commit(AT - 20 * DAY, "add prefix option", "src/m.py"),
             commit(AT - 30 * DAY, "docs", "README.md"),
-            // outside: older than the window, the change itself, later work
+            // outside: older than the window
             commit(AT - 91 * DAY, "fix ancient bug", "src/m.py"),
-            commit(AT, "this change", "src/m.py"),
-            commit(AT + DAY, "bugfix after", "src/m.py"),
         ]
     })));
     for h in hunks(&out) {
         assert_eq!(col(h, "has_history"), 1.0);
         assert_eq!(col(h, "churn"), 3.0);
         assert_eq!(col(h, "fixes"), 2.0, "`prefix` is not a fix");
+    }
+}
+
+#[test]
+fn an_ancestor_committed_in_the_same_second_counts() {
+    // a rebased series stamps parent and child alike; the caller sends only
+    // ancestors, so the engine does not second-guess them by time
+    let out = with_features(Some(json!({
+        "at": AT,
+        "commits": [{ "time": AT, "subject": "fix parent in the series", "paths": ["src/m.py"] }]
+    })));
+    for h in hunks(&out) {
+        assert_eq!(col(h, "churn"), 1.0);
+        assert_eq!(col(h, "fixes"), 1.0);
     }
 }
 
