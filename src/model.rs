@@ -20,13 +20,15 @@ pub struct Input {
     pub history: Option<History>,
 }
 
-/// What the repository did before the change: every commit the caller found,
-/// with the paths it touched. The engine runs no git, so the caller collects
-/// these, and the engine decides which of them count (see `crate::hunch`).
+/// What the repository did before the change: the change's ancestors, with
+/// the paths they touched. The engine runs no git, so the caller collects
+/// these and leaves out the change itself and everything after it, whatever
+/// the timestamps say; the engine only cuts the window's start (see
+/// `crate::hunch`).
 #[derive(Clone, Debug, Deserialize)]
 pub struct History {
-    /// the change's own commit time, in Unix seconds: the window ends here, so
-    /// a past commit's features never see what came after it
+    /// the change's own commit time, in Unix seconds: the window reaches back
+    /// from here
     pub at: i64,
     #[serde(default)]
     pub commits: Vec<PastCommit>,
