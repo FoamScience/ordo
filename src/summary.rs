@@ -387,10 +387,19 @@ pub(crate) fn summarize(
         what(label, &files, &added, &ev, &lines),
         why(verdict, &files, &exposed),
     ];
+    let regressions =
+        crate::readability::worst(files.iter().filter(|f| f.kind == PathKind::Code).flat_map(
+            |f| {
+                f.hunks
+                    .iter()
+                    .flat_map(|(_, s)| s.deltas.iter().map(|d| (f.path, d)))
+            },
+        ));
     Some(Summary {
         label,
         verdict,
         sentences,
+        regressions,
     })
 }
 

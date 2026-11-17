@@ -368,6 +368,57 @@ fn max_nesting_counts_control_flow_not_definitions() {
 }
 
 #[test]
+fn max_nesting_delta_measures_a_touched_definition_against_its_old_self() {
+    let rules = serde_json::json!([{ "name": "deeper", "when": { "max_nesting_delta": 1 }, "warn": "nesting grew" }]);
+    let deeper = one_with(
+        "a.py",
+        "def f(x):\n    if x:\n        return 1\n    return x\n",
+        "def f(x):\n    if x:\n        for i in x:\n            if i:\n                return i\n    return x\n",
+        rules.clone(),
+    );
+    assert_eq!(hits(&deeper, "a.py"), vec!["warn:deeper"]);
+    // grown by exactly the limit is within it
+    let one_more = one_with(
+        "a.py",
+        "def f(x):\n    if x:\n        return 1\n    return x\n",
+        "def f(x):\n    if x:\n        if x[0]:\n            return 1\n    return x\n",
+        rules,
+    );
+    assert!(hits(&one_more, "a.py").is_empty());
+}
+
+#[test]
+fn readability_deltas_ignore_debt_a_definition_already_carried() {
+    let rules = serde_json::json!([{ "name": "deeper", "when": { "max_nesting_delta": 0 }, "warn": "nesting grew" }]);
+    let deep = "def f(x):\n    if x:\n        for i in x:\n            if i:\n                return i\n    return x\n";
+    // the deep definition is edited without getting deeper, and another one
+    // beside it is untouched: neither fires
+    let out = one_with(
+        "a.py",
+        &format!("{deep}\n\ndef g():\n    return 1\n"),
+        &format!(
+            "{}\n\ndef g():\n    return 2\n",
+            deep.replace("return x", "return x + 1")
+        ),
+        rules,
+    );
+    assert!(hits(&out, "a.py").is_empty());
+}
+
+#[test]
+fn readability_delta_rules_speak_once_per_definition() {
+    let rules = serde_json::json!([{ "name": "branchy", "when": { "max_branches_delta": 0 }, "note": "more branches" }]);
+    // two hunks inside one definition that gained branches: one finding
+    let out = one_with(
+        "a.py",
+        "def f(x):\n    a = 1\n    b = 2\n    c = 3\n    d = 4\n    return x\n",
+        "def f(x):\n    if x:\n        a = 1\n    b = 2\n    c = 3\n    if d:\n        d = 4\n    return x\n",
+        rules,
+    );
+    assert_eq!(hits(&out, "a.py"), vec!["note:branchy"]);
+}
+
+#[test]
 fn max_file_lines_fires_only_when_this_change_crosses_it() {
     let rules = serde_json::json!([{ "name": "file-size", "when": { "max_file_lines": 4 }, "note": "big file" }]);
     let crossing = one_with(

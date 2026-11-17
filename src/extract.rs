@@ -3,6 +3,7 @@
 //! tree-sitter, exactly as gitplay's `order.lua` does.
 use crate::lang::{self, LangSpec};
 use crate::model::{Category, ContainerKind, Finding, Symbol};
+use crate::readability::{self, DefDelta, Measured, Metrics};
 use similar::{DiffOp, TextDiff};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
@@ -127,6 +128,9 @@ pub struct HunkSem {
     pub container_members: Vec<String>,
     /// data members the hunk adds that nothing in the change initializes
     pub uninit_members: Vec<String>,
+    /// the definitions this hunk is the first to touch whose readability
+    /// measurements moved, old and new
+    pub deltas: Vec<DefDelta>,
 }
 
 /// A local binding introduced by this hunk and where its name is used
@@ -186,6 +190,7 @@ impl HunkSem {
             recursive: false,
             container_members: vec![],
             uninit_members: vec![],
+            deltas: vec![],
         }
     }
 }
@@ -673,6 +678,12 @@ struct Collected {
     /// deepest control-flow construct each row sits inside (0 = none)
     nest_rows: HashMap<usize, usize>,
     nest_depth: usize,
+    /// the `elif`/`else if` arms among the constructs `nest_depth` counts
+    chained: usize,
+    /// every control-flow construct, by its first row
+    controls: Vec<Control>,
+    /// the row of each run of one boolean operator: `a && b && c` is one
+    bool_runs: Vec<usize>,
     /// (row, name) of every data member declared without an initializer
     uninit_fields: Vec<(usize, String)>,
     /// every member name an initializer list (c++) or `this.x = …` (java)
@@ -765,14 +776,130 @@ pub fn analyze(
             .flat_map(|(s, e, n)| (*s..=*e).map(move |r| (r, n.as_str())))
             .collect(),
     };
-    let out = hunks
+    let mut out: Vec<HunkSem> = hunks
         .iter()
         .map(|h| match h.new_r0 {
             Some(r0) => parsed.hunk_sem(h, r0, h.new_r1),
             None => HunkSem::other(h),
         })
         .collect();
+    if !spec.data && !spec.prose && !old.is_empty() {
+        if let Some(was) = walk_file(spec, old) {
+            let per_hunk = readability::deltas(&hunks, &measured(&was), &measured(&w.c));
+            for (sem, deltas) in out.iter_mut().zip(per_hunk) {
+                sem.deltas = deltas;
+            }
+        }
+    }
     Some((hunks, out))
+}
+
+/// Shorter than this, a local name says nothing of what it holds.
+const SHORT_NAME: usize = 2;
+
+/// What each callable definition in a walked file measures, for comparing
+/// one version of it with the other.
+fn measured(c: &Collected) -> Vec<Measured> {
+    let callables: Vec<&DefRec> = c
+        .defs
+        .iter()
+        .filter(|d| d.callable && d.kind == ContainerKind::Definition)
+        .collect();
+    // a row belongs to the innermost callable holding it: a nested function's
+    // branches are its own, not its parent's a second time
+    let mut by_span: Vec<usize> = (0..callables.len()).collect();
+    by_span.sort_by_key(|&i| std::cmp::Reverse((callables[i].e - callables[i].s, i)));
+    let mut row_owner: Vec<Option<usize>> =
+        vec![None; callables.iter().map(|d| d.e + 1).max().unwrap_or(0)];
+    for i in by_span {
+        row_owner[callables[i].s..=callables[i].e].fill(Some(i));
+    }
+    let owner = |row: usize| row_owner.get(row).copied().flatten();
+    let mut controls: Vec<Vec<&Control>> = callables.iter().map(|_| vec![]).collect();
+    for k in &c.controls {
+        if let Some(i) = owner(k.row) {
+            controls[i].push(k);
+        }
+    }
+    let mut bool_runs = vec![0; callables.len()];
+    for i in c.bool_runs.iter().filter_map(|r| owner(*r)) {
+        bool_runs[i] += 1;
+    }
+    let mut names: Vec<HashSet<&str>> = callables.iter().map(|_| HashSet::new()).collect();
+    for (r, n) in c.local_binds.iter().filter(|(_, n)| n != "_") {
+        if let Some(i) = owner(*r) {
+            names[i].insert(n.as_str());
+        }
+    }
+    callables
+        .iter()
+        .zip(controls.iter().zip(bool_runs).zip(&names))
+        .map(|(d, ((controls, bool_runs), names))| {
+            // the controls a definition holds start one below the ones it
+            // sits in, so its shallowest is its own first level
+            let base = controls.iter().map(|k| k.depth - 1).min().unwrap_or(0);
+            let short = names
+                .iter()
+                .filter(|n| n.chars().count() <= SHORT_NAME)
+                .count();
+            Measured {
+                name: d.name.clone(),
+                rows: (d.s, d.e),
+                metrics: Metrics {
+                    nesting: controls.iter().map(|k| k.depth - base).max().unwrap_or(0),
+                    lines: d.e - d.s + 1,
+                    params: d.params,
+                    branches: controls.iter().filter(|k| k.branch).count(),
+                    cognitive: controls
+                        .iter()
+                        .filter(|k| k.branch)
+                        .map(|k| if k.continues { 1 } else { k.depth - base })
+                        .sum::<usize>()
+                        + bool_runs,
+                    short_names: (short * 100).checked_div(names.len()).unwrap_or(0),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Control constructs that take one path through: they open a level of
+/// nesting without adding a branch.
+const NOT_BRANCHES: &[&str] = &["try_statement", "with_statement"];
+
+/// One control-flow construct, as readability measures it.
+struct Control {
+    row: usize,
+    /// how many constructs it sits in, itself included; the arms of one
+    /// `if`/`else if` chain count once
+    depth: usize,
+    /// it adds a path through the code
+    branch: bool,
+    /// an `elif` or `else if`: it continues its `if` rather than nesting in it
+    continues: bool,
+}
+
+/// An `elif`, or an `if` that is the `else` of another: one more arm of the
+/// same chain, not a level deeper.
+fn continues_chain(node: Node) -> bool {
+    node.kind() == "elif_clause"
+        || (matches!(
+            node.kind(),
+            "if_statement" | "if_expression" | "if_let_expression"
+        ) && node.parent().is_some_and(|p| {
+            p.kind() == "else_clause"
+                || (CONTROL_KINDS.contains(&p.kind())
+                    && p.child_by_field_name("alternative") == Some(node))
+        }))
+}
+
+/// `&&`, `||`, `and`, `or` — the operator a boolean expression node applies
+fn boolean_op<'s>(node: Node, src: &'s [u8]) -> Option<&'s str> {
+    if !matches!(node.kind(), "boolean_operator" | "binary_expression") {
+        return None;
+    }
+    let op = node.child_by_field_name("operator")?.utf8_text(src).ok()?;
+    matches!(op, "&&" | "||" | "and" | "or").then_some(op)
 }
 
 /// One parsed file after the walk: what every hunk's facts are read from.
@@ -899,6 +1026,7 @@ impl Parsed<'_> {
                 .filter(|(row, n)| r0 <= *row && *row <= r1 && !self.c.field_inits.contains(n))
                 .map(|(_, n)| n.clone())
                 .collect(),
+            deltas: vec![],
             defines,
             imports,
             enclosing,
@@ -2367,10 +2495,24 @@ impl<'a> Walker<'a> {
                 let d = self.c.nest_rows.entry(r).or_insert(0);
                 *d = (*d).max(self.c.nest_depth);
             }
+            let continues = continues_chain(node);
+            self.c.chained += usize::from(continues);
+            self.c.controls.push(Control {
+                row: node.start_position().row,
+                depth: self.c.nest_depth - self.c.chained,
+                branch: !NOT_BRANCHES.contains(&node.kind()),
+                continues,
+            });
+        }
+        if let Some(op) = boolean_op(node, self.src) {
+            if node.parent().and_then(|p| boolean_op(p, self.src)) != Some(op) {
+                self.c.bool_runs.push(node.start_position().row);
+            }
         }
         self.walk_node(node);
         if control {
             self.c.nest_depth -= 1;
+            self.c.chained -= usize::from(continues_chain(node));
         }
     }
 

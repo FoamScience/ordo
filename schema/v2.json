@@ -204,6 +204,30 @@
                         "type": "integer",
                         "description": "fires on the hunks of a file this change pushed past the limit"
                       },
+                      "max_nesting_delta": {
+                        "type": "integer",
+                        "description": "fires when a definition the hunk touched nests control flow deeper than its old version by more than this"
+                      },
+                      "max_lines_delta": {
+                        "type": "integer",
+                        "description": "fires when a definition the hunk touched grew longer than its old version by more than this"
+                      },
+                      "max_params_delta": {
+                        "type": "integer",
+                        "description": "fires when a definition the hunk touched gained more parameters than this"
+                      },
+                      "max_branches_delta": {
+                        "type": "integer",
+                        "description": "fires when a definition the hunk touched gained more branches (if, loops, match/switch) than this"
+                      },
+                      "max_cognitive_delta": {
+                        "type": "integer",
+                        "description": "fires when a definition the hunk touched grew in cognitive complexity (branches weighted by nesting, plus boolean operator runs) by more than this"
+                      },
+                      "max_short_names_delta": {
+                        "type": "integer",
+                        "description": "fires when a definition the hunk touched grew its share of one- or two-character local names by more than this many percentage points"
+                      },
                       "recursive": {
                         "type": "boolean",
                         "description": "a definition starting in the hunk calls itself"
@@ -717,6 +741,10 @@
                 "type": "string"
               },
               "description": "what the label rests on, then what the verdict rests on"
+            },
+            "regressions": {
+              "type": "string",
+              "description": "the definitions the change made hardest to read, each with the measurements that grew against its own old version (nesting, cognitive complexity, branches, params, short-name share, lines). Omitted when no touched definition got harder to read."
             }
           }
         },

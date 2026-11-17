@@ -631,6 +631,7 @@ function changeSummary(s: ChangeSummary | null): HTMLElement | null {
     { class: `change-summary ${s.verdict}` },
     h("div", { class: "line" }, h("span", { class: "label" }, s.label.replace("-", " ")), h("span", { class: "verdict" }, VERDICT[s.verdict])),
     s.sentences.map((t) => h("p", null, t)),
+    s.regressions ? h("p", null, s.regressions) : null,
   );
 }
 

@@ -265,6 +265,28 @@ const RULE_DOC: &[(&str, bool, &str)] = &[
         "this change pushed the file past this many lines",
     ),
     (
+        "max-nesting-delta",
+        true,
+        "a definition the hunk touched nests control flow deeper than its old version by more than this (below)",
+    ),
+    ("max-lines-delta", true, "…grew longer by more than this"),
+    ("max-params-delta", true, "…gained more parameters than this"),
+    (
+        "max-branches-delta",
+        true,
+        "…gained more `if`/loop/`match` branches than this",
+    ),
+    (
+        "max-cognitive-delta",
+        true,
+        "…grew in cognitive complexity by more than this",
+    ),
+    (
+        "max-short-names-delta",
+        true,
+        "…grew its share of one- or two-character local names by more than this many percentage points",
+    ),
+    (
         "recursive",
         true,
         "a definition starting in the hunk calls itself",

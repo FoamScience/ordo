@@ -72,6 +72,8 @@ export interface ChangeSummary {
   verdict: "preserving" | "changes" | "unknown";
   /** what the label rests on, then what the verdict rests on */
   sentences: string[];
+  /** the definitions the change made hardest to read, with what grew */
+  regressions?: string;
 }
 
 export interface Review {

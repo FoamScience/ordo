@@ -185,6 +185,12 @@ occasionally what you want, otherwise a mistake its name should make obvious.
 | `max-lines` | …is longer than this |
 | `max-nesting` | …sits deeper in control flow than this |
 | `max-file-lines` | this change pushed the file past this many lines |
+| `max-nesting-delta` | a definition the hunk touched nests control flow deeper than its old version by more than this (below) |
+| `max-lines-delta` | …grew longer by more than this |
+| `max-params-delta` | …gained more parameters than this |
+| `max-branches-delta` | …gained more `if`/loop/`match` branches than this |
+| `max-cognitive-delta` | …grew in cognitive complexity by more than this |
+| `max-short-names-delta` | …grew its share of one- or two-character local names by more than this many percentage points |
 | `recursive` | a definition starting in the hunk calls itself |
 | `container-with` | glob against the members of the container the hunk defines into (below) |
 | `container-without` | …the same, negated |
@@ -295,6 +301,32 @@ note = "this change pushed the file past 2000 lines"
 the deepest `if`/`for`/`while`/`match`/`try` any row of the hunk sits inside.
 `max-file-lines` fires on the hunks of a file that *crossed* the limit in this change —
 not on every edit to a file that was already over it.
+
+The `-delta` limits measure growth instead: a definition the hunk touched against
+its own old version, so debt it already carried never fires.
+
+```toml
+[[rule]]
+name = "no-deeper"
+max-nesting-delta = 1
+warn = "this made it two levels deeper; return early"
+
+[[rule]]
+name = "harder-to-follow"
+max-cognitive-delta = 5
+note = "this function got much harder to follow"
+```
+
+`max-nesting-delta`, `max-lines-delta`, `max-params-delta`, `max-branches-delta`
+(`if`, loops, `match`/`switch`) and `max-cognitive-delta` (branches weighted by how deep
+they sit, plus each run of `&&`/`||`) count the measurement itself;
+`max-short-names-delta` counts percentage points of the definition's local names that
+are one or two characters long. A definition is paired with its old version by its
+qualified name, and speaks on the first hunk that touches it, once. A rule with several
+`-delta` limits fires when one definition grew past all of them. An `else if` or `elif`
+is another arm of its `if`, not a level deeper. A definition the
+change adds or renames has no old version to grow from — `max-lines` and its kin above
+cover it.
 
 ## Relationships
 
