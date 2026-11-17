@@ -2,10 +2,10 @@
 """Grade ordo's claims per hunk across the pinned corpus with a System One judge.
 
 Walks corpus/manifest.toml the way tests/corpus.rs does, runs ordo-engine on
-each commit, and asks the judge three nouls per hunk: is the rationale faithful
-to the diff, is it consistent with the commit subject, and, when ordo flagged
-noise, is the hunk really noise. Findings get one noul each. Scores are written
-per hunk to --out (jsonl) so a sweep can resume, and summarised into --report
+each commit, and asks the judge nouls per hunk: is the rationale faithful
+to the diff, is it consistent with the commit subject, can a reviewer skip the
+hunk, and, when ordo flagged noise, is the hunk really noise. Findings get one
+noul each. Scores are written per hunk to --out (jsonl) so a sweep can resume, and summarised into --report
 bucketed by rationale template, language, repo, enclosing_kind and rule.
 
 The judge is paid per input token (output is free), so the sweep is budgeted
@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from corpuslib import ROOT, commit_input, engine_output, git, repos, template
-from judgelib import JEFF_URL
+from judgelib import JEFF_URL, QUESTIONS
 
 try:
     from typesafe_sdk import Noul, TypeSafeClient
@@ -36,17 +36,13 @@ except ImportError:  # --report-only needs no judge
     Noul = TypeSafeClient = None
 
 
-QUESTIONS = {
-    "faithful": "Does the rationale accurately describe what this diff changes?",
-    "matches_commit": "Is the rationale consistent with the commit message?",
-    "noise_correct": "Is this diff only formatting, whitespace, generated code or import lines, with no behavioural change?",
-}
 # Cuts that maximise balanced accuracy against the Opus labels on
 # corpus/gold.jsonl with jev-1.13.0 (scripts/judge-gold.py scores): faithful
 # 0.67 @0.58, matches_commit 0.98 @0.24, noise_correct 0.78 @0.15, finding
 # 0.76 @0.50. Balanced rather than raw accuracy, since raw is won by the base
 # rate (faithful 0.74 @0.39 is mostly "say yes"). Fitted to jev: re-derive for the jeff judge.
-CUTS = {"faithful": 0.58, "matches_commit": 0.24, "noise_correct": 0.15, "finding": 0.5}
+# should_skip is not fitted yet.
+CUTS = {"faithful": 0.58, "matches_commit": 0.24, "noise_correct": 0.15, "should_skip": 0.5, "finding": 0.5}
 
 
 def commit_output(repo, sha):
@@ -119,10 +115,9 @@ def summarise(out_path, report_path):
 
 
 def hunk_questions(h):
-    """The nouls one hunk is asked: faithful, matches_commit, noise when
-    flagged, one per finding."""
-    qs = {"faithful": Noul(instructions=QUESTIONS["faithful"]),
-          "matches_commit": Noul(instructions=QUESTIONS["matches_commit"])}
+    """The nouls one hunk is asked: faithful, matches_commit, should_skip,
+    noise when flagged, one per finding."""
+    qs = {k: Noul(instructions=QUESTIONS[k]) for k in ("faithful", "matches_commit", "should_skip")}
     if h.get("noise"):
         qs["noise_correct"] = Noul(instructions=QUESTIONS["noise_correct"])
     for x in h.get("findings", []):

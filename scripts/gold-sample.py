@@ -169,6 +169,7 @@ def unlabeled_rows(picked):
     """The draw as gold.jsonl rows: every label null, sorted by key."""
     rows = [{**h, "labels": {"faithful": None, "matches_commit": None,
                              **({"noise_correct": None} if h["noise"] else {}),
+                             "should_skip": None,
                              "findings": {x["name"]: None for x in h["findings"]}}}
             for h in picked]
     return sorted(rows, key=lambda h: h["key"])
