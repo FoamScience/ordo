@@ -9,6 +9,7 @@ QUESTIONS = {
     "faithful": "Does the rationale accurately describe what this diff changes?",
     "matches_commit": "Is the rationale consistent with the commit message?",
     "noise_correct": "Is this diff only formatting, whitespace, generated code or import lines, with no behavioural change?",
+    "should_skip": "Can a reviewer skip this diff without missing anything that changes behaviour or needs a reviewer's judgement?",
 }
 
 

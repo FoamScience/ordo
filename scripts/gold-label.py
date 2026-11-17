@@ -37,7 +37,7 @@ def apply(path, target=GOLD):
         for k, v in got["labels"].items():
             if k == "findings":
                 r["labels"]["findings"].update({f: v[f] for f in v if f in r["labels"]["findings"]})
-            elif k in r["labels"]:
+            elif k in r["labels"] or k == "should_skip":
                 r["labels"][k] = v
         n += 1
     target.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rows))
@@ -46,7 +46,8 @@ def apply(path, target=GOLD):
 
 def pending(r):
     L = r["labels"]
-    return any(v is None for k, v in L.items() if k != "findings") or \
+    return L.get("should_skip") is None or \
+        any(v is None for k, v in L.items() if k != "findings") or \
         any(v is None for v in L["findings"].values())
 
 
@@ -74,8 +75,9 @@ def label(r):
                  ("matches_commit", "is the rationale consistent with the commit message?")]
     if r["noise"]:
         questions.append(("noise_correct", "is this hunk really pure formatting/generated?"))
+    questions.append(("should_skip", "can a reviewer skip this hunk without missing anything?"))
     for key, q in questions:
-        if L[key] is not None:
+        if L.get(key) is not None:
             continue
         a = ask(q)
         if a in ("q", "s"):

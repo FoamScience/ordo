@@ -2,8 +2,8 @@
 """Score a System One judge against the labeled gold set.
 
 Asks the judge the same questions the labels answer (faithful, matches_commit,
-noise_correct, one per finding) as nouls, then reports agreement at a 0.5 cut
-and a threshold-free ranking score (AUC) per question, so a judge with a yes
+noise_correct, should_skip, one per finding) as nouls, then reports agreement
+at a 0.5 cut and a threshold-free ranking score (AUC) per question, so a judge with a yes
 bias still shows whether its ordering carries signal.
 
 usage: scripts/judge-gold.py [--base-url JEFF_URL] [--gold corpus/gold.jsonl] [--out judged.jsonl]
@@ -57,7 +57,7 @@ def judge(client, text, qs):
 def report(judge, n_req, secs, scored, per_rule):
     print(f"judge={judge}  hunks={n_req}  {secs:.0f}s")
     print(f"{'question':16} {'n':>5} {'agree@.5':>9} {'AUC':>6}  {'mean(yes)':>9} {'mean(no)':>8}")
-    for k in ("faithful", "matches_commit", "noise_correct", "findings"):
+    for k in ("faithful", "matches_commit", "noise_correct", "should_skip", "findings"):
         p = scored.get(k)
         if not p:
             continue
