@@ -46,8 +46,9 @@ open a second tab from the URL the server printed, not from the address bar.
 └─────────────────┴──────────────────────────────────────┴───────────────────┘
 ```
 The page is set in Geist Mono, compiled into the binary,
-so it reads the same offline. It follows the system's light or dark setting:
-blue line on a white sheet by day, white line on a blue sheet by night.
+so it reads the same offline. It opens on a dark Catppuccin Mocha sheet
+whatever the system's setting; a light `:theme` lays its colours over a light
+graphite sheet instead.
 
 The **reading order** on the left is every hunk on one thread, grouped by file:
 a hollow square is unread, a filled one read, a red or amber outline a finding. The

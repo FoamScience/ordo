@@ -446,6 +446,7 @@ button:disabled {
 }
 .pane {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--pane-head) minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
@@ -537,11 +538,14 @@ body.zoom #panes > .pane:not(.zoomed) {
 #list .body {
   position: relative;
   padding-bottom: 30vh;
+  --rail: 30px;
 }
 .rows {
   position: relative;
   padding-right: var(--space-sm);
-  --rail: 30px;
+}
+.rows:focus-visible {
+  outline-offset: -2px;
 }
 .rows::before {
   content: "";
@@ -1186,9 +1190,15 @@ body.zoom #panes > .pane:not(.zoomed) {
   gap: 0 var(--space-xs);
   padding: var(--space-xs) var(--space-sm);
   margin: 0 calc(var(--space-sm) * -1);
+  border: 0;
   border-left: var(--rule-heavy) solid transparent;
   border-bottom: var(--rule-hair) solid var(--line-2);
   cursor: pointer;
+  background: none;
+  text-align: left;
+}
+.link:focus-visible {
+  outline-offset: -2px;
 }
 .link .who {
   font-size: var(--fs-tiny);
@@ -1299,6 +1309,9 @@ body.zoom #panes > .pane:not(.zoomed) {
   border: var(--rule-heavy) solid var(--line);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+}
+.sheet:focus-visible {
+  outline: none;
 }
 .sheet > header {
   display: flex;

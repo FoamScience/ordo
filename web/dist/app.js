@@ -1924,11 +1924,14 @@ function rowText(it2, run2) {
   };
   const name = aboutOf(it2) ?? "";
   const sentence2 = alone((o) => o.rationale);
-  const tail = new RegExp(`\\s+(?:to|in|of|from|on)\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
-  const short = sentence2?.replace(tail, "");
+  const quoted = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tail = new RegExp(`\\s+(?:to|in|of|from|on)\\s+${quoted}$`);
+  const head = new RegExp(`^(\\w+) ${quoted}(?=[: ]\\s*\\S)`);
+  const trim = (s) => s.replace(tail, "").replace(head, "$1");
+  const short = sentence2 && trim(sentence2);
   if (short && short !== `edits ${name}`) return { text: short, code: false };
   const detail = alone((o) => o.details[0]);
-  if (detail) return { text: detail, code: false };
+  if (detail) return { text: trim(detail), code: false };
   if (it2.gist) return { text: it2.gist, code: true };
   return { text: it2.details[0] ?? it2.rationale, code: false };
 }
@@ -4331,7 +4334,8 @@ function renderList() {
     zoomButton("list")
   );
   const body = pane.querySelector(".body");
-  const rows = h("div", { class: "rows" });
+  const hadFocus = body.contains(document.activeElement);
+  const rows = h("div", { class: "rows", role: "listbox", tabindex: "0", "aria-label": "Reading order", "aria-activedescendant": `row-${st2.sel}` });
   const dots = /* @__PURE__ */ new Map();
   let selEl = null;
   const { rows: listRows, runOf } = withSymbols(shownRows(), r.items);
@@ -4342,6 +4346,8 @@ function renderList() {
           "div",
           {
             class: `symhead${row.items.includes(st2.sel) ? " cur" : ""}`,
+            role: "option",
+            "aria-selected": "false",
             title: row.items.length === 1 ? `1 hunk changes ${row.name}` : `${row.items.length} hunks in a row change ${row.name}`,
             onclick: () => {
               st2.focus = "list";
@@ -4377,6 +4383,9 @@ function renderList() {
         "div",
         {
           class: `${rowClass(items, selected)}${folded ? " folded" : ""}${run2 ? " inrun" : ""}${run2 && run2[run2.length - 1] === items[0] ? " last" : ""}`,
+          role: "option",
+          id: `row-${selected ? st2.sel : items[0]}`,
+          "aria-selected": selected ? "true" : "false",
           title: folded ? "Quiet: an import, formatting or generated code. Select it to read." : first.rationale,
           onclick: () => {
             st2.focus = "list";
@@ -4402,6 +4411,7 @@ function renderList() {
     }
   }
   replace(body, changeSummary(r.summary), rows);
+  if (hadFocus) rows.focus({ preventScroll: true });
   drawArcs(rows, dots);
   if (selEl) {
     const el = selEl;
@@ -4581,7 +4591,7 @@ function renderReading(it2) {
       key && h("kbd", null, key)
     ),
     next && h("button", { class: "next", onclick: () => step(1), title: `Next: ${next.rationale}`, "aria-label": `next hunk: ${next.rationale}` }, "Next"),
-    next && h("span", { class: "said" }, prose(sentence(next.rationale)))
+    next && h("span", { class: "said" }, "Next: ", prose(sentence(next.rationale)))
   );
 }
 var VERDICT = {
@@ -4846,7 +4856,7 @@ function edgeRows(targets, limit) {
     const link = st2.whyLinks.length;
     st2.whyLinks.push(target);
     return h(
-      "div",
+      "button",
       {
         class: `link${st2.whyCur === link ? " cur" : ""}`,
         title: "Go there (Enter); come back with C-o",
@@ -5201,18 +5211,22 @@ function zoomButton(p) {
     h("i", { "aria-hidden": "true" })
   );
 }
+var sheetOpener = null;
 function showSheet(title, text) {
   const ov = $("#overlay");
+  if (ov.hidden) {
+    sheetOpener = document.activeElement;
+    for (const id of ["band", "panes", "summary"]) $(`#${id}`).inert = true;
+  }
   ov.hidden = false;
-  replace(
-    ov,
-    h(
-      "div",
-      { class: "sheet", role: "dialog", "aria-label": title },
-      h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "\xD7")),
-      typeof text === "string" ? h("pre", null, text) : h("div", { class: "scroll" }, text)
-    )
+  const sheet = h(
+    "div",
+    { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title, tabindex: "-1" },
+    h("header", null, title, h("button", { onclick: closeSheet, "aria-label": "close" }, "\xD7")),
+    typeof text === "string" ? h("pre", null, text) : h("div", { class: "scroll" }, text)
   );
+  replace(ov, sheet);
+  sheet.focus({ preventScroll: true });
 }
 function dismissSheet() {
   if ($("#overlay").dataset.kind === "config") {
@@ -5225,6 +5239,9 @@ function closeSheet() {
   const ov = $("#overlay");
   if (ov.hidden) return false;
   ov.hidden = true;
+  for (const id of ["band", "panes", "summary"]) $(`#${id}`).inert = false;
+  if (sheetOpener instanceof HTMLElement && sheetOpener.isConnected) sheetOpener.focus({ preventScroll: true });
+  sheetOpener = null;
   delete ov.dataset.kind;
   canvas = null;
   depmap = null;
@@ -5239,9 +5256,21 @@ function showHelp() {
     const k = b.prefix ? `${b.prefix} ${b.key}` : b.key;
     by.set(b.action, [...by.get(b.action) ?? [], k]);
   }
-  const rows = [...by].map(([a, ks]) => h("tr", null, h("td", null, ks.join(", ")), h("td", null, a)));
+  const rows = [...by].map(([a, ks]) => h("tr", null, h("td", null, ks.join(", ")), h("td", null, actionLabel(a))));
   const cmds = [...r.commands, ...CLIENT_COMMANDS].map((c) => h("tr", null, h("td", null, `:${c.name} ${c.args}`), h("td", null, c.help)));
-  showSheet("keys and commands", h("div", { class: "why" }, h("table", null, h("tbody", null, rows)), h("h3", null, "commands"), h("table", null, h("tbody", null, cmds))));
+  showSheet("Keys and commands", h("div", { class: "why" }, h("table", null, h("tbody", null, rows)), h("h3", null, "Commands"), h("table", null, h("tbody", null, cmds))));
+}
+var ACTION_LABEL = {
+  quit: "close, or back out of a search, selection or zoom",
+  "toggle-reviewed": "mark read or unread",
+  next: "next hunk, line or link",
+  prev: "previous hunk, line or link",
+  "open-deps": "open the dependency canvas",
+  "focus-deps": "open the dependency canvas"
+};
+function actionLabel(action) {
+  const s = ACTION_LABEL[action] ?? action.replaceAll("-", " ");
+  return s[0].toUpperCase() + s.slice(1);
 }
 var toastTimer = 0;
 function toast(msg, err = false) {
