@@ -460,6 +460,18 @@ pub(super) struct RuleToml {
     #[serde(default)]
     max_file_lines: Option<usize>,
     #[serde(default)]
+    max_nesting_delta: Option<usize>,
+    #[serde(default)]
+    max_lines_delta: Option<usize>,
+    #[serde(default)]
+    max_params_delta: Option<usize>,
+    #[serde(default)]
+    max_branches_delta: Option<usize>,
+    #[serde(default)]
+    max_cognitive_delta: Option<usize>,
+    #[serde(default)]
+    max_short_names_delta: Option<usize>,
+    #[serde(default)]
     recursive: Option<bool>,
     #[serde(default)]
     container_with: Option<String>,
@@ -517,6 +529,12 @@ fn rule_from_toml(
         max_lines: parsed.max_lines,
         max_nesting: parsed.max_nesting,
         max_file_lines: parsed.max_file_lines,
+        max_nesting_delta: parsed.max_nesting_delta,
+        max_lines_delta: parsed.max_lines_delta,
+        max_params_delta: parsed.max_params_delta,
+        max_branches_delta: parsed.max_branches_delta,
+        max_cognitive_delta: parsed.max_cognitive_delta,
+        max_short_names_delta: parsed.max_short_names_delta,
         recursive: parsed.recursive,
         container_with: parsed.container_with,
         container_without: parsed.container_without,

@@ -202,6 +202,10 @@ pub struct Summary {
     pub verdict: Verdict,
     /// what the label rests on, then what the verdict rests on
     pub sentences: Vec<String>,
+    /// the definitions the change made hardest to read, by how their own
+    /// measurements moved. Omitted when none got harder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regressions: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -470,6 +474,22 @@ pub struct When {
     /// fires on the hunks of a file this change pushed past the limit
     #[serde(default)]
     pub max_file_lines: Option<usize>,
+
+    // ---- readability deltas: fires when a definition the hunk touched grew
+    // by more than this against its own old version
+    #[serde(default)]
+    pub max_nesting_delta: Option<usize>,
+    #[serde(default)]
+    pub max_lines_delta: Option<usize>,
+    #[serde(default)]
+    pub max_params_delta: Option<usize>,
+    #[serde(default)]
+    pub max_branches_delta: Option<usize>,
+    #[serde(default)]
+    pub max_cognitive_delta: Option<usize>,
+    /// in percentage points of its local names that are one or two characters
+    #[serde(default)]
+    pub max_short_names_delta: Option<usize>,
 
     // ---- relationships the engine already knows
     /// a definition starting in the hunk calls itself

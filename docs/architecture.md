@@ -14,7 +14,7 @@ repository, a config file or a terminal lives in the client.
 | --- | --- | --- |
 | **A — engine** | A1 pipeline core | `src/lib.rs` |
 | | A2 syntax layer | `src/lang.rs`, `src/extract.rs`, `grammars/` |
-| | A3 narration layer | `src/order.rs`, `src/advisories.rs`, `src/contract.rs`, `rulesets/catalog/` |
+| | A3 narration layer | `src/order.rs`, `src/advisories.rs`, `src/contract.rs`, `src/readability.rs`, `rulesets/catalog/` |
 | **B — contract** | B1 contract + input | `src/model.rs`, `schema/v2.json`, `src/main.rs`, `src/patch.rs` |
 | | B2 rules + rulesets | `src/rules.rs`, `src/catalog.rs`, `rulesets/`, `scripts/ruleset-check.py` |
 | **C — client** | C1 data layer | `src/bin/ordo/main.rs` (args, load), `src/bin/ordo/findings.rs`, `src/bin/ordo/git.rs`, `src/bin/ordo/consumers.rs`, `src/bin/ordo/marks.rs` |
@@ -60,7 +60,7 @@ The surviving copies, and what holds them together:
 
 | the fact | copies | what catches drift |
 | --- | --- | --- |
-| the rule schema | `model::When` (26 fields), `RuleToml` in the client, `schema/v2.json` (25 declared + the `unknown` catch-all) | `tests/schema.rs`, `rule_toml_keys`, `every_documented_rule_condition_is_one_the_engine_reads` |
+| the rule schema | `model::When` (32 fields), `RuleToml` in the client, `schema/v2.json` (31 declared + the `unknown` catch-all) | `tests/schema.rs`, `rule_toml_keys`, `every_documented_rule_condition_is_one_the_engine_reads` |
 | the extension table | `src/lang.rs`, the client's highlighter | nothing yet |
 | the construct catalog | `rulesets/catalog/*.toml` → `src/catalog.generated.json` | `the_compiled_catalog_matches_the_toml_it_is_built_from`, `tests/catalog.rs` |
 

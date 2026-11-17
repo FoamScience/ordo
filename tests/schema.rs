@@ -185,6 +185,10 @@ fn the_fixture_reaches_the_optional_output_fields() {
     }
     assert!(out.get("ledger").is_some(), "fixture produced no ledger");
     assert!(out.get("summary").is_some(), "fixture produced no summary");
+    assert!(
+        out["summary"].get("regressions").is_some(),
+        "fixture's summary names no regressions"
+    );
 
     // the other two fixtures own the paths this one cannot reach; without them
     // the schema check walks those objects zero times and passes on nothing

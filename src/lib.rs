@@ -27,6 +27,7 @@ mod lang;
 pub mod model;
 mod order;
 mod patch;
+mod readability;
 pub mod refine;
 pub mod rules;
 mod summary;
@@ -396,6 +397,7 @@ fn hunk_facts<'a>(
         recursive: sem.recursive,
         container_members: &sem.container_members,
         uninit_members: &sem.uninit_members,
+        deltas: &sem.deltas,
     }
 }
 

@@ -18,6 +18,7 @@
 //! collected it (per-user and per-repo).
 use crate::lang::{self, LangSpec};
 use crate::model::{Category, ContainerKind, Finding, FindingSource, Level, Rule};
+use crate::readability::{DefDelta, Metrics};
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use std::collections::HashMap;
@@ -66,6 +67,8 @@ pub struct HunkFacts<'a> {
     pub recursive: bool,
     pub container_members: &'a [String],
     pub uninit_members: &'a [String],
+    /// the definitions the hunk touched whose readability measurements moved
+    pub deltas: &'a [DefDelta],
 }
 
 pub struct Rules<'r> {
@@ -476,6 +479,12 @@ impl<'r> Compiled<'r> {
             // file that was already over it
             && w.max_file_lines.is_none_or(|m| new_lines > m && old_lines.is_none_or(|o| o <= m))
             && w.recursive.is_none_or(|r| r == f.recursive)
+            && grew_past(w.max_nesting_delta, f.deltas, |m| m.nesting)
+            && grew_past(w.max_lines_delta, f.deltas, |m| m.lines)
+            && grew_past(w.max_params_delta, f.deltas, |m| m.params)
+            && grew_past(w.max_branches_delta, f.deltas, |m| m.branches)
+            && grew_past(w.max_cognitive_delta, f.deltas, |m| m.cognitive)
+            && grew_past(w.max_short_names_delta, f.deltas, |m| m.short_names)
     }
 
     /// the names it defines, uses and imports, and what its container holds
@@ -610,6 +619,13 @@ pub fn priority(hits: &[Finding], rules: &[Rule]) -> i64 {
         .map(|r| r.priority)
         .max()
         .unwrap_or(0)
+}
+
+/// A definition the hunk touched grew by more than `limit` in one
+/// measurement — its old version is the baseline, so debt it already
+/// carried never fires.
+fn grew_past(limit: Option<usize>, deltas: &[DefDelta], metric: fn(&Metrics) -> usize) -> bool {
+    limit.is_none_or(|m| deltas.iter().any(|d| d.grew(metric) > m))
 }
 
 fn node_row(n: Node) -> usize {

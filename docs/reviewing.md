@@ -355,6 +355,22 @@ wrong "preserving" is the costly mistake, so the verdict never guesses it.
 When a renamed definition is one callers outside the change may reach, the
 second sentence says the API changes for them, and names each such rename.
 
+`regressions` names the definitions the change made hardest to read, worst
+first, each against its own old version:
+
+```json
+"regressions": "Readability regressed most in schedule (src/jobs.py): nesting 2 → 5, cognitive 4 → 19, lines 40 → 118."
+```
+
+Each definition a hunk touches is measured on both sides — control-flow
+nesting, cognitive complexity (branches weighted by how deep they sit, plus
+each run of `&&`/`||`), branches, parameters, the share of one- or
+two-character local names, lines — and only the measurements that grew are
+named. There is no single score. A definition the change did not touch is not
+measured, so debt it already carried never shows; one that only grew longer is
+not named either, since that is what adding to it looks like. The same deltas
+are rule conditions: `max-nesting-delta` and its kin in [rules.md](rules.md).
+
 ### The change ledger
 
 One line per **symbol**, not per hunk — a forty-hunk diff read before any hunk

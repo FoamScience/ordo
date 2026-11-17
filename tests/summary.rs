@@ -174,6 +174,26 @@ fn a_guard_alone_is_still_a_fix_candidate_and_says_no_test_was_touched() {
 }
 
 #[test]
+fn the_definitions_made_hardest_to_read_are_named_with_what_moved() {
+    let s = summary(json!([{"path": "src/a.py",
+        "old": "def schedule(jobs):\n    out = []\n    for j in jobs:\n        out.append(j)\n    return out\n\n\ndef tidy(x):\n    return x\n",
+        "new": "def schedule(jobs):\n    out = []\n    for j in jobs:\n        if j and j.ok:\n            for q in j:\n                out.append(q)\n    return out\n\n\ndef tidy(x):\n    value = x\n    return value\n"}]));
+    // `tidy` only grew longer: that is not harder to read
+    assert_eq!(
+        s.regressions.as_deref(),
+        Some("Readability regressed most in schedule (src/a.py): nesting 1 → 3, cognitive 1 → 7, branches 1 → 3, lines 5 → 7.")
+    );
+}
+
+#[test]
+fn a_change_that_makes_nothing_harder_to_read_names_no_regressions() {
+    let s = summary(json!([{"path": "src/a.py",
+        "old": "def f(x):\n    if x:\n        if x.y:\n            return 1\n    return 0\n",
+        "new": "def f(x):\n    if x and x.y:\n        return 1\n    return 0\n"}]));
+    assert_eq!(s.regressions, None);
+}
+
+#[test]
 fn new_definitions_are_a_feature() {
     let s = is(
         json!([
