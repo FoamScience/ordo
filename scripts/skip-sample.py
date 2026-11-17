@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""A should_skip label set beyond gold and silver: a stratified, seeded sample
+of the judged sweep, rendered as ordo's own hunks for an Opus labeler, and the
+labels collected into a file of their own (judged.jsonl is never touched).
+
+Strata are repo x the noise flag the judged sweep recorded (kept as `noise`,
+not re-read from today's engine), filled equally and topped up from the
+strata with hunks to spare when one runs short. Each sampled row records its
+stratum's population (`stratum_n`) so rates can be reweighted to the sweep.
+
+Usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/skip-sample.py draw [--n 5000] [--seed 131]
+       scripts/skip-sample.py chunks DIR [--size 50]      # labeler inputs, DIR/cNNN.jsonl
+       scripts/skip-sample.py collect DIR --model MODEL   # DIR/*.labels.jsonl -> judged.should_skip.jsonl
+"""
+import argparse
+import importlib.util
+import json
+import os
+import random
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+from corpuslib import ROOT
+
+CORPUS = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus")).expanduser()
+SAMPLE = CORPUS / "skip-sample.jsonl"
+OUT = CORPUS / "judged.should_skip.jsonl"
+SHOWN = ("key", "repo", "lang", "sha", "path", "subject", "diff")
+
+_spec = importlib.util.spec_from_file_location("gold_sample", ROOT / "scripts/gold-sample.py")
+gold_sample = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gold_sample)
+
+
+def keys_of(path):
+    return {json.loads(l)["key"] for l in Path(path).read_text().splitlines() if l.strip()}
+
+
+def quotas(sizes, n):
+    """Equal share per stratum, a stratum smaller than its share giving the
+    rest to the others."""
+    q, left = {}, n
+    order = sorted(sizes, key=lambda s: (sizes[s], s))
+    for i, s in enumerate(order):
+        q[s] = min(sizes[s], left // (len(order) - i))
+        left -= q[s]
+    return q
+
+
+def draw(a):
+    if OUT.exists():
+        sys.exit(f"{OUT} holds labels keyed to {SAMPLE}; move it aside before redrawing")
+    taken = keys_of(ROOT / "corpus/gold.jsonl") | keys_of(CORPUS / "silver.jsonl")
+    cells, seen = defaultdict(list), set()
+    for l in (CORPUS / "judged.jsonl").open():
+        r = json.loads(l)
+        if r["key"] in taken or r["key"] in seen:
+            continue
+        seen.add(r["key"])
+        cells[(r["repo"], r["noise"])].append(r["key"])
+    rng = random.Random(a.seed)
+    for k in sorted(cells):
+        rng.shuffle(cells[k])
+    sizes = {k: len(v) for k, v in cells.items()}
+    want = quotas(sizes, a.n)
+    got, have, cursor = {}, defaultdict(int), {k: 0 for k in cells}
+    # the engine may no longer emit a sampled hunk at the same line: draw the
+    # next key of the same stratum until each quota is met or the stratum dries
+    while True:
+        ask = []
+        for k in sorted(cells):
+            short = want[k] - have[k]
+            take = cells[k][cursor[k]:cursor[k] + short]
+            cursor[k] += len(take)
+            ask += [(k, key) for key in take]
+        if not ask:
+            dry = {k: have[k] for k in cells if cursor[k] >= len(cells[k])}
+            if len(got) >= a.n or not dry or quotas({**sizes, **dry}, a.n) == want:
+                break
+            want = quotas({**sizes, **dry}, a.n)
+            continue
+        stratum = dict((key, k) for k, key in ask)
+        for h in gold_sample.draw_keys(CORPUS, [key for _, key in ask]):
+            if h["key"] in stratum and h["key"] not in got:
+                k = stratum[h["key"]]
+                have[k] += 1
+                got[h["key"]] = {**{f: h[f] for f in SHOWN}, "noise": k[1], "stratum_n": sizes[k]}
+        print(f"  drawn {len(got)}/{a.n}", file=sys.stderr)
+    rows = sorted(got.values(), key=lambda r: r["key"])
+    SAMPLE.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    print(f"wrote {len(rows)} hunks to {SAMPLE}")
+
+
+def chunks(a):
+    """Shuffled, so a chunk is not fifty hunks of one commit; keys already
+    chunked in DIR are left out and new chunks number on from the last."""
+    a.dir.mkdir(parents=True, exist_ok=True)
+    old = sorted(p for p in a.dir.glob("c*.jsonl") if ".labels" not in p.name)
+    done = set().union(*map(keys_of, old)) if old else set()
+    rows = [r for l in SAMPLE.read_text().splitlines() if l.strip()
+            if (r := json.loads(l))["key"] not in done]
+    random.Random(a.seed).shuffle(rows)
+    start = int(old[-1].stem[1:]) + 1 if old else 0
+    for i in range(0, len(rows), a.size):
+        part = rows[i:i + a.size]
+        (a.dir / f"c{start + i // a.size:03d}.jsonl").write_text(
+            "".join(json.dumps({f: r[f] for f in SHOWN}, ensure_ascii=False) + "\n" for r in part))
+    print(f"{(len(rows) + a.size - 1) // a.size} chunks of {a.size} in {a.dir}, from c{start:03d}")
+
+
+def collect(a):
+    want = [json.loads(l)["key"] for l in SAMPLE.read_text().splitlines() if l.strip()]
+    got, bad = {}, []
+    for f in sorted(a.dir.glob("*.labels.jsonl")):
+        src = keys_of(f.with_name(f.name.replace(".labels", "")))
+        for l in f.read_text().splitlines():
+            if not l.strip():
+                continue
+            r = json.loads(l)
+            v = r.get("labels", {}).get("should_skip")
+            if r.get("key") not in src or not isinstance(v, bool) or r["key"] in got:
+                bad.append(f"{f.name}: {l[:120]}")
+                continue
+            got[r["key"]] = {"key": r["key"], "should_skip": v, "why": r.get("why", ""),
+                             "judge": "opus", "model": a.model}
+    missing = [k for k in want if k not in got]
+    for b in bad:
+        print(f"bad line {b}", file=sys.stderr)
+    for k in missing:
+        print(f"missing {k}", file=sys.stderr)
+    if bad or missing:
+        sys.exit(f"{len(bad)} bad lines, {len(missing)} keys missing; nothing written")
+    OUT.write_text("".join(json.dumps(got[k], ensure_ascii=False) + "\n" for k in want))
+    print(f"wrote {len(want)} labels to {OUT}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    d = sub.add_parser("draw")
+    d.add_argument("--n", type=int, default=5000)
+    d.add_argument("--seed", type=int, default=131)
+    c = sub.add_parser("chunks")
+    c.add_argument("dir", type=Path)
+    c.add_argument("--size", type=int, default=50)
+    c.add_argument("--seed", type=int, default=131)
+    k = sub.add_parser("collect")
+    k.add_argument("dir", type=Path)
+    k.add_argument("--model", required=True)
+    a = ap.parse_args()
+    {"draw": draw, "chunks": chunks, "collect": collect}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    main()
