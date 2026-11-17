@@ -60,14 +60,32 @@ def with_features(repo, sha, inp):
         edges = shallow.read_text().split()
         if any(int(t) > since for t in git(repo, "show", "-s", "--format=%ct", *edges).split()):
             return inp
-    log = git(repo, "log", "--no-renames", "--name-only", "--format=%x1e%ct%x09%s",
-              f"--max-age={since}", f"{sha}^", "--", *(c["path"] for c in inp["changes"]))
+    log = git(repo, "-c", "core.quotePath=false", "log", "-M", "--topo-order", "--name-status", "--format=%x1e%ct%x09%s",
+              f"--max-age={since}", f"{sha}^")
+    return {**inp, "history": {"at": at, "commits": followed(log, [c["path"] for c in inp["changes"]])}}
+
+
+def followed(log, paths):
+    """The commits of a `git log -M --topo-order --name-status` that touch
+    `paths`, each listing them by their name at `paths`, so a file renamed
+    inside the window keeps the history from before the rename. The log is
+    unfiltered because a pathspec would hide the rename's old side."""
+    current = {p: p for p in paths}
     commits = []
     for rec in log.split("\x1e")[1:]:
-        head, *paths = rec.strip("\n").split("\n")
+        head, *entries = rec.strip("\n").split("\n")
         time, _, subject = head.partition("\t")
-        commits.append({"time": int(time), "subject": subject, "paths": [p for p in paths if p]})
-    return {**inp, "history": {"at": at, "commits": commits}}
+        touched = []
+        for e in filter(None, entries):
+            status, *names = e.split("\t")
+            if (p := current.get(names[-1])) is not None:
+                touched.append(p)
+                if status.startswith("R"):
+                    del current[names[-1]]
+                    current[names[0]] = p
+        if touched:
+            commits.append({"time": int(time), "subject": subject, "paths": touched})
+    return commits
 
 
 def engine_output(inp):
