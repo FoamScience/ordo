@@ -88,6 +88,7 @@ fn every_shipped_ruleset_loads_and_every_rule_fires_on_its_sample() {
                 ..Default::default()
             },
             consumers: vec![],
+            history: None,
         };
         let out: Output = ordo_diff::run(input);
         assert!(
@@ -138,6 +139,7 @@ fn mutable_global_state_reports_the_assignment_and_spares_imports() {
                 ..Default::default()
             },
             consumers: vec![],
+            history: None,
         };
         let out: Output = ordo_diff::run(input);
         out.files

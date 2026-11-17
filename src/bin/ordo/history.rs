@@ -90,6 +90,7 @@ fn symbol_identity(
         }],
         options: Options::default(),
         consumers: vec![],
+        history: None,
     });
     let file = out.files.iter().find(|f| f.path == path)?;
     let line = row + 1;
@@ -144,6 +145,7 @@ fn classify_commit(sha: &str, path: &str, target: &Symbol) -> Option<String> {
         }],
         options: Options::default(),
         consumers: vec![],
+        history: None,
     });
     let file = out.files.iter().find(|f| f.path == path)?;
     let qualified = qualified_name(target);

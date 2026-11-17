@@ -322,6 +322,7 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
             ..Options::default()
         },
         consumers: vec![],
+        history: None,
     };
     let out = ordo_diff::run(input);
     let mut items = build_items(&out);

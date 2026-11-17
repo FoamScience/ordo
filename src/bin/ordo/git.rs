@@ -473,6 +473,7 @@ pub(super) fn gather_range(
         changes,
         options: Options::default(),
         consumers: vec![],
+        history: None,
     }
 }
 
@@ -562,6 +563,7 @@ pub(super) fn gather_uncommitted(filter: &Filter, progress: &dyn Fn(String)) -> 
         changes,
         options: Options::default(),
         consumers: vec![],
+        history: None,
     }
 }
 
@@ -620,5 +622,6 @@ pub(super) fn gather_worktree_range(
         changes,
         options: Options::default(),
         consumers: vec![],
+        history: None,
     }
 }

@@ -22,6 +22,7 @@ mod advisories;
 pub mod catalog;
 mod contract;
 mod extract;
+pub mod hunch;
 mod intent;
 mod lang;
 pub mod model;
@@ -251,6 +252,10 @@ pub fn run(input: Input) -> Output {
     arity_check(&mut files, &ledger, &input.changes);
     incomplete_rename(&mut files, &ledger, &input.changes, &symbols);
     contract::run(&mut files, &ledger, &input.changes, &input.consumers);
+    let feature_schema = input.options.features.then(|| {
+        hunch::annotate(&mut files, &hunks, &edges_out, input.history.as_ref());
+        hunch::schema()
+    });
     // every pass is done with the trees; the client calls `run` again on each
     // reload, and holding this changeset's trees until then buys nothing
     lang::forget_trees();
@@ -265,6 +270,7 @@ pub fn run(input: Input) -> Output {
         notes,
         ledger,
         summary,
+        feature_schema,
     }
 }
 
@@ -470,6 +476,7 @@ impl Passes<'_> {
                     rows: b.uses.clone(),
                 })
                 .collect(),
+            features: None,
         }
     }
 }
