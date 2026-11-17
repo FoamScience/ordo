@@ -9,6 +9,7 @@ import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordA
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
+import { moved, regressed } from "./readability.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
 import type { ActResult, ChangeSummary, FileData, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
@@ -1018,6 +1019,10 @@ function renderWhy(): void {
               h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : "")),
             ),
           ),
+      ],
+      it.readability.length > 0 && [
+        h("h3", null, "Readability", h("small", null, "against each definition's old version")),
+        it.readability.map((d) => h("p", { class: regressed(d) ? "warnline" : "" }, `${d.name}: ${moved(d).join(", ")}`)),
       ],
       it.executed && [
         h("h3", null, "Test coverage"),

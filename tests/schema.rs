@@ -38,8 +38,8 @@ fn declared(schema: &Value, path: &str) -> Vec<String> {
 /// An input that reaches as many optional output fields as one fixture can: a
 /// rename whose old name survives at one call site (a `notes` entry), a
 /// cross-file use, a removal, a rule hit, a local binding that is used again
-/// (a `uses_at` entry), and a config edit whose changed keys produce
-/// `details`.
+/// (a `uses_at` entry), a definition that gained a loop (a `deltas` entry),
+/// and a config edit whose changed keys produce `details`.
 fn rich() -> Input {
     serde_json::from_value(serde_json::json!({
         "changes": [
@@ -142,6 +142,9 @@ fn the_schema_declares_everything_the_engine_emits() {
                 for u in h["uses_at"].as_array().into_iter().flatten() {
                     check("files/hunks/uses_at", u);
                 }
+                for d in h["deltas"].as_array().into_iter().flatten() {
+                    check("files/hunks/deltas", d);
+                }
             }
             for d in f["dropped"].as_array().into_iter().flatten() {
                 check("files/dropped", d);
@@ -177,7 +180,9 @@ fn the_fixture_reaches_the_optional_output_fields() {
         .iter()
         .flat_map(|f| f["hunks"].as_array().expect("hunks"))
         .collect();
-    for field in ["findings", "uses_at", "symbols", "details", "notes"] {
+    for field in [
+        "findings", "uses_at", "symbols", "details", "notes", "deltas",
+    ] {
         assert!(
             hunks.iter().any(|h| h.get(field).is_some()),
             "no hunk carries `{field}`; the schema check would not cover it"

@@ -453,6 +453,7 @@ impl Passes<'_> {
             comment: f.comment[li],
             details: sem.details.clone(),
             notes: sem.notes.clone(),
+            deltas: sem.deltas.iter().map(Into::into).collect(),
             symbols: sem.symbols.clone(),
             // one list: the construct catalog, the caller's rules, and anything a
             // client adds later, all say the same kind of thing

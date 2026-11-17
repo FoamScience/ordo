@@ -370,6 +370,14 @@ named. There is no single score. A definition the change did not touch is not
 measured, so debt it already carried never shows; one that only grew longer is
 not named either, since that is what adding to it looks like. The same deltas
 are rule conditions: `max-nesting-delta` and its kin in [rules.md](rules.md).
+Each hunk carries the full measurements of the definitions it is the first to
+touch in `--json`, as `[old, new]` pairs, and the web reviewer's why pane lists
+the ones that moved:
+
+```json
+"deltas": [{ "name": "schedule", "nesting": [2, 5], "lines": [40, 118], "params": [1, 1],
+             "branches": [3, 9], "cognitive": [4, 19], "short_names": [0, 20] }]
+```
 
 ### The change ledger
 
