@@ -61,7 +61,7 @@ file (a schema, a lockfile, a `package.json`) often drives the code around it
 and keeps its place. Set it to `false` for a docs-led change.
 
 `options.hunch` (off by default) puts a trained model's guess on every hunk,
-beside the engine's own `noise` flag:
+beside the engine's own `noise` flag (overview in [hunch.md](hunch.md)):
 
 ```json
 "hunch": { "noise": 0.7234, "top": [["comment", 1.661], ["uses", -0.82], ["lines_added", -0.31]],

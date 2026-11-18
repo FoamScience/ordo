@@ -413,6 +413,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         include_str!("../../../docs/web.md"),
     ),
     (
+        "hunch",
+        "the trained guess behind --hunch: what it changes, how it was trained",
+        include_str!("../../../docs/hunch.md"),
+    ),
+    (
         "reviewing",
         "the detail layer, rationale patterns, advisories, the ledger",
         include_str!("../../../docs/reviewing.md"),

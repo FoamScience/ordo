@@ -368,6 +368,9 @@ Both are repeatable.
 
 ## Hunch
 
+What the model is, what it may change and how well it works:
+[hunch.md](hunch.md). This section covers what the reviewer shows.
+
 `--hunch` asks the engine for hunch's guess on every hunk: how likely a
 reviewer can skip it, from a small model trained offline on labelled reviews
 (`scripts/hunch-train.py`). The code pane shows it as a muted `Hunch: 72%
