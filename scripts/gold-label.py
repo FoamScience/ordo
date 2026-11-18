@@ -113,7 +113,7 @@ def show(r, i, total):
 def label(r, L):
     """Ask for every null label of one hunk into `L`; `s` leaves the rest of it
     null. True when the labeler asked to quit."""
-    questions = [("faithful", "does the rationale accurately describe this diff?"),
+    questions = [("faithful", "does the rationale state nothing false or misleading about this diff (terse but true is faithful)?"),
                  ("matches_commit", "is the rationale consistent with the commit message?")]
     if r["noise"]:
         questions.append(("noise_correct", "is this hunk really pure formatting/generated?"))
