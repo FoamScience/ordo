@@ -736,6 +736,665 @@
    }
   }
  },
+ "promotion": {
+  "gate": {
+   "gold_at_noise_hide_rate": {
+    "beats": true,
+    "hunch": {
+     "hidden": 44,
+     "missed_skips": 9,
+     "wrong_hides": 1
+    },
+    "noise": {
+     "hidden": 44,
+     "missed_skips": 13,
+     "wrong_hides": 5
+    }
+   },
+   "loro_at_repo_hide_rate": {
+    "hunch": {
+     "buildtheworld": {
+      "hidden": 11,
+      "missed_skips": 17,
+      "wrong_hides": 2
+     },
+     "click": {
+      "hidden": 21,
+      "missed_skips": 10,
+      "wrong_hides": 0
+     },
+     "cobra": {
+      "hidden": 32,
+      "missed_skips": 2,
+      "wrong_hides": 2
+     },
+     "curl": {
+      "hidden": 6,
+      "missed_skips": 5,
+      "wrong_hides": 0
+     },
+     "excalidraw": {
+      "hidden": 44,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "execa": {
+      "hidden": 19,
+      "missed_skips": 0,
+      "wrong_hides": 1
+     },
+     "junit5": {
+      "hidden": 25,
+      "missed_skips": 4,
+      "wrong_hides": 0
+     },
+     "lazy": {
+      "hidden": 53,
+      "missed_skips": 11,
+      "wrong_hides": 0
+     },
+     "nvm": {
+      "hidden": 2,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "openfoam": {
+      "hidden": 36,
+      "missed_skips": 42,
+      "wrong_hides": 0
+     },
+     "ripgrep": {
+      "hidden": 4,
+      "missed_skips": 8,
+      "wrong_hides": 0
+     },
+     "vue": {
+      "hidden": 64,
+      "missed_skips": 10,
+      "wrong_hides": 5
+     }
+    },
+    "losing_repos": [
+     "cobra",
+     "vue"
+    ],
+    "noise": {
+     "buildtheworld": {
+      "hidden": 11,
+      "missed_skips": 18,
+      "wrong_hides": 3
+     },
+     "click": {
+      "hidden": 21,
+      "missed_skips": 10,
+      "wrong_hides": 0
+     },
+     "cobra": {
+      "hidden": 32,
+      "missed_skips": 1,
+      "wrong_hides": 1
+     },
+     "curl": {
+      "hidden": 6,
+      "missed_skips": 5,
+      "wrong_hides": 0
+     },
+     "excalidraw": {
+      "hidden": 44,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "execa": {
+      "hidden": 19,
+      "missed_skips": 0,
+      "wrong_hides": 1
+     },
+     "junit5": {
+      "hidden": 25,
+      "missed_skips": 5,
+      "wrong_hides": 1
+     },
+     "lazy": {
+      "hidden": 53,
+      "missed_skips": 11,
+      "wrong_hides": 0
+     },
+     "nvm": {
+      "hidden": 2,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "openfoam": {
+      "hidden": 36,
+      "missed_skips": 42,
+      "wrong_hides": 0
+     },
+     "ripgrep": {
+      "hidden": 4,
+      "missed_skips": 8,
+      "wrong_hides": 0
+     },
+     "vue": {
+      "hidden": 64,
+      "missed_skips": 9,
+      "wrong_hides": 4
+     }
+    }
+   },
+   "passes": false
+  },
+  "model": "trees",
+  "policy": {
+   "gold": {
+    "hunch": {
+     "all": {
+      "hidden": 42,
+      "missed_skips": 13,
+      "newly_hidden": 0,
+      "unhidden": 2,
+      "wrong_hides": 3
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 2,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 2
+      },
+      "cobra": {
+       "hidden": 0,
+       "missed_skips": 4,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 4,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 2,
+       "wrong_hides": 0
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 10,
+       "missed_skips": 2,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 7,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      }
+     }
+    },
+    "noise": {
+     "all": {
+      "hidden": 44,
+      "missed_skips": 13,
+      "newly_hidden": 0,
+      "unhidden": 0,
+      "wrong_hides": 5
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "click": {
+       "hidden": 3,
+       "missed_skips": 2,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 2
+      },
+      "cobra": {
+       "hidden": 0,
+       "missed_skips": 4,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "curl": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 4,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 8,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 2
+      },
+      "junit5": {
+       "hidden": 2,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 10,
+       "missed_skips": 2,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 0,
+       "missed_skips": 3,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 7,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "ripgrep": {
+       "hidden": 1,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 6,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      }
+     }
+    }
+   },
+   "loro": {
+    "hunch": {
+     "all": {
+      "hidden": 313,
+      "missed_skips": 112,
+      "newly_hidden": 0,
+      "unhidden": 4,
+      "wrong_hides": 7
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 9,
+       "missed_skips": 18,
+       "newly_hidden": 0,
+       "unhidden": 2,
+       "wrong_hides": 1
+      },
+      "click": {
+       "hidden": 21,
+       "missed_skips": 10,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "cobra": {
+       "hidden": 32,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "curl": {
+       "hidden": 6,
+       "missed_skips": 5,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 44,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 19,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "junit5": {
+       "hidden": 23,
+       "missed_skips": 6,
+       "newly_hidden": 0,
+       "unhidden": 2,
+       "wrong_hides": 0
+      },
+      "lazy": {
+       "hidden": 53,
+       "missed_skips": 11,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 2,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 36,
+       "missed_skips": 42,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "ripgrep": {
+       "hidden": 4,
+       "missed_skips": 8,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 64,
+       "missed_skips": 9,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 4
+      }
+     }
+    },
+    "noise": {
+     "all": {
+      "hidden": 317,
+      "missed_skips": 111,
+      "newly_hidden": 0,
+      "unhidden": 0,
+      "wrong_hides": 10
+     },
+     "per_repo": {
+      "buildtheworld": {
+       "hidden": 11,
+       "missed_skips": 18,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 3
+      },
+      "click": {
+       "hidden": 21,
+       "missed_skips": 10,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "cobra": {
+       "hidden": 32,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "curl": {
+       "hidden": 6,
+       "missed_skips": 5,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "excalidraw": {
+       "hidden": 44,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "execa": {
+       "hidden": 19,
+       "missed_skips": 0,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "junit5": {
+       "hidden": 25,
+       "missed_skips": 5,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 1
+      },
+      "lazy": {
+       "hidden": 53,
+       "missed_skips": 11,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "nvm": {
+       "hidden": 2,
+       "missed_skips": 1,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "openfoam": {
+       "hidden": 36,
+       "missed_skips": 42,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "ripgrep": {
+       "hidden": 4,
+       "missed_skips": 8,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 0
+      },
+      "vue": {
+       "hidden": 64,
+       "missed_skips": 9,
+       "newly_hidden": 0,
+       "unhidden": 0,
+       "wrong_hides": 4
+      }
+     }
+    }
+   },
+   "picked_on": "leave-one-repo-out on silver, fewest wrong hides + missed skips",
+   "rule": "noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= 0.9",
+   "unhide": 0.05,
+   "unhide_curve_loro": {
+    "0.05": {
+     "hidden": 313,
+     "missed_skips": 112,
+     "newly_hidden": 0,
+     "unhidden": 4,
+     "wrong_hides": 7
+    },
+    "0.1": {
+     "hidden": 312,
+     "missed_skips": 113,
+     "newly_hidden": 0,
+     "unhidden": 5,
+     "wrong_hides": 7
+    },
+    "0.15": {
+     "hidden": 311,
+     "missed_skips": 113,
+     "newly_hidden": 0,
+     "unhidden": 6,
+     "wrong_hides": 6
+    },
+    "0.2": {
+     "hidden": 311,
+     "missed_skips": 113,
+     "newly_hidden": 0,
+     "unhidden": 6,
+     "wrong_hides": 6
+    },
+    "0.25": {
+     "hidden": 311,
+     "missed_skips": 113,
+     "newly_hidden": 0,
+     "unhidden": 6,
+     "wrong_hides": 6
+    },
+    "0.3": {
+     "hidden": 311,
+     "missed_skips": 113,
+     "newly_hidden": 0,
+     "unhidden": 6,
+     "wrong_hides": 6
+    },
+    "0.35": {
+     "hidden": 310,
+     "missed_skips": 114,
+     "newly_hidden": 0,
+     "unhidden": 7,
+     "wrong_hides": 6
+    },
+    "0.4": {
+     "hidden": 308,
+     "missed_skips": 116,
+     "newly_hidden": 0,
+     "unhidden": 9,
+     "wrong_hides": 6
+    },
+    "0.45": {
+     "hidden": 306,
+     "missed_skips": 118,
+     "newly_hidden": 0,
+     "unhidden": 11,
+     "wrong_hides": 6
+    },
+    "0.5": {
+     "hidden": 305,
+     "missed_skips": 119,
+     "newly_hidden": 0,
+     "unhidden": 12,
+     "wrong_hides": 6
+    },
+    "0.55": {
+     "hidden": 304,
+     "missed_skips": 120,
+     "newly_hidden": 0,
+     "unhidden": 13,
+     "wrong_hides": 6
+    },
+    "0.6": {
+     "hidden": 304,
+     "missed_skips": 120,
+     "newly_hidden": 0,
+     "unhidden": 13,
+     "wrong_hides": 6
+    },
+    "0.65": {
+     "hidden": 303,
+     "missed_skips": 121,
+     "newly_hidden": 0,
+     "unhidden": 14,
+     "wrong_hides": 6
+    },
+    "0.7": {
+     "hidden": 302,
+     "missed_skips": 122,
+     "newly_hidden": 0,
+     "unhidden": 15,
+     "wrong_hides": 6
+    },
+    "0.75": {
+     "hidden": 300,
+     "missed_skips": 124,
+     "newly_hidden": 0,
+     "unhidden": 17,
+     "wrong_hides": 6
+    },
+    "0.8": {
+     "hidden": 299,
+     "missed_skips": 125,
+     "newly_hidden": 0,
+     "unhidden": 18,
+     "wrong_hides": 6
+    },
+    "0.85": {
+     "hidden": 295,
+     "missed_skips": 129,
+     "newly_hidden": 0,
+     "unhidden": 22,
+     "wrong_hides": 6
+    }
+   }
+  }
+ },
  "provenance": {
   "eval": {
    "file": "corpus/gold.jsonl",
