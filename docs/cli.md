@@ -65,7 +65,8 @@ beside the engine's own `noise` flag:
 
 ```json
 "hunch": { "noise": 0.7234, "top": [["comment", 1.661], ["uses", -0.82], ["lines_added", -0.31]],
-           "faithful": 0.9412, "faithful_top": [["rationale_more", -0.81], ["lines_added", 0.4], ["uses", 0.22]] }
+           "faithful": 0.9412, "faithful_top": [["rationale_more", -0.81], ["lines_added", 0.4], ["uses", 0.22]],
+           "attention": 0.6371, "attention_top": [["lines_added", 0.52], ["noise", -0.3], ["comment", -0.21]] }
 ```
 
 `noise` is P(a reviewer can skip it); `top` is the three features that moved
@@ -81,9 +82,19 @@ a confident guess also moves the hunk's `noise` flag and says so in
 model's un-hide threshold (picked on held-out repositories), `"hid"` sets
 one it left clear when P(skip) is 0.9 or more. The gate passes only when, on
 held-out repositories and on the gold set, this policy hides no repository's
-hunks more wrongly than the engine's flag alone and fewer overall. The
-reading order, groups and edges stay the engine's own; without
-`options.hunch` nothing changes.
+hunks more wrongly than the engine's flag alone and fewer overall.
+`attention` is how much the hunk needs a reviewer's attention, 0 to 1 (the
+expected 1-3 rating of a labelled review, rescaled), with `attention_top`
+signed toward attention. When its gate passed (on held-out repositories and
+on the gold set, it ranks pairs of hunks within a commit better than file
+position does, and loses to it in at most two repositories), the
+`comprehension` strategy reads the groups the def→use order has freed by it,
+a group by its most-attended hunk, highest first: it takes the place of file
+position only. A use still never comes before its definition, a rule's
+`priority` and `docs_last` still win over it, a cycle still breaks by file
+position, and hunks inside a group keep their file order; the `file` and
+`defs-first` strategies ignore it. Groups and edges stay the engine's own;
+without `options.hunch` nothing changes.
 
 Its history features read the input's `history`: the change's ancestors only,
 each with the time, subject and the change's paths it touched (renames

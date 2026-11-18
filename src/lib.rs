@@ -170,8 +170,50 @@ pub fn run(input: Input) -> Output {
         changed: &changed,
         changes: &input.changes,
     };
-    let ordered = order::order_all(&hunks, &paths, &facts, &input.options);
-    let placed = placements(&ordered, &hunks);
+    // `--hunch` reads the groups the def->use order freed by attention, which
+    // hunch guesses from the finished output's hunks; that output comes from
+    // a first assembly in file-position order, whose hunks carry the same
+    // features, since none of them reads the order
+    let attention =
+        (input.options.hunch && hunch::attention_orders() && hunch::model_fits()).then(|| {
+            hunch::attention(&assemble(
+                &input,
+                &hunks,
+                &paths,
+                &facts,
+                &rule_hits,
+                problems.clone(),
+                None,
+            ))
+        });
+    let out = assemble(
+        &input,
+        &hunks,
+        &paths,
+        &facts,
+        &rule_hits,
+        problems,
+        attention.as_deref(),
+    );
+    // every pass is done with the trees; the client calls `run` again on each
+    // reload, and holding this changeset's trees until then buys nothing
+    lang::forget_trees();
+    out
+}
+
+/// Everything from the reading order on, for hunks the passes before it
+/// settled; `attention` as `order::order_all` takes it.
+fn assemble(
+    input: &Input,
+    hunks: &[PerFileHunks],
+    paths: &[String],
+    facts: &order::FileFacts,
+    rule_hits: &[Vec<Vec<Finding>>],
+    problems: Vec<String>,
+    attention: Option<&[Vec<f64>]>,
+) -> Output {
+    let ordered = order::order_all(hunks, paths, facts, &input.options, attention);
+    let placed = placements(&ordered, hunks);
     let gids: Vec<String> = (0..ordered.groups.len())
         .map(|gi| format!("g{gi}"))
         .collect();
@@ -187,19 +229,13 @@ pub fn run(input: Input) -> Output {
             }
         })
         .collect();
-    // the drops leave `hunks` here: the output owns them, and nothing after
-    // this reads them from the pass tables
-    let mut dropped: Vec<Vec<DroppedHunk>> = hunks
-        .iter_mut()
-        .map(|f| std::mem::take(&mut f.dropped))
-        .collect();
     let passes = Passes {
-        hunks: &hunks,
+        hunks,
         placed: &placed,
         ordered: &ordered,
         gids: &gids,
-        rule_hits: &rule_hits,
-        symbols: &symbols,
+        rule_hits,
+        symbols: facts.symbols,
     };
     let mut files: Vec<FileOut> = input
         .changes
@@ -212,7 +248,7 @@ pub fn run(input: Input) -> Output {
                 .collect(),
             degraded: hunks[fi].degraded,
             unsupported: lang::for_path(&change.path).is_none(),
-            dropped: std::mem::take(&mut dropped[fi]),
+            dropped: hunks[fi].dropped.clone(),
         })
         .collect();
 
@@ -246,25 +282,22 @@ pub fn run(input: Input) -> Output {
         .map(|c| c.iter().map(|&i| hid(i)).collect())
         .collect();
 
-    let ledger = build_ledger(&files, &order, &facts);
+    let ledger = build_ledger(&files, &order, facts);
     let notes = changeset_notes(&files, &ledger);
-    let summary = summary::summarize(&input.changes, &hunks, &changed, &ledger);
+    let summary = summary::summarize(&input.changes, hunks, facts.changed, &ledger);
     arity_check(&mut files, &ledger, &input.changes);
-    incomplete_rename(&mut files, &ledger, &input.changes, &symbols);
+    incomplete_rename(&mut files, &ledger, &input.changes, facts.symbols);
     contract::run(&mut files, &ledger, &input.changes, &input.consumers);
     if input.options.features || input.options.hunch {
         hunch::annotate(
             &mut files,
-            &hunks,
+            hunks,
             &edges_out,
             input.history.as_ref(),
             &input.options,
         );
     }
     let feature_schema = input.options.features.then(hunch::schema);
-    // every pass is done with the trees; the client calls `run` again on each
-    // reload, and holding this changeset's trees until then buys nothing
-    lang::forget_trees();
     Output {
         schema: SCHEMA_VERSION,
         order,

@@ -428,6 +428,8 @@ pub enum Head {
     Skip,
     /// P(the rationale states nothing false or misleading)
     Faithful,
+    /// the expected attention rating, (level - 1) / 2
+    Attention,
 }
 
 impl Head {
@@ -435,6 +437,7 @@ impl Head {
         match self {
             Head::Skip => &SKIP,
             Head::Faithful => &FAITHFUL,
+            Head::Attention => &ATTENTION,
         }
     }
 }
@@ -565,6 +568,32 @@ pub fn decide(noise: bool, p: f64, policy: Option<Policy>) -> Option<HunchChange
     }
 }
 
+/// Whether `--hunch` reorders the groups the def->use order freed by
+/// attention: only once the trainer's attention gate passed (see
+/// scripts/hunch-train.py `train_attention`); otherwise the guess is a shadow.
+pub fn attention_orders() -> bool {
+    ATTENTION_ORDERS
+}
+
+/// Each hunk's attention in `out`, per file, as `--hunch` guessed it; what
+/// `order::order_all` sorts freed groups by.
+pub(crate) fn attention(out: &Output) -> Vec<Vec<f64>> {
+    out.files
+        .iter()
+        .map(|f| {
+            f.hunks
+                .iter()
+                .map(|h| {
+                    h.hunch
+                        .as_ref()
+                        .expect("--hunch guesses every hunk")
+                        .attention
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The `TOP` features that moved a guess most, either way, in four decimals.
 fn top(contrib: &[f64]) -> Vec<(String, f64)> {
     let mut by_size: Vec<usize> = (0..contrib.len()).filter(|&i| contrib[i] != 0.0).collect();
@@ -582,11 +611,14 @@ fn top(contrib: &[f64]) -> Vec<(String, f64)> {
 fn guess(x: &[f64], noise: bool) -> Hunch {
     let (p, contrib) = predict(Head::Skip, x);
     let (f, f_contrib) = predict(Head::Faithful, x);
+    let (a, a_contrib) = predict(Head::Attention, x);
     Hunch {
         noise: round4(p),
         top: top(&contrib),
         changed: decide(noise, p, POLICY),
         faithful: round4(f),
         faithful_top: top(&f_contrib),
+        attention: round4(a),
+        attention_top: top(&a_contrib),
     }
 }

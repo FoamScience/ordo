@@ -71,6 +71,15 @@ fn hunch_model() {
     // the faithful head stays a shadow: its doubt gate has not passed
     model(&mut out, "SKIP", &skip["model"], &names);
     model(&mut out, "FAITHFUL", &head("faithful")["model"], &names);
+    // `--hunch` orders freed groups by attention only once its gate passed
+    let attention = head("attention");
+    writeln!(
+        out,
+        "static ATTENTION_ORDERS: bool = {};",
+        attention["policy"]["passes"].as_bool() == Some(true)
+    )
+    .unwrap();
+    model(&mut out, "ATTENTION", &attention["model"], &names);
     let dest =
         std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("hunch_model.rs");
     std::fs::write(dest, out).expect("write hunch_model.rs");

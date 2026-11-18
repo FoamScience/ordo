@@ -847,6 +847,8 @@ fn hidden_breakdown_charges_hunchs_hides_apart_from_the_engines_noise() {
         changed: Some(ordo_diff::model::HunchChange::Hid),
         faithful: 0.97,
         faithful_top: vec![],
+        attention: 0.1,
+        attention_top: vec![],
     });
     let items = vec![engine, guessed, test_item("c.rs")];
     let h = hidden_breakdown(&items, false, false, None, None);

@@ -138,7 +138,7 @@ options:
   --coverage <file>       count changed lines lcov never ran (repeatable)
   --rules <file>          add a rules file (repeatable)
   --no-catalog            skip the built-in construct catalog
-  --hunch                 show hunch's P(skip) per hunk; a confident one moves its noise flag
+  --hunch                 hunch's guess per hunk; may move noise flags and the freed order
   --all                   keep generated and lock files
   --only-comments         only comment and docstring hunks
   --keys <vim|vscode>     key preset (default vim, or $ORDO_KEYS)

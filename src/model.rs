@@ -828,6 +828,12 @@ pub struct Hunch {
     pub faithful: f64,
     /// the three features that moved `faithful` most, as `top` is for `noise`
     pub faithful_top: Vec<(String, f64)>,
+    /// how much the hunk needs a reviewer's attention, 0 (none) to 1 (most):
+    /// the expected Opus rating (1-3) rescaled; `--hunch` reads the groups
+    /// the def->use order freed by it, highest first
+    pub attention: f64,
+    /// the three features that moved `attention` most, as `top` is for `noise`
+    pub attention_top: Vec<(String, f64)>,
 }
 
 /// What hunch's policy did to a hunk's `noise` flag.
