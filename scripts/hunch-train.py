@@ -54,6 +54,8 @@ HISTORY = ("has_history", "churn", "fixes")
 MIN_GAIN = 0.03
 OVERLAP_MIN = 0.8
 TREE_MAX, TREE_STEP, TREE_TOL = 1000, 5, 0.005
+POLICY_HIDE = 0.9
+UNHIDE_GRID = [round(0.05 * i, 2) for i in range(1, 18)]
 LGBM = dict(n_estimators=TREE_MAX, learning_rate=0.05, num_leaves=15, min_child_samples=20,
             subsample=0.8, subsample_freq=1, colsample_bytree=0.8, random_state=SEED,
             deterministic=True, force_row_wise=True, n_jobs=1, verbose=-1)
@@ -261,6 +263,85 @@ def at_hide_rate(score, base, y, repos):
             "per_repo": {r: counts(repos == r) for r in sorted(set(repos))}}
 
 
+def at_repo_hide_rate(score, base, y, repos):
+    """at_hide_rate within each repo on its own: hunch hides as many of a
+    repo's hunks as the noise flag does there. With the hide count fixed,
+    wrong hides and missed skips move together (wrong - missed = hidden -
+    skips), so a repo where hunch makes more wrong hides is one it loses."""
+    return {r: at_hide_rate(score[repos == r], base[repos == r], y[repos == r], repos[repos == r])["all"]
+            for r in sorted(set(repos))}
+
+
+def policy(score, base, y, repos, unhide):
+    """The promoted policy: start from the noise flag, show a hidden hunk
+    whose P(skip) is under `unhide`, hide a shown one at P(skip) >=
+    POLICY_HIDE. With no score, the noise flag alone."""
+    base = base.astype(bool)
+    hidden = base if score is None else np.where(base, score >= unhide, score >= POLICY_HIDE)
+    counts = lambda m: {"hidden": int(hidden[m].sum()), "unhidden": int((base & ~hidden)[m].sum()),
+                        "newly_hidden": int((~base & hidden)[m].sum()),
+                        "wrong_hides": int((hidden & ~y)[m].sum()), "missed_skips": int((~hidden & y)[m].sum())}
+    return {"all": counts(np.ones(len(y), dtype=bool)),
+            "per_repo": {r: counts(repos == r) for r in sorted(set(repos))}}
+
+
+def pick_unhide(score, base, y, repos):
+    """The un-hide threshold with the fewest wrong hides plus missed skips
+    leaving one repo out, the lowest on a tie (it un-hides least)."""
+    curve = {t: policy(score, base, y, repos, t)["all"] for t in UNHIDE_GRID}
+    best = min(UNHIDE_GRID, key=lambda t: (curve[t]["wrong_hides"] + curve[t]["missed_skips"], t))
+    return best, curve
+
+
+def promotion(gold, loro_score, gold_score, xs_noise, xg_noise, ys, yg, rs, rg, shipped):
+    """The promotion gate and the promoted policy's numbers, for the shipped
+    model: at the noise flag's hide rate on gold it makes fewer wrong hides
+    and fewer missed skips, and leaving one repo out, at each repo's own
+    hide rate, no repo gets more wrong hides than under the noise flag."""
+    g_rule, g_hunch = (gold[k]["at_noise_hide_rate"]["all"] for k in ("noise", shipped))
+    rule_repo = at_repo_hide_rate(xs_noise, xs_noise, ys, rs)
+    hunch_repo = at_repo_hide_rate(loro_score, xs_noise, ys, rs)
+    losing = sorted(r for r in rule_repo if hunch_repo[r]["wrong_hides"] > rule_repo[r]["wrong_hides"])
+    gold_ok = (g_hunch["wrong_hides"] <= g_rule["wrong_hides"] and g_hunch["missed_skips"] <= g_rule["missed_skips"]
+               and g_hunch != g_rule)
+    unhide, curve = pick_unhide(loro_score, xs_noise, ys, rs)
+    return {
+        "model": shipped,
+        "gate": {"gold_at_noise_hide_rate": {"noise": g_rule, "hunch": g_hunch, "beats": gold_ok},
+                 "loro_at_repo_hide_rate": {"noise": rule_repo, "hunch": hunch_repo, "losing_repos": losing},
+                 "passes": gold_ok and not losing},
+        "policy": {"rule": f"noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= {POLICY_HIDE}",
+                   "unhide": unhide, "picked_on": "leave-one-repo-out on silver, fewest wrong hides + missed skips",
+                   "unhide_curve_loro": {str(t): c for t, c in curve.items()},
+                   "gold": {"noise": policy(None, xg_noise, yg, rg, None), "hunch": policy(gold_score, xg_noise, yg, rg, unhide)},
+                   "loro": {"noise": policy(None, xs_noise, ys, rs, None), "hunch": policy(loro_score, xs_noise, ys, rs, unhide)}},
+    }
+
+
+def promotion_table(p):
+    g = p["gate"]
+    print(f"\npromotion gate ({p['model']}): {'PASS' if g['passes'] else 'FAIL'}")
+    a = g["gold_at_noise_hide_rate"]
+    print(f"gold at the noise hide rate, wrong/missed: noise {a['noise']['wrong_hides']}/{a['noise']['missed_skips']}"
+          f", hunch {a['hunch']['wrong_hides']}/{a['hunch']['missed_skips']}")
+    l = g["loro_at_repo_hide_rate"]
+    print(f"{'repo':14} {'hidden':>6} {'noise':>13} {'hunch':>13}   (LORO at the repo's hide rate, wrong/missed)")
+    for r, c in l["noise"].items():
+        h = l["hunch"][r]
+        print(f"{r:14} {c['hidden']:6} {c['wrong_hides']:>6}/{c['missed_skips']:<6} {h['wrong_hides']:>6}/{h['missed_skips']:<6}"
+              + ("  LOSES" if r in l["losing_repos"] else ""))
+    q = p["policy"]
+    print(f"\npolicy: un-hide below {q['unhide']}, hide at >= {POLICY_HIDE}")
+    for where in ("gold", "loro"):
+        n, h = q[where]["noise"], q[where]["hunch"]
+        print(f"{where}: noise {n['all']['wrong_hides']}/{n['all']['missed_skips']} -> policy "
+              f"{h['all']['wrong_hides']}/{h['all']['missed_skips']} (un-hid {h['all']['unhidden']}, newly hid {h['all']['newly_hidden']})")
+        for r, c in n["per_repo"].items():
+            d = h["per_repo"][r]
+            if (c["wrong_hides"], c["missed_skips"]) != (d["wrong_hides"], d["missed_skips"]):
+                print(f"  {r:14} {c['wrong_hides']:>3}/{c['missed_skips']:<3} -> {d['wrong_hides']:>3}/{d['missed_skips']:<3}")
+
+
 def metrics(score, base, y, repos):
     return {"auroc": round(roc_auc_score(y, score), 4),
             "pr_auc": round(average_precision_score(y, score), 4),
@@ -408,8 +489,10 @@ def main():
     a.out.write_text(dump({"head": "should_skip", "model": model, "feature_schema": schema,
                            "fingerprint": fp, "selection": selection, "provenance": provenance}))
     a.parity.write_text(parity(xg, proba("lr" if fired is None else "trees", xg)))
+    shipped = "lr" if fired is None else "trees"
+    promo = promotion(gold, loro[shipped], proba(shipped, xg), xs[:, noise], xg[:, noise], ys, yg, rs, rg, shipped)
     a.report.write_text(json.dumps({
-        "head": "should_skip", "selection": selection, "provenance": provenance,
+        "head": "should_skip", "selection": selection, "provenance": provenance, "promotion": promo,
         "metrics": {"gold": gold, "gold_without_history": gold_nohist,
                     "leave_one_repo_out": loro_ev, "leave_one_repo_out_auroc_per_repo": loro_per_repo},
         "tree_count_tradeoff": tradeoff,
@@ -420,6 +503,7 @@ def main():
     table(f"leave-one-repo-out on silver ({len(ys)} hunks)", loro_ev)
     print(f"\ngold AUROC gain trees - lr: {gain:+.4f}; LORO wrong hides {wrong}; "
           f"rule fired: {fired}; shipping {model['type']} -> {a.out}")
+    promotion_table(promo)
 
 
 if __name__ == "__main__":
