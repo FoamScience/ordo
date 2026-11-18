@@ -69,6 +69,7 @@ pub(crate) fn review(app: &App) -> Value {
                 "gist": gist(app, it),
                 "notes": it.notes,
                 "readability": it.readability,
+                "hunch": it.hunch,
                 "edges": it.edges.iter().map(|e| json!({
                     "label": e.label,
                     "target": e.target,

@@ -39,7 +39,7 @@ fn declared(schema: &Value, path: &str) -> Vec<String> {
 /// rename whose old name survives at one call site (a `notes` entry), a
 /// cross-file use, a removal, a rule hit, a local binding that is used again
 /// (a `uses_at` entry), a definition that gained a loop (a `deltas` entry),
-/// and a config edit whose changed keys produce `details`.
+/// a config edit whose changed keys produce `details`, and hunch's guess.
 fn rich() -> Input {
     serde_json::from_value(serde_json::json!({
         "changes": [
@@ -56,7 +56,7 @@ fn rich() -> Input {
               "old": "svc:\n  port: 80\n  host: a\n",
               "new": "svc:\n  port: 443\n  host: a\n  tls: on\n" }
         ],
-        "options": { "rules": [
+        "options": { "hunch": true, "rules": [
             { "name": "py-note", "when": { "lang": "python" }, "note": "python touched" }
         ]}
     }))
@@ -145,6 +145,9 @@ fn the_schema_declares_everything_the_engine_emits() {
                 for d in h["deltas"].as_array().into_iter().flatten() {
                     check("files/hunks/deltas", d);
                 }
+                if let Some(g) = h.get("hunch") {
+                    check("files/hunks/hunch", g);
+                }
             }
             for d in f["dropped"].as_array().into_iter().flatten() {
                 check("files/dropped", d);
@@ -181,7 +184,7 @@ fn the_fixture_reaches_the_optional_output_fields() {
         .flat_map(|f| f["hunks"].as_array().expect("hunks"))
         .collect();
     for field in [
-        "findings", "uses_at", "symbols", "details", "notes", "deltas",
+        "findings", "uses_at", "symbols", "details", "notes", "deltas", "hunch",
     ] {
         assert!(
             hunks.iter().any(|h| h.get(field).is_some()),

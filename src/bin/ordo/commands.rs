@@ -319,10 +319,11 @@ pub(super) fn run_strategy(app: &mut App, name: &str) -> Result<(), String> {
             docs_last: app.docs_last,
             disable: app.disables.clone(),
             levels: app.levels.clone(),
+            hunch: app.hunch,
             ..Options::default()
         },
         consumers: vec![],
-        history: None,
+        history: app.history.clone(),
     };
     let out = ordo_diff::run(input);
     let mut items = build_items(&out);

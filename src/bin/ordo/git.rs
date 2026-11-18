@@ -3,8 +3,10 @@ use crate::read_progress;
 use crate::Filter;
 use crate::EMPTY_TREE;
 use ordo_diff::model::Change;
+use ordo_diff::model::History;
 use ordo_diff::model::Input;
 use ordo_diff::model::Options;
+use ordo_diff::model::PastCommit;
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
@@ -419,6 +421,151 @@ pub(super) fn review_commit_sha(target: &Target) -> Option<String> {
             (!sha.is_empty()).then(|| sha.to_string())
         }
     }
+}
+
+/// How far back hunch's history log reaches: a day past the engine's own
+/// window, which does the exact cut.
+const HISTORY_LOG_DAYS: i64 = ordo_diff::hunch::HISTORY_DAYS + 1;
+
+/// hunch's history for `target`: the commits before the change, never the
+/// change itself or anything after it, each listing the files of `paths` it
+/// touched under their names at the change, so a rename keeps the history
+/// from before it. The change is a commit's own diff, a range's commits, or
+/// the uncommitted work on top of `HEAD` (or of a range's base); it happens
+/// at its tip's commit time, or now when uncommitted. A shallow clone whose
+/// boundary falls inside the window would undercount, so it gets none, as a
+/// diff on stdin does. Mirrors `with_features` in scripts/corpuslib.py, which
+/// collected what the model was trained on.
+pub(super) fn hunch_history(target: &Target, paths: &[String]) -> Option<History> {
+    let commit_time = |rev: &str| -> Option<i64> {
+        git(&["show", "-s", "--format=%ct", rev])
+            .trim()
+            .parse()
+            .ok()
+    };
+    let now = || crate::marks::now_unix() as i64;
+    let rev = |r: &str| {
+        let sha = git(&["rev-parse", "--verify", "-q", &format!("{r}^{{commit}}")]);
+        Some(sha.trim().to_string()).filter(|s| !s.is_empty())
+    };
+    let (base, tip, at) = match target {
+        Target::Commit(sha) => (
+            rev(&format!("{sha}^")),
+            Some(sha.as_str()),
+            commit_time(sha)?,
+        ),
+        Target::Range(base, tip) => (
+            Some(base.clone()).filter(|b| b != EMPTY_TREE),
+            Some(tip.as_str()),
+            commit_time(tip)?,
+        ),
+        Target::Uncommitted => (rev("HEAD"), None, now()),
+        Target::WorktreeRange(base) => (Some(base.clone()), None, now()),
+    };
+    let Some(base) = base else {
+        // the change starts the repository: nothing came before it
+        return Some(History {
+            at,
+            commits: vec![],
+        });
+    };
+    let since = at - HISTORY_LOG_DAYS * 86_400;
+    let shallow = git(&["rev-parse", "--git-path", "shallow"]);
+    if let Ok(edges) = std::fs::read_to_string(shallow.trim()) {
+        let mut args = vec!["show", "-s", "--format=%ct"];
+        args.extend(edges.split_whitespace());
+        if git(&args)
+            .lines()
+            .any(|t| t.trim().parse::<i64>().is_ok_and(|t| t > since))
+        {
+            return None;
+        }
+    }
+    let mut diff = vec![
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "-M",
+        "--name-status",
+        "--diff-filter=R",
+        &base,
+    ];
+    diff.extend(tip);
+    let renamed: HashMap<String, String> = git(&diff)
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t').skip(1);
+            let (old, new) = (f.next()?, f.next()?);
+            Some((new.to_string(), old.to_string()))
+        })
+        .collect();
+    let log = git(&[
+        "-c",
+        "core.quotePath=false",
+        "log",
+        "-M",
+        "--topo-order",
+        "--name-status",
+        "--format=%x1e%ct%x09%s",
+        &format!("--max-age={since}"),
+        &base,
+    ]);
+    let heads = paths
+        .iter()
+        .map(|p| (p.clone(), renamed.get(p).unwrap_or(p).clone()));
+    Some(History {
+        at,
+        commits: followed(&log, heads),
+    })
+}
+
+/// The commits of a `git log -M --topo-order --name-status` that touch the
+/// files of `heads` (path, its name at the log's newest commit), each listing
+/// them by path, so a file renamed inside the window keeps the history from
+/// before the rename. The log is unfiltered because a pathspec would hide the
+/// rename's old side.
+pub(super) fn followed(
+    log: &str,
+    heads: impl Iterator<Item = (String, String)>,
+) -> Vec<PastCommit> {
+    let mut current: HashMap<String, Vec<String>> = HashMap::new();
+    for (path, name) in heads {
+        current.entry(name).or_default().push(path);
+    }
+    let mut commits = vec![];
+    for rec in log.split('\x1e').skip(1) {
+        let mut lines = rec.trim_matches('\n').split('\n');
+        let (time, subject) = lines
+            .next()
+            .unwrap_or_default()
+            .split_once('\t')
+            .unwrap_or_default();
+        let mut touched = vec![];
+        for entry in lines.filter(|l| !l.is_empty()) {
+            let fields: Vec<&str> = entry.split('\t').collect();
+            let (Some(status), Some(&name)) = (fields.first(), fields.last()) else {
+                continue;
+            };
+            if let Some(ps) = current.get(name) {
+                touched.extend(ps.iter().cloned());
+                if status.starts_with('R') && fields.len() == 3 {
+                    let ps = current.remove(name).unwrap_or_default();
+                    current.entry(fields[1].to_string()).or_default().extend(ps);
+                }
+            }
+        }
+        let Ok(time) = time.parse() else {
+            continue;
+        };
+        if !touched.is_empty() {
+            commits.push(PastCommit {
+                time,
+                subject: subject.to_string(),
+                paths: touched,
+            });
+        }
+    }
+    commits
 }
 
 pub(super) fn gather(rev: &str, filter: &Filter, progress: &dyn Fn(String)) -> Input {

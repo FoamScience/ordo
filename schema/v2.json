@@ -296,6 +296,11 @@
                 ]
               },
               "description": "a level per rule name, replacing the one a catalog entry or one of `rules` was written with; the finding records the old one in `original_level`, and a name nothing reports under is a problem"
+            },
+            "hunch": {
+              "type": "boolean",
+              "default": false,
+              "description": "put a trained model's guess on every hunk (`hunks[].hunch`): P(skip) and the features that moved it most. Shadow only: no flag and no order changes. Its history features read `history`"
             }
           }
         },
@@ -315,6 +320,45 @@
               },
               "content": {
                 "type": "string"
+              }
+            }
+          }
+        },
+        "history": {
+          "type": "object",
+          "description": "what the repository did before the change, for `options.hunch`: the change's ancestors only, never the change itself or anything after it, with the paths each touched under their names at the change (follow renames). The engine counts those inside 90 days before `at`. Absent when no repository is behind the change, such as a diff on stdin",
+          "required": [
+            "at"
+          ],
+          "properties": {
+            "at": {
+              "type": "integer",
+              "description": "the change's own commit time, Unix seconds"
+            },
+            "commits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "time",
+                  "subject",
+                  "paths"
+                ],
+                "properties": {
+                  "time": {
+                    "type": "integer",
+                    "description": "commit time, Unix seconds"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             }
           }
@@ -589,6 +633,40 @@
                             "minItems": 2,
                             "maxItems": 2
                           }
+                        }
+                      }
+                    },
+                    "hunch": {
+                      "type": "object",
+                      "description": "a trained model's guess, when `options.hunch` asked for it: shadow only, it changes no flag and no order. Omitted otherwise",
+                      "required": [
+                        "noise",
+                        "top"
+                      ],
+                      "properties": {
+                        "noise": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1,
+                          "description": "P(a reviewer can skip this hunk), to four decimals; beside the engine's own `noise` flag, not instead of it"
+                        },
+                        "top": {
+                          "type": "array",
+                          "description": "up to three features that moved the guess most, as [feature, contribution]: the contribution is in log-odds, positive toward skipping, largest first by size",
+                          "items": {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "minItems": 2,
+                            "maxItems": 2
+                          },
+                          "maxItems": 3
                         }
                       }
                     },

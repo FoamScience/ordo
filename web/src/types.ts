@@ -33,6 +33,8 @@ export interface Item {
   notes: string[];
   /** the definitions this hunk is the first to touch whose readability moved */
   readability: Readability[];
+  /** hunch's guess, with `--hunch` */
+  hunch: Hunch | null;
   edges: Edge[];
   symbol: string | null;
   bucket: string;
@@ -49,6 +51,12 @@ export interface Item {
   reviewed: boolean;
   delta: Delta;
   note: string | null;
+}
+
+/** a trained model's P(skip) and the three features that moved it most, as `[name, log-odds]` */
+export interface Hunch {
+  noise: number;
+  top: [string, number][];
 }
 
 /** one definition's readability measurements, each `[old, new]` */

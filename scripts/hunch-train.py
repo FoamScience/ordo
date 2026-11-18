@@ -14,9 +14,10 @@ regression hides more hunks wrongly than the noise flag and the trees do not.
 Writes src/hunch.json (trimmed model, feature schema, selection, provenance)
 for build.rs, corpus/hunch-report.json (full metrics and the tree-count
 trade-off), and prints the comparison against the engine's rule-based noise
-flag at its own hide rate.
+flag at its own hide rate. tests/hunch-parity.json gets the gold rows with the
+shipped model's own predictions, for the Rust inference to match.
 
-usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--workers N] [--extra FILE]
+usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--parity FILE] [--workers N] [--extra FILE]
 
 --extra adds labeled hunks to training, one {key, should_skip} per line
 (e.g. $ORDO_CORPUS/judged.should_skip.jsonl); evaluation stays on gold and silver.
@@ -222,6 +223,15 @@ def dump(doc):
     return text.replace('"@TREES@"', "[\n" + rows + "\n  ]") + "\n"
 
 
+def parity(x, p):
+    """The gold rows and the shipped model's P(skip) for each, as the trained
+    library computes it: tests/hunch.rs checks the Rust inference against it."""
+    num = lambda v: int(v) if float(v).is_integer() else float(v)
+    rows = ",\n".join(" " + json.dumps({"x": [num(v) for v in row], "p": float(q)}, separators=(",", ":"))
+                       for row, q in zip(x, p))
+    return "[\n" + rows + "\n]\n"
+
+
 def at_hide_rate(score, base, y, repos):
     """Hide as many hunks as the noise flag does, highest score first; wrong
     hides and missed skips overall and per repo."""
@@ -266,6 +276,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=ROOT / "src/hunch.json")
     ap.add_argument("--report", type=Path, default=ROOT / "corpus/hunch-report.json")
+    ap.add_argument("--parity", type=Path, default=ROOT / "tests/hunch-parity.json")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--extra", type=Path, help="more training labels, {key, should_skip} per line")
     a = ap.parse_args()
@@ -346,6 +357,7 @@ def main():
                                   proba("trees", np.vstack([xs, xg]))).max())
         if export_err > 1e-4:
             sys.exit(f"trimmed trees disagree with LightGBM by {export_err:.2g}")
+        print(f"trimmed trees vs LightGBM over silver and gold: max |dP| {export_err:.2g}")
         model = {"type": "lightgbm", "objective": "binary", "link": "sigmoid",
                  "score": "sum of the trees' leaf_value", "split": "x[feature] <= threshold goes left",
                  "trees": trees}
@@ -377,6 +389,7 @@ def main():
     }
     a.out.write_text(dump({"head": "should_skip", "model": model, "feature_schema": schema,
                            "selection": selection, "provenance": provenance}))
+    a.parity.write_text(parity(xg, proba("lr" if fired is None else "trees", xg)))
     a.report.write_text(json.dumps({
         "head": "should_skip", "selection": selection, "provenance": provenance,
         "metrics": {"gold": gold, "gold_without_history": gold_nohist,
