@@ -11,11 +11,13 @@ by at least OVERLAP_MIN. The tree count is the smallest within TREE_TOL of the
 best pooled leave-one-repo-out AUROC. The trees ship when they beat the
 regression by MIN_GAIN AUROC on gold, or when, leaving one repo out, the
 regression hides more hunks wrongly than the noise flag and the trees do not.
-Writes src/hunch.json (trimmed model, feature schema, the fingerprint of the
-engine's vectors for tests/fixtures/hunch, selection, provenance) for
-build.rs, corpus/hunch-report.json (full metrics and the tree-count
+The promotion gate tests the policy `--hunch` applies to the noise flag (see
+`promotion`). Writes src/hunch.json (trimmed model, feature schema, the
+fingerprint of the engine's vectors for tests/fixtures/hunch, selection,
+provenance, and the policy's thresholds and gate verdict) for build.rs,
+corpus/hunch-report.json (full metrics, the gate and the tree-count
 trade-off), and prints the comparison against the engine's rule-based noise
-flag at its own hide rate. tests/hunch-parity.json gets the gold rows with the
+flag. tests/hunch-parity.json gets the gold rows with the
 shipped model's own predictions, for the Rust inference to match.
 
 usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--parity FILE] [--workers N] [--extra FILE]
@@ -294,52 +296,65 @@ def pick_unhide(score, base, y, repos):
 
 
 def promotion(gold, loro_score, gold_score, xs_noise, xg_noise, ys, yg, rs, rg, shipped):
-    """The promotion gate and the promoted policy's numbers, for the shipped
-    model: at the noise flag's hide rate on gold it makes fewer wrong hides
-    and fewer missed skips, and leaving one repo out, at each repo's own
-    hide rate, no repo gets more wrong hides than under the noise flag."""
+    """The promotion gate, on the policy that ships: start from the noise
+    flag, un-hide a hidden hunk under the `unhide` threshold (picked leaving
+    one repo out, never on gold), hide a shown one at POLICY_HIDE. It passes
+    when, leaving one repo out and on gold, no repo gets more wrong hides than
+    under the noise flag and both make fewer overall. The ranking at the noise
+    flag's hide rate is reported beside it, for information only."""
+    unhide, curve = pick_unhide(loro_score, xs_noise, ys, rs)
+    runs = {"gold": {"noise": policy(None, xg_noise, yg, rg, None), "hunch": policy(gold_score, xg_noise, yg, rg, unhide)},
+            "loro": {"noise": policy(None, xs_noise, ys, rs, None), "hunch": policy(loro_score, xs_noise, ys, rs, unhide)}}
+    verdict = {}
+    for where, run in runs.items():
+        n, h = run["noise"], run["hunch"]
+        verdict[where] = {"raised_in": sorted(r for r in n["per_repo"]
+                                              if h["per_repo"][r]["wrong_hides"] > n["per_repo"][r]["wrong_hides"]),
+                          "lowered_overall": h["all"]["wrong_hides"] < n["all"]["wrong_hides"]}
+    passes = all(v["lowered_overall"] and not v["raised_in"] for v in verdict.values())
     g_rule, g_hunch = (gold[k]["at_noise_hide_rate"]["all"] for k in ("noise", shipped))
     rule_repo = at_repo_hide_rate(xs_noise, xs_noise, ys, rs)
     hunch_repo = at_repo_hide_rate(loro_score, xs_noise, ys, rs)
-    losing = sorted(r for r in rule_repo if hunch_repo[r]["wrong_hides"] > rule_repo[r]["wrong_hides"])
-    gold_ok = (g_hunch["wrong_hides"] <= g_rule["wrong_hides"] and g_hunch["missed_skips"] <= g_rule["missed_skips"]
-               and g_hunch != g_rule)
-    unhide, curve = pick_unhide(loro_score, xs_noise, ys, rs)
     return {
         "model": shipped,
-        "gate": {"gold_at_noise_hide_rate": {"noise": g_rule, "hunch": g_hunch, "beats": gold_ok},
-                 "loro_at_repo_hide_rate": {"noise": rule_repo, "hunch": hunch_repo, "losing_repos": losing},
-                 "passes": gold_ok and not losing},
+        "gate": {"rule": "the policy raises wrong hides in no repo, leaving one repo out and on gold, "
+                         "and lowers them overall in both",
+                 **verdict, "passes": passes},
         "policy": {"rule": f"noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= {POLICY_HIDE}",
-                   "unhide": unhide, "picked_on": "leave-one-repo-out on silver, fewest wrong hides + missed skips",
-                   "unhide_curve_loro": {str(t): c for t, c in curve.items()},
-                   "gold": {"noise": policy(None, xg_noise, yg, rg, None), "hunch": policy(gold_score, xg_noise, yg, rg, unhide)},
-                   "loro": {"noise": policy(None, xs_noise, ys, rs, None), "hunch": policy(loro_score, xs_noise, ys, rs, unhide)}},
+                   "unhide": unhide, "hide": POLICY_HIDE,
+                   "picked_on": "leave-one-repo-out on silver, fewest wrong hides + missed skips",
+                   "unhide_curve_loro": {str(t): c for t, c in curve.items()}, **runs},
+        "ranking": {"note": "informational, not the gate: hunch's ranking at the noise flag's hide rate",
+                    "gold_at_noise_hide_rate": {"noise": g_rule, "hunch": g_hunch},
+                    "loro_at_repo_hide_rate": {"noise": rule_repo, "hunch": hunch_repo,
+                                               "more_wrong_hides": sorted(r for r in rule_repo
+                                                                          if hunch_repo[r]["wrong_hides"] > rule_repo[r]["wrong_hides"])}},
     }
 
 
 def promotion_table(p):
-    g = p["gate"]
-    print(f"\npromotion gate ({p['model']}): {'PASS' if g['passes'] else 'FAIL'}")
-    a = g["gold_at_noise_hide_rate"]
-    print(f"gold at the noise hide rate, wrong/missed: noise {a['noise']['wrong_hides']}/{a['noise']['missed_skips']}"
-          f", hunch {a['hunch']['wrong_hides']}/{a['hunch']['missed_skips']}")
-    l = g["loro_at_repo_hide_rate"]
-    print(f"{'repo':14} {'hidden':>6} {'noise':>13} {'hunch':>13}   (LORO at the repo's hide rate, wrong/missed)")
-    for r, c in l["noise"].items():
-        h = l["hunch"][r]
-        print(f"{r:14} {c['hidden']:6} {c['wrong_hides']:>6}/{c['missed_skips']:<6} {h['wrong_hides']:>6}/{h['missed_skips']:<6}"
-              + ("  LOSES" if r in l["losing_repos"] else ""))
-    q = p["policy"]
-    print(f"\npolicy: un-hide below {q['unhide']}, hide at >= {POLICY_HIDE}")
+    g, q = p["gate"], p["policy"]
+    print(f"\npromotion gate ({p['model']}, the policy: un-hide below {q['unhide']}, hide at >= {q['hide']}): "
+          f"{'PASS' if g['passes'] else 'FAIL'}")
     for where in ("gold", "loro"):
         n, h = q[where]["noise"], q[where]["hunch"]
         print(f"{where}: noise {n['all']['wrong_hides']}/{n['all']['missed_skips']} -> policy "
-              f"{h['all']['wrong_hides']}/{h['all']['missed_skips']} (un-hid {h['all']['unhidden']}, newly hid {h['all']['newly_hidden']})")
+              f"{h['all']['wrong_hides']}/{h['all']['missed_skips']} (un-hid {h['all']['unhidden']}, newly hid "
+              f"{h['all']['newly_hidden']}); more wrong hides in: {', '.join(g[where]['raised_in']) or 'none'}")
         for r, c in n["per_repo"].items():
             d = h["per_repo"][r]
             if (c["wrong_hides"], c["missed_skips"]) != (d["wrong_hides"], d["missed_skips"]):
                 print(f"  {r:14} {c['wrong_hides']:>3}/{c['missed_skips']:<3} -> {d['wrong_hides']:>3}/{d['missed_skips']:<3}")
+    k = p["ranking"]
+    a = k["gold_at_noise_hide_rate"]
+    print(f"\nranking (informational), gold at the noise hide rate, wrong/missed: noise "
+          f"{a['noise']['wrong_hides']}/{a['noise']['missed_skips']}, hunch {a['hunch']['wrong_hides']}/{a['hunch']['missed_skips']}")
+    l = k["loro_at_repo_hide_rate"]
+    print(f"{'repo':14} {'hidden':>6} {'noise':>13} {'hunch':>13}   (LORO at the repo's hide rate, wrong/missed)")
+    for r, c in l["noise"].items():
+        h = l["hunch"][r]
+        print(f"{r:14} {c['hidden']:6} {c['wrong_hides']:>6}/{c['missed_skips']:<6} {h['wrong_hides']:>6}/{h['missed_skips']:<6}"
+              + ("  more wrong" if r in l["more_wrong_hides"] else ""))
 
 
 def metrics(score, base, y, repos):
@@ -486,11 +501,14 @@ def main():
         "versions": {"scikit-learn": sklearn.__version__, "lightgbm": lightgbm.__version__,
                      "numpy": np.__version__},
     }
-    a.out.write_text(dump({"head": "should_skip", "model": model, "feature_schema": schema,
-                           "fingerprint": fp, "selection": selection, "provenance": provenance}))
-    a.parity.write_text(parity(xg, proba("lr" if fired is None else "trees", xg)))
     shipped = "lr" if fired is None else "trees"
     promo = promotion(gold, loro[shipped], proba(shipped, xg), xs[:, noise], xg[:, noise], ys, yg, rs, rg, shipped)
+    shipped_policy = {"passes": promo["gate"]["passes"], "unhide": promo["policy"]["unhide"],
+                      "hide": promo["policy"]["hide"], "rule": promo["policy"]["rule"]}
+    a.out.write_text(dump({"head": "should_skip", "model": model, "feature_schema": schema,
+                           "fingerprint": fp, "selection": selection, "provenance": provenance,
+                           "policy": shipped_policy}))
+    a.parity.write_text(parity(xg, proba(shipped, xg)))
     a.report.write_text(json.dumps({
         "head": "should_skip", "selection": selection, "provenance": provenance, "promotion": promo,
         "metrics": {"gold": gold, "gold_without_history": gold_nohist,
