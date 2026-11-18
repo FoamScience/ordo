@@ -10,18 +10,30 @@ manifest bump produces the same picks where the commits still exist.
 
 Usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/gold-sample.py [--n 200] [--per-repo 60]
        ... --n 2000 --seed 2 --exclude corpus/gold.jsonl --out silver.jsonl   # a training draw
+       ... --refresh corpus/gold.jsonl --out new.jsonl --report report.jsonl [--engine PATH]
+
+`--refresh` reruns the engine on a labeled set's commits after an engine
+change. A row whose hunk kept its changed lines keeps every label its inputs did not
+change; a row whose hunk moved or changed shape maps to the current hunk by
+key or by changed-line overlap and loses all its labels; a row with no such
+hunk is dropped. Labels to redo are left null for gold-label.py --apply, and
+the report lists each row's status and the questions to relabel.
 """
 import argparse
 import json
 import os
 import random
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
+import corpuslib
 from corpuslib import ROOT, commit_input, engine_output, git, repos, template
 
 OUT = ROOT / "corpus/gold.jsonl"
+OUTPUT_FIELDS = ("template", "rationale", "details", "noise", "comment", "findings", "diff")
+MIN_OVERLAP = 0.8
 
 
 def commit_output(repo, sha):
@@ -135,6 +147,97 @@ def draw_keys(corpus, keys):
     return picked
 
 
+def changed_lines(diff):
+    """The lines a hunk diff removes and adds, as ("-"|"+", line number)."""
+    o0, oc, n0, nc = map(int, re.match(r"@@ -(\d+),(\d+) \+(\d+),(\d+) @@", diff).groups())
+    return {("-", i) for i in range(o0, o0 + oc)} | {("+", i) for i in range(n0, n0 + nc)}
+
+
+def scope(diff):
+    """A hunk diff without its context lines, which an engine change can
+    widen or narrow at the end of a file while the hunk stays the same."""
+    head, *body = diff.split("\n")
+    return [head] + [l for l in body if l[:1] in "+-"]
+
+
+def overlap(a, b):
+    a, b = changed_lines(a), changed_lines(b)
+    return len(a & b) / len(a | b) if a | b else 0.0
+
+
+def stale_questions(row, entry):
+    """The labels whose inputs differ between a row and its current hunk with
+    the same changed lines: the rationale's claims, the noise flag, each finding."""
+    L = row["labels"]
+    stale = []
+    if (row["rationale"], row["details"]) != (entry["rationale"], entry["details"]):
+        stale += ["faithful", "matches_commit"]
+    if entry["noise"] and (not row["noise"] or L.get("noise_correct") is None):
+        stale.append("noise_correct")
+    old = {f["name"]: f for f in row["findings"]}
+    stale += [f"finding:{f['name']}" for f in entry["findings"]
+              if old.get(f["name"]) != f or L["findings"].get(f["name"]) is None]
+    return stale
+
+
+def relabeled(row, entry, stale):
+    """`row` with the current hunk's output and every stale label null; labels
+    of questions the hunk no longer asks go."""
+    L = dict(row["labels"])
+    if entry["noise"]:
+        L.setdefault("noise_correct", None)
+    else:
+        L.pop("noise_correct", None)
+    findings = {f["name"]: L["findings"].get(f["name"]) for f in entry["findings"]}
+    for q in stale:
+        if q.startswith("finding:"):
+            findings[q.split(":", 1)[1]] = None
+        else:
+            L[q] = None
+    L["findings"] = findings
+    return {**row, **{k: entry[k] for k in ("key", *OUTPUT_FIELDS)}, "labels": L}
+
+
+def refresh(corpus, rows):
+    """(rows, report) for a labeled set rerun through the engine. Rows whose
+    hunk kept its exact key are matched first, so a moved row never takes a
+    hunk another row still names."""
+    lang_of = {name: lang for name, lang, _ in repos()}
+    hunks = {}
+    for repo, sha in sorted({(r["repo"], r["sha"]) for r in rows}):
+        blobs, out = commit_output(corpus / repo, sha) if (corpus / repo).is_dir() else (None, None)
+        subject = next(r["subject"] for r in rows if (r["repo"], r["sha"]) == (repo, sha))
+        hunks[(repo, sha)] = [hunk_entry(repo, lang_of[repo], sha, subject, f, h, *blobs[f["path"]])
+                              for f in (out or {}).get("files", [])
+                              if not (f.get("unsupported") or f.get("degraded")) for h in f["hunks"]]
+    by_key = {e["key"]: e for es in hunks.values() for e in es}
+    claimed = {r["key"] for r in rows if r["key"] in by_key}
+    out, report = {}, []
+    for i, r in sorted(enumerate(rows), key=lambda x: x[1]["key"] not in by_key):
+        entry = by_key.get(r["key"])
+        if entry is None:
+            free = [e for e in hunks[(r["repo"], r["sha"])] if e["path"] == r["path"] and e["key"] not in claimed]
+            entry = max(free, key=lambda e: overlap(r["diff"], e["diff"]), default=None)
+            if entry is None or overlap(r["diff"], entry["diff"]) < MIN_OVERLAP:
+                report.append({"key": r["key"], "old_key": r["key"], "status": "dropped",
+                               "overlap": round(overlap(r["diff"], entry["diff"]), 3) if entry else 0.0})
+                continue
+            claimed.add(entry["key"])
+        score = overlap(r["diff"], entry["diff"])
+        if scope(entry["diff"]) != scope(r["diff"]):
+            stale = ["faithful", "matches_commit", *(["noise_correct"] if entry["noise"] else []), "should_skip",
+                     *(f"finding:{f['name']}" for f in entry["findings"])]
+            status = "scope"
+        else:
+            stale = stale_questions(r, entry)
+            status = "output" if any(r[k] != entry[k] for k in OUTPUT_FIELDS) else "unchanged"
+        out[i] = relabeled(r, entry, stale)
+        report.append({"key": entry["key"], "old_key": r["key"], "status": status,
+                       "overlap": round(score, 3), "stale": stale,
+                       "changed": [k for k in OUTPUT_FIELDS if r[k] != entry[k]]})
+    return [out[i] for i in sorted(out)], sorted(report, key=lambda x: x["key"])
+
+
 def stratify(pool, n, seed):
     """`n` hunks: the rare strata first (findings, noise), then round-robin
     over template x language until full."""
@@ -185,9 +288,26 @@ def main():
                     help="jsonl whose keys must not be drawn again (keeps a training draw off the gold set)")
     ap.add_argument("--keys", type=Path,
                     help="draw exactly these keys (one per line) instead of stratifying a pool")
+    ap.add_argument("--refresh", type=Path, help="labeled jsonl to rerun through the engine (see above)")
+    ap.add_argument("--report", type=Path, help="--refresh: where each row's status and stale labels go")
+    ap.add_argument("--engine", type=Path, default=corpuslib.ENGINE, help="ordo-engine binary to run")
     a = ap.parse_args()
+    corpuslib.ENGINE = a.engine
     taken = {json.loads(l)["key"] for f in a.exclude for l in f.read_text().splitlines() if l.strip()}
     corpus = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus"))
+    if a.refresh:
+        if a.out.resolve() == OUT or not a.report:
+            sys.exit("--refresh needs --out (not the gold file itself) and --report")
+        old = [json.loads(l) for l in a.refresh.read_text().splitlines() if l.strip()]
+        rows, report = refresh(corpus, old)
+        a.out.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in rows))
+        a.report.write_text("".join(json.dumps(x) + "\n" for x in report))
+        by = defaultdict(int)
+        for x in report:
+            by[x["status"]] += 1
+        print(f"refreshed {len(old)} rows into {a.out} ({len(rows)} kept): "
+              + ", ".join(f"{k}={v}" for k, v in sorted(by.items())))
+        return
     if a.keys:
         keys = [l.strip() for l in a.keys.read_text().splitlines() if l.strip()]
         excluded = [k for k in keys if k in taken]
