@@ -28,15 +28,25 @@ A model audit, end to end:
      chunk of the manifest is answered with its keys in order, exactly its
      question ids, booleans only and a non-empty why; then backs up the gold
      file to DIR/gold.jsonl.bak and adds `labels_audit` and `audited_by` to
-     the sampled hunks, refusing hunks that already carry an audit.
+     the sampled hunks, refusing hunks that already carry an audit unless
+     `--reaudit` is given: then the previous `labels_audit` and `audited_by`
+     are appended to `labels_audit_prev` before being replaced.
+
+After a refresh (gold-sample.py --refresh) drops sampled hunks or changes
+their rationale, `--audit-replace BEFORE` swaps each sampled key missing from
+gold for a seeded draw from the same repo and pool (judge-rejected or not, as
+the key was in BEFORE, the pre-refresh gold file), and `--audit-render DIR
+--keys FILE` renders only the keys listed in FILE (one per line), so just the
+stale and replaced hunks are re-audited.
 
 Usage: scripts/gold-label.py                      # interactive
        scripts/gold-label.py --apply labels.jsonl [target.jsonl]  # merge {key, labels} lines produced elsewhere
        scripts/gold-label.py --human              # label the audit sample
        scripts/gold-label.py --human-report       # human-vs-judge agreement per question
        scripts/gold-label.py --audit-report       # the same for a model auditor's `labels_audit`
-       scripts/gold-label.py --audit-render DIR [--chunks N] [--gold PATH]   # auditor inputs, N files (default 4)
-       scripts/gold-label.py --audit-merge ANSWERS... --auditor MODEL [--gold PATH]
+       scripts/gold-label.py --audit-render DIR [--chunks N] [--gold PATH] [--keys FILE]   # auditor inputs, N files (default 4)
+       scripts/gold-label.py --audit-merge ANSWERS... --auditor MODEL [--gold PATH] [--reaudit]
+       scripts/gold-label.py --audit-replace BEFORE.jsonl [--gold PATH]   # resample sampled keys gone from gold
 """
 import contextlib
 import io
@@ -55,7 +65,7 @@ AUDIT = GOLD.with_name("human-audit.json")
 SKIP_WHY = Path(os.environ.get("ORDO_CORPUS", Path.home() / ".cache/ordo-corpus")) / "skip.labels.jsonl"
 SKIP_PROMPT = SKIP_WHY.with_name("skip.prompt.txt")
 AUDIT_SEED, AUDIT_PER_REPO, AUDIT_REJECTED = 120, 4, 2
-LABEL_FIELDS = ("labels", "labels_human", "labels_audit", "audited_by")
+LABEL_FIELDS = ("labels", "labels_human", "labels_audit", "audited_by", "labels_audit_prev")
 
 
 def ask(prompt):
@@ -142,12 +152,12 @@ def rejected(r):
         False in L["findings"].values()
 
 
-def audit_sample(rows):
+def audit_sample(rows, audit=AUDIT):
     """Gold keys for the human audit, drawn once and then read back: per repo,
     up to AUDIT_REJECTED hunks the judge rejected a claim on, the rest of
     AUDIT_PER_REPO from the others, in a seeded shuffle."""
-    if AUDIT.exists():
-        return json.loads(AUDIT.read_text())["keys"]
+    if audit.exists():
+        return json.loads(audit.read_text())["keys"]
     rng = random.Random(AUDIT_SEED)
     by_repo = defaultdict(list)
     for r in rows:
@@ -161,10 +171,33 @@ def audit_sample(rows):
         k = min(AUDIT_REJECTED, len(no))
         keys += (no[:k] + yes + no[k:])[:AUDIT_PER_REPO]
     rng.shuffle(keys)
-    AUDIT.write_text(json.dumps({"seed": AUDIT_SEED, "per_repo": AUDIT_PER_REPO,
+    audit.write_text(json.dumps({"seed": AUDIT_SEED, "per_repo": AUDIT_PER_REPO,
                                  "rejected_per_repo": AUDIT_REJECTED, "keys": keys}, indent=1) + "\n")
-    print(f"drew {len(keys)} hunks into {AUDIT}")
+    print(f"drew {len(keys)} hunks into {audit}")
     return keys
+
+
+def audit_replace(rows, before, audit=AUDIT):
+    """Swap each sampled key missing from `rows` for a draw from the same repo
+    and pool it had in `before`, seeded by the key; recorded under "replaced"."""
+    sample = json.loads(audit.read_text())
+    have = {r["key"]: r for r in rows}
+    was = {r["key"]: r for r in before}
+    for i, k in enumerate(sample["keys"]):
+        if k in have:
+            continue
+        if k not in was:
+            sys.exit(f"{k}: in neither gold nor {len(before)} BEFORE rows, so its pool is unknown")
+        pool = rejected(was[k])
+        cand = sorted(r["key"] for r in rows if r["repo"] == was[k]["repo"]
+                      and rejected(r) == pool and r["key"] not in sample["keys"])
+        if not cand:
+            sys.exit(f"{k}: no {'rejected' if pool else 'other'} hunk left in {was[k]['repo']}")
+        new = random.Random(f"{AUDIT_SEED}:{k}").choice(cand)
+        sample["keys"][i] = new
+        sample.setdefault("replaced", {})[k] = new
+        print(f"{k} -> {new} ({'rejected' if pool else 'other'} pool, {len(cand)} candidates)")
+    audit.write_text(json.dumps(sample, indent=1) + "\n")
 
 
 def blank(r):
@@ -265,14 +298,17 @@ def audit_questions(r):
     return qs
 
 
-def audit_render(rows, out, chunks=4):
-    """The audit sample as `chunks` auditor input files plus manifest.json.
-    Hunks are shown from a copy without any label field, and the output is
-    checked for the judge's should_skip reasons."""
+def audit_render(rows, out, chunks=4, only=None, audit=AUDIT):
+    """The audit sample, or its keys in `only`, as `chunks` auditor input files
+    plus manifest.json. Hunks are shown from a copy without any label field,
+    and the output is checked for the judge's should_skip reasons."""
     rubric = [l for l in SKIP_PROMPT.read_text().splitlines()
               if not l.startswith(("Input:", "Output:", "Do not skip lines", "{"))]
     by = {r["key"]: r for r in rows}
-    keys = audit_sample(rows)
+    keys = audit_sample(rows, audit)
+    if only is not None:
+        assert set(only) <= set(keys), f"not in the audit sample: {sorted(set(only) - set(keys))}"
+        keys = [k for k in keys if k in only]
     why = {}
     if SKIP_WHY.exists():
         why = {x["key"]: x.get("why", "") for x in map(json.loads, filter(str.strip, SKIP_WHY.read_text().splitlines()))}
@@ -302,9 +338,10 @@ def audit_render(rows, out, chunks=4):
     print(f"rendered {len(keys)} hunks into {out}: " + ", ".join(f"chunk{c} ({len(m)})" for c, m in manifest.items()))
 
 
-def audit_merge(paths, auditor, target=GOLD):
+def audit_merge(paths, auditor, target=GOLD, reaudit=False):
     """Validate a model's answers against the manifest beside them, back up
-    `target` there and add labels_audit + audited_by to the sampled hunks."""
+    `target` there and add labels_audit + audited_by to the sampled hunks;
+    with `reaudit`, an existing audit moves to labels_audit_prev first."""
     out = paths[0].parent
     manifest = json.loads((out / "manifest.json").read_text())
     files = {p.name.split(".")[0].removeprefix("chunk"): p for p in paths}
@@ -330,25 +367,34 @@ def audit_merge(paths, auditor, target=GOLD):
                 errs.append(f"chunk{c} {r['key']}: no why")
             got[r["key"]] = {q: a[q] for q in qs if q in a}
     old = [json.loads(l) for l in target.read_text().splitlines() if l.strip()]
-    errs += [f"{r['key']}: already audited" for r in old if r["key"] in got and "labels_audit" in r]
+    if not reaudit:
+        errs += [f"{r['key']}: already audited (pass --reaudit)" for r in old if r["key"] in got and "labels_audit" in r]
     if errs:
         sys.exit("\n".join(errs))
     shutil.copy(target, out / "gold.jsonl.bak")
+    merged = set(got)
     new = []
     for o in old:
         r = dict(o)
         a = got.pop(r["key"], None)
         if a is not None:
+            if "labels_audit" in r:
+                r["labels_audit_prev"] = r.get("labels_audit_prev", []) + \
+                    [{"labels": r["labels_audit"], "audited_by": r["audited_by"]}]
             L = {k: v for k, v in a.items() if not k.startswith("finding:")}
             L["findings"] = {k.split(":", 1)[1]: v for k, v in a.items() if k.startswith("finding:")}
             r["labels_audit"], r["audited_by"] = L, auditor
         new.append(r)
     assert not got, f"keys not in {target}: {sorted(got)}"
+    audit = {"labels_audit", "audited_by", "labels_audit_prev"}
     for o, n in zip(old, new):
-        assert {k: n[k] for k in o} == o and set(n) - set(o) <= {"labels_audit", "audited_by"}, o["key"]
+        assert o["key"] in merged or n == o, o["key"]
+        assert {k: n[k] for k in o if k not in audit} == {k: v for k, v in o.items() if k not in audit} \
+            and set(n) - set(o) <= audit, o["key"]
     target.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in new))
-    print(f"merged {sum('labels_audit' in r for r in new) - sum('labels_audit' in r for r in old)} "
-          f"audits by {auditor} into {target}; backup {out / 'gold.jsonl.bak'}")
+    redone = sum(len(n.get("labels_audit_prev", [])) > len(o.get("labels_audit_prev", [])) for o, n in zip(old, new))
+    print(f"merged {sum('labels_audit' in r for r in new) - sum('labels_audit' in r for r in old)} new and "
+          f"{redone} re-audits by {auditor} into {target}; backup {out / 'gold.jsonl.bak'}")
 
 
 def opt(args, name, default=None):
@@ -364,18 +410,30 @@ def opt(args, name, default=None):
 
 def main():
     args = sys.argv[1:]
-    if args[:1] in (["--audit-render"], ["--audit-merge"]):
+    if args[:1] in (["--audit-render"], ["--audit-merge"], ["--audit-replace"]):
         gold = Path(opt(args, "--gold", GOLD))
+        audit = gold.with_name("human-audit.json")
         if args[0] == "--audit-merge":
             auditor = opt(args, "--auditor")
+            reaudit = "--reaudit" in args
+            if reaudit:
+                args.remove("--reaudit")
             if not auditor or len(args) < 2:
-                sys.exit("usage: --audit-merge ANSWERS... --auditor MODEL [--gold PATH]")
-            return audit_merge([Path(a) for a in args[1:]], auditor, gold)
-        chunks = int(opt(args, "--chunks", 4))
-        if len(args) != 2:
-            sys.exit("usage: --audit-render DIR [--chunks N] [--gold PATH]")
+                sys.exit("usage: --audit-merge ANSWERS... --auditor MODEL [--gold PATH] [--reaudit]")
+            return audit_merge([Path(a) for a in args[1:]], auditor, gold, reaudit)
         rows = [json.loads(l) for l in gold.read_text().splitlines() if l.strip()]
-        return audit_render(rows, Path(args[1]), chunks)
+        if args[0] == "--audit-replace":
+            if len(args) != 2:
+                sys.exit("usage: --audit-replace BEFORE.jsonl [--gold PATH]")
+            return audit_replace(rows, [json.loads(l) for l in Path(args[1]).read_text().splitlines() if l.strip()],
+                                 audit)
+        chunks = int(opt(args, "--chunks", 4))
+        only = opt(args, "--keys")
+        if len(args) != 2:
+            sys.exit("usage: --audit-render DIR [--chunks N] [--gold PATH] [--keys FILE]")
+        if only is not None:
+            only = set(filter(None, map(str.strip, Path(only).read_text().splitlines())))
+        return audit_render(rows, Path(args[1]), chunks, only, audit)
     if len(sys.argv) in (3, 4) and sys.argv[1] == "--apply":
         return apply(sys.argv[2], *(Path(a) for a in sys.argv[3:]))
     rows = [json.loads(l) for l in GOLD.read_text().splitlines() if l.strip()]
