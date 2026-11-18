@@ -1,144 +1,72 @@
-<p align="center">
-  <img src="assets/readme/hero.svg" width="100%" alt="ordo — a code change, read in the order a human should read it. Right: a reviewer pane from a real ordo run listing five hunks in comprehension order, the changed definition first, with the rationale “changes signature of edit_files”.">
-</p>
+# ordo
 
-<p align="center">
+<p>
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/schema-v2-5fd4c0" alt="schema v2">
+  <a href="https://crates.io/crates/ordo-diff"><img src="https://img.shields.io/crates/v/ordo-diff" alt="ordo-diff on crates.io"></a>
   <!-- ordo:begin langs-badge -->
   <img src="https://img.shields.io/badge/languages-29-5fd4c0" alt="29 supported languages">
   <!-- ordo:end langs-badge -->
-
-**Diffs arrive in file order. Nobody reads them that way.**
-
-`ordo` is a standalone, language-agnostic engine that reorders the **hunks** of
-a code change into a **comprehension-optimized** reading order, with per-hunk
-semantic metadata and a human-readable rationale. One core, many consumers —
-editors, CLIs, CI, review bots — all speaking one frozen JSON contract.
-
-Grounded in Baum, Schneider & Bacchelli (ICSME 2017): **P1** keep related
-changes together, **P2** definitions before their uses, **P3** grouping is the
-dominant win. Ordering is a comprehension *aid*, not a correctness fix — treat
-it as such.
-
-## What you get
-
-- **A reading order**, not a file listing — a deterministic permutation of the
-  change's hunks, definitions ahead of their uses.
-- **A rationale per hunk** — one plain sentence saying why it is where it is
-  and what it did: `adds parse_cfg, used in main.py`, `changes signature of
-  parse`, `renames foo → bar`, `removes 31 lines`.
-- **A detail layer** — what the hunk did to its container's members: which enum
-  variant, struct field, object property or call keyword actually moved.
-- **Clusters** — the change's independent parts. One cluster means the change
-  is atomic; several is a candidate PR split.
-- **Advisories** — curated, deterministic guidance on advanced constructs
-  (metaclasses, `unsafe`, raw `new`/`delete`, shell injection), with an
-  escalation ladder and a verdict only when the pattern is concretely wrong.
-- **Noise flags** — generated, lock, pure-formatting and copyright-notice
-  hunks marked so a client can dim or drop them.
-- **Full accounting** — every hunk the diff produced is either in the reading
-  order or recorded in `dropped` with the reason, so a consumer can prove
-  nothing went missing silently.
-- **Your own rules** — conventions as data (path/name facts plus tree-sitter
-  queries) that annotate, flag, or move a hunk earlier in the reading order,
-  without ever overriding definitions-before-uses.
-- **Intra-line refinement** — when a removed and an added line are the same line
-  edited, only the part that changed is highlighted, over grammar leaves rather
-  than characters: adding a parameter reads as adding that parameter.
-- **A reviewer** — `ordo`, a first-party client that shells to git and
-  serves the whole thing to a browser tab.
-
-## Why the order is principled
-
-<p align="center">
-  <img src="assets/readme/defuse.svg" width="100%" alt="Real ordo output on a two-file change: main.py uses helper(), util.py defines it. Diffed order lists main.py first; ordo's comprehension order puts util.py's definition first, linked to its use by a def-to-use edge.">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-Per file, `ordo` parses both sides of the diff with tree-sitter and, for each
-hunk: classifies it (`import` / `definition` / `other`), finds its enclosing
-definition, and extracts the symbols it **defines** and **uses** (imported
-names and local bindings are neither, so they can't seed spurious edges). Pure
-import hunks are marked `noise` and grouped together, the rest are grouped by
-enclosing definition (**P1**),
-linked by **def→use** edges between groups (**P2**, across files when
-`cross_file` is on), and topologically sorted — ties and cycles broken by file
-position, so output is deterministic and a permutation of the non-import
-hunks.
+Review a code change in reading order: definitions before their uses.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/reviewer-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/readme/reviewer-light.png">
+  <img src="assets/readme/reviewer-dark.png" alt="The ordo reviewer on a Vue fix commit: a fix-candidate verdict with readability regressions above the reading order of 12 hunks grouped by symbol with def-to-use arcs; the hunk being read edits the canSetRef signature, with removed and added tokens highlighted inside the lines; beside it, what it needs, what needs it, a catalog finding on an any type, a readability line and the lines' history.">
+</picture>
+
+- **Reading order.** Each definition comes before the code that uses it, across
+  files, parsed with tree-sitter ([languages](docs/languages.md)).
+- **A reason per hunk.** One plain sentence: `adds parse_cfg, used in
+  main.py`, `renames foo → bar`.
+- **Skip the noise.** Imports, generated and lock files, and pure formatting
+  are dimmed.
+- **A verdict on the change.** Feature, likely fix or refactor; whether
+  behaviour is preserved; which function got harder to read (nesting 2 → 3).
+- **Findings on what changed.** Built-in construct checks and your own rules,
+  flagged only where this change introduces them.
+- **[Hunch](docs/hunch.md)** (opt-in). A trained guess of what a reviewer can
+  skip and what needs care first.
+- **Local and scriptable.** Runs on your machine; `ordo-engine` gives the same
+  analysis as JSON or as compact text for an LLM.
 
 ## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/FoamScience/ordo/main/install.sh | sh
-cargo binstall ordo-diff                     # prebuilt, through cargo-binstall
-cargo install ordo-diff --features web       # from crates.io, built locally
-npm install -g ordo-diff                     # node wrapper with the prebuilt binaries
-pip install ordo-diff                        # python wrapper with the prebuilt binaries
+# or
+cargo install ordo-diff --features web
 ```
 
-Each installs two commands: `ordo`, the reviewer, and `ordo-engine`, the JSON
-engine. The prebuilt binaries are on every [GitHub
-release](https://github.com/FoamScience/ordo/releases) for linux (static, any
-distribution), macOS and windows, with their SHA-256 sums. `install.sh` puts
-them in `~/.local/bin` (`ORDO_INSTALL_DIR` to change it, `ORDO_VERSION` to pin
-one). The npm and pypi wrappers look in `ORDO_BIN_DIR` first, for a local
-build.
+Prebuilt binaries for Linux, macOS and Windows are on the
+[releases page](https://github.com/FoamScience/ordo/releases).
 
-Building from source on windows needs `clang-cl` (LLVM) as the C compiler, set
-with `CC=clang-cl`: one grammar passes a flag msvc's `cl` rejects.
-
-
-## Quickstart
+## Use
 
 ```sh
-ordo HEAD                                   # review the last commit, in a browser tab
-ordo main...feature 'src/*'                 # a branch, Rust sources only
-git diff | ordo-engine review               # the JSON contract, from a patch
-ordo-engine pack --json < input.json        # compact LLM-ready review context
+ordo                       # review the last commit in a browser tab
+ordo zz                    # uncommitted work
+ordo main...feat           # a branch
+git diff | ordo-engine review   # the same analysis as JSON, no git needed
 ```
 
-`ordo help` lists the documentation topics and `ordo help <topic>` prints one —
-the pages below, embedded in the binary, so they always match the version you
-are running.
+`j` next hunk, `]f` next finding, `x` mark read, `:help` for commands.
 
-`ordo` is the interactive reviewer; `ordo-engine` is the pure JSON CLI every
-other consumer speaks to. Neither is required by the other.
+## Docs
 
-## Documentation
+- [Reviewer](docs/web.md): revisions, keys, commands, themes
+- [Hunch](docs/hunch.md): the opt-in trained guess
+- [Engine and JSON schema](docs/cli.md)
+- [What the rationales and findings mean](docs/reviewing.md)
+- [Your own rules](docs/rules.md)
+- [Supported languages](docs/languages.md)
+- [What ordo does not do](docs/ceilings.md)
+- [Architecture](docs/architecture.md)
 
-| | |
-| --- | --- |
-| [`docs/cli.md`](docs/cli.md) | `ordo-engine`, schema v2, the `enclosing_kind` table, the library API |
-| [`docs/web.md`](docs/web.md) | the reviewer: revisions, filters, keybindings, commands, themes, safety, building the client |
-| [`docs/reviewing.md`](docs/reviewing.md) | the detail layer, rationale patterns, advisories, the change ledger |
-| [`docs/rules.md`](docs/rules.md) | conventions as data — conditions, limits, queries, shipped rulesets |
-| [`docs/languages.md`](docs/languages.md) | every supported language and the shape it is read in |
-| [`docs/ceilings.md`](docs/ceilings.md) | what `ordo` deliberately does not do |
-| [`docs/architecture.md`](docs/architecture.md) | for contributors: the seams, what may depend on what, where a new fact goes |
+Pre-1.0; see the [changelog](CHANGELOG.md) before upgrading.
 
-Design notes — how a decision was reached rather than what it is — also live in
-[`docs/`](docs), suffixed `-design.md`.
+## License
 
-## Ceilings, in brief
-
-`ordo` states its own limits rather than guessing past them: symbol resolution
-is name-matching, not type analysis; a context-limited `diff` of a modified
-file stays positional and is flagged `degraded`; a file with no tree-sitter
-grammar is flagged `unsupported`; the engine has no filtering policy of its
-own. The full list is [`docs/ceilings.md`](docs/ceilings.md).
-
-## Development
-
-```sh
-cargo test --features web                     # unit + property + golden + cross-file + docs
-UPDATE_GOLDEN=1 cargo test --features web     # regenerate tests/golden/*/expected.json
-UPDATE_DOCS=1   cargo test --features web     # regenerate the marked blocks in README/docs
-```
-
-Blocks fenced by a pair of `ordo:begin <key>` / `ordo:end <key>` HTML
-comments are generated from the code that owns them — the language registry, the command
-table, the keymaps, the theme list, the bundled rulesets. A test fails when a
-committed block no longer matches, so the docs cannot quietly go stale.
-
-License: MIT.
+[MIT](LICENSE)
