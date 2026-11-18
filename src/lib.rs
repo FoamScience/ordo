@@ -261,9 +261,6 @@ pub fn run(input: Input) -> Output {
             &input.options,
         );
     }
-    if input.options.hunch && !hunch::model_fits() {
-        problems.push(hunch::misfit());
-    }
     let feature_schema = input.options.features.then(hunch::schema);
     // every pass is done with the trees; the client calls `run` again on each
     // reload, and holding this changeset's trees until then buys nothing

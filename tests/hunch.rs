@@ -145,6 +145,65 @@ fn a_file_without_commits_still_has_history() {
     }
 }
 
+/// tests/fixtures/hunch's outputs, by file name, as the trainer reads them.
+fn fixture_outputs() -> Vec<(String, Output)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hunch");
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
+        .expect("tests/fixtures/hunch")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty(), "no fixtures in {}", dir.display());
+    paths
+        .into_iter()
+        .map(|p| {
+            let input = serde_json::from_str(&std::fs::read_to_string(&p).expect("fixture"))
+                .expect("fixture json");
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            (name, run(input))
+        })
+        .collect()
+}
+
+#[test]
+fn the_model_was_trained_on_this_engines_features() {
+    // the schema catches a renamed column, the fingerprint one whose values
+    // moved under the same name
+    let outputs = fixture_outputs();
+    let fp = hunch::fingerprint(outputs.iter().map(|(n, o)| (n.as_str(), o)));
+    if let Some(why) = hunch::misfit(Some(&fp)) {
+        panic!("{why}");
+    }
+}
+
+#[test]
+fn the_fixtures_cover_what_the_fingerprint_guards() {
+    let outputs = fixture_outputs();
+    let all: Vec<&HunkOut> = outputs.iter().flat_map(|(_, o)| hunks(o)).collect();
+    let any = |name: &str| all.iter().any(|h| col(h, name) != 0.0);
+    for name in [
+        "noise",
+        "comment",
+        "test_path",
+        "has_history",
+        "churn",
+        "fixes",
+        "delta_nesting",
+        "delta_cognitive",
+        "catalog_note",
+        "rule_note",
+        "rule_warn",
+        "rule_verdict",
+        "lang_python",
+        "lang_go",
+        "lang_c",
+        "lang_typescript",
+    ] {
+        assert!(any(name), "no fixture hunk sets {name}");
+    }
+}
+
 #[test]
 fn the_guess_matches_the_trained_library() {
     // the trainer writes these: gold hunks' vectors and what LightGBM (or the
@@ -154,10 +213,6 @@ fn the_guess_matches_the_trained_library() {
         serde_json::from_str(&std::fs::read_to_string(p).expect("tests/hunch-parity.json"))
             .expect("json");
     assert!(rows.len() > 100, "{} rows", rows.len());
-    assert!(
-        hunch::model_fits(),
-        "src/hunch.json was trained on another feature schema"
-    );
     let width = hunch::names().len();
     let worst = rows
         .iter()
@@ -187,6 +242,7 @@ fn the_guess_is_off_unless_asked() {
 #[test]
 fn the_guess_carries_a_probability_and_its_top_features() {
     let v = with_hunch(json!({}));
+    assert!(v.get("problems").is_none(), "{}", v["problems"]);
     let names = hunch::names();
     for h in v["files"][0]["hunks"].as_array().unwrap() {
         let g = &h["hunch"];

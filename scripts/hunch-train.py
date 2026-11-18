@@ -11,8 +11,9 @@ by at least OVERLAP_MIN. The tree count is the smallest within TREE_TOL of the
 best pooled leave-one-repo-out AUROC. The trees ship when they beat the
 regression by MIN_GAIN AUROC on gold, or when, leaving one repo out, the
 regression hides more hunks wrongly than the noise flag and the trees do not.
-Writes src/hunch.json (trimmed model, feature schema, selection, provenance)
-for build.rs, corpus/hunch-report.json (full metrics and the tree-count
+Writes src/hunch.json (trimmed model, feature schema, the fingerprint of the
+engine's vectors for tests/fixtures/hunch, selection, provenance) for
+build.rs, corpus/hunch-report.json (full metrics and the tree-count
 trade-off), and prints the comparison against the engine's rule-based noise
 flag at its own hide rate. tests/hunch-parity.json gets the gold rows with the
 shipped model's own predictions, for the Rust inference to match.
@@ -69,6 +70,22 @@ def commit_features(corpus, repo, sha):
     hunks = [(f"{repo}:{sha[:8]}:{f['path']}:{h['new_range'][0]}", h["old_range"], h["new_range"], h["features"])
              for f in out["files"] for h in f["hunks"] if h.get("features") is not None]
     return hunks, out.get("feature_schema")
+
+
+def fingerprint():
+    """FNV-1a of the engine's feature vectors for tests/fixtures/hunch, as
+    `hunch::fingerprint` writes them: per fixture its file name on a line,
+    then a line per hunk of its values to six decimals. tests/hunch.rs
+    recomputes it, so a column whose values move fails CI until retrained."""
+    text = ""
+    for p in sorted((ROOT / "tests/fixtures/hunch").glob("*.json")):
+        out = engine_output(json.loads(p.read_text()))
+        text += p.name + "\n" + "".join(",".join(f"{v:.6f}" for v in h["features"]) + "\n"
+                                         for f in out["files"] for h in f["hunks"])
+    h = 0xCBF29CE484222325
+    for b in text.encode():
+        h = ((h ^ b) * 0x100000001B3) % 2**64
+    return f"{h:016x}"
 
 
 def changed(diff):
@@ -280,6 +297,7 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--extra", type=Path, help="more training labels, {key, should_skip} per line")
     a = ap.parse_args()
+    fp = fingerprint()
     corpus = Path(os.environ.get("ORDO_CORPUS", "~/.cache/ordo-corpus")).expanduser()
     gold_path, silver_path = ROOT / "corpus/gold.jsonl", corpus / "silver.jsonl"
     read = lambda p: [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
@@ -388,7 +406,7 @@ def main():
                      "numpy": np.__version__},
     }
     a.out.write_text(dump({"head": "should_skip", "model": model, "feature_schema": schema,
-                           "selection": selection, "provenance": provenance}))
+                           "fingerprint": fp, "selection": selection, "provenance": provenance}))
     a.parity.write_text(parity(xg, proba("lr" if fired is None else "trees", xg)))
     a.report.write_text(json.dumps({
         "head": "should_skip", "selection": selection, "provenance": provenance,
