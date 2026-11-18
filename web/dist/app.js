@@ -3939,6 +3939,12 @@ function badge(g) {
 function contributions(g) {
   return g.top.map(([name, c]) => `${name} ${c >= 0 ? "+" : "\u2212"}${Math.abs(c).toFixed(2)}`);
 }
+function flagBadge(g) {
+  return g.changed === "unhid" ? "Hunch: shown" : g.changed === "hid" ? "Hunch: hidden" : null;
+}
+function effect(g) {
+  return g.changed === "unhid" ? "the engine hid this as noise; the model is confident it should be read, so it is shown" : g.changed === "hid" ? "the model is confident this can be skipped, so it is hidden like noise" : "a trained guess; it changes nothing here";
+}
 
 // src/palette.ts
 function parseCommand(line) {
@@ -4592,9 +4598,10 @@ function renderReading(it2) {
       { class: "pills" },
       it2.reviewed && h("span", { class: "pill done" }, "Read"),
       it2.delta && h("span", { class: "pill accent" }, sentence(SINCE[it2.delta][1].split(":")[0])),
-      it2.noise && !/formatting/.test(it2.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
+      it2.noise && !it2.hunch?.changed && !/formatting/.test(it2.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
       it2.wave !== null && h("span", { class: "pill" }, `Wave ${it2.wave}`),
-      it2.hunch && h("span", { class: "pill", title: contributions(it2.hunch).join(", ") }, badge(it2.hunch))
+      it2.hunch && h("span", { class: "pill", title: contributions(it2.hunch).join(", ") }, badge(it2.hunch)),
+      it2.hunch && flagBadge(it2.hunch) && h("span", { class: "pill accent" }, flagBadge(it2.hunch))
     ),
     (search || st2.from !== null) && h(
       "div",
@@ -4974,7 +4981,7 @@ function renderWhy() {
         )
       ],
       it2.hunch && [
-        h("h3", null, "Hunch", h("small", null, "a trained guess; it changes nothing here")),
+        h("h3", null, "Hunch", h("small", null, effect(it2.hunch))),
         h("p", { class: "muted" }, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}.`)
       ],
       it2.readability.length > 0 && [

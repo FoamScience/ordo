@@ -61,8 +61,7 @@ file (a schema, a lockfile, a `package.json`) often drives the code around it
 and keeps its place. Set it to `false` for a docs-led change.
 
 `options.hunch` (off by default) puts a trained model's guess on every hunk,
-beside the engine's own `noise` flag rather than instead of it — it changes
-no flag and no order:
+beside the engine's own `noise` flag:
 
 ```json
 "hunch": { "noise": 0.7234, "top": [["comment", 1.661], ["uses", -0.82], ["lines_added", -0.31]] }
@@ -70,6 +69,16 @@ no flag and no order:
 
 `noise` is P(a reviewer can skip it); `top` is the three features that moved
 it most, as `[feature, contribution]` in log-odds, positive toward skipping.
+When the shipped model passed its promotion gate (`scripts/hunch-train.py`),
+a confident guess also moves the hunk's `noise` flag and says so in
+`changed`: `"unhid"` clears a flag the engine set when P(skip) is under the
+model's un-hide threshold (picked on held-out repositories), `"hid"` sets
+one it left clear when P(skip) is 0.9 or more. The gate passes only when, on
+held-out repositories and on the gold set, this policy hides no repository's
+hunks more wrongly than the engine's flag alone and fewer overall. The
+reading order, groups and edges stay the engine's own; without
+`options.hunch` nothing changes.
+
 Its history features read the input's `history`: the change's ancestors only,
 each with the time, subject and the change's paths it touched (renames
 followed), and `at`, the change's own commit time. The engine counts the ones

@@ -1,6 +1,6 @@
 // hunch's guess on a hunk, said as a reviewer reads it: how likely it is
-// skippable, and the features that pushed it there. Shadow only: nothing in
-// the review moves on it.
+// skippable, the features that pushed it there, and whether it moved the
+// engine's noise flag. Nothing is reordered by it.
 
 import type { Hunch } from "./types.ts";
 
@@ -12,4 +12,18 @@ export function badge(g: Hunch): string {
 /** `comment +1.66`, one per feature, signed toward skipping */
 export function contributions(g: Hunch): string[] {
   return g.top.map(([name, c]) => `${name} ${c >= 0 ? "+" : "−"}${Math.abs(c).toFixed(2)}`);
+}
+
+/** `Hunch: shown` / `Hunch: hidden` when the guess moved the hunk's noise flag */
+export function flagBadge(g: Hunch): string | null {
+  return g.changed === "unhid" ? "Hunch: shown" : g.changed === "hid" ? "Hunch: hidden" : null;
+}
+
+/** what the guess did to the review, for the why pane */
+export function effect(g: Hunch): string {
+  return g.changed === "unhid"
+    ? "the engine hid this as noise; the model is confident it should be read, so it is shown"
+    : g.changed === "hid"
+      ? "the model is confident this can be skipped, so it is hidden like noise"
+      : "a trained guess; it changes nothing here";
 }

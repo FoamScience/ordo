@@ -53,10 +53,11 @@ export interface Item {
   note: string | null;
 }
 
-/** a trained model's P(skip) and the three features that moved it most, as `[name, log-odds]` */
+/** a trained model's P(skip) and the three features that moved it most, as `[name, log-odds]`; `changed` when it moved the hunk's noise flag */
 export interface Hunch {
   noise: number;
   top: [string, number][];
+  changed?: "unhid" | "hid";
 }
 
 /** one definition's readability measurements, each `[old, new]` */

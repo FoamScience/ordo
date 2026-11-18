@@ -48,6 +48,21 @@ fn hunch_model() {
          static FINGERPRINT: Option<&str> = {fingerprint:?};\n",
         names.len()
     );
+    // the policy `--hunch` applies to the noise flag, only once the trainer's
+    // promotion gate passed it; absent, the guess stays a shadow
+    let policy = &doc["policy"];
+    if policy["passes"].as_bool() == Some(true) {
+        let at = |k: &str| policy[k].as_f64().unwrap_or_else(|| panic!("policy.{k}"));
+        writeln!(
+            out,
+            "static POLICY: Option<Policy> = Some(Policy {{ unhide: {:?}, hide: {:?} }});",
+            at("unhide"),
+            at("hide")
+        )
+        .unwrap();
+    } else {
+        out.push_str("static POLICY: Option<Policy> = None;\n");
+    }
     match model["type"].as_str() {
         Some("lightgbm") => {
             assert_eq!(model["link"], "sigmoid", "hunch: only a sigmoid link");

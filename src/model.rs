@@ -111,8 +111,10 @@ pub struct Options {
     #[serde(default)]
     pub features: bool,
     /// Put hunch's guess on every hunk: the trained model's P(skip) and the
-    /// features that moved it most (see `HunkOut::hunch`). Shadow only: it
-    /// changes no flag and no order. Off by default.
+    /// features that moved it most (see `HunkOut::hunch`). When the shipped
+    /// model passed its promotion gate, the guess also moves a hunk's `noise`
+    /// flag past the gate's thresholds and says so in `Hunch::changed`; the
+    /// reading order stays the engine's own. Off by default.
     #[serde(default)]
     pub hunch: bool,
 }
@@ -808,8 +810,8 @@ pub struct HunkOut {
     pub hunch: Option<Hunch>,
 }
 
-/// What the trained model makes of a hunk, beside the engine's own `noise`
-/// rather than instead of it.
+/// What the trained model makes of a hunk, beside the engine's own `noise`;
+/// `changed` says when it overrode that flag.
 #[derive(Debug, Clone, Serialize)]
 pub struct Hunch {
     /// P(a reviewer can skip it)
@@ -817,6 +819,19 @@ pub struct Hunch {
     /// the three features that moved the guess most, as `[name, log-odds]`,
     /// largest first by size
     pub top: Vec<(String, f64)>,
+    /// how the guess moved the hunk's `noise` flag, when it did
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed: Option<HunchChange>,
+}
+
+/// What hunch's policy did to a hunk's `noise` flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HunchChange {
+    /// the engine hid it; the model is confident a reviewer should read it
+    Unhid,
+    /// the engine showed it; the model is confident it can be skipped
+    Hid,
 }
 
 #[derive(Debug, Serialize)]

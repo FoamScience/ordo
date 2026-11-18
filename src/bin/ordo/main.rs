@@ -138,7 +138,7 @@ options:
   --coverage <file>       count changed lines lcov never ran (repeatable)
   --rules <file>          add a rules file (repeatable)
   --no-catalog            skip the built-in construct catalog
-  --hunch                 show hunch's guess, P(skip), on each hunk; changes nothing
+  --hunch                 show hunch's P(skip) per hunk; a confident one moves its noise flag
   --all                   keep generated and lock files
   --only-comments         only comment and docstring hunks
   --keys <vim|vscode>     key preset (default vim, or $ORDO_KEYS)
@@ -1738,6 +1738,8 @@ fn compute_view(
 struct Hidden {
     comment: usize,
     noise: usize,
+    /// noise only because `--hunch`'s guess hid it
+    hunch: usize,
     glob: usize,
     /// changed in another wave than `:only-wave`'s
     wave: usize,
@@ -1756,7 +1758,15 @@ fn hidden_breakdown(
         if comments_only && !it.comment {
             h.comment += 1;
         } else if !show_all && it.noise {
-            h.noise += 1;
+            let hid = it
+                .hunch
+                .as_ref()
+                .is_some_and(|g| g.changed == Some(ordo_diff::model::HunchChange::Hid));
+            if hid {
+                h.hunch += 1;
+            } else {
+                h.noise += 1;
+            }
         } else if glob.is_some_and(|g| !g.is_match(&it.path)) {
             h.glob += 1;
         } else if wave.is_some_and(|w| it.wave != Some(w)) {
@@ -1764,7 +1774,7 @@ fn hidden_breakdown(
         }
     }
     let shown = compute_view(items, comments_only, show_all, glob, wave).len();
-    h.unaccounted = items.len() - shown - h.comment - h.noise - h.glob - h.wave;
+    h.unaccounted = items.len() - shown - h.comment - h.noise - h.hunch - h.glob - h.wave;
     h
 }
 
