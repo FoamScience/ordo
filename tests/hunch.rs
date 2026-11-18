@@ -266,17 +266,16 @@ fn the_guess_carries_a_probability_and_its_top_features() {
 
 /// Past both of the shipped policy's thresholds: a new file that only
 /// imports and runs top-level code, which the engine hides as import noise
-/// (P(skip) about 0.01), and a one-line comment edit in a busy C file, which
-/// it shows (about 0.91, close to the hide threshold: a retrain may need a
-/// busier file here).
+/// (P(skip) about 0.01), and a comment reworded at the top level of one
+/// document of a busy multi-document YAML file, which it shows (about 0.98,
+/// against the hide threshold of 0.9).
 fn policy_input(hunch: bool) -> serde_json::Value {
-    let c = "static int set_version(int *enabled, int v)\n{\n  switch(v) {\n    case 3:\n\n      \
-             /* Windows Server 2022 and newer */\n      if(check_version(10, 0, 20348)) {\n        \
-             *enabled |= 4;\n      }\n      break;\n  }\n  return 0;\n}\n";
+    let yaml = "name: lint\nimage: python:3.12\n# runs on every push\ncommand: ruff check .\n---\n\
+                name: test\nimage: python:3.12\n# the slow suite runs nightly\ncommand: pytest -q\n";
     let commits: Vec<_> = (0..20)
         .map(|i| {
-            let subject = if i < 6 { "fix: a crash" } else { "schannel: tidy" };
-            json!({ "time": AT - (i + 1) * DAY, "subject": subject, "paths": ["lib/vtls/schannel.c"] })
+            let subject = if i < 6 { "fix: a crash" } else { "ci: tidy" };
+            json!({ "time": AT - (i + 1) * DAY, "subject": subject, "paths": ["ci/jobs.yaml"] })
         })
         .collect();
     json!({
@@ -291,9 +290,9 @@ fn policy_input(hunch: bool) -> serde_json::Value {
                         process.stderr.write(`${input}:stderr`);\n"
             },
             {
-                "path": "lib/vtls/schannel.c",
-                "old": c,
-                "new": c.replace("and newer", "and later")
+                "path": "ci/jobs.yaml",
+                "old": yaml,
+                "new": yaml.replace("runs nightly", "runs every night")
             }
         ],
         "history": { "at": AT, "commits": commits },
@@ -341,14 +340,27 @@ fn the_guess_moves_nothing_else() {
 #[test]
 fn the_policy_moves_only_noise_flags() {
     let plain = serde_json::to_value(run(policy_input(false))).unwrap();
-    let (with, moves) = unmoved(serde_json::to_value(run(policy_input(true))).unwrap());
+    let guessed = serde_json::to_value(run(policy_input(true))).unwrap();
+    let p: Vec<f64> = guessed["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|f| f["hunks"].as_array().unwrap())
+        .map(|h| h["hunch"]["noise"].as_f64().expect("noise"))
+        .collect();
+    let (with, moves) = unmoved(guessed);
     // the reading order, edges, groups and every other field stay the engine's
     assert_eq!(with, plain);
     let expected = match hunch::policy() {
         Some(_) => vec![Some(HunchChange::Unhid), Some(HunchChange::Hid)],
         None => vec![None, None],
     };
-    assert_eq!(moves, expected);
+    assert_eq!(
+        moves,
+        expected,
+        "P(skip) {p:?} against {:?}",
+        hunch::policy()
+    );
 }
 
 #[test]
