@@ -138,6 +138,7 @@ options:
   --coverage <file>       count changed lines lcov never ran (repeatable)
   --rules <file>          add a rules file (repeatable)
   --no-catalog            skip the built-in construct catalog
+  --hunch                 show hunch's guess, P(skip), on each hunk; changes nothing
   --all                   keep generated and lock files
   --only-comments         only comment and docstring hunks
   --keys <vim|vscode>     key preset (default vim, or $ORDO_KEYS)
@@ -383,6 +384,9 @@ struct ParsedArgs {
     /// `--json`: print the engine input and exit, for scripts that want ordo's
     /// revision and path handling without the reviewer
     json: bool,
+    /// `--hunch`: ask the engine for its trained guess, with the git history
+    /// it reads
+    hunch: bool,
     web: web::WebArgs,
 }
 
@@ -559,6 +563,7 @@ fn parse_argv(argv: Vec<String>) -> Result<ParsedArgs, i32> {
             .and_then(|v| v.parse().ok())
             .map_or(watch::DEBOUNCE, Duration::from_millis),
         json: raw.json,
+        hunch: raw.hunch,
         web: web::WebArgs {
             port: raw
                 .port
@@ -592,6 +597,7 @@ struct RawArgs {
     /// as written: checked once the flags are all read
     debounce_ms: Option<String>,
     json: bool,
+    hunch: bool,
     port: Option<String>,
     no_open: bool,
 }
@@ -628,6 +634,7 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
         watch: None,
         debounce_ms: None,
         json: false,
+        hunch: false,
         port: None,
         no_open: false,
     };
@@ -692,6 +699,7 @@ fn flag_loop(argv: Vec<String>) -> Result<RawArgs, i32> {
             "--init-config" => raw.want_init = true,
             "--force" => raw.force = true,
             "--json" => raw.json = true,
+            "--hunch" => raw.hunch = true,
             "-h" | "--help" | "help" => return Err(help_topic(None)),
             "-V" | "--version" | "version" => {
                 println!(
@@ -845,6 +853,7 @@ fn main() -> std::io::Result<()> {
         watch,
         debounce,
         json,
+        hunch,
         web,
     } = match parse_args() {
         Ok(v) => v,
@@ -858,7 +867,11 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     };
     if json {
-        println!("{}", input_json(&gather_input(target, &filter, &|_| {})));
+        let mut input = gather_input(target.clone(), &filter, &|_| {});
+        if hunch {
+            ask_hunch(&mut input, &target);
+        }
+        println!("{}", input_json(&input));
         return Ok(());
     }
     // the single commit the hover's history section reviews from — a
@@ -889,6 +902,7 @@ fn main() -> std::io::Result<()> {
         rules_report,
         sarif,
         coverage,
+        hunch,
         target,
         carry: None,
         watch,
@@ -962,6 +976,8 @@ struct LoadResult {
     /// which wave touched each line, kept so a re-order can tag its new items
     /// without asking git again, and what each wave's agent turn was
     waves: waves::Waves,
+    /// what `--hunch` read, kept so a re-order asks the engine the same thing
+    history: Option<ordo_diff::model::History>,
 }
 
 /// group id -> the engine's `Group::reason`, for `:group`'s header rows.
@@ -994,11 +1010,29 @@ struct LoadSpec {
     sarif: Vec<String>,
     /// paths given with `--coverage`; lcov tracefiles
     coverage: Vec<String>,
+    /// `--hunch`
+    hunch: bool,
 }
 
-/// What `--json` prints: the gathered changes in the engine's input shape.
+/// What `--json` prints: the gathered changes in the engine's input shape,
+/// and with `--hunch`, the option and the history it reads.
 fn input_json(input: &Input) -> serde_json::Value {
-    serde_json::json!({ "changes": input.changes })
+    if !input.options.hunch {
+        return serde_json::json!({ "changes": input.changes });
+    }
+    serde_json::json!({
+        "changes": input.changes,
+        "options": { "hunch": true },
+        "history": input.history,
+    })
+}
+
+/// `--hunch`: the engine's guess on every hunk, and the git history of the
+/// files the change touches for it to read.
+fn ask_hunch(input: &mut Input, target: &Target) {
+    let paths: Vec<String> = input.changes.iter().map(|c| c.path.clone()).collect();
+    input.options.hunch = true;
+    input.history = git::hunch_history(target, &paths);
 }
 
 fn gather_input(target: Target, filter: &Filter, progress: &dyn Fn(String)) -> Input {
@@ -1020,6 +1054,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         rules,
         sarif,
         coverage,
+        hunch,
     } = spec;
     let progress = |msg: String| {
         let _ = tx.send(LoadMsg::Progress(msg));
@@ -1033,6 +1068,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         Target::WorktreeRange(base) => Some((base.clone(), None)),
         Target::Commit(_) | Target::Uncommitted => None,
     };
+    let history_target = hunch.then(|| target.clone());
     let input = gather_input(target, &filter, &progress);
     // `only_comments` becomes the starting state of the live `:only-comments`
     // filter (see `compute_view`) rather than an engine option — the engine
@@ -1054,6 +1090,11 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
     input.options.disable = rules.disables;
     input.options.levels = rules.levels;
     input.options.docs_last = docs_last;
+    if let Some(t) = &history_target {
+        progress("reading the files' history…".to_string());
+        ask_hunch(&mut input, t);
+    }
+    let history = input.history.clone();
     let changes = input.changes.clone();
     let out = ordo_diff::run(input);
     let mut ledger = filter.tally.get();
@@ -1154,6 +1195,7 @@ fn load(spec: LoadSpec, tx: mpsc::Sender<LoadMsg>) {
         delta_gone,
         fingerprint,
         waves,
+        history,
     })));
 }
 
@@ -1279,6 +1321,8 @@ struct Item {
     notes: Vec<String>,
     /// the engine's `HunkOut::deltas`, shown in the web reviewer's why pane
     readability: Vec<ordo_diff::model::ReadabilityDelta>,
+    /// the engine's `HunkOut::hunch`, with `--hunch`
+    hunch: Option<ordo_diff::model::Hunch>,
     edges: Vec<EdgeRef>,
     /// the key the list groups and folds by — a ledger symbol or a group id,
     /// depending on `App::mode`. Swapped in place by `set_mode`, so the two
@@ -1504,6 +1548,9 @@ struct App {
     /// (`"comprehension"`, `"defs-first"`, `"file"`) — set by `:strategy`,
     /// otherwise the engine's own default
     strategy: String,
+    /// `--hunch`, and the history it read, so a re-order asks the same
+    hunch: bool,
+    history: Option<ordo_diff::model::History>,
 }
 
 fn build_items(out: &Output) -> Vec<Item> {
@@ -1557,6 +1604,7 @@ fn build_items(out: &Output) -> Vec<Item> {
                 details: h.details.clone(),
                 notes: h.notes.clone(),
                 readability: h.deltas.clone(),
+                hunch: h.hunch.clone(),
                 edges: hunk_edges(out, h, &by_id, &item_index),
                 noise: h.noise,
                 comment: h.comment,
@@ -2013,6 +2061,8 @@ struct Session {
     rules_report: Vec<String>,
     sarif: Vec<String>,
     coverage: Vec<String>,
+    /// `--hunch`
+    hunch: bool,
     /// what is being reviewed, so a reload can read it again
     target: Target,
     /// where the reviewer was, handed from the review a reload replaces to
@@ -2043,6 +2093,7 @@ impl Session {
             rules: self.rules.clone(),
             sarif: self.sarif.clone(),
             coverage: self.coverage.clone(),
+            hunch: self.hunch,
         };
         thread::spawn(move || load(spec, tx));
         rx
@@ -2084,6 +2135,7 @@ impl Session {
             rules_report: self.rules_report.clone(),
             sarif: self.sarif.clone(),
             coverage: self.coverage.clone(),
+            hunch: self.hunch,
             target,
             carry: None,
             watch: self.watch,
@@ -2130,6 +2182,7 @@ impl Session {
             delta_gone,
             fingerprint,
             waves,
+            history,
         } = r;
         self.drift = fingerprint.map(Drift::new).unwrap_or_default();
         let sel0 = view[0];
@@ -2197,6 +2250,8 @@ impl Session {
             config: None,
             strategy: "comprehension".to_string(),
             rules_report: self.rules_report.clone(),
+            hunch: self.hunch,
+            history,
         };
         // the list is a list of *symbols* by default; `:mode` switches it
         // back to hunks

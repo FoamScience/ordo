@@ -8,6 +8,7 @@ import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
+import { badge, contributions } from "./hunch.ts";
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
 import { moved, regressed } from "./readability.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
@@ -592,6 +593,7 @@ function renderReading(it: Item | undefined): void {
       it.delta && h("span", { class: "pill accent" }, sentence(SINCE[it.delta][1].split(":")[0])),
       it.noise && !/formatting/.test(it.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
       it.wave !== null && h("span", { class: "pill" }, `Wave ${it.wave}`),
+      it.hunch && h("span", { class: "pill", title: contributions(it.hunch).join(", ") }, badge(it.hunch)),
     ),
     (search || st.from !== null) &&
       h(
@@ -1019,6 +1021,10 @@ function renderWhy(): void {
               h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : "")),
             ),
           ),
+      ],
+      it.hunch && [
+        h("h3", null, "Hunch", h("small", null, "a trained guess; it changes nothing here")),
+        h("p", { class: "muted" }, `${badge(it.hunch)}, most moved by ${contributions(it.hunch).join(", ")}.`),
       ],
       it.readability.length > 0 && [
         h("h3", null, "Readability", h("small", null, "against each definition's old version")),

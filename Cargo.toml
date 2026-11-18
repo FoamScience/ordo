@@ -14,6 +14,7 @@ categories = ["development-tools", "command-line-utilities", "parser-implementat
 include = [
     "/src/**/*.rs",
     "/src/catalog.generated.json",
+    "/src/hunch.json",
     "/build.rs",
     "/grammars/tree-sitter-go-template/src/**",
     "/grammars/tree-sitter-go-template/LICENSE*",
@@ -112,6 +113,8 @@ mimalloc = { version = "0.1.52", default-features = false }
 [build-dependencies]
 # builds the in-tree go-template grammar (see grammars/ and build.rs)
 cc = "1"
+# reads src/hunch.json into static arrays (see build.rs); already a dependency
+serde_json = "1"
 
 [dev-dependencies]
 toml = "1"

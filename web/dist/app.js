@@ -3932,6 +3932,14 @@ function smoothPath(ps) {
   return `${d} L ${last.x} ${last.y}`;
 }
 
+// src/hunch.ts
+function badge(g) {
+  return `Hunch: ${Math.round(g.noise * 100)}% skippable`;
+}
+function contributions(g) {
+  return g.top.map(([name, c]) => `${name} ${c >= 0 ? "+" : "\u2212"}${Math.abs(c).toFixed(2)}`);
+}
+
 // src/palette.ts
 function parseCommand(line) {
   const t = line.trim().replace(/^:/, "").trimStart();
@@ -4585,7 +4593,8 @@ function renderReading(it2) {
       it2.reviewed && h("span", { class: "pill done" }, "Read"),
       it2.delta && h("span", { class: "pill accent" }, sentence(SINCE[it2.delta][1].split(":")[0])),
       it2.noise && !/formatting/.test(it2.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
-      it2.wave !== null && h("span", { class: "pill" }, `Wave ${it2.wave}`)
+      it2.wave !== null && h("span", { class: "pill" }, `Wave ${it2.wave}`),
+      it2.hunch && h("span", { class: "pill", title: contributions(it2.hunch).join(", ") }, badge(it2.hunch))
     ),
     (search || st2.from !== null) && h(
       "div",
@@ -4963,6 +4972,10 @@ function renderWhy() {
             h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
           )
         )
+      ],
+      it2.hunch && [
+        h("h3", null, "Hunch", h("small", null, "a trained guess; it changes nothing here")),
+        h("p", { class: "muted" }, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}.`)
       ],
       it2.readability.length > 0 && [
         h("h3", null, "Readability", h("small", null, "against each definition's old version")),

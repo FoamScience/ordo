@@ -252,10 +252,19 @@ pub fn run(input: Input) -> Output {
     arity_check(&mut files, &ledger, &input.changes);
     incomplete_rename(&mut files, &ledger, &input.changes, &symbols);
     contract::run(&mut files, &ledger, &input.changes, &input.consumers);
-    let feature_schema = input.options.features.then(|| {
-        hunch::annotate(&mut files, &hunks, &edges_out, input.history.as_ref());
-        hunch::schema()
-    });
+    if input.options.features || input.options.hunch {
+        hunch::annotate(
+            &mut files,
+            &hunks,
+            &edges_out,
+            input.history.as_ref(),
+            &input.options,
+        );
+    }
+    if input.options.hunch && !hunch::model_fits() {
+        problems.push(hunch::misfit());
+    }
+    let feature_schema = input.options.features.then(hunch::schema);
     // every pass is done with the trees; the client calls `run` again on each
     // reload, and holding this changeset's trees until then buys nothing
     lang::forget_trees();
@@ -477,6 +486,7 @@ impl Passes<'_> {
                 })
                 .collect(),
             features: None,
+            hunch: None,
         }
     }
 }

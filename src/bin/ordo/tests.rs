@@ -624,6 +624,7 @@ fn test_hunk(rationale: &str, enclosing: Option<&str>, symbols: Vec<Symbol>) -> 
         uses_at: vec![],
         symbols,
         features: None,
+        hunch: None,
     }
 }
 
@@ -985,6 +986,7 @@ fn test_item(path: &str) -> Item {
         details: vec![],
         notes: vec![],
         readability: vec![],
+        hunch: None,
         edges: vec![],
         uses_at: vec![],
         noise: false,
@@ -1575,6 +1577,8 @@ fn test_app() -> App {
         rules: vec![],
         strategy: "comprehension".to_string(),
         rules_report: vec![],
+        hunch: false,
+        history: None,
     }
 }
 
@@ -4112,4 +4116,38 @@ fn the_rules_report_counts_the_built_in_catalog_it_runs() {
     assert_eq!(with[0], format!("{catalog} rules active"));
     assert!(with.iter().any(|l| l.ends_with("built-in catalog: python")));
     assert_eq!(r.lines(false)[0], "0 rules active");
+}
+
+/// hunch's history follows a file back through a rename inside the window,
+/// and keeps only the commits that touched a file of the change.
+#[test]
+fn hunch_history_follows_renames_back() {
+    let log = "\x1e300\tfix parse\n\nM\tsrc/new.py\nM\tREADME.md\n\
+               \x1e200\tmove parser\n\nR100\tsrc/old.py\tsrc/new.py\n\
+               \x1e100\tadd parser\n\nA\tsrc/old.py\n\
+               \x1e50\tdocs\n\nM\tREADME.md\n";
+    let heads = [("lib/p.py".to_string(), "src/new.py".to_string())].into_iter();
+    let got: Vec<(i64, String, Vec<String>)> = followed(log, heads)
+        .into_iter()
+        .map(|c| (c.time, c.subject, c.paths))
+        .collect();
+    let p = || vec!["lib/p.py".to_string()];
+    assert_eq!(
+        got,
+        vec![
+            (300, "fix parse".to_string(), p()),
+            (200, "move parser".to_string(), p()),
+            (100, "add parser".to_string(), p()),
+        ]
+    );
+}
+
+#[test]
+fn hunch_is_opt_in_and_works_with_json() {
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(!parse_argv(argv(&["HEAD"])).ok().unwrap().hunch);
+    let parsed = parse_argv(argv(&["HEAD", "--hunch", "--json"]))
+        .ok()
+        .unwrap();
+    assert!(parsed.hunch && parsed.json);
 }

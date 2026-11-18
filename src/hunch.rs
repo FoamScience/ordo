@@ -6,7 +6,8 @@
 //! or reordered is a different schema, and the model no longer fits.
 
 use crate::model::{
-    Category, Edge, Extent, FeatureSchema, FileOut, FindingSource, History, HunkOut, Level,
+    Category, Edge, Extent, FeatureSchema, FileOut, FindingSource, History, Hunch, HunkOut, Level,
+    Options,
 };
 use crate::readability::DefDelta;
 use crate::{lang, readability, PerFileHunks};
@@ -19,7 +20,7 @@ use std::sync::OnceLock;
 pub const VERSION: u32 = 1;
 
 /// How far back a file's history counts, from the change's own commit time.
-const HISTORY_DAYS: i64 = 90;
+pub const HISTORY_DAYS: i64 = 90;
 
 /// Past this many commits a file is simply busy; the count stops there so one
 /// hot file cannot dominate the scale.
@@ -255,12 +256,14 @@ pub(crate) fn file_history(history: &History) -> HashMap<&str, (usize, usize)> {
     per
 }
 
-/// Every hunk's vector, on the hunk.
+/// Every hunk's vector, on the hunk when `options.features` asks for it, and
+/// the model's guess from it when `options.hunch` does.
 pub(crate) fn annotate(
     files: &mut [FileOut],
     hunks: &[PerFileHunks],
     edges: &[Edge],
     history: Option<&History>,
+    options: &Options,
 ) {
     let mut out_deg: HashMap<&str, usize> = HashMap::new();
     let mut in_deg: HashMap<&str, usize> = HashMap::new();
@@ -292,9 +295,138 @@ pub(crate) fn annotate(
                 .collect()
         })
         .collect();
+    let guess_too = options.hunch && model_fits();
     for (file, vs) in files.iter_mut().zip(vectors) {
         for (hunk, v) in file.hunks.iter_mut().zip(vs) {
-            hunk.features = Some(v);
+            if guess_too {
+                hunk.hunch = Some(guess(&v));
+            }
+            if options.features {
+                hunk.features = Some(v);
+            }
         }
+    }
+}
+
+/// One node of a trained tree: a split sends `x[feature] <= threshold` left;
+/// `value` is what the tree would output had it stopped here, which is what
+/// path contributions are measured against.
+enum Node {
+    Split {
+        feature: u16,
+        threshold: f32,
+        left: u32,
+        right: u32,
+        value: f32,
+    },
+    Leaf(f32),
+}
+
+/// The trained model, as build.rs generates it from `src/hunch.json`: a
+/// LightGBM forest whose leaf values sum to the log-odds, or a logistic
+/// regression over standardized features. Weights are f32, as the trainer
+/// exported and checked them; sums are f64, as LightGBM's are.
+#[allow(dead_code)] // build.rs builds whichever one the trainer shipped
+enum Model {
+    Trees {
+        nodes: &'static [Node],
+        roots: &'static [u32],
+    },
+    Logistic {
+        mean: &'static [f32],
+        scale: &'static [f32],
+        coef: &'static [f32],
+        intercept: f32,
+    },
+}
+
+include!(concat!(env!("OUT_DIR"), "/hunch_model.rs"));
+
+/// Whether the shipped model was trained on the columns this engine builds;
+/// a guess from any other vector would be wrong without looking wrong.
+pub fn model_fits() -> bool {
+    SCHEMA_HASH == schema_hash()
+}
+
+/// Why `Options.hunch` got no guesses, for `Output.problems`.
+pub(crate) fn misfit() -> String {
+    format!(
+        "hunch: the model was trained on feature schema {SCHEMA_HASH}, this engine builds {}; no guesses",
+        schema_hash()
+    )
+}
+
+/// How many contributions a guess reports.
+const TOP: usize = 3;
+
+/// P(skip) for one feature vector, and each feature's share of the log-odds:
+/// a tree's split credits its feature with how far the step moved the
+/// tree's value (Saabas), a regression's term is its own share. What is
+/// left over is the model's bias, credited to nothing.
+pub fn predict(x: &[f64]) -> (f64, Vec<f64>) {
+    let mut contrib = vec![0.0; NAMES.len()];
+    let raw = match &MODEL {
+        Model::Trees { nodes, roots } => roots
+            .iter()
+            .map(|&root| {
+                let mut node = &nodes[root as usize];
+                while let Node::Split {
+                    feature,
+                    threshold,
+                    left,
+                    right,
+                    value,
+                } = node
+                {
+                    let f = usize::from(*feature);
+                    let next = if x[f] as f32 <= *threshold {
+                        left
+                    } else {
+                        right
+                    };
+                    node = &nodes[*next as usize];
+                    let to = match node {
+                        Node::Split { value, .. } | Node::Leaf(value) => *value,
+                    };
+                    contrib[f] += f64::from(to) - f64::from(*value);
+                }
+                match node {
+                    Node::Leaf(v) => f64::from(*v),
+                    Node::Split { .. } => unreachable!("the walk stops at a leaf"),
+                }
+            })
+            .sum::<f64>(),
+        Model::Logistic {
+            mean,
+            scale,
+            coef,
+            intercept,
+        } => {
+            for (i, c) in contrib.iter_mut().enumerate() {
+                *c = f64::from(coef[i]) * (x[i] - f64::from(mean[i])) / f64::from(scale[i]);
+            }
+            f64::from(*intercept) + contrib.iter().sum::<f64>()
+        }
+    };
+    (1.0 / (1.0 + (-raw).exp()), contrib)
+}
+
+fn round4(v: f64) -> f64 {
+    (v * 1e4).round() / 1e4
+}
+
+/// The guess a hunk carries: P(skip) and the `TOP` features that moved it
+/// most, either way, in four decimals.
+fn guess(x: &[f64]) -> Hunch {
+    let (p, contrib) = predict(x);
+    let mut by_size: Vec<usize> = (0..contrib.len()).filter(|&i| contrib[i] != 0.0).collect();
+    by_size.sort_by(|&a, &b| contrib[b].abs().total_cmp(&contrib[a].abs()));
+    Hunch {
+        noise: round4(p),
+        top: by_size
+            .into_iter()
+            .take(TOP)
+            .map(|i| (NAMES[i].to_string(), round4(contrib[i])))
+            .collect(),
     }
 }

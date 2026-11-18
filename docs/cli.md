@@ -27,7 +27,7 @@ instead carry a `diff` (unified/git) — see [Ceilings](ceilings.md).
 Output carries the global `order`, per-file `hunks` (with `category`,
 `enclosing`, `defines`, `uses`, `group`, `order_index`, `rationale`, `details`,
 `symbols`, `findings`, `uses_at`, `deltas` for the readability measurements of the
-definitions it touched, `noise` for skippable formatting/generated/copyright-notice
+definitions it touched, `hunch` when `options.hunch` asks for it, `noise` for skippable formatting/generated/copyright-notice
 hunks, `extent` for how much of it changed — `whitespace`, `formatting`,
 `edited` (most of the old leaves survive), `rewritten`, `added` or `removed` —
 and `comment` for comment/docstring-only hunks), the `groups`, the def→use `edges`, and the
@@ -59,6 +59,22 @@ incoming edge and would otherwise land wherever the file order puts it, which
 is alphabetical and so usually first. Only prose files move; a data or config
 file (a schema, a lockfile, a `package.json`) often drives the code around it
 and keeps its place. Set it to `false` for a docs-led change.
+
+`options.hunch` (off by default) puts a trained model's guess on every hunk,
+beside the engine's own `noise` flag rather than instead of it — it changes
+no flag and no order:
+
+```json
+"hunch": { "noise": 0.7234, "top": [["comment", 1.661], ["uses", -0.82], ["lines_added", -0.31]] }
+```
+
+`noise` is P(a reviewer can skip it); `top` is the three features that moved
+it most, as `[feature, contribution]` in log-odds, positive toward skipping.
+Its history features read the input's `history`: the change's ancestors only,
+each with the time, subject and the change's paths it touched (renames
+followed), and `at`, the change's own commit time. The engine counts the ones
+inside 90 days before `at`. Without `history`, as for a diff on stdin, the
+model is told there is none.
 
 A finding carries `source`, `name`, `message` and `level`, plus `row` — the
 1-based new-side row it is anchored at, omitted when it is about the hunk as a

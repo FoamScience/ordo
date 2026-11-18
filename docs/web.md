@@ -340,6 +340,24 @@ but no test touched` note, which otherwise guesses from file names.
 
 Both are repeatable.
 
+## Hunch
+
+`--hunch` asks the engine for hunch's guess on every hunk: how likely a
+reviewer can skip it, from a small model trained offline on labelled reviews
+(`scripts/hunch-train.py`). The code pane shows it as a muted `Hunch: 72%
+skippable` badge, and the why pane names the three features that moved it
+most, each signed toward skipping in log-odds. It is a shadow: nothing is
+hidden, dimmed or reordered by it, and the plain text output is unchanged.
+
+The model reads each file's git history: the commits before the change (its
+ancestors, never the change itself or what came after) that touched the file
+in the 90 days before it, following renames. A commit reviews from its own
+commit time, a range from its tip's, the uncommitted area from now. A shallow
+clone whose boundary falls inside that window gets no history, as a diff on
+stdin does. With `--json`, `--hunch` adds the option and that history to the
+printed input, so `ordo --json --hunch HEAD | ordo-engine order --json` gets
+the same guesses.
+
 <details>
 <summary><b>Revision syntax, path filters, GitButler support</b></summary>
 

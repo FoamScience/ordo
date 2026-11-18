@@ -14,8 +14,9 @@ pub struct Input {
     #[serde(default)]
     pub consumers: Vec<Consumer>,
     /// The repository's commits before this change, for hunch's history
-    /// features. Read only when `Options.features` is on; absent for a change
-    /// with no repository behind it, such as a diff on stdin.
+    /// features. Read only when `Options.hunch` or `Options.features` is on;
+    /// absent for a change with no repository behind it, such as a diff on
+    /// stdin.
     #[serde(default)]
     pub history: Option<History>,
 }
@@ -25,7 +26,7 @@ pub struct Input {
 /// these and leaves out the change itself and everything after it, whatever
 /// the timestamps say; the engine only cuts the window's start (see
 /// `crate::hunch`).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct History {
     /// the change's own commit time, in Unix seconds: the window reaches back
     /// from here
@@ -34,7 +35,7 @@ pub struct History {
     pub commits: Vec<PastCommit>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PastCommit {
     /// commit time, in Unix seconds
     pub time: i64,
@@ -109,6 +110,11 @@ pub struct Options {
     /// the published contract.
     #[serde(default)]
     pub features: bool,
+    /// Put hunch's guess on every hunk: the trained model's P(skip) and the
+    /// features that moved it most (see `HunkOut::hunch`). Shadow only: it
+    /// changes no flag and no order. Off by default.
+    #[serde(default)]
+    pub hunch: bool,
 }
 
 fn catalog_default() -> bool {
@@ -131,6 +137,7 @@ impl Default for Options {
             disable: vec![],
             levels: BTreeMap::new(),
             features: false,
+            hunch: false,
         }
     }
 }
@@ -796,6 +803,20 @@ pub struct HunkOut {
     /// Internal: hunch's feature vector, in `Output.feature_schema` order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub features: Option<Vec<f64>>,
+    /// hunch's guess, when `Options.hunch` asked for it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunch: Option<Hunch>,
+}
+
+/// What the trained model makes of a hunk, beside the engine's own `noise`
+/// rather than instead of it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Hunch {
+    /// P(a reviewer can skip it)
+    pub noise: f64,
+    /// the three features that moved the guess most, as `[name, log-odds]`,
+    /// largest first by size
+    pub top: Vec<(String, f64)>,
 }
 
 #[derive(Debug, Serialize)]

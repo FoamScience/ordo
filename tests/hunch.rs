@@ -1,5 +1,6 @@
 //! hunch's feature export: off unless asked, one named column per position,
-//! and git history read only inside its window.
+//! and git history read only inside its window; its guess: off unless asked,
+//! the trained library's own numbers, and nothing else in the output moved.
 use ordo_diff::hunch;
 use ordo_diff::model::{HunkOut, Output};
 use serde_json::json;
@@ -142,4 +143,94 @@ fn a_file_without_commits_still_has_history() {
         assert_eq!(col(h, "has_history"), 1.0);
         assert_eq!(col(h, "churn"), 0.0);
     }
+}
+
+#[test]
+fn the_guess_matches_the_trained_library() {
+    // the trainer writes these: gold hunks' vectors and what LightGBM (or the
+    // regression it shipped) predicted for each
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/hunch-parity.json");
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(p).expect("tests/hunch-parity.json"))
+            .expect("json");
+    assert!(rows.len() > 100, "{} rows", rows.len());
+    assert!(
+        hunch::model_fits(),
+        "src/hunch.json was trained on another feature schema"
+    );
+    let width = hunch::names().len();
+    let worst = rows
+        .iter()
+        .map(|r| {
+            let x: Vec<f64> = serde_json::from_value(r["x"].clone()).expect("x");
+            assert_eq!(x.len(), width);
+            (hunch::predict(&x).0 - r["p"].as_f64().expect("p")).abs()
+        })
+        .fold(0.0, f64::max);
+    assert!(worst <= 1e-4, "off by {worst}");
+}
+
+fn with_hunch(extra: serde_json::Value) -> serde_json::Value {
+    let mut input = json!({ "changes": [change()], "options": { "hunch": true } });
+    if let serde_json::Value::Object(m) = extra {
+        input["options"].as_object_mut().unwrap().extend(m);
+    }
+    serde_json::to_value(run(input)).unwrap()
+}
+
+#[test]
+fn the_guess_is_off_unless_asked() {
+    let v = serde_json::to_value(run(json!({ "changes": [change()] }))).unwrap();
+    assert!(v["files"][0]["hunks"][0].get("hunch").is_none());
+}
+
+#[test]
+fn the_guess_carries_a_probability_and_its_top_features() {
+    let v = with_hunch(json!({}));
+    let names = hunch::names();
+    for h in v["files"][0]["hunks"].as_array().unwrap() {
+        let g = &h["hunch"];
+        let p = g["noise"].as_f64().expect("noise");
+        assert!((0.0..=1.0).contains(&p), "{p}");
+        let top = g["top"].as_array().expect("top");
+        assert!(!top.is_empty() && top.len() <= 3, "{top:?}");
+        let sizes: Vec<f64> = top
+            .iter()
+            .map(|t| {
+                assert!(names.contains(&t[0].as_str().unwrap().to_string()), "{t}");
+                t[1].as_f64().unwrap().abs()
+            })
+            .collect();
+        assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "{sizes:?}");
+        // asked for the guess only, not the training columns
+        assert!(h.get("features").is_none());
+    }
+}
+
+#[test]
+fn the_guess_moves_nothing_else() {
+    let strip = |mut v: serde_json::Value| {
+        for h in v["files"][0]["hunks"].as_array_mut().unwrap() {
+            h.as_object_mut().unwrap().remove("hunch");
+        }
+        v
+    };
+    let plain = serde_json::to_value(run(json!({ "changes": [change()] }))).unwrap();
+    assert_eq!(strip(with_hunch(json!({}))), plain);
+}
+
+#[test]
+fn contributions_and_bias_make_up_the_log_odds() {
+    // two vectors that differ in one column the model splits on: the
+    // difference in log-odds is all that column's, so the bias cancels
+    let base = vec![0.0; hunch::names().len()];
+    let mut noisy = base.clone();
+    noisy[hunch::names().iter().position(|n| n == "noise").unwrap()] = 1.0;
+    let logit = |p: f64| (p / (1.0 - p)).ln();
+    let (pa, ca) = hunch::predict(&base);
+    let (pb, cb) = hunch::predict(&noisy);
+    let total = |c: &[f64]| c.iter().sum::<f64>();
+    let moved = (logit(pb) - logit(pa)) - (total(&cb) - total(&ca));
+    assert!(moved.abs() < 1e-6, "bias moved by {moved}");
+    assert!(pb > pa, "the noise flag should raise P(skip): {pa} -> {pb}");
 }
