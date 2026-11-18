@@ -1200,9 +1200,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-jsonnet"
-version = "0.0.1"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38ce8f9839652bd0effc7c384d42d1a1da3ba0c0313b85bb9a723b80cd91ca6c"
+checksum = "4033ba556171e1cf060e45b4a6e16a780e31bcfdf391b03656990af32a089396"
 dependencies = [
  "cc",
  "tree-sitter-language",
