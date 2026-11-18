@@ -33,7 +33,7 @@
   "cobra:67171d69:README.md:1",
   "execa:04b44546:test/fixtures/graceful-disconnect.js:6",
   "lazy:3c86e236:lua/lazy/build.lua:53",
-  "vue:5d0db082:pnpm-lock.yaml:4907",
+  "vue:02421cdb:packages/vue/__tests__/index.spec.ts:364",
   "cobra:8cb30f9c:site/content/active_help.md:118",
   "vue:02421cdb:packages/compiler-core/__tests__/transforms/transformElement.spec.ts:1089",
   "nvm:f1e7a84c:nvm.sh:14",
@@ -51,5 +51,8 @@
   "excalidraw:1acf66ed:packages/element/src/index.ts:60",
   "excalidraw:e33a1c0e:packages/excalidraw/components/UserList.test.tsx:17",
   "nvm:65ded65d:README.md:283"
- ]
+ ],
+ "replaced": {
+  "vue:5d0db082:pnpm-lock.yaml:4907": "vue:02421cdb:packages/vue/__tests__/index.spec.ts:364"
+ }
 }
