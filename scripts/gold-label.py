@@ -12,10 +12,15 @@ The judge's answers and its should_skip reasoning are shown only once a hunk
 is answered. The sample is drawn once with a fixed seed and kept in
 corpus/human-audit.json.
 
+A model can audit the same sample instead: its answers go in `labels_audit`,
+shaped like `labels_human`, with the model id in `audited_by`; this script
+only reports on them (`--audit-report`).
+
 Usage: scripts/gold-label.py                      # interactive
        scripts/gold-label.py --apply labels.jsonl [target.jsonl]  # merge {key, labels} lines produced elsewhere
        scripts/gold-label.py --human              # label the audit sample
        scripts/gold-label.py --human-report       # human-vs-judge agreement per question
+       scripts/gold-label.py --audit-report       # the same for a model auditor's `labels_audit`
 """
 import json
 import os
@@ -187,35 +192,42 @@ def human(rows):
     print(f"\nsaved. {left} audit hunks still unlabeled")
 
 
-def human_report(rows):
-    """Per question: hunks both answered, agreement, and each kind of
-    disagreement; findings pooled under `finding`."""
+def agreement_report(rows, field="labels_human", who="you", hint="run --human first"):
+    """Per question: hunks both answered, how many of them came from the
+    judge-rejected pool, agreement, and each kind of disagreement; findings
+    pooled under `finding`. Disagreeing keys from that pool are starred."""
     tally = defaultdict(Counter)
+    pool = Counter()
     differ = defaultdict(list)
     for r in rows:
-        if "labels_human" not in r:
+        if field not in r:
             continue
         judge = answers(r["labels"])
-        for q, h in answers(r["labels_human"]).items():
+        for q, h in answers(r[field]).items():
             j = judge.get(q)
             if h is None or j is None:
                 continue
             q = q.split(":")[0]
             tally[q][(j, h)] += 1
+            pool[q] += rejected(r)
             if j != h:
-                differ[q].append(r["key"])
+                differ[q].append(f"{'*' if rejected(r) else ' '} {r['key']}")
     if not tally:
-        return print("no human labels yet; run --human first")
-    audited = [r for r in rows if "labels_human" in r and any(v is not None for v in answers(r["labels_human"]).values())]
+        return print(f"no {field} yet; {hint}")
+    audited = [r for r in rows if field in r and any(v is not None for v in answers(r[field]).values())]
     print(f"{len(audited)} hunks audited, {sum(map(rejected, audited))} drawn from the judge-rejected "
-          f"pool (oversampled, so agreement leans on them)\n")
-    print(f"{'question':<16}{'n':>4}{'agree':>8}{'judge y/you n':>15}{'judge n/you y':>15}")
+          f"pool (oversampled, so agreement leans on them)")
+    by = Counter(r.get("audited_by", who) for r in audited)
+    print("answered by: " + ", ".join(f"{k} ({v})" for k, v in by.items()) + "\n")
+    yn, ny = f"judge y/{who} n", f"judge n/{who} y"
+    w = len(yn) + 2
+    print(f"{'question':<16}{'n':>4}{'pool':>6}{'agree':>8}{yn:>{w}}{ny:>{w}}")
     for q, c in tally.items():
         n = sum(c.values())
         agree = c[(True, True)] + c[(False, False)]
-        print(f"{q:<16}{n:>4}{agree / n:>8.0%}{c[(True, False)]:>15}{c[(False, True)]:>15}")
+        print(f"{q:<16}{n:>4}{pool[q]:>6}{agree / n:>8.0%}{c[(True, False)]:>{w}}{c[(False, True)]:>{w}}")
     for q, keys in differ.items():
-        print(f"\n{q} differs on:")
+        print(f"\n{q} differs on (* judge-rejected pool):")
         for k in keys:
             print(f"  {k}")
 
@@ -227,7 +239,9 @@ def main():
     if sys.argv[1:] == ["--human"]:
         return human(rows)
     if sys.argv[1:] == ["--human-report"]:
-        return human_report(rows)
+        return agreement_report(rows)
+    if sys.argv[1:] == ["--audit-report"]:
+        return agreement_report(rows, "labels_audit", "auditor", "no model audit merged")
     todo = [r for r in rows if pending(r)]
     print(f"{len(todo)} of {len(rows)} hunks unlabeled\n")
     for i, r in enumerate(todo):
