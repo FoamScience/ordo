@@ -6,7 +6,7 @@ import os
 JEFF_URL = os.environ.get("JEFF_URL", "http://127.0.0.1:8017")
 
 QUESTIONS = {
-    "faithful": "Does the rationale accurately describe what this diff changes?",
+    "faithful": "Does the rationale state nothing false or misleading about this diff? A terse or uninformative rationale that is true counts as faithful.",
     "matches_commit": "Is the rationale consistent with the commit message?",
     "noise_correct": "Is this diff only formatting, whitespace, generated code or import lines, with no behavioural change?",
     "should_skip": "Can a reviewer skip this diff without missing anything that changes behaviour or needs a reviewer's judgement?",
