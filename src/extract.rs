@@ -95,6 +95,9 @@ pub struct HunkSem {
     /// the hunk is a pure-import hunk whose statements all existed in the old
     /// file: the import moved rather than arriving or changing
     pub import_moved: bool,
+    /// an import-category hunk that touches a re-export (see `is_reexport`):
+    /// it widens or narrows the module's API, so it is not noise
+    pub reexport: bool,
     /// ordering influence from a matching rule (`Options.rules`) — higher
     /// sorts earlier, but only among hunks the dependency graph has freed
     pub priority: i64,
@@ -172,6 +175,7 @@ impl HunkSem {
             symbols: vec![],
             local_defs: vec![],
             import_moved: false,
+            reexport: false,
             priority: 0,
             bindings: vec![],
             start_row: h.new_r0.unwrap_or_else(|| h.new_range[0].saturating_sub(1)),
@@ -619,6 +623,8 @@ fn split_at(h: &RawHunk, r0: usize, cuts: &[usize]) -> Vec<RawHunk> {
 #[derive(Default)]
 struct Collected {
     import_rows: HashSet<usize>,
+    /// the subset of `import_rows` a re-export covers
+    reexport_rows: HashSet<usize>,
     def_rows: HashSet<usize>,
     type_rows: HashSet<usize>,
     defs: Vec<DefRec>,
@@ -989,6 +995,7 @@ impl Parsed<'_> {
                 .map(|(_, name, s, e)| (name.clone(), *s, *e))
                 .collect(),
             import_moved: false,
+            reexport: (r0..=r1).any(|r| self.c.reexport_rows.contains(&r)),
             priority: 0,
             bindings: self.bindings(r0, r1),
             start_row: r0,
@@ -1430,6 +1437,21 @@ fn is_bookkeeping_export(node: Node) -> bool {
         .named_children(&mut cur)
         .any(|c| c.kind() == "export_clause" && c.named_child_count() == 0);
     !empty_clause
+}
+
+/// An import-like statement that hands names on to the module's users: a
+/// bookkeeping `export` (js/ts), or a `pub use` (rust). It is classified as an
+/// import, for ordering and binding, but unlike one it is the module's API, so
+/// adding or removing it is never noise. `pub(crate)` and the other restricted
+/// visibilities are not the public API and stay plain imports.
+fn is_reexport(node: Node, src: &[u8], spec: &LangSpec) -> bool {
+    if spec.name == "rust" && node.kind() == "use_declaration" {
+        let mut cur = node.walk();
+        return node.named_children(&mut cur).any(|c| {
+            c.kind() == "visibility_modifier" && c.utf8_text(src).is_ok_and(|t| t.trim() == "pub")
+        });
+    }
+    is_bookkeeping_export(node)
 }
 
 /// Import-like for classification: a real import, or an export that only moves
@@ -2617,6 +2639,9 @@ impl<'a> Walker<'a> {
         let er = end_row(node, self.spec);
         for r in sr..=er {
             self.c.import_rows.insert(r);
+        }
+        if is_reexport(node, self.src, self.spec) {
+            self.c.reexport_rows.extend(sr..=er);
         }
         // A name is attributed to the row it is written on and to the
         // statement's head and tail: a hunk that touches the tail of a
@@ -5468,13 +5493,28 @@ fn ident_texts(node: Node, src: &[u8]) -> Vec<String> {
 /// reads as a plain `other` hunk — the same asymmetry that made an added import
 /// invisible, one level down.
 pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
+    import_rows_where(spec, content, |_| true)
+}
+
+/// The 1-based rows every re-export (see `is_reexport`) in a file covers.
+pub fn reexport_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
+    import_rows_where(spec, content, |n| is_reexport(n, content.as_bytes(), spec))
+}
+
+fn import_rows_where(
+    spec: &LangSpec,
+    content: &str,
+    keep: impl Fn(Node) -> bool,
+) -> HashSet<usize> {
     let mut out = HashSet::new();
     let Some(tree) = lang::parse(spec, content) else {
         return out;
     };
     each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
-        for r in n.start_position().row..=n.end_position().row {
-            out.insert(r + 1);
+        if keep(n) {
+            for r in n.start_position().row..=n.end_position().row {
+                out.insert(r + 1);
+            }
         }
     });
     out
