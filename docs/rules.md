@@ -54,6 +54,34 @@ catalog off leaves your own rules running; they are the reason you would.
 Through the engine directly it is `options.catalog` and `options.disable`, so
 `ordo-engine order --json` behaves the same way.
 
+### Usefulness depends on the codebase
+
+A catalog entry flags a construct, not a mistake, and whether that construct
+deserves a reviewer's attention is a property of the codebase. `goto` in a C
+library that uses it for cleanup paths, raw `new`/`delete` in a numerics code
+that manages its own memory, or a version string in a tool whose data is
+versions: each is the house style there and worth a look elsewhere.
+
+When ordo's catalog findings on several open-source repositories were
+labelled (November 2026), the same entry could be warranted on every hit in
+one repository and on none in another, and no repository-independent signal
+predicted which. So the catalog's levels stay one default for everyone, and the
+place to tune them is the repository: lower an entry that keeps firing on the
+local idiom, raise one the project cares about, in `<repo>/.ordo/rules.toml`,
+where the choice is checked in with the code it describes.
+
+```toml
+# <repo>/.ordo/rules.toml
+disable = ["goto"]                # the cleanup-label idiom; never flag it here
+
+[levels]
+hardcoded-version = "note"        # versions are data in this project, not pins
+magic-number = "warn"             # bare numbers have bitten this project before
+```
+
+`note` is the lowest level, so an entry that is already a note (`goto`,
+`raw-new-delete`) goes quiet only through `disable`.
+
 ### Raising or lowering a level
 
 A `[levels]` table sets the level of any catalog entry or rule by name, without
