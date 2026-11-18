@@ -64,11 +64,17 @@ and keeps its place. Set it to `false` for a docs-led change.
 beside the engine's own `noise` flag:
 
 ```json
-"hunch": { "noise": 0.7234, "top": [["comment", 1.661], ["uses", -0.82], ["lines_added", -0.31]] }
+"hunch": { "noise": 0.7234, "top": [["comment", 1.661], ["uses", -0.82], ["lines_added", -0.31]],
+           "faithful": 0.9412, "faithful_top": [["rationale_more", -0.81], ["lines_added", 0.4], ["uses", 0.22]] }
 ```
 
 `noise` is P(a reviewer can skip it); `top` is the three features that moved
 it most, as `[feature, contribution]` in log-odds, positive toward skipping.
+`faithful` is P(the rationale and details state nothing false or
+misleading), with `faithful_top` signed toward faithful; it is a shadow
+guess for now and changes nothing, since its gate (flag a rationale only
+where the flags are right at least half the time, and still find a fifth of
+the unfaithful ones on held-out repositories) has not passed.
 When the shipped model passed its promotion gate (`scripts/hunch-train.py`),
 a confident guess also moves the hunk's `noise` flag and says so in
 `changed`: `"unhid"` clears a flag the engine set when P(skip) is under the

@@ -1,8 +1,9 @@
 //! hunch's feature export: off unless asked, one named column per position,
 //! and git history read only inside its window; its guess: off unless asked,
-//! the trained library's own numbers, and nothing else in the output moved
-//! but the noise flags its policy overrides, and only once its gate passed.
-use ordo_diff::hunch::{self, Policy};
+//! each head the trained library's own numbers, and nothing else in the
+//! output moved but the noise flags the skip policy overrides, and only once
+//! its gate passed.
+use ordo_diff::hunch::{self, Head, Policy};
 use ordo_diff::model::{HunchChange, HunkOut, Output};
 use serde_json::json;
 mod fixture;
@@ -200,30 +201,40 @@ fn the_fixtures_cover_what_the_fingerprint_guards() {
         "lang_go",
         "lang_c",
         "lang_typescript",
+        "rationale_clauses",
+        "rationale_commas",
+        "rationale_more",
+        "rationale_cut",
+        "rationale_used_at",
+        "rationale_added_at",
+        "rationale_details",
     ] {
         assert!(any(name), "no fixture hunk sets {name}");
     }
 }
 
 #[test]
-fn the_guess_matches_the_trained_library() {
+fn every_head_matches_the_trained_library() {
     // the trainer writes these: gold hunks' vectors and what LightGBM (or the
-    // regression it shipped) predicted for each
+    // regression it shipped) predicted for each, per head
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/hunch-parity.json");
     let rows: Vec<serde_json::Value> =
         serde_json::from_str(&std::fs::read_to_string(p).expect("tests/hunch-parity.json"))
             .expect("json");
     assert!(rows.len() > 100, "{} rows", rows.len());
     let width = hunch::names().len();
-    let worst = rows
-        .iter()
-        .map(|r| {
-            let x: Vec<f64> = serde_json::from_value(r["x"].clone()).expect("x");
-            assert_eq!(x.len(), width);
-            (hunch::predict(&x).0 - r["p"].as_f64().expect("p")).abs()
-        })
-        .fold(0.0, f64::max);
-    assert!(worst <= 1e-4, "off by {worst}");
+    for (head, key) in [(Head::Skip, "should_skip"), (Head::Faithful, "faithful")] {
+        let worst = rows
+            .iter()
+            .map(|r| {
+                let x: Vec<f64> = serde_json::from_value(r["x"].clone()).expect("x");
+                assert_eq!(x.len(), width);
+                let want = r["p"][key].as_f64().unwrap_or_else(|| panic!("p.{key}"));
+                (hunch::predict(head, &x).0 - want).abs()
+            })
+            .fold(0.0, f64::max);
+        assert!(worst <= 1e-4, "{key} off by {worst}");
+    }
 }
 
 fn with_hunch(extra: serde_json::Value) -> serde_json::Value {
@@ -259,6 +270,10 @@ fn the_guess_carries_a_probability_and_its_top_features() {
             })
             .collect();
         assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "{sizes:?}");
+        let f = g["faithful"].as_f64().expect("faithful");
+        assert!((0.0..=1.0).contains(&f), "{f}");
+        let top = g["faithful_top"].as_array().expect("faithful_top");
+        assert!(top.len() <= 3, "{top:?}");
         // asked for the guess only, not the training columns
         assert!(h.get("features").is_none());
     }
@@ -363,17 +378,28 @@ fn the_policy_moves_only_noise_flags() {
     );
 }
 
-#[test]
-fn the_policy_ships_only_when_its_gate_passed() {
+fn shipped_policy(head: &str) -> serde_json::Value {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hunch.json");
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(p).expect("src/hunch.json")).expect("json");
-    let policy = &doc["policy"];
+    doc["heads"][head]["policy"].clone()
+}
+
+#[test]
+fn the_policy_ships_only_when_its_gate_passed() {
+    let policy = shipped_policy("should_skip");
     let shipped = (policy["passes"] == true).then(|| Policy {
         unhide: policy["unhide"].as_f64().expect("unhide"),
         hide: policy["hide"].as_f64().expect("hide"),
     });
     assert_eq!(hunch::policy(), shipped);
+}
+
+#[test]
+fn the_faithful_guess_stays_a_shadow() {
+    // its doubt gate failed, so nothing reads P(faithful) yet; a pass is the
+    // cue to give `--hunch` a doubt marker
+    assert_eq!(shipped_policy("faithful")["passes"], false);
 }
 
 #[test]
@@ -407,8 +433,8 @@ fn contributions_and_bias_make_up_the_log_odds() {
     let mut noisy = base.clone();
     noisy[hunch::names().iter().position(|n| n == "noise").unwrap()] = 1.0;
     let logit = |p: f64| (p / (1.0 - p)).ln();
-    let (pa, ca) = hunch::predict(&base);
-    let (pb, cb) = hunch::predict(&noisy);
+    let (pa, ca) = hunch::predict(Head::Skip, &base);
+    let (pb, cb) = hunch::predict(Head::Skip, &noisy);
     let total = |c: &[f64]| c.iter().sum::<f64>();
     let moved = (logit(pb) - logit(pa)) - (total(&cb) - total(&ca));
     assert!(moved.abs() < 1e-6, "bias moved by {moved}");

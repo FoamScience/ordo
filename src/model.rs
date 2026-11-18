@@ -110,11 +110,12 @@ pub struct Options {
     /// the published contract.
     #[serde(default)]
     pub features: bool,
-    /// Put hunch's guess on every hunk: the trained model's P(skip) and the
-    /// features that moved it most (see `HunkOut::hunch`). When the shipped
-    /// model passed its promotion gate, the guess also moves a hunk's `noise`
-    /// flag past the gate's thresholds and says so in `Hunch::changed`; the
-    /// reading order stays the engine's own. Off by default.
+    /// Put hunch's guess on every hunk: the trained model's P(skip) and
+    /// P(faithful rationale) and the features that moved each most (see
+    /// `HunkOut::hunch`). When the skip head passed its promotion gate, the
+    /// guess also moves a hunk's `noise` flag past the gate's thresholds and
+    /// says so in `Hunch::changed`; the reading order stays the engine's own.
+    /// Off by default.
     #[serde(default)]
     pub hunch: bool,
 }
@@ -811,7 +812,8 @@ pub struct HunkOut {
 }
 
 /// What the trained model makes of a hunk, beside the engine's own `noise`;
-/// `changed` says when it overrode that flag.
+/// `changed` says when it overrode that flag. `faithful` is a shadow guess:
+/// it changes nothing.
 #[derive(Debug, Clone, Serialize)]
 pub struct Hunch {
     /// P(a reviewer can skip it)
@@ -822,6 +824,10 @@ pub struct Hunch {
     /// how the guess moved the hunk's `noise` flag, when it did
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changed: Option<HunchChange>,
+    /// P(the rationale states nothing false or misleading about the hunk)
+    pub faithful: f64,
+    /// the three features that moved `faithful` most, as `top` is for `noise`
+    pub faithful_top: Vec<(String, f64)>,
 }
 
 /// What hunch's policy did to a hunk's `noise` flag.

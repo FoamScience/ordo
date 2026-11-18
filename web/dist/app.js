@@ -3936,8 +3936,12 @@ function smoothPath(ps) {
 function badge(g) {
   return `Hunch: ${Math.round(g.noise * 100)}% skippable`;
 }
+var signed = (top) => top.map(([name, c]) => `${name} ${c >= 0 ? "+" : "\u2212"}${Math.abs(c).toFixed(2)}`);
 function contributions(g) {
-  return g.top.map(([name, c]) => `${name} ${c >= 0 ? "+" : "\u2212"}${Math.abs(c).toFixed(2)}`);
+  return signed(g.top);
+}
+function faithfulness(g) {
+  return `Rationale: ${Math.round(g.faithful * 100)}% faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
 }
 function flagBadge(g) {
   return g.changed === "unhid" ? "Hunch: shown" : g.changed === "hid" ? "Hunch: hidden" : null;
@@ -4982,7 +4986,8 @@ function renderWhy() {
       ],
       it2.hunch && [
         h("h3", null, "Hunch", h("small", null, effect(it2.hunch))),
-        h("p", { class: "muted" }, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}.`)
+        h("p", { class: "muted" }, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}.`),
+        h("p", { class: "muted" }, `${faithfulness(it2.hunch)}.`)
       ],
       it2.readability.length > 0 && [
         h("h3", null, "Readability", h("small", null, "against each definition's old version")),

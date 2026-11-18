@@ -1,8 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { badge, contributions, effect, flagBadge } from "../src/hunch.ts";
+import { badge, contributions, effect, faithfulness, flagBadge } from "../src/hunch.ts";
 
-const g = { noise: 0.7234, top: [["comment", 1.661], ["noise", -1.0204], ["uses", 0]] as [string, number][] };
+const g = {
+  noise: 0.7234,
+  top: [["comment", 1.661], ["noise", -1.0204], ["uses", 0]] as [string, number][],
+  faithful: 0.9412,
+  faithful_top: [["rationale_more", -0.81], ["lines_added", 0.4]] as [string, number][],
+};
 
 test("the badge says the guess as a percentage", () => {
   assert.equal(badge(g), "Hunch: 72% skippable");
@@ -22,4 +27,8 @@ test("the why pane says what the guess did", () => {
   assert.equal(effect(g), "a trained guess; it changes nothing here");
   assert.match(effect({ ...g, changed: "unhid" }), /so it is shown$/);
   assert.match(effect({ ...g, changed: "hid" }), /hidden like noise$/);
+});
+
+test("the why pane says how faithful the rationale looks", () => {
+  assert.equal(faithfulness(g), "Rationale: 94% faithful, most moved by rationale_more −0.81, lines_added +0.40");
 });

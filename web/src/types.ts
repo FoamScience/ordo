@@ -53,11 +53,13 @@ export interface Item {
   note: string | null;
 }
 
-/** a trained model's P(skip) and the three features that moved it most, as `[name, log-odds]`; `changed` when it moved the hunk's noise flag */
+/** a trained model's P(skip) and the three features that moved it most, as `[name, log-odds]`; `changed` when it moved the hunk's noise flag; and the same for P(faithful rationale), which changes nothing */
 export interface Hunch {
   noise: number;
   top: [string, number][];
   changed?: "unhid" | "hid";
+  faithful: number;
+  faithful_top: [string, number][];
 }
 
 /** one definition's readability measurements, each `[old, new]` */
