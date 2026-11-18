@@ -6,7 +6,6 @@ rust-version = "1.90"
 description = "Comprehension-optimized ordering of code-change hunks"
 license = "MIT"
 repository = "https://github.com/FoamScience/ordo"
-homepage = "https://github.com/FoamScience/ordo"
 documentation = "https://docs.rs/ordo-diff"
 readme = "README.md"
 keywords = ["diff", "code-review", "tree-sitter", "git"]
