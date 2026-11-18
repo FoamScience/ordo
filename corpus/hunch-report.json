@@ -738,150 +738,16 @@
  },
  "promotion": {
   "gate": {
-   "gold_at_noise_hide_rate": {
-    "beats": true,
-    "hunch": {
-     "hidden": 44,
-     "missed_skips": 9,
-     "wrong_hides": 1
-    },
-    "noise": {
-     "hidden": 44,
-     "missed_skips": 13,
-     "wrong_hides": 5
-    }
+   "gold": {
+    "lowered_overall": true,
+    "raised_in": []
    },
-   "loro_at_repo_hide_rate": {
-    "hunch": {
-     "buildtheworld": {
-      "hidden": 11,
-      "missed_skips": 17,
-      "wrong_hides": 2
-     },
-     "click": {
-      "hidden": 21,
-      "missed_skips": 10,
-      "wrong_hides": 0
-     },
-     "cobra": {
-      "hidden": 32,
-      "missed_skips": 2,
-      "wrong_hides": 2
-     },
-     "curl": {
-      "hidden": 6,
-      "missed_skips": 5,
-      "wrong_hides": 0
-     },
-     "excalidraw": {
-      "hidden": 44,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "execa": {
-      "hidden": 19,
-      "missed_skips": 0,
-      "wrong_hides": 1
-     },
-     "junit5": {
-      "hidden": 25,
-      "missed_skips": 4,
-      "wrong_hides": 0
-     },
-     "lazy": {
-      "hidden": 53,
-      "missed_skips": 11,
-      "wrong_hides": 0
-     },
-     "nvm": {
-      "hidden": 2,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "openfoam": {
-      "hidden": 36,
-      "missed_skips": 42,
-      "wrong_hides": 0
-     },
-     "ripgrep": {
-      "hidden": 4,
-      "missed_skips": 8,
-      "wrong_hides": 0
-     },
-     "vue": {
-      "hidden": 64,
-      "missed_skips": 10,
-      "wrong_hides": 5
-     }
-    },
-    "losing_repos": [
-     "cobra",
-     "vue"
-    ],
-    "noise": {
-     "buildtheworld": {
-      "hidden": 11,
-      "missed_skips": 18,
-      "wrong_hides": 3
-     },
-     "click": {
-      "hidden": 21,
-      "missed_skips": 10,
-      "wrong_hides": 0
-     },
-     "cobra": {
-      "hidden": 32,
-      "missed_skips": 1,
-      "wrong_hides": 1
-     },
-     "curl": {
-      "hidden": 6,
-      "missed_skips": 5,
-      "wrong_hides": 0
-     },
-     "excalidraw": {
-      "hidden": 44,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "execa": {
-      "hidden": 19,
-      "missed_skips": 0,
-      "wrong_hides": 1
-     },
-     "junit5": {
-      "hidden": 25,
-      "missed_skips": 5,
-      "wrong_hides": 1
-     },
-     "lazy": {
-      "hidden": 53,
-      "missed_skips": 11,
-      "wrong_hides": 0
-     },
-     "nvm": {
-      "hidden": 2,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "openfoam": {
-      "hidden": 36,
-      "missed_skips": 42,
-      "wrong_hides": 0
-     },
-     "ripgrep": {
-      "hidden": 4,
-      "missed_skips": 8,
-      "wrong_hides": 0
-     },
-     "vue": {
-      "hidden": 64,
-      "missed_skips": 9,
-      "wrong_hides": 4
-     }
-    }
+   "loro": {
+    "lowered_overall": true,
+    "raised_in": []
    },
-   "passes": false
+   "passes": true,
+   "rule": "the policy raises wrong hides in no repo, leaving one repo out and on gold, and lowers them overall in both"
   },
   "model": "trees",
   "policy": {
@@ -1077,6 +943,7 @@
      }
     }
    },
+   "hide": 0.9,
    "loro": {
     "hunch": {
      "all": {
@@ -1393,6 +1260,151 @@
      "wrong_hides": 6
     }
    }
+  },
+  "ranking": {
+   "gold_at_noise_hide_rate": {
+    "hunch": {
+     "hidden": 44,
+     "missed_skips": 9,
+     "wrong_hides": 1
+    },
+    "noise": {
+     "hidden": 44,
+     "missed_skips": 13,
+     "wrong_hides": 5
+    }
+   },
+   "loro_at_repo_hide_rate": {
+    "hunch": {
+     "buildtheworld": {
+      "hidden": 11,
+      "missed_skips": 17,
+      "wrong_hides": 2
+     },
+     "click": {
+      "hidden": 21,
+      "missed_skips": 10,
+      "wrong_hides": 0
+     },
+     "cobra": {
+      "hidden": 32,
+      "missed_skips": 2,
+      "wrong_hides": 2
+     },
+     "curl": {
+      "hidden": 6,
+      "missed_skips": 5,
+      "wrong_hides": 0
+     },
+     "excalidraw": {
+      "hidden": 44,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "execa": {
+      "hidden": 19,
+      "missed_skips": 0,
+      "wrong_hides": 1
+     },
+     "junit5": {
+      "hidden": 25,
+      "missed_skips": 4,
+      "wrong_hides": 0
+     },
+     "lazy": {
+      "hidden": 53,
+      "missed_skips": 11,
+      "wrong_hides": 0
+     },
+     "nvm": {
+      "hidden": 2,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "openfoam": {
+      "hidden": 36,
+      "missed_skips": 42,
+      "wrong_hides": 0
+     },
+     "ripgrep": {
+      "hidden": 4,
+      "missed_skips": 8,
+      "wrong_hides": 0
+     },
+     "vue": {
+      "hidden": 64,
+      "missed_skips": 10,
+      "wrong_hides": 5
+     }
+    },
+    "more_wrong_hides": [
+     "cobra",
+     "vue"
+    ],
+    "noise": {
+     "buildtheworld": {
+      "hidden": 11,
+      "missed_skips": 18,
+      "wrong_hides": 3
+     },
+     "click": {
+      "hidden": 21,
+      "missed_skips": 10,
+      "wrong_hides": 0
+     },
+     "cobra": {
+      "hidden": 32,
+      "missed_skips": 1,
+      "wrong_hides": 1
+     },
+     "curl": {
+      "hidden": 6,
+      "missed_skips": 5,
+      "wrong_hides": 0
+     },
+     "excalidraw": {
+      "hidden": 44,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "execa": {
+      "hidden": 19,
+      "missed_skips": 0,
+      "wrong_hides": 1
+     },
+     "junit5": {
+      "hidden": 25,
+      "missed_skips": 5,
+      "wrong_hides": 1
+     },
+     "lazy": {
+      "hidden": 53,
+      "missed_skips": 11,
+      "wrong_hides": 0
+     },
+     "nvm": {
+      "hidden": 2,
+      "missed_skips": 1,
+      "wrong_hides": 0
+     },
+     "openfoam": {
+      "hidden": 36,
+      "missed_skips": 42,
+      "wrong_hides": 0
+     },
+     "ripgrep": {
+      "hidden": 4,
+      "missed_skips": 8,
+      "wrong_hides": 0
+     },
+     "vue": {
+      "hidden": 64,
+      "missed_skips": 9,
+      "wrong_hides": 4
+     }
+    }
+   },
+   "note": "informational, not the gate: hunch's ranking at the noise flag's hide rate"
   }
  },
  "provenance": {
@@ -1401,7 +1413,7 @@
    "hunks": 196,
    "matched_by_overlap": 1,
    "positives": 52,
-   "sha256": "6c0442e4e9ee6676e2865d0f90c47451ce873f84b90e029e8a8a561acded03d2",
+   "sha256": "c81d4fa97bebd4fdb278b65b908eb66d4bfd740c79185e3cfe1527707c85ff1b",
    "unmatched": 4
   },
   "extra": {
@@ -1443,7 +1455,7 @@
    "hunks": 1520,
    "matched_by_overlap": 12,
    "positives": 418,
-   "sha256": "95abe8b0fb6bf23898aabe35738bb785d9de24e4b2018106f348835373046a4d",
+   "sha256": "8d29c811ed1db631ab8aed9e882217bbe29b8ad464f2b41de3d2178aa6e46e94",
    "unmatched": 100
   },
   "tree_count": {

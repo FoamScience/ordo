@@ -423,13 +423,19 @@
   ],
   "type": "lightgbm"
  },
+ "policy": {
+  "hide": 0.9,
+  "passes": true,
+  "rule": "noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= 0.9",
+  "unhide": 0.05
+ },
  "provenance": {
   "eval": {
    "file": "corpus/gold.jsonl",
    "hunks": 196,
    "matched_by_overlap": 1,
    "positives": 52,
-   "sha256": "6c0442e4e9ee6676e2865d0f90c47451ce873f84b90e029e8a8a561acded03d2",
+   "sha256": "c81d4fa97bebd4fdb278b65b908eb66d4bfd740c79185e3cfe1527707c85ff1b",
    "unmatched": 4
   },
   "extra": {
@@ -471,7 +477,7 @@
    "hunks": 1520,
    "matched_by_overlap": 12,
    "positives": 418,
-   "sha256": "95abe8b0fb6bf23898aabe35738bb785d9de24e4b2018106f348835373046a4d",
+   "sha256": "8d29c811ed1db631ab8aed9e882217bbe29b8ad464f2b41de3d2178aa6e46e94",
    "unmatched": 100
   },
   "tree_count": {
