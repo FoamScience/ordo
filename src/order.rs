@@ -168,10 +168,30 @@ fn src_frags(pairs: &[(&str, &str)], verb: &str, sep: &str, rel: &str) -> Vec<St
 }
 
 /// A group's sort key: rule priority (descending), then whether it is prose
-/// (see `docs_rank`), then file, then source row, then the group index — which
-/// makes every key distinct, so a sorted set of them doubles as the ready queue
-/// in the topological sort.
-type GroupKey = (std::cmp::Reverse<i64>, u8, usize, usize, usize);
+/// (see `docs_rank`), then hunch's attention (descending; 0 without
+/// `--hunch`, see `attention_key`), then file, then source row, then the group
+/// index — which makes every key distinct, so a sorted set of them doubles as
+/// the ready queue in the topological sort.
+type GroupKey = (
+    std::cmp::Reverse<i64>,
+    u8,
+    std::cmp::Reverse<i64>,
+    usize,
+    usize,
+    usize,
+);
+
+/// `key` as file position alone would sort it: what a cycle break picks by,
+/// since attention only ranks groups the graph has freed.
+fn positional((prio, docs, _, file, row, gi): GroupKey) -> GroupKey {
+    (prio, docs, std::cmp::Reverse(0), file, row, gi)
+}
+
+/// hunch's P(attention) as a sort key, in the four decimals `--json` shows,
+/// so two hunks that print the same keep their file order.
+fn attention_key(p: f64) -> i64 {
+    (p * 1e4).round() as i64
+}
 
 /// Where a file's hunks sort among the ones nothing forces an order on.
 ///
@@ -268,11 +288,14 @@ pub struct FileFacts<'a> {
     pub changes: &'a [crate::model::Change],
 }
 
+/// `attention`, per file and hunk, is hunch's P(attention) when `--hunch`
+/// reorders by it (see `order_groups`).
 pub fn order_all(
     files: &[crate::PerFileHunks],
     paths: &[String],
     facts: &FileFacts,
     options: &Options,
+    attention: Option<&[Vec<f64>]>,
 ) -> OrderedAll {
     let FileFacts {
         symbols,
@@ -345,8 +368,24 @@ pub fn order_all(
         .iter()
         .map(|&f| docs_rank(&paths[f], options.docs_last))
         .collect();
+    let att: Vec<i64> = groups
+        .iter()
+        .map(|gr| {
+            attention.map_or(0, |a| {
+                gr.members
+                    .iter()
+                    .map(|&i| {
+                        let (fi, li) = flat.coord[i];
+                        attention_key(a[fi][li])
+                    })
+                    .max()
+                    .unwrap_or(0)
+            })
+        })
+        .collect();
     let keys = GroupKeys {
         docs: &docs,
+        attention: &att,
         file: &group_file,
         row: &group_row,
     };
@@ -1071,6 +1110,9 @@ fn containment_edges(
 /// which is as true of a file-order read as of a comprehension one.
 struct GroupKeys<'a> {
     docs: &'a [u8],
+    /// per group, the highest `attention_key` among its hunks; all 0 unless
+    /// `--hunch` reorders
+    attention: &'a [i64],
     file: &'a [usize],
     row: &'a [usize],
 }
@@ -1117,6 +1159,10 @@ fn order_groups(
             // that they are visible noise, leading with forty dimmed rows
             // buries the change they came with. A reviewer who does want them
             // first can say so with a rule (`priority`).
+            // hunch's attention (`--hunch`) sits after priority and docs and
+            // before file position: it replaces only the positional
+            // tiebreaker, so a rule's priority and `docs_last` still win, and
+            // like priority it never reorders against an edge.
             let key_v: Vec<GroupKey> = groups
                 .iter()
                 .enumerate()
@@ -1130,6 +1176,7 @@ fn order_groups(
                     (
                         std::cmp::Reverse(prio),
                         k.docs[gi],
+                        std::cmp::Reverse(k.attention[gi]),
                         k.file[gi],
                         k.row[gi],
                         gi,
@@ -1174,8 +1221,8 @@ fn joined_topo(key_v: &[GroupKey], gedges: &[(usize, usize)], joined: &[usize]) 
         .iter()
         .enumerate()
         .map(|(n, p)| {
-            let (prio, docs, file, row, _) = key_v[p[0]];
-            (prio, docs, file, row, n)
+            let (prio, docs, att, file, row, _) = key_v[p[0]];
+            (prio, docs, att, file, row, n)
         })
         .collect();
     let node_edges: Vec<(usize, usize)> = gedges
@@ -1190,8 +1237,8 @@ fn joined_topo(key_v: &[GroupKey], gedges: &[(usize, usize)], joined: &[usize]) 
 }
 
 /// Kahn's topological sort over `gedges`, lowest key first among the freed
-/// groups; on a cycle, the lowest key still standing — the same deterministic
-/// tiebreak applied to a set the graph never released.
+/// groups; on a cycle, the lowest `positional` key still standing — the
+/// deterministic tiebreak applied to a set the graph never released.
 ///
 /// The ready set is carried across iterations rather than rebuilt by scanning
 /// every group each round: a group joins it exactly when its indegree reaches
@@ -1214,13 +1261,14 @@ fn topo_order(key_v: &[GroupKey], gedges: &[(usize, usize)]) -> Vec<usize> {
 /// Kahn's frontier over the group graph: `ready` is the groups with no unmet
 /// predecessor and `left` every group not yet emitted, both keyed so the
 /// smallest key is picked first. A cycle leaves `ready` empty with `left`
-/// not; the smallest of `left` is picked then, so a cycle is broken rather
-/// than dropped.
+/// not; the smallest of `left`, keyed `positional`, is picked then, so a
+/// cycle is broken rather than dropped.
 struct Frontier<'a> {
     key_v: &'a [GroupKey],
     indeg: Vec<usize>,
     succ: Vec<Vec<usize>>,
     ready: BTreeSet<GroupKey>,
+    /// keyed `positional`
     left: BTreeSet<GroupKey>,
 }
 
@@ -1237,7 +1285,7 @@ impl<'a> Frontier<'a> {
             .filter(|&gi| indeg[gi] == 0)
             .map(|gi| key_v[gi])
             .collect();
-        let left = key_v.iter().copied().collect();
+        let left = key_v.iter().copied().map(positional).collect();
         Frontier {
             key_v,
             indeg,
@@ -1248,10 +1296,10 @@ impl<'a> Frontier<'a> {
     }
 
     fn take(&mut self) -> Option<usize> {
-        let key = self.ready.first().or_else(|| self.left.first()).copied()?;
-        self.ready.remove(&key);
-        self.left.remove(&key);
-        Some(key.4)
+        let gi = self.ready.first().or_else(|| self.left.first())?.5;
+        self.ready.remove(&self.key_v[gi]);
+        self.left.remove(&positional(self.key_v[gi]));
+        Some(gi)
     }
 
     /// `pick` is emitted: each successor loses a predecessor, and one with
@@ -1263,7 +1311,7 @@ impl<'a> Frontier<'a> {
                 continue;
             }
             self.indeg[s] -= 1;
-            if self.indeg[s] == 0 && self.left.contains(&self.key_v[s]) {
+            if self.indeg[s] == 0 && self.left.contains(&positional(self.key_v[s])) {
                 self.ready.insert(self.key_v[s]);
             }
         }
@@ -3186,12 +3234,18 @@ mod tests {
     use super::*;
 
     fn key(prio: i64, file: usize, row: usize, gi: usize) -> GroupKey {
-        (std::cmp::Reverse(prio), 0, file, row, gi)
+        attended(prio, 0, file, row, gi)
+    }
+
+    fn attended(prio: i64, att: i64, file: usize, row: usize, gi: usize) -> GroupKey {
+        use std::cmp::Reverse;
+        (Reverse(prio), 0, Reverse(att), file, row, gi)
     }
 
     #[test]
     fn topo_order_reads_a_doc_after_the_code_unless_a_rule_says_otherwise() {
-        let doc = |prio: i64| (std::cmp::Reverse(prio), 1u8, 0, 0, 0);
+        use std::cmp::Reverse;
+        let doc = |prio: i64| (Reverse(prio), 1u8, Reverse(0), 0, 0, 0);
         assert_eq!(topo_order(&[doc(0), key(0, 1, 0, 1)], &[]), vec![1, 0]);
         assert_eq!(topo_order(&[doc(5), key(0, 1, 0, 1)], &[]), vec![0, 1]);
     }
@@ -3216,6 +3270,30 @@ mod tests {
         // edge, yet it does jump group 1, which nothing holds back
         let keys = [key(0, 0, 0, 0), key(0, 0, 5, 1), key(9, 0, 9, 2)];
         assert_eq!(topo_order(&keys, &[(0, 2)]), vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn topo_order_lets_attention_reorder_only_the_freed_groups_below_priority() {
+        // group 2 draws the most attention but uses what group 0 defines: it
+        // jumps group 1, never group 0; a priority still outranks attention
+        let keys = [
+            attended(0, 50, 0, 0, 0),
+            attended(0, 10, 0, 5, 1),
+            attended(0, 90, 0, 9, 2),
+        ];
+        assert_eq!(topo_order(&keys, &[(0, 2)]), vec![0, 2, 1]);
+        let keys = [attended(1, 0, 0, 0, 0), attended(0, 90, 0, 9, 1)];
+        assert_eq!(topo_order(&keys, &[]), vec![0, 1]);
+    }
+
+    #[test]
+    fn topo_order_breaks_a_cycle_by_file_position_not_attention() {
+        let keys = [
+            attended(0, 0, 0, 0, 0),
+            attended(0, 50, 0, 5, 1),
+            attended(0, 90, 0, 9, 2),
+        ];
+        assert_eq!(topo_order(&keys, &[(0, 1), (1, 2), (2, 0)]), vec![0, 1, 2]);
     }
 
     #[test]

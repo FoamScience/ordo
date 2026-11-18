@@ -3943,11 +3943,14 @@ function contributions(g) {
 function faithfulness(g) {
   return `Rationale: ${Math.round(g.faithful * 100)}% faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
 }
+function attention(g) {
+  return `Attention: ${Math.round(g.attention * 100)}%, most moved by ${signed(g.attention_top).join(", ")}`;
+}
 function flagBadge(g) {
   return g.changed === "unhid" ? "Hunch: shown" : g.changed === "hid" ? "Hunch: hidden" : null;
 }
 function effect(g) {
-  return g.changed === "unhid" ? "the engine hid this as noise; the model is confident it should be read, so it is shown" : g.changed === "hid" ? "the model is confident this can be skipped, so it is hidden like noise" : "a trained guess; it changes nothing here";
+  return g.changed === "unhid" ? "the engine hid this as noise; the model is confident it should be read, so it is shown" : g.changed === "hid" ? "the model is confident this can be skipped, so it is hidden like noise" : "a trained guess; it hides and shows nothing here";
 }
 
 // src/palette.ts
@@ -4987,7 +4990,8 @@ function renderWhy() {
       it2.hunch && [
         h("h3", null, "Hunch", h("small", null, effect(it2.hunch))),
         h("p", { class: "muted" }, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}.`),
-        h("p", { class: "muted" }, `${faithfulness(it2.hunch)}.`)
+        h("p", { class: "muted" }, `${faithfulness(it2.hunch)}.`),
+        h("p", { class: "muted" }, `${attention(it2.hunch)}.`)
       ],
       it2.readability.length > 0 && [
         h("h3", null, "Readability", h("small", null, "against each definition's old version")),

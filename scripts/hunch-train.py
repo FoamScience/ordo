@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# dependencies = ["numpy", "scikit-learn", "lightgbm"]
+# dependencies = ["numpy", "scipy", "scikit-learn", "lightgbm"]
 # ///
 """Train hunch's heads on the engine's per-hunk features: P(should_skip) (see
 `train_skip`) and P(faithful rationale) (see `train_faithful`), each
@@ -53,6 +53,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from scipy.stats import spearmanr
 
 from corpuslib import ROOT, commit_input, engine_output, with_features
 
@@ -68,6 +69,9 @@ SKIP_DROPS = ("rationale_",)
 DOUBT_GRID = [round(0.05 * i, 2) for i in range(4, 20)]
 DOUBT_PRECISION, DOUBT_MIN_FLAGS, DOUBT_RECALL = 0.5, 5, 0.2
 GOLD_RECALL, GOLD_FALSE_FLAGS = 0.25, 0.03
+ATTENTION_GATE = ("within-commit pairwise accuracy (pairs with different attention labels, a predicted tie half "
+                  "right): above file-position order leaving one repo out overall, below it in at most 2 "
+                  "repos, and above it on gold")
 LGBM = dict(n_estimators=TREE_MAX, learning_rate=0.05, num_leaves=15, min_child_samples=20,
             subsample=0.8, subsample_freq=1, colsample_bytree=0.8, random_state=SEED,
             deterministic=True, force_row_wise=True, n_jobs=1, verbose=-1)
@@ -81,10 +85,39 @@ def commit_features(corpus, repo, sha):
     if not parent:
         return [], None
     out = engine_output(with_features(d, sha, inp))
+    read = {(o["path"], o["hunk"]): i for i, o in enumerate(out["order"])}
+    group = {m: gi for gi, g in enumerate(out["groups"]) for m in g["members"]}
+    succ = defaultdict(set)
+    for e in out["edges"]:
+        if group[e["from"]] != group[e["to"]]:
+            succ[group[e["from"]]].add(group[e["to"]])
+    graph = Graph(dict(succ))
     hunks = [(f"{repo}:{sha[:8]}:{f['path']}:{h['new_range'][0]}", h["old_range"], h["new_range"], h["features"],
-              (h["rationale"], h.get("details", [])))
-             for f in out["files"] for h in f["hunks"] if h.get("features") is not None]
+              (h["rationale"], h.get("details", [])),
+              Where(fi, h["new_range"][0], read[f["path"], h["id"]], group[h["id"]], graph))
+             for fi, f in enumerate(out["files"]) for h in f["hunks"] if h.get("features") is not None]
     return hunks, out.get("feature_schema")
+
+
+Where = namedtuple("Where", "file row read group graph")
+
+
+class Graph:
+    """A commit's group def->use graph, as the engine's edges between
+    different groups; `reaches` walks it."""
+    def __init__(self, succ):
+        self.succ, self.seen = succ, {}
+
+    def reaches(self, a, b):
+        if a not in self.seen:
+            seen, todo = {a}, [a]
+            while todo:
+                for n in self.succ.get(todo.pop(), ()):
+                    if n not in seen:
+                        seen.add(n)
+                        todo.append(n)
+            self.seen[a] = seen
+        return b in self.seen[a]
 
 
 def fingerprint():
@@ -128,12 +161,13 @@ def load(corpus, records, workers, label="should_skip"):
     rationale it was labeled on (`text`) is dropped as stale when the engine
     no longer writes that rationale for its hunk."""
     commits = sorted({(r["repo"], r["sha"]) for r in records})
-    vecs, texts, per_file, schemas = {}, {}, defaultdict(list), set()
+    vecs, texts, where, per_file, schemas = {}, {}, {}, defaultdict(list), set()
     with ThreadPoolExecutor(workers) as ex:
         for hunks, s in ex.map(lambda c: commit_features(corpus, *c), commits):
-            for key, old, new, v, text in hunks:
+            for key, old, new, v, text, at in hunks:
                 vecs[key] = v
                 texts[key] = text
+                where[key] = at
                 per_file[key.rsplit(":", 1)[0]].append((key, (tuple(old), tuple(new))))
             if s:
                 schemas.add(json.dumps(s, sort_keys=True))
@@ -173,7 +207,8 @@ def load(corpus, records, workers, label="should_skip"):
     repos = np.array([r["repo"] for r, _ in kept])
     w = np.array([r.get("weight", 1.0) for r, _ in kept])
     return x, y, repos, w, json.loads(schemas.pop()), {"unmatched": len(missing), "matched_by_overlap": by_overlap,
-                                                       **({"stale_rationale": len(stale)} if stale else {})}
+                                                       **({"stale_rationale": len(stale)} if stale else {})}, \
+        [where[k] for _, k in kept]
 
 
 def extra_records(path, sample_path, label="should_skip"):
@@ -423,7 +458,7 @@ def table(title, ev):
         print(f"{r:14} " + " ".join(f"{c['wrong_hides']:>6}/{c['missed_skips']:<6}" for c in cells))
 
 
-Data = namedtuple("Data", "corpus schema xs s_recs rs ws xg g_recs rg held_out provenance workers")
+Data = namedtuple("Data", "corpus schema xs s_recs rs ws s_at xg g_recs rg g_at held_out provenance workers")
 
 
 def labels(records, label):
@@ -449,7 +484,7 @@ def train_skip(c, extra):
         rows = list(extra_records(extra, c.corpus / "skip-sample.jsonl"))
         extra_kept = c.held_out(rows)
         e_gold = len(rows) - len(extra_kept)
-        xe, ye, re_, we, eschema, e_match = load(c.corpus, extra_kept, c.workers)
+        xe, ye, re_, we, eschema, e_match, _ = load(c.corpus, extra_kept, c.workers)
         if eschema != c.schema:
             sys.exit("silver and extra feature schemas differ")
         xe = xe[:, cols]
@@ -627,7 +662,7 @@ def train_faithful(c, extra):
     if extra:
         rows = list(extra_records(extra, c.corpus / "skip-sample.jsonl", "faithful"))
         kept = c.held_out(rows)
-        xe, ye, re_, we, eschema, e_match = load(c.corpus, kept, c.workers, "faithful")
+        xe, ye, re_, we, eschema, e_match, _ = load(c.corpus, kept, c.workers, "faithful")
         if eschema != c.schema:
             sys.exit("silver and extra feature schemas differ")
         we = we / we.mean()
@@ -708,6 +743,211 @@ def train_faithful(c, extra):
     return head, report, gold_score
 
 
+def attention_rows(c, path, recs, at):
+    """The rows of `recs` an attention file labels: their indices, levels
+    (1-3), later_fix (True/False/None), and commit and position per row."""
+    lab = {r["key"]: r for l in path.read_text().splitlines() if l.strip() for r in [json.loads(l)]}
+    idx = [i for i, r in enumerate(recs) if r["key"] in lab]
+    level = np.array([lab[recs[i]["key"]]["attention"] for i in idx])
+    later = [lab[recs[i]["key"]].get("later_fix") for i in idx]
+    commit = np.array([f"{recs[i]['repo']}:{recs[i]['sha'][:8]}" for i in idx])
+    return np.array(idx, dtype=int), level, later, commit, [at[i] for i in idx]
+
+
+def pairs(commit, level, at, free_only=False):
+    """(i, j) with i before j in the same commit and different labels; with
+    `free_only`, only those in different groups neither of which reaches the
+    other in the def->use graph, the pairs a tiebreak can move."""
+    by = defaultdict(list)
+    for i, k in enumerate(commit):
+        by[k].append(i)
+    out = []
+    for ix in by.values():
+        for a in range(len(ix)):
+            for b in range(a + 1, len(ix)):
+                i, j = ix[a], ix[b]
+                if level[i] == level[j]:
+                    continue
+                if free_only:
+                    gi, gj = at[i].group, at[j].group
+                    if gi == gj or at[i].graph.reaches(gi, gj) or at[i].graph.reaches(gj, gi):
+                        continue
+                out.append((i, j))
+    return np.array(out, dtype=int).reshape(-1, 2)
+
+
+def pairwise(score, level, pr, mask=None):
+    """Share of pairs `pr` ranked as their labels are (the higher score on the
+    higher level), a predicted tie half right; and the pair count."""
+    if mask is not None:
+        pr = pr[mask[pr[:, 0]]]
+    if not len(pr):
+        return None, 0
+    ds = score[pr[:, 0]] - score[pr[:, 1]]
+    dl = level[pr[:, 0]] - level[pr[:, 1]]
+    right = np.where(ds == 0, 0.5, (np.sign(ds) == np.sign(dl)).astype(float))
+    return round(float(right.mean()), 4), len(pr)
+
+
+def commit_spearman(score, level, commit):
+    """Mean Spearman correlation of score and label over commits with at
+    least two labels and two different ones; a commit whose scores all tie
+    counts 0."""
+    vals = []
+    for k in sorted(set(commit)):
+        m = commit == k
+        if m.sum() >= 2 and len(set(level[m])) >= 2:
+            vals.append(spearmanr(score[m], level[m]).statistic if len(set(score[m])) >= 2 else 0.0)
+    return round(float(np.mean(vals)), 4), len(vals)
+
+
+def baselines(x, at, names):
+    """Today's and the naive rankings, higher = read first: file position
+    (file, then start row; the tiebreak the def->use order falls back on),
+    hunk size (lines added + removed), rule priority (no rule in the corpus
+    sets one: every pair ties) and the engine's own reading order."""
+    pos = np.lexsort(([a.row for a in at], [a.file for a in at])).argsort().astype(float)
+    size = x[:, names.index("lines_added")] + x[:, names.index("lines_removed")]
+    return {"file_position": -pos, "hunk_size": size, "rule_priority": np.zeros(len(at)),
+            "reading_order": -np.array([a.read for a in at], dtype=float)}
+
+
+def rank_metrics(scores, level, commit, repos, at):
+    """Per ranking: pairwise accuracy over all and over free pairs, overall
+    and per repo, and the mean within-commit Spearman."""
+    pr, free = pairs(commit, level, at), pairs(commit, level, at, True)
+    out = {}
+    for name, s in scores.items():
+        acc, n = pairwise(s, level, pr)
+        facc, fn = pairwise(s, level, free)
+        sp, ncommits = commit_spearman(s, level, commit)
+        out[name] = {"pairwise": acc, "pairs": n, "pairwise_free": facc, "free_pairs": fn,
+                     "spearman": sp, "commits": ncommits,
+                     "per_repo": {r: pairwise(s, level, pr, repos == r)[0] for r in sorted(set(repos))}}
+    return out
+
+
+def later_fix_by_attention(score, later):
+    """later_fix rate per third of hunks by predicted attention, over the
+    hunks whose later_fix is known."""
+    known = np.array([v is not None for v in later])
+    s, y = score[known], np.array([bool(v) for v in later])[known]
+    cut = np.quantile(s, [1 / 3, 2 / 3])
+    bins = np.digitize(s, cut)
+    return {name: {"hunks": int((bins == b).sum()), "later_fix": int(y[bins == b].sum())}
+            for b, name in enumerate(("low", "mid", "high"))}
+
+
+def train_attention(c, gold_path, silver_path):
+    """The attention head: how much a hunk needs a reviewer's attention,
+    from Opus's 1-3 rating, as a fractional logistic target (level-1)/2 (each
+    row twice, as a 0 weighted 1-t and a 1 weighted t), so one sigmoid head
+    ranks by expected level and the 2-vs-3 distinction counts. Tree count
+    picked on leave-one-repo-out log-loss; logistic vs trees on its
+    within-commit pairwise accuracy. The gate (`ATTENTION_GATE`) decides
+    whether `--hunch` may reorder by it."""
+    names = c.schema["names"]
+    hist = [names.index(n) for n in HISTORY]
+    si, ls, later, cs, sat = attention_rows(c, silver_path, c.s_recs, c.s_at)
+    gi, lg, _, cg, gat = attention_rows(c, gold_path, c.g_recs, c.g_at)
+    x, r, w = c.xs[si], c.rs[si], c.ws[si]
+    xg, rg = c.xg[gi], c.rg[gi]
+    t = (ls - 1) / 2
+
+    def doubled(rows):
+        xx = np.vstack([x[rows], x[rows]])
+        yy = np.concatenate([np.zeros(len(rows), dtype=bool), np.ones(len(rows), dtype=bool)])
+        ww = np.concatenate([w[rows] * (1 - t[rows]), w[rows] * t[rows]])
+        keep = ww > 0
+        return drop_history(xx, hist, np.random.default_rng(SEED))[keep], yy[keep], ww[keep]
+
+    def loss(p, rows=slice(None)):
+        p = np.clip(p, 1e-9, 1 - 1e-9)
+        return float(np.average(-(t[rows] * np.log(p) + (1 - t[rows]) * np.log(1 - p)), weights=w[rows]))
+
+    grid = list(range(TREE_STEP, TREE_MAX + 1, TREE_STEP))
+    loro, curve = {"lr": np.zeros(len(t))}, np.zeros((len(grid), len(t)))
+    for repo in sorted(set(r)):
+        held = r == repo
+        xt, yt, wt = doubled(np.flatnonzero(~held))
+        loro["lr"][held] = fit("lr", xt, yt, wt).predict_proba(x[held])[:, 1]
+        m = fit("trees", xt, yt, wt)
+        for i, n in enumerate(grid):
+            curve[i, held] = m.predict_proba(x[held], num_iteration=n)[:, 1]
+    losses = [loss(cv) for cv in curve]
+    best = int(np.argmin(losses))
+    ship = next(i for i, v in enumerate(losses) if v <= losses[best] + TREE_TOL)
+    n_trees = grid[ship]
+    loro["trees"] = curve[ship]
+    xt, yt, wt = doubled(np.arange(len(t)))
+    models = {k: fit(k, xt, yt, wt) for k in ("lr", "trees")}
+    proba = lambda k, x_, n=n_trees: models[k].predict_proba(x_, **({"num_iteration": n} if k == "trees" else {}))[:, 1]
+
+    loro_ev = rank_metrics({**baselines(x, sat, names), **loro}, ls, cs, r, sat)
+    shipped = "trees" if loro_ev["trees"]["pairwise"] >= loro_ev["lr"]["pairwise"] else "lr"
+    gold_scores = {k: proba(k, xg) for k in models}
+    gold_ev = rank_metrics({**baselines(xg, gat, names), **gold_scores}, lg, cg, rg, gat)
+    if shipped == "lr":
+        scaler, lr = models["lr"].named_steps.values()
+        model = {"type": "logistic", "mean": [f32(v) for v in scaler.mean_],
+                 "scale": [f32(v) for v in scaler.scale_], "coef": [f32(v) for v in lr.coef_[0]],
+                 "intercept": f32(lr.intercept_[0])}
+    else:
+        trees = trimmed_trees(models["trees"].booster_, n_trees)
+        both = np.vstack([c.xs, c.xg])
+        export_err = float(np.abs(trees_proba(trees, both) - proba("trees", both)).max())
+        if export_err > 1e-4:
+            sys.exit(f"attention: trimmed trees disagree with LightGBM by {export_err:.2g}")
+        model = {"type": "lightgbm", "objective": "binary", "link": "sigmoid",
+                 "score": "sum of the trees' leaf_value", "split": "x[feature] <= threshold goes left",
+                 "trees": trees}
+    base, h = "file_position", shipped
+    lost = sorted(k for k, v in loro_ev[h]["per_repo"].items()
+                  if v is not None and loro_ev[base]["per_repo"][k] is not None and v < loro_ev[base]["per_repo"][k])
+    gate = {"rule": ATTENTION_GATE, "model": h,
+            "loro": {"hunch": loro_ev[h]["pairwise"], "file_position": loro_ev[base]["pairwise"],
+                     "pairs": loro_ev[h]["pairs"], "losing_repos": lost},
+            "gold": {"hunch": gold_ev[h]["pairwise"], "file_position": gold_ev[base]["pairwise"],
+                     "pairs": gold_ev[h]["pairs"]}}
+    gate["passes"] = bool(gate["loro"]["hunch"] > gate["loro"]["file_position"] and len(lost) <= 2
+                          and gate["gold"]["hunch"] > gate["gold"]["file_position"])
+    provenance = {
+        "label": "attention (Opus 1-3) as (level-1)/2",
+        "train": {"file": silver_path.name, "sha256": sha256(silver_path), "hunks": len(t),
+                  "levels": {str(k): int((ls == k).sum()) for k in (1, 2, 3)}},
+        "eval": {"file": "corpus/attention.gold.jsonl", "sha256": sha256(gold_path), "hunks": len(lg),
+                 "levels": {str(k): int((lg == k).sum()) for k in (1, 2, 3)}},
+        "history_drop": HISTORY_DROP, "seed": SEED, "lightgbm_params": {**LGBM, "n_estimators": n_trees},
+        "tree_count": {"rule": f"smallest count within {TREE_TOL} of the best pooled leave-one-repo-out "
+                               f"log-loss, every {TREE_STEP} up to {TREE_MAX}",
+                       "best": grid[best], "shipped": n_trees, "shipped_loro_log_loss": round(losses[ship], 4)},
+    }
+    selection = {"rule": "the model with the higher leave-one-repo-out within-commit pairwise accuracy, "
+                         "lightgbm on a tie", "chosen": shipped}
+    report = {"selection": selection, "provenance": provenance, "gate": gate,
+              "metrics": {"loro": loro_ev, "gold": gold_ev},
+              "loro_log_loss": {"lr": round(loss(loro["lr"]), 4), "trees": round(losses[ship], 4)},
+              "later_fix_by_attention_loro": later_fix_by_attention(loro[shipped], later),
+              "tree_count_curve": {"trees": grid, "loro_log_loss": [round(v, 4) for v in losses]}}
+    print(f"\nattention ({len(t)} silver, {len(lg)} gold), shipping {model['type']} ({n_trees} trees)")
+    print(f"{'ranking':14} {'LORO pair':>9} {'free':>6} {'rho':>6} | {'gold pair':>9} {'free':>6} {'rho':>6}")
+    for k in loro_ev:
+        a, g = loro_ev[k], gold_ev[k]
+        print(f"{k:14} {a['pairwise']:9.3f} {a['pairwise_free'] or 0:6.3f} {a['spearman']:6.3f} | "
+              f"{g['pairwise']:9.3f} {g['pairwise_free'] or 0:6.3f} {g['spearman']:6.3f}")
+    print(f"pairs LORO {loro_ev[h]['pairs']} (free {loro_ev[h]['free_pairs']}), gold {gold_ev[h]['pairs']} "
+          f"(free {gold_ev[h]['free_pairs']})")
+    print(f"{'repo':14} {'file_pos':>8} {'hunch':>8}")
+    for k, v in loro_ev[base]["per_repo"].items():
+        print(f"{k:14} {v if v is not None else float('nan'):8.3f} {loro_ev[h]['per_repo'][k] or float('nan'):8.3f}"
+              + ("  loses" if k in lost else ""))
+    print(f"later_fix by predicted attention (LORO): {report['later_fix_by_attention_loro']}")
+    print(f"attention gate: {'PASS' if gate['passes'] else 'FAIL'}")
+    head = {"model": model, "columns": names, "selection": selection, "provenance": provenance,
+            "policy": {"passes": gate["passes"], "rule": ATTENTION_GATE}}
+    return head, report, proba(shipped, c.xg)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=ROOT / "src/hunch.json")
@@ -727,21 +967,24 @@ def main():
     held_out = lambda records: [r for r in records if (r["repo"], r["sha"][:8]) not in gold_commits]
     silver_records = read(silver_path)
     silver_kept = held_out(silver_records)
-    xs, s_recs, rs, ws, schema, s_match = load(corpus, silver_kept, a.workers, None)
-    xg, g_recs, rg, _, gschema, g_match = load(corpus, gold_records, a.workers, None)
+    xs, s_recs, rs, ws, schema, s_match, s_at = load(corpus, silver_kept, a.workers, None)
+    xg, g_recs, rg, _, gschema, g_match, g_at = load(corpus, gold_records, a.workers, None)
     if gschema != schema:
         sys.exit("silver and gold feature schemas differ")
-    c = Data(corpus, schema, xs, s_recs, rs, ws, xg, g_recs, rg, held_out,
+    c = Data(corpus, schema, xs, s_recs, rs, ws, s_at, xg, g_recs, rg, g_at, held_out,
              {"train": {"file": "silver.jsonl", "sha256": sha256(silver_path), "hunks": len(rs),
                         "dropped_in_gold_commits": len(silver_records) - len(silver_kept), **s_match},
               "eval": {"file": "corpus/gold.jsonl", "sha256": sha256(gold_path), "hunks": len(rg), **g_match}},
              a.workers)
     skip, skip_report, skip_gold = train_skip(c, a.extra)
     faithful, faithful_report, faithful_gold = train_faithful(c, a.extra_faithful)
+    attention, attention_report, attention_gold = train_attention(c, ROOT / "corpus/attention.gold.jsonl",
+                                                                  corpus / "attention.silver.jsonl")
     a.out.write_text(dump({"feature_schema": schema, "fingerprint": fp,
-                           "heads": {"should_skip": skip, "faithful": faithful}}))
-    a.parity.write_text(parity(xg, {"should_skip": skip_gold, "faithful": faithful_gold}))
-    a.report.write_text(json.dumps({"heads": {"should_skip": skip_report, "faithful": faithful_report}},
+                           "heads": {"should_skip": skip, "faithful": faithful, "attention": attention}}))
+    a.parity.write_text(parity(xg, {"should_skip": skip_gold, "faithful": faithful_gold, "attention": attention_gold}))
+    a.report.write_text(json.dumps({"heads": {"should_skip": skip_report, "faithful": faithful_report,
+                                              "attention": attention_report}},
                                    indent=1, sort_keys=True) + "\n")
 
 

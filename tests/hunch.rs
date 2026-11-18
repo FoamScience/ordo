@@ -1,8 +1,8 @@
 //! hunch's feature export: off unless asked, one named column per position,
 //! and git history read only inside its window; its guess: off unless asked,
 //! each head the trained library's own numbers, and nothing else in the
-//! output moved but the noise flags the skip policy overrides, and only once
-//! its gate passed.
+//! output moved but the noise flags the skip policy overrides and the
+//! freed groups attention reorders, each only once its gate passed.
 use ordo_diff::hunch::{self, Head, Policy};
 use ordo_diff::model::{HunchChange, HunkOut, Output};
 use serde_json::json;
@@ -223,7 +223,11 @@ fn every_head_matches_the_trained_library() {
             .expect("json");
     assert!(rows.len() > 100, "{} rows", rows.len());
     let width = hunch::names().len();
-    for (head, key) in [(Head::Skip, "should_skip"), (Head::Faithful, "faithful")] {
+    for (head, key) in [
+        (Head::Skip, "should_skip"),
+        (Head::Faithful, "faithful"),
+        (Head::Attention, "attention"),
+    ] {
         let worst = rows
             .iter()
             .map(|r| {
@@ -274,6 +278,10 @@ fn the_guess_carries_a_probability_and_its_top_features() {
         assert!((0.0..=1.0).contains(&f), "{f}");
         let top = g["faithful_top"].as_array().expect("faithful_top");
         assert!(top.len() <= 3, "{top:?}");
+        let a = g["attention"].as_f64().expect("attention");
+        assert!((0.0..=1.0).contains(&a), "{a}");
+        let top = g["attention_top"].as_array().expect("attention_top");
+        assert!(top.len() <= 3, "{top:?}");
         // asked for the guess only, not the training columns
         assert!(h.get("features").is_none());
     }
@@ -317,12 +325,19 @@ fn policy_input(hunch: bool) -> serde_json::Value {
 
 /// `with` stripped of hunch's guesses, each noise flag the policy moved put
 /// back, so it reads as the output without `--hunch`; and the moves, in
-/// hunk order.
+/// hunk order. Its reading order (`order`, each hunk's `order_index`) goes
+/// too, when attention may move it: `attention_keeps_every_edge` checks that.
 fn unmoved(mut with: serde_json::Value) -> (serde_json::Value, Vec<Option<HunchChange>>) {
     let mut moves = vec![];
+    if hunch::attention_orders() {
+        with.as_object_mut().unwrap().remove("order");
+    }
     for f in with["files"].as_array_mut().unwrap() {
         for h in f["hunks"].as_array_mut().unwrap() {
             let h = h.as_object_mut().unwrap();
+            if hunch::attention_orders() {
+                h.remove("order_index");
+            }
             let changed = h.remove("hunch").and_then(|g| g.get("changed").cloned());
             let changed: Option<HunchChange> = changed.map(|c| match c.as_str() {
                 Some("unhid") => HunchChange::Unhid,
@@ -344,9 +359,23 @@ fn unmoved(mut with: serde_json::Value) -> (serde_json::Value, Vec<Option<HunchC
     (with, moves)
 }
 
+/// The output without `--hunch`, less what `unmoved` drops from the guess.
+fn plain(input: serde_json::Value) -> serde_json::Value {
+    let mut v = serde_json::to_value(run(input)).unwrap();
+    if hunch::attention_orders() {
+        v.as_object_mut().unwrap().remove("order");
+        for f in v["files"].as_array_mut().unwrap() {
+            for h in f["hunks"].as_array_mut().unwrap() {
+                h.as_object_mut().unwrap().remove("order_index");
+            }
+        }
+    }
+    v
+}
+
 #[test]
 fn the_guess_moves_nothing_else() {
-    let plain = serde_json::to_value(run(json!({ "changes": [change()] }))).unwrap();
+    let plain = plain(json!({ "changes": [change()] }));
     let (with, moves) = unmoved(with_hunch(json!({})));
     assert_eq!(with, plain);
     assert!(moves.iter().all(Option::is_none), "{moves:?}");
@@ -354,7 +383,7 @@ fn the_guess_moves_nothing_else() {
 
 #[test]
 fn the_policy_moves_only_noise_flags() {
-    let plain = serde_json::to_value(run(policy_input(false))).unwrap();
+    let plain = plain(policy_input(false));
     let guessed = serde_json::to_value(run(policy_input(true))).unwrap();
     let p: Vec<f64> = guessed["files"]
         .as_array()
@@ -364,7 +393,7 @@ fn the_policy_moves_only_noise_flags() {
         .map(|h| h["hunch"]["noise"].as_f64().expect("noise"))
         .collect();
     let (with, moves) = unmoved(guessed);
-    // the reading order, edges, groups and every other field stay the engine's
+    // edges, groups and every other field stay the engine's
     assert_eq!(with, plain);
     let expected = match hunch::policy() {
         Some(_) => vec![Some(HunchChange::Unhid), Some(HunchChange::Hid)],
@@ -393,6 +422,137 @@ fn the_policy_ships_only_when_its_gate_passed() {
         hide: policy["hide"].as_f64().expect("hide"),
     });
     assert_eq!(hunch::policy(), shipped);
+}
+
+#[test]
+fn attention_orders_only_once_its_gate_passed() {
+    assert_eq!(
+        shipped_policy("attention")["passes"] == true,
+        hunch::attention_orders()
+    );
+}
+
+/// Each hunk id's place in `out`'s reading order.
+fn places(out: &Output) -> std::collections::HashMap<String, usize> {
+    out.order
+        .iter()
+        .enumerate()
+        .map(|(i, o)| (o.hunk.clone(), i))
+        .collect()
+}
+
+#[test]
+fn attention_keeps_every_edge() {
+    // the order with `--hunch` reads every definition before its use wherever
+    // the engine's own order does: attention only reorders freed groups
+    let mut inputs = feature_inputs();
+    inputs.push(policy_input(false));
+    for mut input in inputs {
+        input["options"]["hunch"] = json!(false);
+        let without = run(input.clone());
+        input["options"]["hunch"] = json!(true);
+        let with = run(input);
+        let (a, b) = (places(&without), places(&with));
+        let mut sorted: Vec<&String> = b.keys().collect();
+        sorted.sort();
+        let mut want: Vec<&String> = a.keys().collect();
+        want.sort();
+        assert_eq!(sorted, want, "the same hunks");
+        for e in &without.edges {
+            if a[&e.from] < a[&e.to] {
+                assert!(b[&e.from] < b[&e.to], "{} -> {} reversed", e.from, e.to);
+            }
+        }
+    }
+}
+
+/// tests/fixtures/hunch's inputs and `attention_input`'s, each with features
+/// asked for.
+fn feature_inputs() -> Vec<serde_json::Value> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hunch");
+    let mut inputs: Vec<serde_json::Value> = fixture_outputs()
+        .into_iter()
+        .map(|(name, _)| {
+            serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
+        })
+        .collect();
+    inputs.push(attention_input(false));
+    for i in &mut inputs {
+        i["options"]["features"] = json!(true);
+    }
+    inputs
+}
+
+#[test]
+fn the_first_assembly_feeds_attention_the_same_features() {
+    // attention is guessed on an assembly in file-position order; that is
+    // only sound while no feature reads the reading order
+    let vectors = |o: &Output| -> Vec<Vec<f64>> {
+        hunks(o)
+            .iter()
+            .map(|h| h.features.clone().expect("features"))
+            .collect()
+    };
+    let mut reordered = false;
+    for mut input in feature_inputs() {
+        input["options"]["hunch"] = json!(false);
+        let without = run(input.clone());
+        input["options"]["hunch"] = json!(true);
+        let with = run(input);
+        assert_eq!(vectors(&with), vectors(&without));
+        reordered |= places(&with) != places(&without);
+    }
+    assert_eq!(reordered, hunch::attention_orders());
+}
+
+#[test]
+fn attention_cannot_pull_a_use_ahead_of_its_definition() {
+    // tests/rules.rs's "P2 outranks a preference", with hunch's in place of a
+    // rule's: main.py's use draws the attention, util.py still comes first
+    let out = run(json!({
+        "changes": [
+            { "path": "main.py", "old": "x = 1\n", "new": "x = helper()\n" },
+            { "path": "util.py", "old": "", "new": "def helper():\n    return 1\n" },
+        ],
+        "options": { "cross_file": true, "hunch": true }
+    }));
+    let paths: Vec<&str> = out.order.iter().map(|o| o.path.as_str()).collect();
+    assert_eq!(paths, vec!["util.py", "main.py"]);
+    assert_eq!(out.edges.len(), 1);
+}
+
+/// One file of two unrelated functions: the first only reworded in a
+/// comment, the second given new branching logic, which a reviewer needs to
+/// read far more closely.
+fn attention_input(hunch: bool) -> serde_json::Value {
+    let old = "def a():\n    # the first one\n    return 1\n\n\n\n\n\n\n\n\n\n\n\n\
+               def b(xs):\n    return 0\n";
+    let new = "def a():\n    # the very first one\n    return 1\n\n\n\n\n\n\n\n\n\n\n\n\
+               def b(xs):\n    t = 0\n    for x in xs:\n        if x > 0 and x % 2:\n            \
+               t += x\n        elif x < 0:\n            t -= x\n    return t\n";
+    json!({ "changes": [{ "path": "src/m.py", "old": old, "new": new }],
+            "options": { "hunch": hunch } })
+}
+
+#[test]
+fn attention_reads_the_freed_group_that_needs_it_first() {
+    let without = run(attention_input(false));
+    let with = run(attention_input(true));
+    let att: Vec<f64> = with.files[0]
+        .hunks
+        .iter()
+        .map(|h| h.hunch.as_ref().unwrap().attention)
+        .collect();
+    assert_eq!(att.len(), 2, "two hunks");
+    assert!(att[1] > att[0], "attention {att:?}");
+    let first = |o: &Output| o.order[0].hunk.clone();
+    assert_eq!(first(&without), with.files[0].hunks[0].id);
+    let want = if hunch::attention_orders() { 1 } else { 0 };
+    assert_eq!(
+        first(&with),
+        with.files[0].hunks[want].id,
+        "attention {att:?}"
+    );
 }
 
 #[test]

@@ -8,7 +8,7 @@ import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
-import { badge, contributions, effect, faithfulness, flagBadge } from "./hunch.ts";
+import { attention, badge, contributions, effect, faithfulness, flagBadge } from "./hunch.ts";
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
 import { moved, regressed } from "./readability.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
@@ -1027,6 +1027,7 @@ function renderWhy(): void {
         h("h3", null, "Hunch", h("small", null, effect(it.hunch))),
         h("p", { class: "muted" }, `${badge(it.hunch)}, most moved by ${contributions(it.hunch).join(", ")}.`),
         h("p", { class: "muted" }, `${faithfulness(it.hunch)}.`),
+        h("p", { class: "muted" }, `${attention(it.hunch)}.`),
       ],
       it.readability.length > 0 && [
         h("h3", null, "Readability", h("small", null, "against each definition's old version")),

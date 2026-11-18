@@ -1,7 +1,7 @@
 // hunch's guess on a hunk, said as a reviewer reads it: how likely it is
 // skippable, the features that pushed it there, and whether it moved the
-// engine's noise flag; and how likely its rationale is faithful. Nothing is
-// reordered by it.
+// engine's noise flag; how likely its rationale is faithful; and how much
+// attention it needs, which may reorder what the def->use order left free.
 
 import type { Hunch } from "./types.ts";
 
@@ -23,6 +23,11 @@ export function faithfulness(g: Hunch): string {
   return `Rationale: ${Math.round(g.faithful * 100)}% faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
 }
 
+/** `Attention: 64%`, most moved by features signed toward attention */
+export function attention(g: Hunch): string {
+  return `Attention: ${Math.round(g.attention * 100)}%, most moved by ${signed(g.attention_top).join(", ")}`;
+}
+
 /** `Hunch: shown` / `Hunch: hidden` when the guess moved the hunk's noise flag */
 export function flagBadge(g: Hunch): string | null {
   return g.changed === "unhid" ? "Hunch: shown" : g.changed === "hid" ? "Hunch: hidden" : null;
@@ -34,5 +39,5 @@ export function effect(g: Hunch): string {
     ? "the engine hid this as noise; the model is confident it should be read, so it is shown"
     : g.changed === "hid"
       ? "the model is confident this can be skipped, so it is hidden like noise"
-      : "a trained guess; it changes nothing here";
+      : "a trained guess; it hides and shows nothing here";
 }
