@@ -21,10 +21,10 @@ fn go_template() {
         .compile("tree-sitter-go-template");
 }
 
-// hunch's trained model (scripts/hunch-train.py) as static arrays, so the
-// engine never parses JSON for it. Trees become one node list with indices
-// made absolute and a root per tree; a logistic model becomes its four
-// vectors. See `crate::hunch::Model`.
+// hunch's trained heads (scripts/hunch-train.py) as static arrays, so the
+// engine never parses JSON for them: each head's trees become one node list
+// with indices made absolute and a root per tree, a logistic head its four
+// vectors. All heads read the one feature schema. See `crate::hunch::Model`.
 fn hunch_model() {
     let path = "src/hunch.json";
     println!("cargo:rerun-if-changed={path}");
@@ -36,7 +36,6 @@ fn hunch_model() {
         .iter()
         .map(|n| n.as_str().expect("a feature name"))
         .collect();
-    let model = &doc["model"];
     let hash = doc["feature_schema"]["hash"]
         .as_str()
         .expect("feature_schema.hash");
@@ -48,9 +47,15 @@ fn hunch_model() {
          static FINGERPRINT: Option<&str> = {fingerprint:?};\n",
         names.len()
     );
+    let head = |name: &str| {
+        let h = &doc["heads"][name];
+        assert!(h.is_object(), "hunch: no head {name}");
+        h
+    };
     // the policy `--hunch` applies to the noise flag, only once the trainer's
     // promotion gate passed it; absent, the guess stays a shadow
-    let policy = &doc["policy"];
+    let skip = head("should_skip");
+    let policy = &skip["policy"];
     if policy["passes"].as_bool() == Some(true) {
         let at = |k: &str| policy[k].as_f64().unwrap_or_else(|| panic!("policy.{k}"));
         writeln!(
@@ -63,6 +68,16 @@ fn hunch_model() {
     } else {
         out.push_str("static POLICY: Option<Policy> = None;\n");
     }
+    // the faithful head stays a shadow: its doubt gate has not passed
+    model(&mut out, "SKIP", &skip["model"], &names);
+    model(&mut out, "FAITHFUL", &head("faithful")["model"], &names);
+    let dest =
+        std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("hunch_model.rs");
+    std::fs::write(dest, out).expect("write hunch_model.rs");
+}
+
+/// One head's model as `static {prefix}: Model`.
+fn model(out: &mut String, prefix: &str, model: &Value, names: &[&str]) {
     match model["type"].as_str() {
         Some("lightgbm") => {
             assert_eq!(model["link"], "sigmoid", "hunch: only a sigmoid link");
@@ -97,9 +112,9 @@ fn hunch_model() {
             }
             writeln!(
                 out,
-                "static NODES: [Node; {n}] = [\n{nodes}];\n\
-                 static ROOTS: [u32; {}] = {roots:?};\n\
-                 static MODEL: Model = Model::Trees {{ nodes: &NODES, roots: &ROOTS }};",
+                "static {prefix}_NODES: [Node; {n}] = [\n{nodes}];\n\
+                 static {prefix}_ROOTS: [u32; {}] = {roots:?};\n\
+                 static {prefix}: Model = Model::Trees {{ nodes: &{prefix}_NODES, roots: &{prefix}_ROOTS }};",
                 roots.len()
             )
             .unwrap();
@@ -113,7 +128,7 @@ fn hunch_model() {
             };
             writeln!(
                 out,
-                "static MODEL: Model = Model::Logistic {{ mean: &{}, scale: &{}, coef: &{}, intercept: {} }};",
+                "static {prefix}: Model = Model::Logistic {{ mean: &{}, scale: &{}, coef: &{}, intercept: {} }};",
                 vector("mean"),
                 vector("scale"),
                 vector("coef"),
@@ -123,9 +138,6 @@ fn hunch_model() {
         }
         other => panic!("hunch: unknown model type {other:?}"),
     }
-    let dest =
-        std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("hunch_model.rs");
-    std::fs::write(dest, out).expect("write hunch_model.rs");
 }
 
 /// A JSON number as an f32 literal; `{:?}` prints the shortest form that

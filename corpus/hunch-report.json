@@ -1,1918 +1,2694 @@
 {
- "head": "should_skip",
- "metrics": {
-  "gold": {
-   "lr": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 15,
-      "wrong_hides": 7
+ "heads": {
+  "faithful": {
+   "gate": {
+    "curve_gold": {
+     "0.2": {
+      "false_flag_rate": 0.0,
+      "flags": 0,
+      "precision": null,
+      "recall": 0.0,
+      "unfaithful": 8,
+      "unfaithful_flagged": 0
      },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 4,
-       "missed_skips": 2,
-       "wrong_hides": 3
-      },
-      "cobra": {
-       "hidden": 0,
-       "missed_skips": 4,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 5,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "execa": {
-       "hidden": 6,
-       "missed_skips": 2,
-       "wrong_hides": 2
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 10,
-       "missed_skips": 2,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 7,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      }
+     "0.25": {
+      "false_flag_rate": 0.0,
+      "flags": 0,
+      "precision": null,
+      "recall": 0.0,
+      "unfaithful": 8,
+      "unfaithful_flagged": 0
+     },
+     "0.3": {
+      "false_flag_rate": 0.0,
+      "flags": 0,
+      "precision": null,
+      "recall": 0.0,
+      "unfaithful": 8,
+      "unfaithful_flagged": 0
+     },
+     "0.35": {
+      "false_flag_rate": 0.0,
+      "flags": 1,
+      "precision": 1.0,
+      "recall": 0.125,
+      "unfaithful": 8,
+      "unfaithful_flagged": 1
+     },
+     "0.4": {
+      "false_flag_rate": 0.0,
+      "flags": 1,
+      "precision": 1.0,
+      "recall": 0.125,
+      "unfaithful": 8,
+      "unfaithful_flagged": 1
+     },
+     "0.45": {
+      "false_flag_rate": 0.0,
+      "flags": 2,
+      "precision": 1.0,
+      "recall": 0.25,
+      "unfaithful": 8,
+      "unfaithful_flagged": 2
+     },
+     "0.5": {
+      "false_flag_rate": 0.0,
+      "flags": 2,
+      "precision": 1.0,
+      "recall": 0.25,
+      "unfaithful": 8,
+      "unfaithful_flagged": 2
+     },
+     "0.55": {
+      "false_flag_rate": 0.0,
+      "flags": 2,
+      "precision": 1.0,
+      "recall": 0.25,
+      "unfaithful": 8,
+      "unfaithful_flagged": 2
+     },
+     "0.6": {
+      "false_flag_rate": 0.0053,
+      "flags": 3,
+      "precision": 0.6667,
+      "recall": 0.25,
+      "unfaithful": 8,
+      "unfaithful_flagged": 2
+     },
+     "0.65": {
+      "false_flag_rate": 0.016,
+      "flags": 5,
+      "precision": 0.4,
+      "recall": 0.25,
+      "unfaithful": 8,
+      "unfaithful_flagged": 2
+     },
+     "0.7": {
+      "false_flag_rate": 0.0266,
+      "flags": 7,
+      "precision": 0.2857,
+      "recall": 0.25,
+      "unfaithful": 8,
+      "unfaithful_flagged": 2
+     },
+     "0.75": {
+      "false_flag_rate": 0.0319,
+      "flags": 9,
+      "precision": 0.3333,
+      "recall": 0.375,
+      "unfaithful": 8,
+      "unfaithful_flagged": 3
+     },
+     "0.8": {
+      "false_flag_rate": 0.0745,
+      "flags": 18,
+      "precision": 0.2222,
+      "recall": 0.5,
+      "unfaithful": 8,
+      "unfaithful_flagged": 4
+     },
+     "0.85": {
+      "false_flag_rate": 0.0904,
+      "flags": 22,
+      "precision": 0.2273,
+      "recall": 0.625,
+      "unfaithful": 8,
+      "unfaithful_flagged": 5
+     },
+     "0.9": {
+      "false_flag_rate": 0.1436,
+      "flags": 32,
+      "precision": 0.1562,
+      "recall": 0.625,
+      "unfaithful": 8,
+      "unfaithful_flagged": 5
+     },
+     "0.95": {
+      "false_flag_rate": 0.2447,
+      "flags": 53,
+      "precision": 0.1321,
+      "recall": 0.875,
+      "unfaithful": 8,
+      "unfaithful_flagged": 7
      }
     },
-    "auroc": 0.9335,
-    "brier": 0.0747,
-    "pr_auc": 0.8947
+    "curve_loro": {
+     "0.2": {
+      "false_flag_rate": 0.0,
+      "flags": 8,
+      "precision": 0.9554,
+      "recall": 0.0144,
+      "unfaithful": 287,
+      "unfaithful_flagged": 5
+     },
+     "0.25": {
+      "false_flag_rate": 0.0003,
+      "flags": 15,
+      "precision": 0.743,
+      "recall": 0.0181,
+      "unfaithful": 287,
+      "unfaithful_flagged": 6
+     },
+     "0.3": {
+      "false_flag_rate": 0.0003,
+      "flags": 21,
+      "precision": 0.7299,
+      "recall": 0.0188,
+      "unfaithful": 287,
+      "unfaithful_flagged": 9
+     },
+     "0.35": {
+      "false_flag_rate": 0.001,
+      "flags": 44,
+      "precision": 0.7218,
+      "recall": 0.057,
+      "unfaithful": 287,
+      "unfaithful_flagged": 28
+     },
+     "0.4": {
+      "false_flag_rate": 0.0012,
+      "flags": 48,
+      "precision": 0.7154,
+      "recall": 0.0652,
+      "unfaithful": 287,
+      "unfaithful_flagged": 30
+     },
+     "0.45": {
+      "false_flag_rate": 0.0017,
+      "flags": 54,
+      "precision": 0.6541,
+      "recall": 0.0707,
+      "unfaithful": 287,
+      "unfaithful_flagged": 32
+     },
+     "0.5": {
+      "false_flag_rate": 0.002,
+      "flags": 62,
+      "precision": 0.6758,
+      "recall": 0.0935,
+      "unfaithful": 287,
+      "unfaithful_flagged": 38
+     },
+     "0.55": {
+      "false_flag_rate": 0.0038,
+      "flags": 74,
+      "precision": 0.5509,
+      "recall": 0.1028,
+      "unfaithful": 287,
+      "unfaithful_flagged": 42
+     },
+     "0.6": {
+      "false_flag_rate": 0.0052,
+      "flags": 90,
+      "precision": 0.5458,
+      "recall": 0.1363,
+      "unfaithful": 287,
+      "unfaithful_flagged": 49
+     },
+     "0.65": {
+      "false_flag_rate": 0.0074,
+      "flags": 110,
+      "precision": 0.4986,
+      "recall": 0.1613,
+      "unfaithful": 287,
+      "unfaithful_flagged": 54
+     },
+     "0.7": {
+      "false_flag_rate": 0.0127,
+      "flags": 151,
+      "precision": 0.4014,
+      "recall": 0.1864,
+      "unfaithful": 287,
+      "unfaithful_flagged": 62
+     },
+     "0.75": {
+      "false_flag_rate": 0.0165,
+      "flags": 179,
+      "precision": 0.3581,
+      "recall": 0.2011,
+      "unfaithful": 287,
+      "unfaithful_flagged": 69
+     },
+     "0.8": {
+      "false_flag_rate": 0.0238,
+      "flags": 241,
+      "precision": 0.2959,
+      "recall": 0.2187,
+      "unfaithful": 287,
+      "unfaithful_flagged": 79
+     },
+     "0.85": {
+      "false_flag_rate": 0.0386,
+      "flags": 345,
+      "precision": 0.2402,
+      "recall": 0.2673,
+      "unfaithful": 287,
+      "unfaithful_flagged": 90
+     },
+     "0.9": {
+      "false_flag_rate": 0.0734,
+      "flags": 600,
+      "precision": 0.1795,
+      "recall": 0.3517,
+      "unfaithful": 287,
+      "unfaithful_flagged": 106
+     },
+     "0.95": {
+      "false_flag_rate": 0.1665,
+      "flags": 1334,
+      "precision": 0.1404,
+      "recall": 0.5956,
+      "unfaithful": 287,
+      "unfaithful_flagged": 183
+     }
+    },
+    "doubt": 0.6,
+    "gold": {
+     "false_flag_rate": 0.0053,
+     "flags": 3,
+     "precision": 0.6667,
+     "recall": 0.25,
+     "unfaithful": 8,
+     "unfaithful_flagged": 2
+    },
+    "loro": {
+     "false_flag_rate": 0.0052,
+     "flags": 90,
+     "precision": 0.5458,
+     "recall": 0.1363,
+     "unfaithful": 287,
+     "unfaithful_flagged": 49
+    },
+    "passes": false,
+    "rule": "doubt below the highest P(faithful) threshold whose leave-one-repo-out flags are unfaithful >= 0.5 of the time (>= 5 flags); passes when there it finds >= 0.2 of the unfaithful rationales and on gold >= 0.25 while flagging <= 0.03 of the faithful"
    },
-   "noise": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 13,
-      "wrong_hides": 5
+   "metrics": {
+    "lr": {
+     "gold": {
+      "auroc": 0.7666,
+      "brier": 0.0411,
+      "unfaithful_ap": 0.1683
      },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 3,
-       "missed_skips": 2,
-       "wrong_hides": 2
-      },
-      "cobra": {
-       "hidden": 0,
-       "missed_skips": 4,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 4,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 8,
-       "missed_skips": 0,
-       "wrong_hides": 2
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 10,
-       "missed_skips": 2,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 7,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      }
+     "loro": {
+      "auroc": 0.6691,
+      "silver_auroc": 0.6815,
+      "silver_unfaithful_ap": 0.191,
+      "unfaithful_ap": 0.1484
      }
     },
-    "auroc": 0.8576,
-    "brier": 0.0918,
-    "pr_auc": 0.7311
+    "trees": {
+     "gold": {
+      "auroc": 0.8969,
+      "brier": 0.032,
+      "unfaithful_ap": 0.4132
+     },
+     "loro": {
+      "auroc": 0.8214,
+      "silver_auroc": 0.768,
+      "silver_unfaithful_ap": 0.2967,
+      "unfaithful_ap": 0.2455
+     }
+    }
    },
-   "trees": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 9,
-      "wrong_hides": 1
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 2,
-       "missed_skips": 2,
-       "wrong_hides": 1
-      },
-      "cobra": {
-       "hidden": 1,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 5,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 11,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 1,
-       "missed_skips": 2,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 6,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      }
-     }
+   "provenance": {
+    "eval": {
+     "file": "corpus/gold.jsonl",
+     "hunks": 196,
+     "matched_by_overlap": 0,
+     "sha256": "a04e2f4129198ce0583fc117b5ee126109256264af9654fa17adbffe76c8e57a",
+     "unfaithful": 8,
+     "unmatched": 0
     },
-    "auroc": 0.9772,
-    "brier": 0.0412,
-    "pr_auc": 0.9555
+    "extra": {
+     "dropped_in_gold_commits": 0,
+     "file": "judged.faithful.jsonl",
+     "hunks": 4619,
+     "matched_by_overlap": 0,
+     "sha256": "870322ef6a0ad129a341d858e8da14719d42790117086e97493009f02865a22a",
+     "unfaithful": 207,
+     "unmatched": 0
+    },
+    "history_drop": 0.2,
+    "label": "labels.faithful",
+    "lightgbm_params": {
+     "colsample_bytree": 0.8,
+     "deterministic": true,
+     "force_row_wise": true,
+     "learning_rate": 0.05,
+     "min_child_samples": 20,
+     "n_estimators": 155,
+     "n_jobs": 1,
+     "num_leaves": 15,
+     "random_state": 0,
+     "subsample": 0.8,
+     "subsample_freq": 1,
+     "verbose": -1
+    },
+    "overlap_min": 0.8,
+    "seed": 0,
+    "train": {
+     "dropped_in_gold_commits": 368,
+     "file": "silver.jsonl",
+     "hunks": 1520,
+     "matched_by_overlap": 0,
+     "sha256": "a725976f53fe776208cbfbe794e3c6d06a84080678fa4182c14b2b730f7b93f0",
+     "unfaithful": 80,
+     "unmatched": 0
+    },
+    "tree_count": {
+     "best": 180,
+     "rule": "smallest count within 0.005 of the best pooled leave-one-repo-out AUROC (silver and extra, weighted), every 5 up to 1000",
+     "shipped": 155,
+     "shipped_loro_auroc": 0.8214
+    }
+   },
+   "selection": {
+    "chosen": "trees",
+    "rule": "the model with the higher leave-one-repo-out average precision for unfaithful rationales, lightgbm on a tie"
+   },
+   "tree_count_curve": {
+    "loro_auroc": [
+     0.7424,
+     0.7688,
+     0.7871,
+     0.7891,
+     0.7936,
+     0.7923,
+     0.7934,
+     0.7954,
+     0.8018,
+     0.8069,
+     0.806,
+     0.8073,
+     0.8098,
+     0.8087,
+     0.8094,
+     0.8122,
+     0.8125,
+     0.8113,
+     0.8115,
+     0.8141,
+     0.8153,
+     0.816,
+     0.8155,
+     0.8159,
+     0.8172,
+     0.8167,
+     0.8178,
+     0.8189,
+     0.8192,
+     0.8203,
+     0.8214,
+     0.8212,
+     0.8205,
+     0.823,
+     0.8236,
+     0.8254,
+     0.8246,
+     0.8229,
+     0.8207,
+     0.8204,
+     0.8215,
+     0.8209,
+     0.823,
+     0.8229,
+     0.8226,
+     0.8239,
+     0.8228,
+     0.8233,
+     0.8238,
+     0.8244,
+     0.8238,
+     0.8234,
+     0.8237,
+     0.8231,
+     0.8233,
+     0.8231,
+     0.8234,
+     0.8223,
+     0.8221,
+     0.8214,
+     0.8212,
+     0.821,
+     0.8212,
+     0.8202,
+     0.82,
+     0.8199,
+     0.8197,
+     0.819,
+     0.8192,
+     0.8197,
+     0.818,
+     0.8184,
+     0.8179,
+     0.8174,
+     0.8175,
+     0.8173,
+     0.8165,
+     0.817,
+     0.8166,
+     0.8165,
+     0.8156,
+     0.8169,
+     0.8159,
+     0.8166,
+     0.8169,
+     0.817,
+     0.8176,
+     0.8173,
+     0.8168,
+     0.8169,
+     0.8162,
+     0.8169,
+     0.8162,
+     0.8156,
+     0.8156,
+     0.8155,
+     0.8153,
+     0.815,
+     0.8145,
+     0.8152,
+     0.8153,
+     0.8152,
+     0.8141,
+     0.8144,
+     0.8138,
+     0.8134,
+     0.8137,
+     0.8131,
+     0.8133,
+     0.8131,
+     0.8128,
+     0.8138,
+     0.8137,
+     0.8136,
+     0.8133,
+     0.8128,
+     0.8121,
+     0.8124,
+     0.8122,
+     0.8121,
+     0.8115,
+     0.8114,
+     0.8113,
+     0.8106,
+     0.811,
+     0.8112,
+     0.8114,
+     0.8111,
+     0.8109,
+     0.8116,
+     0.8105,
+     0.8108,
+     0.8116,
+     0.8108,
+     0.8111,
+     0.8116,
+     0.8115,
+     0.8113,
+     0.8109,
+     0.8109,
+     0.8108,
+     0.8106,
+     0.8111,
+     0.8101,
+     0.8106,
+     0.8108,
+     0.81,
+     0.8084,
+     0.8086,
+     0.8089,
+     0.8081,
+     0.8079,
+     0.808,
+     0.8077,
+     0.8068,
+     0.8072,
+     0.8078,
+     0.8074,
+     0.8074,
+     0.8069,
+     0.8067,
+     0.8063,
+     0.8062,
+     0.8062,
+     0.8064,
+     0.8059,
+     0.806,
+     0.8062,
+     0.8055,
+     0.8053,
+     0.8059,
+     0.8055,
+     0.8051,
+     0.8054,
+     0.8054,
+     0.805,
+     0.8053,
+     0.8058,
+     0.8056,
+     0.8052,
+     0.8043,
+     0.8051,
+     0.8052,
+     0.8048,
+     0.8053,
+     0.8046,
+     0.8041,
+     0.8042,
+     0.8041,
+     0.804,
+     0.8038,
+     0.8046,
+     0.8042,
+     0.8045,
+     0.805,
+     0.8045,
+     0.805,
+     0.8049,
+     0.8045,
+     0.8044
+    ],
+    "trees": [
+     5,
+     10,
+     15,
+     20,
+     25,
+     30,
+     35,
+     40,
+     45,
+     50,
+     55,
+     60,
+     65,
+     70,
+     75,
+     80,
+     85,
+     90,
+     95,
+     100,
+     105,
+     110,
+     115,
+     120,
+     125,
+     130,
+     135,
+     140,
+     145,
+     150,
+     155,
+     160,
+     165,
+     170,
+     175,
+     180,
+     185,
+     190,
+     195,
+     200,
+     205,
+     210,
+     215,
+     220,
+     225,
+     230,
+     235,
+     240,
+     245,
+     250,
+     255,
+     260,
+     265,
+     270,
+     275,
+     280,
+     285,
+     290,
+     295,
+     300,
+     305,
+     310,
+     315,
+     320,
+     325,
+     330,
+     335,
+     340,
+     345,
+     350,
+     355,
+     360,
+     365,
+     370,
+     375,
+     380,
+     385,
+     390,
+     395,
+     400,
+     405,
+     410,
+     415,
+     420,
+     425,
+     430,
+     435,
+     440,
+     445,
+     450,
+     455,
+     460,
+     465,
+     470,
+     475,
+     480,
+     485,
+     490,
+     495,
+     500,
+     505,
+     510,
+     515,
+     520,
+     525,
+     530,
+     535,
+     540,
+     545,
+     550,
+     555,
+     560,
+     565,
+     570,
+     575,
+     580,
+     585,
+     590,
+     595,
+     600,
+     605,
+     610,
+     615,
+     620,
+     625,
+     630,
+     635,
+     640,
+     645,
+     650,
+     655,
+     660,
+     665,
+     670,
+     675,
+     680,
+     685,
+     690,
+     695,
+     700,
+     705,
+     710,
+     715,
+     720,
+     725,
+     730,
+     735,
+     740,
+     745,
+     750,
+     755,
+     760,
+     765,
+     770,
+     775,
+     780,
+     785,
+     790,
+     795,
+     800,
+     805,
+     810,
+     815,
+     820,
+     825,
+     830,
+     835,
+     840,
+     845,
+     850,
+     855,
+     860,
+     865,
+     870,
+     875,
+     880,
+     885,
+     890,
+     895,
+     900,
+     905,
+     910,
+     915,
+     920,
+     925,
+     930,
+     935,
+     940,
+     945,
+     950,
+     955,
+     960,
+     965,
+     970,
+     975,
+     980,
+     985,
+     990,
+     995,
+     1000
+    ]
    }
   },
-  "gold_without_history": {
-   "lr": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 15,
-      "wrong_hides": 7
+  "should_skip": {
+   "metrics": {
+    "gold": {
+     "lr": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 15,
+        "wrong_hides": 7
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 4,
+         "missed_skips": 2,
+         "wrong_hides": 3
+        },
+        "cobra": {
+         "hidden": 0,
+         "missed_skips": 4,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 5,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "execa": {
+         "hidden": 6,
+         "missed_skips": 2,
+         "wrong_hides": 2
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 10,
+         "missed_skips": 2,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 7,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        }
+       }
+      },
+      "auroc": 0.9335,
+      "brier": 0.0747,
+      "pr_auc": 0.8947
      },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
+     "noise": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 13,
+        "wrong_hides": 5
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 3,
+         "missed_skips": 2,
+         "wrong_hides": 2
+        },
+        "cobra": {
+         "hidden": 0,
+         "missed_skips": 4,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 4,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 8,
+         "missed_skips": 0,
+         "wrong_hides": 2
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 10,
+         "missed_skips": 2,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 7,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        }
+       }
       },
-      "click": {
-       "hidden": 4,
-       "missed_skips": 2,
-       "wrong_hides": 3
+      "auroc": 0.8576,
+      "brier": 0.0918,
+      "pr_auc": 0.7311
+     },
+     "trees": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 9,
+        "wrong_hides": 1
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 2,
+         "missed_skips": 2,
+         "wrong_hides": 1
+        },
+        "cobra": {
+         "hidden": 1,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 5,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 11,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 1,
+         "missed_skips": 2,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 6,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        }
+       }
       },
-      "cobra": {
-       "hidden": 0,
-       "missed_skips": 4,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 5,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "execa": {
-       "hidden": 6,
-       "missed_skips": 2,
-       "wrong_hides": 2
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 10,
-       "missed_skips": 2,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 7,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      }
+      "auroc": 0.9772,
+      "brier": 0.0412,
+      "pr_auc": 0.9555
      }
     },
-    "auroc": 0.9342,
-    "brier": 0.0746,
-    "pr_auc": 0.8959
+    "gold_without_history": {
+     "lr": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 15,
+        "wrong_hides": 7
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 4,
+         "missed_skips": 2,
+         "wrong_hides": 3
+        },
+        "cobra": {
+         "hidden": 0,
+         "missed_skips": 4,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 5,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "execa": {
+         "hidden": 6,
+         "missed_skips": 2,
+         "wrong_hides": 2
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 10,
+         "missed_skips": 2,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 7,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        }
+       }
+      },
+      "auroc": 0.9342,
+      "brier": 0.0746,
+      "pr_auc": 0.8959
+     },
+     "noise": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 13,
+        "wrong_hides": 5
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 3,
+         "missed_skips": 2,
+         "wrong_hides": 2
+        },
+        "cobra": {
+         "hidden": 0,
+         "missed_skips": 4,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 4,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 8,
+         "missed_skips": 0,
+         "wrong_hides": 2
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 10,
+         "missed_skips": 2,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 7,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        }
+       }
+      },
+      "auroc": 0.8576,
+      "brier": 0.0918,
+      "pr_auc": 0.7311
+     },
+     "trees": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 9,
+        "wrong_hides": 1
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 2,
+         "missed_skips": 2,
+         "wrong_hides": 1
+        },
+        "cobra": {
+         "hidden": 1,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 5,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 12,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 6,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        }
+       }
+      },
+      "auroc": 0.9706,
+      "brier": 0.0448,
+      "pr_auc": 0.9494
+     }
+    },
+    "leave_one_repo_out": {
+     "lr": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 317,
+        "missed_skips": 116,
+        "wrong_hides": 14
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 9,
+         "missed_skips": 17,
+         "wrong_hides": 1
+        },
+        "click": {
+         "hidden": 25,
+         "missed_skips": 7,
+         "wrong_hides": 1
+        },
+        "cobra": {
+         "hidden": 35,
+         "missed_skips": 1,
+         "wrong_hides": 4
+        },
+        "curl": {
+         "hidden": 7,
+         "missed_skips": 5,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 36,
+         "missed_skips": 10,
+         "wrong_hides": 1
+        },
+        "execa": {
+         "hidden": 18,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 23,
+         "missed_skips": 6,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 53,
+         "missed_skips": 11,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 3,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "openfoam": {
+         "hidden": 36,
+         "missed_skips": 42,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 6,
+         "missed_skips": 6,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 66,
+         "missed_skips": 9,
+         "wrong_hides": 6
+        }
+       }
+      },
+      "auroc": 0.922,
+      "brier": 0.0788,
+      "pr_auc": 0.8856
+     },
+     "noise": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 317,
+        "missed_skips": 111,
+        "wrong_hides": 9
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 11,
+         "missed_skips": 17,
+         "wrong_hides": 3
+        },
+        "click": {
+         "hidden": 21,
+         "missed_skips": 10,
+         "wrong_hides": 0
+        },
+        "cobra": {
+         "hidden": 32,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "curl": {
+         "hidden": 6,
+         "missed_skips": 6,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 44,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 19,
+         "missed_skips": 0,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 25,
+         "missed_skips": 5,
+         "wrong_hides": 1
+        },
+        "lazy": {
+         "hidden": 53,
+         "missed_skips": 11,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 2,
+         "missed_skips": 1,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 36,
+         "missed_skips": 42,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 4,
+         "missed_skips": 8,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 64,
+         "missed_skips": 9,
+         "wrong_hides": 4
+        }
+       }
+      },
+      "auroc": 0.8635,
+      "brier": 0.0789,
+      "pr_auc": 0.7872
+     },
+     "trees": {
+      "at_noise_hide_rate": {
+       "all": {
+        "hidden": 317,
+        "missed_skips": 112,
+        "wrong_hides": 10
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 8,
+         "missed_skips": 17,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 23,
+         "missed_skips": 8,
+         "wrong_hides": 0
+        },
+        "cobra": {
+         "hidden": 33,
+         "missed_skips": 1,
+         "wrong_hides": 2
+        },
+        "curl": {
+         "hidden": 7,
+         "missed_skips": 5,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 42,
+         "missed_skips": 3,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 20,
+         "missed_skips": 0,
+         "wrong_hides": 1
+        },
+        "junit5": {
+         "hidden": 26,
+         "missed_skips": 4,
+         "wrong_hides": 1
+        },
+        "lazy": {
+         "hidden": 53,
+         "missed_skips": 11,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 3,
+         "missed_skips": 1,
+         "wrong_hides": 1
+        },
+        "openfoam": {
+         "hidden": 35,
+         "missed_skips": 43,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 6,
+         "missed_skips": 7,
+         "wrong_hides": 1
+        },
+        "vue": {
+         "hidden": 61,
+         "missed_skips": 12,
+         "wrong_hides": 4
+        }
+       }
+      },
+      "auroc": 0.9361,
+      "brier": 0.0706,
+      "pr_auc": 0.9003
+     }
+    },
+    "leave_one_repo_out_auroc_per_repo": {
+     "buildtheworld": {
+      "lr": 0.7837,
+      "noise": 0.6346,
+      "trees": 0.861
+     },
+     "click": {
+      "lr": 0.9418,
+      "noise": 0.8387,
+      "trees": 0.9485
+     },
+     "cobra": {
+      "lr": 0.9871,
+      "noise": 0.9795,
+      "trees": 0.9835
+     },
+     "curl": {
+      "lr": 0.8665,
+      "noise": 0.75,
+      "trees": 0.9023
+     },
+     "excalidraw": {
+      "lr": 0.9837,
+      "noise": 0.9889,
+      "trees": 1.0
+     },
+     "execa": {
+      "lr": 0.9984,
+      "noise": 1.0,
+      "trees": 1.0
+     },
+     "junit5": {
+      "lr": 0.9943,
+      "noise": 0.9075,
+      "trees": 0.9843
+     },
+     "lazy": {
+      "lr": 0.9792,
+      "noise": 0.9141,
+      "trees": 0.9807
+     },
+     "nvm": {
+      "lr": 0.9302,
+      "noise": 0.8333,
+      "trees": 0.969
+     },
+     "openfoam": {
+      "lr": 0.8364,
+      "noise": 0.7308,
+      "trees": 0.8824
+     },
+     "ripgrep": {
+      "lr": 0.8889,
+      "noise": 0.6667,
+      "trees": 0.9267
+     },
+     "vue": {
+      "lr": 0.9468,
+      "noise": 0.9154,
+      "trees": 0.9576
+     }
+    }
    },
-   "noise": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 13,
-      "wrong_hides": 5
+   "promotion": {
+    "gate": {
+     "gold": {
+      "lowered_overall": true,
+      "raised_in": []
      },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 3,
-       "missed_skips": 2,
-       "wrong_hides": 2
-      },
-      "cobra": {
-       "hidden": 0,
-       "missed_skips": 4,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 4,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 8,
-       "missed_skips": 0,
-       "wrong_hides": 2
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 10,
-       "missed_skips": 2,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 7,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      }
-     }
+     "loro": {
+      "lowered_overall": true,
+      "raised_in": []
+     },
+     "passes": true,
+     "rule": "the policy raises wrong hides in no repo, leaving one repo out and on gold, and lowers them overall in both"
     },
-    "auroc": 0.8576,
-    "brier": 0.0918,
-    "pr_auc": 0.7311
-   },
-   "trees": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 9,
-      "wrong_hides": 1
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
+    "model": "trees",
+    "policy": {
+     "gold": {
+      "hunch": {
+       "all": {
+        "hidden": 42,
+        "missed_skips": 13,
+        "newly_hidden": 0,
+        "unhidden": 2,
+        "wrong_hides": 3
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 3,
+         "missed_skips": 2,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 2
+        },
+        "cobra": {
+         "hidden": 0,
+         "missed_skips": 4,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 4,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 2,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 10,
+         "missed_skips": 2,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 7,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 1
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        }
+       }
       },
-      "click": {
-       "hidden": 2,
-       "missed_skips": 2,
-       "wrong_hides": 1
-      },
-      "cobra": {
-       "hidden": 1,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 5,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 12,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 6,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "wrong_hides": 0
+      "noise": {
+       "all": {
+        "hidden": 44,
+        "missed_skips": 13,
+        "newly_hidden": 0,
+        "unhidden": 0,
+        "wrong_hides": 5
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "click": {
+         "hidden": 3,
+         "missed_skips": 2,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 2
+        },
+        "cobra": {
+         "hidden": 0,
+         "missed_skips": 4,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "curl": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 4,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 8,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 2
+        },
+        "junit5": {
+         "hidden": 2,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 10,
+         "missed_skips": 2,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 0,
+         "missed_skips": 3,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 7,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 1
+        },
+        "ripgrep": {
+         "hidden": 1,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 6,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        }
+       }
       }
-     }
-    },
-    "auroc": 0.9706,
-    "brier": 0.0448,
-    "pr_auc": 0.9494
-   }
-  },
-  "leave_one_repo_out": {
-   "lr": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 317,
-      "missed_skips": 116,
-      "wrong_hides": 14
      },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 9,
-       "missed_skips": 17,
-       "wrong_hides": 1
+     "hide": 0.9,
+     "loro": {
+      "hunch": {
+       "all": {
+        "hidden": 314,
+        "missed_skips": 111,
+        "newly_hidden": 0,
+        "unhidden": 3,
+        "wrong_hides": 6
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 9,
+         "missed_skips": 17,
+         "newly_hidden": 0,
+         "unhidden": 2,
+         "wrong_hides": 1
+        },
+        "click": {
+         "hidden": 21,
+         "missed_skips": 10,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "cobra": {
+         "hidden": 32,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 1
+        },
+        "curl": {
+         "hidden": 6,
+         "missed_skips": 6,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 44,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 19,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 24,
+         "missed_skips": 5,
+         "newly_hidden": 0,
+         "unhidden": 1,
+         "wrong_hides": 0
+        },
+        "lazy": {
+         "hidden": 53,
+         "missed_skips": 11,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 2,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 36,
+         "missed_skips": 42,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 4,
+         "missed_skips": 8,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 64,
+         "missed_skips": 9,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 4
+        }
+       }
       },
-      "click": {
-       "hidden": 25,
-       "missed_skips": 7,
-       "wrong_hides": 1
-      },
-      "cobra": {
-       "hidden": 35,
-       "missed_skips": 1,
-       "wrong_hides": 4
-      },
-      "curl": {
-       "hidden": 7,
-       "missed_skips": 5,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 36,
-       "missed_skips": 10,
-       "wrong_hides": 1
-      },
-      "execa": {
-       "hidden": 18,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 23,
-       "missed_skips": 6,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 53,
-       "missed_skips": 11,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 3,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "openfoam": {
-       "hidden": 36,
-       "missed_skips": 42,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 6,
-       "missed_skips": 6,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 66,
-       "missed_skips": 9,
+      "noise": {
+       "all": {
+        "hidden": 317,
+        "missed_skips": 111,
+        "newly_hidden": 0,
+        "unhidden": 0,
+        "wrong_hides": 9
+       },
+       "per_repo": {
+        "buildtheworld": {
+         "hidden": 11,
+         "missed_skips": 17,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 3
+        },
+        "click": {
+         "hidden": 21,
+         "missed_skips": 10,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "cobra": {
+         "hidden": 32,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 1
+        },
+        "curl": {
+         "hidden": 6,
+         "missed_skips": 6,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "excalidraw": {
+         "hidden": 44,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "execa": {
+         "hidden": 19,
+         "missed_skips": 0,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "junit5": {
+         "hidden": 25,
+         "missed_skips": 5,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 1
+        },
+        "lazy": {
+         "hidden": 53,
+         "missed_skips": 11,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "nvm": {
+         "hidden": 2,
+         "missed_skips": 1,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "openfoam": {
+         "hidden": 36,
+         "missed_skips": 42,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "ripgrep": {
+         "hidden": 4,
+         "missed_skips": 8,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 0
+        },
+        "vue": {
+         "hidden": 64,
+         "missed_skips": 9,
+         "newly_hidden": 0,
+         "unhidden": 0,
+         "wrong_hides": 4
+        }
+       }
+      }
+     },
+     "picked_on": "leave-one-repo-out on silver, fewest wrong hides + missed skips",
+     "rule": "noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= 0.9",
+     "unhide": 0.05,
+     "unhide_curve_loro": {
+      "0.05": {
+       "hidden": 314,
+       "missed_skips": 111,
+       "newly_hidden": 0,
+       "unhidden": 3,
        "wrong_hides": 6
+      },
+      "0.1": {
+       "hidden": 312,
+       "missed_skips": 113,
+       "newly_hidden": 0,
+       "unhidden": 5,
+       "wrong_hides": 6
+      },
+      "0.15": {
+       "hidden": 311,
+       "missed_skips": 113,
+       "newly_hidden": 0,
+       "unhidden": 6,
+       "wrong_hides": 5
+      },
+      "0.2": {
+       "hidden": 311,
+       "missed_skips": 113,
+       "newly_hidden": 0,
+       "unhidden": 6,
+       "wrong_hides": 5
+      },
+      "0.25": {
+       "hidden": 311,
+       "missed_skips": 113,
+       "newly_hidden": 0,
+       "unhidden": 6,
+       "wrong_hides": 5
+      },
+      "0.3": {
+       "hidden": 311,
+       "missed_skips": 113,
+       "newly_hidden": 0,
+       "unhidden": 6,
+       "wrong_hides": 5
+      },
+      "0.35": {
+       "hidden": 309,
+       "missed_skips": 115,
+       "newly_hidden": 0,
+       "unhidden": 8,
+       "wrong_hides": 5
+      },
+      "0.4": {
+       "hidden": 309,
+       "missed_skips": 115,
+       "newly_hidden": 0,
+       "unhidden": 8,
+       "wrong_hides": 5
+      },
+      "0.45": {
+       "hidden": 308,
+       "missed_skips": 116,
+       "newly_hidden": 0,
+       "unhidden": 9,
+       "wrong_hides": 5
+      },
+      "0.5": {
+       "hidden": 308,
+       "missed_skips": 116,
+       "newly_hidden": 0,
+       "unhidden": 9,
+       "wrong_hides": 5
+      },
+      "0.55": {
+       "hidden": 307,
+       "missed_skips": 117,
+       "newly_hidden": 0,
+       "unhidden": 10,
+       "wrong_hides": 5
+      },
+      "0.6": {
+       "hidden": 305,
+       "missed_skips": 119,
+       "newly_hidden": 0,
+       "unhidden": 12,
+       "wrong_hides": 5
+      },
+      "0.65": {
+       "hidden": 303,
+       "missed_skips": 121,
+       "newly_hidden": 0,
+       "unhidden": 14,
+       "wrong_hides": 5
+      },
+      "0.7": {
+       "hidden": 302,
+       "missed_skips": 122,
+       "newly_hidden": 0,
+       "unhidden": 15,
+       "wrong_hides": 5
+      },
+      "0.75": {
+       "hidden": 301,
+       "missed_skips": 123,
+       "newly_hidden": 0,
+       "unhidden": 16,
+       "wrong_hides": 5
+      },
+      "0.8": {
+       "hidden": 300,
+       "missed_skips": 124,
+       "newly_hidden": 0,
+       "unhidden": 17,
+       "wrong_hides": 5
+      },
+      "0.85": {
+       "hidden": 292,
+       "missed_skips": 132,
+       "newly_hidden": 0,
+       "unhidden": 25,
+       "wrong_hides": 5
       }
      }
     },
-    "auroc": 0.922,
-    "brier": 0.0788,
-    "pr_auc": 0.8856
-   },
-   "noise": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 317,
-      "missed_skips": 111,
-      "wrong_hides": 9
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 11,
-       "missed_skips": 17,
-       "wrong_hides": 3
-      },
-      "click": {
-       "hidden": 21,
-       "missed_skips": 10,
-       "wrong_hides": 0
-      },
-      "cobra": {
-       "hidden": 32,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "curl": {
-       "hidden": 6,
-       "missed_skips": 6,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
+    "ranking": {
+     "gold_at_noise_hide_rate": {
+      "hunch": {
        "hidden": 44,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 19,
-       "missed_skips": 0,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 25,
-       "missed_skips": 5,
-       "wrong_hides": 1
-      },
-      "lazy": {
-       "hidden": 53,
-       "missed_skips": 11,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 2,
-       "missed_skips": 1,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 36,
-       "missed_skips": 42,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 4,
-       "missed_skips": 8,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 64,
        "missed_skips": 9,
-       "wrong_hides": 4
-      }
-     }
-    },
-    "auroc": 0.8635,
-    "brier": 0.0789,
-    "pr_auc": 0.7872
-   },
-   "trees": {
-    "at_noise_hide_rate": {
-     "all": {
-      "hidden": 317,
-      "missed_skips": 112,
-      "wrong_hides": 10
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 8,
-       "missed_skips": 17,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 23,
-       "missed_skips": 8,
-       "wrong_hides": 0
-      },
-      "cobra": {
-       "hidden": 33,
-       "missed_skips": 1,
-       "wrong_hides": 2
-      },
-      "curl": {
-       "hidden": 7,
-       "missed_skips": 5,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 42,
-       "missed_skips": 3,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 20,
-       "missed_skips": 0,
        "wrong_hides": 1
       },
-      "junit5": {
-       "hidden": 26,
-       "missed_skips": 4,
-       "wrong_hides": 1
-      },
-      "lazy": {
-       "hidden": 53,
-       "missed_skips": 11,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 3,
-       "missed_skips": 1,
-       "wrong_hides": 1
-      },
-      "openfoam": {
-       "hidden": 35,
-       "missed_skips": 43,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 6,
-       "missed_skips": 7,
-       "wrong_hides": 1
-      },
-      "vue": {
-       "hidden": 61,
-       "missed_skips": 12,
-       "wrong_hides": 4
-      }
-     }
-    },
-    "auroc": 0.9361,
-    "brier": 0.0706,
-    "pr_auc": 0.9003
-   }
-  },
-  "leave_one_repo_out_auroc_per_repo": {
-   "buildtheworld": {
-    "lr": 0.7837,
-    "noise": 0.6346,
-    "trees": 0.861
-   },
-   "click": {
-    "lr": 0.9418,
-    "noise": 0.8387,
-    "trees": 0.9485
-   },
-   "cobra": {
-    "lr": 0.9871,
-    "noise": 0.9795,
-    "trees": 0.9835
-   },
-   "curl": {
-    "lr": 0.8665,
-    "noise": 0.75,
-    "trees": 0.9023
-   },
-   "excalidraw": {
-    "lr": 0.9837,
-    "noise": 0.9889,
-    "trees": 1.0
-   },
-   "execa": {
-    "lr": 0.9984,
-    "noise": 1.0,
-    "trees": 1.0
-   },
-   "junit5": {
-    "lr": 0.9943,
-    "noise": 0.9075,
-    "trees": 0.9843
-   },
-   "lazy": {
-    "lr": 0.9792,
-    "noise": 0.9141,
-    "trees": 0.9807
-   },
-   "nvm": {
-    "lr": 0.9302,
-    "noise": 0.8333,
-    "trees": 0.969
-   },
-   "openfoam": {
-    "lr": 0.8364,
-    "noise": 0.7308,
-    "trees": 0.8824
-   },
-   "ripgrep": {
-    "lr": 0.8889,
-    "noise": 0.6667,
-    "trees": 0.9267
-   },
-   "vue": {
-    "lr": 0.9468,
-    "noise": 0.9154,
-    "trees": 0.9576
-   }
-  }
- },
- "promotion": {
-  "gate": {
-   "gold": {
-    "lowered_overall": true,
-    "raised_in": []
-   },
-   "loro": {
-    "lowered_overall": true,
-    "raised_in": []
-   },
-   "passes": true,
-   "rule": "the policy raises wrong hides in no repo, leaving one repo out and on gold, and lowers them overall in both"
-  },
-  "model": "trees",
-  "policy": {
-   "gold": {
-    "hunch": {
-     "all": {
-      "hidden": 42,
-      "missed_skips": 13,
-      "newly_hidden": 0,
-      "unhidden": 2,
-      "wrong_hides": 3
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 3,
-       "missed_skips": 2,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 2
-      },
-      "cobra": {
-       "hidden": 0,
-       "missed_skips": 4,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 4,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 2,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 10,
-       "missed_skips": 2,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 7,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 1
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      }
-     }
-    },
-    "noise": {
-     "all": {
-      "hidden": 44,
-      "missed_skips": 13,
-      "newly_hidden": 0,
-      "unhidden": 0,
-      "wrong_hides": 5
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "click": {
-       "hidden": 3,
-       "missed_skips": 2,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 2
-      },
-      "cobra": {
-       "hidden": 0,
-       "missed_skips": 4,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "curl": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 4,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 8,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 2
-      },
-      "junit5": {
-       "hidden": 2,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 10,
-       "missed_skips": 2,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 0,
-       "missed_skips": 3,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 7,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 1
-      },
-      "ripgrep": {
-       "hidden": 1,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 6,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      }
-     }
-    }
-   },
-   "hide": 0.9,
-   "loro": {
-    "hunch": {
-     "all": {
-      "hidden": 314,
-      "missed_skips": 111,
-      "newly_hidden": 0,
-      "unhidden": 3,
-      "wrong_hides": 6
-     },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 9,
-       "missed_skips": 17,
-       "newly_hidden": 0,
-       "unhidden": 2,
-       "wrong_hides": 1
-      },
-      "click": {
-       "hidden": 21,
-       "missed_skips": 10,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "cobra": {
-       "hidden": 32,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 1
-      },
-      "curl": {
-       "hidden": 6,
-       "missed_skips": 6,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
+      "noise": {
        "hidden": 44,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 19,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 24,
-       "missed_skips": 5,
-       "newly_hidden": 0,
-       "unhidden": 1,
-       "wrong_hides": 0
-      },
-      "lazy": {
-       "hidden": 53,
-       "missed_skips": 11,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 2,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 36,
-       "missed_skips": 42,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 4,
-       "missed_skips": 8,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 64,
-       "missed_skips": 9,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 4
+       "missed_skips": 13,
+       "wrong_hides": 5
       }
-     }
-    },
-    "noise": {
-     "all": {
-      "hidden": 317,
-      "missed_skips": 111,
-      "newly_hidden": 0,
-      "unhidden": 0,
-      "wrong_hides": 9
      },
-     "per_repo": {
-      "buildtheworld": {
-       "hidden": 11,
-       "missed_skips": 17,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 3
+     "loro_at_repo_hide_rate": {
+      "hunch": {
+       "buildtheworld": {
+        "hidden": 11,
+        "missed_skips": 17,
+        "wrong_hides": 3
+       },
+       "click": {
+        "hidden": 21,
+        "missed_skips": 10,
+        "wrong_hides": 0
+       },
+       "cobra": {
+        "hidden": 32,
+        "missed_skips": 1,
+        "wrong_hides": 1
+       },
+       "curl": {
+        "hidden": 6,
+        "missed_skips": 6,
+        "wrong_hides": 0
+       },
+       "excalidraw": {
+        "hidden": 44,
+        "missed_skips": 1,
+        "wrong_hides": 0
+       },
+       "execa": {
+        "hidden": 19,
+        "missed_skips": 0,
+        "wrong_hides": 0
+       },
+       "junit5": {
+        "hidden": 25,
+        "missed_skips": 4,
+        "wrong_hides": 0
+       },
+       "lazy": {
+        "hidden": 53,
+        "missed_skips": 11,
+        "wrong_hides": 0
+       },
+       "nvm": {
+        "hidden": 2,
+        "missed_skips": 1,
+        "wrong_hides": 0
+       },
+       "openfoam": {
+        "hidden": 36,
+        "missed_skips": 42,
+        "wrong_hides": 0
+       },
+       "ripgrep": {
+        "hidden": 4,
+        "missed_skips": 8,
+        "wrong_hides": 0
+       },
+       "vue": {
+        "hidden": 64,
+        "missed_skips": 9,
+        "wrong_hides": 4
+       }
       },
-      "click": {
-       "hidden": 21,
-       "missed_skips": 10,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "cobra": {
-       "hidden": 32,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 1
-      },
-      "curl": {
-       "hidden": 6,
-       "missed_skips": 6,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "excalidraw": {
-       "hidden": 44,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "execa": {
-       "hidden": 19,
-       "missed_skips": 0,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "junit5": {
-       "hidden": 25,
-       "missed_skips": 5,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 1
-      },
-      "lazy": {
-       "hidden": 53,
-       "missed_skips": 11,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "nvm": {
-       "hidden": 2,
-       "missed_skips": 1,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "openfoam": {
-       "hidden": 36,
-       "missed_skips": 42,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "ripgrep": {
-       "hidden": 4,
-       "missed_skips": 8,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 0
-      },
-      "vue": {
-       "hidden": 64,
-       "missed_skips": 9,
-       "newly_hidden": 0,
-       "unhidden": 0,
-       "wrong_hides": 4
+      "more_wrong_hides": [],
+      "noise": {
+       "buildtheworld": {
+        "hidden": 11,
+        "missed_skips": 17,
+        "wrong_hides": 3
+       },
+       "click": {
+        "hidden": 21,
+        "missed_skips": 10,
+        "wrong_hides": 0
+       },
+       "cobra": {
+        "hidden": 32,
+        "missed_skips": 1,
+        "wrong_hides": 1
+       },
+       "curl": {
+        "hidden": 6,
+        "missed_skips": 6,
+        "wrong_hides": 0
+       },
+       "excalidraw": {
+        "hidden": 44,
+        "missed_skips": 1,
+        "wrong_hides": 0
+       },
+       "execa": {
+        "hidden": 19,
+        "missed_skips": 0,
+        "wrong_hides": 0
+       },
+       "junit5": {
+        "hidden": 25,
+        "missed_skips": 5,
+        "wrong_hides": 1
+       },
+       "lazy": {
+        "hidden": 53,
+        "missed_skips": 11,
+        "wrong_hides": 0
+       },
+       "nvm": {
+        "hidden": 2,
+        "missed_skips": 1,
+        "wrong_hides": 0
+       },
+       "openfoam": {
+        "hidden": 36,
+        "missed_skips": 42,
+        "wrong_hides": 0
+       },
+       "ripgrep": {
+        "hidden": 4,
+        "missed_skips": 8,
+        "wrong_hides": 0
+       },
+       "vue": {
+        "hidden": 64,
+        "missed_skips": 9,
+        "wrong_hides": 4
+       }
       }
-     }
+     },
+     "note": "informational, not the gate: hunch's ranking at the noise flag's hide rate"
     }
    },
-   "picked_on": "leave-one-repo-out on silver, fewest wrong hides + missed skips",
-   "rule": "noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= 0.9",
-   "unhide": 0.05,
-   "unhide_curve_loro": {
-    "0.05": {
-     "hidden": 314,
-     "missed_skips": 111,
-     "newly_hidden": 0,
-     "unhidden": 3,
-     "wrong_hides": 6
+   "provenance": {
+    "eval": {
+     "file": "corpus/gold.jsonl",
+     "hunks": 196,
+     "matched_by_overlap": 0,
+     "positives": 52,
+     "sha256": "a04e2f4129198ce0583fc117b5ee126109256264af9654fa17adbffe76c8e57a",
+     "unmatched": 0
     },
-    "0.1": {
-     "hidden": 312,
-     "missed_skips": 113,
-     "newly_hidden": 0,
-     "unhidden": 5,
-     "wrong_hides": 6
+    "extra": {
+     "dropped_in_gold_commits": 381,
+     "file": "judged.should_skip.jsonl",
+     "hunks": 4619,
+     "matched_by_overlap": 0,
+     "positives": 1999,
+     "sha256": "a4ad628cea6e1b61f8e193a138bc0f9d81dfb04f63abff8ea7fd5f84f35858b1",
+     "unmatched": 0
     },
-    "0.15": {
-     "hidden": 311,
-     "missed_skips": 113,
-     "newly_hidden": 0,
-     "unhidden": 6,
-     "wrong_hides": 5
+    "extra_weights": {
+     "max": 4.142,
+     "min": 0.06,
+     "skip_rate_raw": 0.4328,
+     "skip_rate_weighted": 0.2373
     },
-    "0.2": {
-     "hidden": 311,
-     "missed_skips": 113,
-     "newly_hidden": 0,
-     "unhidden": 6,
-     "wrong_hides": 5
+    "history_drop": 0.2,
+    "label": "labels.should_skip",
+    "lightgbm_params": {
+     "colsample_bytree": 0.8,
+     "deterministic": true,
+     "force_row_wise": true,
+     "learning_rate": 0.05,
+     "min_child_samples": 20,
+     "n_estimators": 305,
+     "n_jobs": 1,
+     "num_leaves": 15,
+     "random_state": 0,
+     "subsample": 0.8,
+     "subsample_freq": 1,
+     "verbose": -1
     },
-    "0.25": {
-     "hidden": 311,
-     "missed_skips": 113,
-     "newly_hidden": 0,
-     "unhidden": 6,
-     "wrong_hides": 5
+    "overlap_min": 0.8,
+    "seed": 0,
+    "train": {
+     "dropped_in_gold_commits": 368,
+     "file": "silver.jsonl",
+     "hunks": 1520,
+     "matched_by_overlap": 0,
+     "positives": 419,
+     "sha256": "a725976f53fe776208cbfbe794e3c6d06a84080678fa4182c14b2b730f7b93f0",
+     "unmatched": 0
     },
-    "0.3": {
-     "hidden": 311,
-     "missed_skips": 113,
-     "newly_hidden": 0,
-     "unhidden": 6,
-     "wrong_hides": 5
+    "tree_count": {
+     "best": 885,
+     "best_loro_auroc": 0.941,
+     "rule": "smallest count within 0.005 of the best pooled leave-one-repo-out AUROC, every 5 up to 1000",
+     "shipped": 305,
+     "shipped_loro_auroc": 0.9361
     },
-    "0.35": {
-     "hidden": 309,
-     "missed_skips": 115,
-     "newly_hidden": 0,
-     "unhidden": 8,
-     "wrong_hides": 5
-    },
-    "0.4": {
-     "hidden": 309,
-     "missed_skips": 115,
-     "newly_hidden": 0,
-     "unhidden": 8,
-     "wrong_hides": 5
-    },
-    "0.45": {
-     "hidden": 308,
-     "missed_skips": 116,
-     "newly_hidden": 0,
-     "unhidden": 9,
-     "wrong_hides": 5
-    },
-    "0.5": {
-     "hidden": 308,
-     "missed_skips": 116,
-     "newly_hidden": 0,
-     "unhidden": 9,
-     "wrong_hides": 5
-    },
-    "0.55": {
-     "hidden": 307,
-     "missed_skips": 117,
-     "newly_hidden": 0,
-     "unhidden": 10,
-     "wrong_hides": 5
-    },
-    "0.6": {
-     "hidden": 305,
-     "missed_skips": 119,
-     "newly_hidden": 0,
-     "unhidden": 12,
-     "wrong_hides": 5
-    },
-    "0.65": {
-     "hidden": 303,
-     "missed_skips": 121,
-     "newly_hidden": 0,
-     "unhidden": 14,
-     "wrong_hides": 5
-    },
-    "0.7": {
-     "hidden": 302,
-     "missed_skips": 122,
-     "newly_hidden": 0,
-     "unhidden": 15,
-     "wrong_hides": 5
-    },
-    "0.75": {
-     "hidden": 301,
-     "missed_skips": 123,
-     "newly_hidden": 0,
-     "unhidden": 16,
-     "wrong_hides": 5
-    },
-    "0.8": {
-     "hidden": 300,
-     "missed_skips": 124,
-     "newly_hidden": 0,
-     "unhidden": 17,
-     "wrong_hides": 5
-    },
-    "0.85": {
-     "hidden": 292,
-     "missed_skips": 132,
-     "newly_hidden": 0,
-     "unhidden": 25,
-     "wrong_hides": 5
-    }
-   }
-  },
-  "ranking": {
-   "gold_at_noise_hide_rate": {
-    "hunch": {
-     "hidden": 44,
-     "missed_skips": 9,
-     "wrong_hides": 1
-    },
-    "noise": {
-     "hidden": 44,
-     "missed_skips": 13,
-     "wrong_hides": 5
+    "versions": {
+     "lightgbm": "4.7.0",
+     "numpy": "2.5.5",
+     "scikit-learn": "1.9.1"
     }
    },
-   "loro_at_repo_hide_rate": {
-    "hunch": {
-     "buildtheworld": {
-      "hidden": 11,
-      "missed_skips": 17,
-      "wrong_hides": 3
-     },
-     "click": {
-      "hidden": 21,
-      "missed_skips": 10,
-      "wrong_hides": 0
-     },
-     "cobra": {
-      "hidden": 32,
-      "missed_skips": 1,
-      "wrong_hides": 1
-     },
-     "curl": {
-      "hidden": 6,
-      "missed_skips": 6,
-      "wrong_hides": 0
-     },
-     "excalidraw": {
-      "hidden": 44,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "execa": {
-      "hidden": 19,
-      "missed_skips": 0,
-      "wrong_hides": 0
-     },
-     "junit5": {
-      "hidden": 25,
-      "missed_skips": 4,
-      "wrong_hides": 0
-     },
-     "lazy": {
-      "hidden": 53,
-      "missed_skips": 11,
-      "wrong_hides": 0
-     },
-     "nvm": {
-      "hidden": 2,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "openfoam": {
-      "hidden": 36,
-      "missed_skips": 42,
-      "wrong_hides": 0
-     },
-     "ripgrep": {
-      "hidden": 4,
-      "missed_skips": 8,
-      "wrong_hides": 0
-     },
-     "vue": {
-      "hidden": 64,
-      "missed_skips": 9,
-      "wrong_hides": 4
-     }
+   "selection": {
+    "chosen": "lightgbm",
+    "fired": "gold_auroc_gain",
+    "gold_auroc_gain": 0.0437,
+    "loro_wrong_hides": {
+     "lr": 14,
+     "noise": 9,
+     "trees": 10
     },
-    "more_wrong_hides": [],
-    "noise": {
-     "buildtheworld": {
-      "hidden": 11,
-      "missed_skips": 17,
-      "wrong_hides": 3
-     },
-     "click": {
-      "hidden": 21,
-      "missed_skips": 10,
-      "wrong_hides": 0
-     },
-     "cobra": {
-      "hidden": 32,
-      "missed_skips": 1,
-      "wrong_hides": 1
-     },
-     "curl": {
-      "hidden": 6,
-      "missed_skips": 6,
-      "wrong_hides": 0
-     },
-     "excalidraw": {
-      "hidden": 44,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "execa": {
-      "hidden": 19,
-      "missed_skips": 0,
-      "wrong_hides": 0
-     },
-     "junit5": {
-      "hidden": 25,
-      "missed_skips": 5,
-      "wrong_hides": 1
-     },
-     "lazy": {
-      "hidden": 53,
-      "missed_skips": 11,
-      "wrong_hides": 0
-     },
-     "nvm": {
-      "hidden": 2,
-      "missed_skips": 1,
-      "wrong_hides": 0
-     },
-     "openfoam": {
-      "hidden": 36,
-      "missed_skips": 42,
-      "wrong_hides": 0
-     },
-     "ripgrep": {
-      "hidden": 4,
-      "missed_skips": 8,
-      "wrong_hides": 0
-     },
-     "vue": {
-      "hidden": 64,
-      "missed_skips": 9,
-      "wrong_hides": 4
-     }
-    }
+    "rule": "lightgbm if gold AUROC gain over logistic >= 0.03, or if leaving one repo out logistic makes more wrong hides than the noise flag at its hide rate and lightgbm does not"
    },
-   "note": "informational, not the gate: hunch's ranking at the noise flag's hide rate"
+   "tree_count_curve": {
+    "loro_auroc": [
+     0.9225,
+     0.9112,
+     0.9121,
+     0.915,
+     0.9123,
+     0.9128,
+     0.9129,
+     0.9102,
+     0.9141,
+     0.918,
+     0.9177,
+     0.9196,
+     0.9194,
+     0.9217,
+     0.9225,
+     0.9233,
+     0.9239,
+     0.924,
+     0.9241,
+     0.9225,
+     0.9214,
+     0.9225,
+     0.925,
+     0.9247,
+     0.9252,
+     0.9248,
+     0.9246,
+     0.9248,
+     0.9249,
+     0.9245,
+     0.9249,
+     0.9258,
+     0.9264,
+     0.9272,
+     0.9274,
+     0.9283,
+     0.9289,
+     0.9291,
+     0.9297,
+     0.93,
+     0.9308,
+     0.9311,
+     0.9307,
+     0.9305,
+     0.9305,
+     0.9304,
+     0.9314,
+     0.9315,
+     0.9319,
+     0.931,
+     0.9316,
+     0.9324,
+     0.9329,
+     0.9327,
+     0.934,
+     0.9345,
+     0.9349,
+     0.9354,
+     0.9356,
+     0.9357,
+     0.9361,
+     0.9358,
+     0.9364,
+     0.9364,
+     0.9361,
+     0.9364,
+     0.9362,
+     0.9357,
+     0.9363,
+     0.9364,
+     0.9367,
+     0.937,
+     0.9379,
+     0.938,
+     0.9376,
+     0.9379,
+     0.9378,
+     0.9384,
+     0.9386,
+     0.9387,
+     0.9392,
+     0.9391,
+     0.9392,
+     0.9398,
+     0.9395,
+     0.9394,
+     0.939,
+     0.9393,
+     0.9392,
+     0.9391,
+     0.939,
+     0.9393,
+     0.9389,
+     0.9394,
+     0.9394,
+     0.939,
+     0.9391,
+     0.9395,
+     0.939,
+     0.9394,
+     0.9391,
+     0.9393,
+     0.939,
+     0.939,
+     0.9389,
+     0.939,
+     0.9387,
+     0.9385,
+     0.9387,
+     0.9387,
+     0.9387,
+     0.9392,
+     0.9396,
+     0.9394,
+     0.9394,
+     0.9396,
+     0.9393,
+     0.9391,
+     0.9399,
+     0.9397,
+     0.9402,
+     0.9405,
+     0.9404,
+     0.9404,
+     0.9403,
+     0.9401,
+     0.9399,
+     0.9398,
+     0.9398,
+     0.9396,
+     0.9394,
+     0.9395,
+     0.9395,
+     0.9393,
+     0.9394,
+     0.9398,
+     0.9401,
+     0.94,
+     0.9394,
+     0.9401,
+     0.9401,
+     0.9401,
+     0.9402,
+     0.9402,
+     0.9402,
+     0.9407,
+     0.9404,
+     0.9406,
+     0.9404,
+     0.9404,
+     0.9401,
+     0.9404,
+     0.9405,
+     0.9404,
+     0.9402,
+     0.9402,
+     0.9402,
+     0.9404,
+     0.9401,
+     0.9403,
+     0.9403,
+     0.9403,
+     0.9406,
+     0.9408,
+     0.9402,
+     0.9404,
+     0.9401,
+     0.9405,
+     0.9406,
+     0.9407,
+     0.9406,
+     0.941,
+     0.9408,
+     0.9407,
+     0.9408,
+     0.941,
+     0.941,
+     0.9409,
+     0.9409,
+     0.941,
+     0.9406,
+     0.941,
+     0.9407,
+     0.9406,
+     0.9398,
+     0.9403,
+     0.9403,
+     0.9401,
+     0.9403,
+     0.9402,
+     0.9406,
+     0.9407,
+     0.9401,
+     0.9403,
+     0.9399,
+     0.9402,
+     0.9408,
+     0.9408,
+     0.9404,
+     0.9401
+    ],
+    "trees": [
+     5,
+     10,
+     15,
+     20,
+     25,
+     30,
+     35,
+     40,
+     45,
+     50,
+     55,
+     60,
+     65,
+     70,
+     75,
+     80,
+     85,
+     90,
+     95,
+     100,
+     105,
+     110,
+     115,
+     120,
+     125,
+     130,
+     135,
+     140,
+     145,
+     150,
+     155,
+     160,
+     165,
+     170,
+     175,
+     180,
+     185,
+     190,
+     195,
+     200,
+     205,
+     210,
+     215,
+     220,
+     225,
+     230,
+     235,
+     240,
+     245,
+     250,
+     255,
+     260,
+     265,
+     270,
+     275,
+     280,
+     285,
+     290,
+     295,
+     300,
+     305,
+     310,
+     315,
+     320,
+     325,
+     330,
+     335,
+     340,
+     345,
+     350,
+     355,
+     360,
+     365,
+     370,
+     375,
+     380,
+     385,
+     390,
+     395,
+     400,
+     405,
+     410,
+     415,
+     420,
+     425,
+     430,
+     435,
+     440,
+     445,
+     450,
+     455,
+     460,
+     465,
+     470,
+     475,
+     480,
+     485,
+     490,
+     495,
+     500,
+     505,
+     510,
+     515,
+     520,
+     525,
+     530,
+     535,
+     540,
+     545,
+     550,
+     555,
+     560,
+     565,
+     570,
+     575,
+     580,
+     585,
+     590,
+     595,
+     600,
+     605,
+     610,
+     615,
+     620,
+     625,
+     630,
+     635,
+     640,
+     645,
+     650,
+     655,
+     660,
+     665,
+     670,
+     675,
+     680,
+     685,
+     690,
+     695,
+     700,
+     705,
+     710,
+     715,
+     720,
+     725,
+     730,
+     735,
+     740,
+     745,
+     750,
+     755,
+     760,
+     765,
+     770,
+     775,
+     780,
+     785,
+     790,
+     795,
+     800,
+     805,
+     810,
+     815,
+     820,
+     825,
+     830,
+     835,
+     840,
+     845,
+     850,
+     855,
+     860,
+     865,
+     870,
+     875,
+     880,
+     885,
+     890,
+     895,
+     900,
+     905,
+     910,
+     915,
+     920,
+     925,
+     930,
+     935,
+     940,
+     945,
+     950,
+     955,
+     960,
+     965,
+     970,
+     975,
+     980,
+     985,
+     990,
+     995,
+     1000
+    ]
+   },
+   "tree_count_tradeoff": [
+    {
+     "bytes": 308043,
+     "gold_auroc": 0.9749,
+     "loro_auroc": 0.93,
+     "nodes": 5800,
+     "trees": 200
+    },
+    {
+     "bytes": 469931,
+     "gold_auroc": 0.9772,
+     "loro_auroc": 0.9361,
+     "nodes": 8845,
+     "trees": 305
+    },
+    {
+     "bytes": 1364904,
+     "gold_auroc": 0.9817,
+     "loro_auroc": 0.941,
+     "nodes": 25665,
+     "trees": 885
+    },
+    {
+     "bytes": 1542657,
+     "gold_auroc": 0.9817,
+     "loro_auroc": 0.9401,
+     "nodes": 29000,
+     "trees": 1000
+    }
+   ]
   }
- },
- "provenance": {
-  "eval": {
-   "file": "corpus/gold.jsonl",
-   "hunks": 196,
-   "matched_by_overlap": 0,
-   "positives": 52,
-   "sha256": "a04e2f4129198ce0583fc117b5ee126109256264af9654fa17adbffe76c8e57a",
-   "unmatched": 0
-  },
-  "extra": {
-   "dropped_in_gold_commits": 381,
-   "file": "judged.should_skip.jsonl",
-   "hunks": 4619,
-   "matched_by_overlap": 0,
-   "positives": 1999,
-   "sha256": "a4ad628cea6e1b61f8e193a138bc0f9d81dfb04f63abff8ea7fd5f84f35858b1",
-   "unmatched": 0
-  },
-  "extra_weights": {
-   "max": 4.142,
-   "min": 0.06,
-   "skip_rate_raw": 0.4328,
-   "skip_rate_weighted": 0.2373
-  },
-  "history_drop": 0.2,
-  "label": "labels.should_skip",
-  "lightgbm_params": {
-   "colsample_bytree": 0.8,
-   "deterministic": true,
-   "force_row_wise": true,
-   "learning_rate": 0.05,
-   "min_child_samples": 20,
-   "n_estimators": 305,
-   "n_jobs": 1,
-   "num_leaves": 15,
-   "random_state": 0,
-   "subsample": 0.8,
-   "subsample_freq": 1,
-   "verbose": -1
-  },
-  "overlap_min": 0.8,
-  "seed": 0,
-  "train": {
-   "dropped_in_gold_commits": 368,
-   "file": "silver.jsonl",
-   "hunks": 1520,
-   "matched_by_overlap": 0,
-   "positives": 419,
-   "sha256": "a725976f53fe776208cbfbe794e3c6d06a84080678fa4182c14b2b730f7b93f0",
-   "unmatched": 0
-  },
-  "tree_count": {
-   "best": 885,
-   "best_loro_auroc": 0.941,
-   "rule": "smallest count within 0.005 of the best pooled leave-one-repo-out AUROC, every 5 up to 1000",
-   "shipped": 305,
-   "shipped_loro_auroc": 0.9361
-  },
-  "versions": {
-   "lightgbm": "4.7.0",
-   "numpy": "2.5.5",
-   "scikit-learn": "1.9.1"
-  }
- },
- "selection": {
-  "chosen": "lightgbm",
-  "fired": "gold_auroc_gain",
-  "gold_auroc_gain": 0.0437,
-  "loro_wrong_hides": {
-   "lr": 14,
-   "noise": 9,
-   "trees": 10
-  },
-  "rule": "lightgbm if gold AUROC gain over logistic >= 0.03, or if leaving one repo out logistic makes more wrong hides than the noise flag at its hide rate and lightgbm does not"
- },
- "tree_count_curve": {
-  "loro_auroc": [
-   0.9225,
-   0.9112,
-   0.9121,
-   0.915,
-   0.9123,
-   0.9128,
-   0.9129,
-   0.9102,
-   0.9141,
-   0.918,
-   0.9177,
-   0.9196,
-   0.9194,
-   0.9217,
-   0.9225,
-   0.9233,
-   0.9239,
-   0.924,
-   0.9241,
-   0.9225,
-   0.9214,
-   0.9225,
-   0.925,
-   0.9247,
-   0.9252,
-   0.9248,
-   0.9246,
-   0.9248,
-   0.9249,
-   0.9245,
-   0.9249,
-   0.9258,
-   0.9264,
-   0.9272,
-   0.9274,
-   0.9283,
-   0.9289,
-   0.9291,
-   0.9297,
-   0.93,
-   0.9308,
-   0.9311,
-   0.9307,
-   0.9305,
-   0.9305,
-   0.9304,
-   0.9314,
-   0.9315,
-   0.9319,
-   0.931,
-   0.9316,
-   0.9324,
-   0.9329,
-   0.9327,
-   0.934,
-   0.9345,
-   0.9349,
-   0.9354,
-   0.9356,
-   0.9357,
-   0.9361,
-   0.9358,
-   0.9364,
-   0.9364,
-   0.9361,
-   0.9364,
-   0.9362,
-   0.9357,
-   0.9363,
-   0.9364,
-   0.9367,
-   0.937,
-   0.9379,
-   0.938,
-   0.9376,
-   0.9379,
-   0.9378,
-   0.9384,
-   0.9386,
-   0.9387,
-   0.9392,
-   0.9391,
-   0.9392,
-   0.9398,
-   0.9395,
-   0.9394,
-   0.939,
-   0.9393,
-   0.9392,
-   0.9391,
-   0.939,
-   0.9393,
-   0.9389,
-   0.9394,
-   0.9394,
-   0.939,
-   0.9391,
-   0.9395,
-   0.939,
-   0.9394,
-   0.9391,
-   0.9393,
-   0.939,
-   0.939,
-   0.9389,
-   0.939,
-   0.9387,
-   0.9385,
-   0.9387,
-   0.9387,
-   0.9387,
-   0.9392,
-   0.9396,
-   0.9394,
-   0.9394,
-   0.9396,
-   0.9393,
-   0.9391,
-   0.9399,
-   0.9397,
-   0.9402,
-   0.9405,
-   0.9404,
-   0.9404,
-   0.9403,
-   0.9401,
-   0.9399,
-   0.9398,
-   0.9398,
-   0.9396,
-   0.9394,
-   0.9395,
-   0.9395,
-   0.9393,
-   0.9394,
-   0.9398,
-   0.9401,
-   0.94,
-   0.9394,
-   0.9401,
-   0.9401,
-   0.9401,
-   0.9402,
-   0.9402,
-   0.9402,
-   0.9407,
-   0.9404,
-   0.9406,
-   0.9404,
-   0.9404,
-   0.9401,
-   0.9404,
-   0.9405,
-   0.9404,
-   0.9402,
-   0.9402,
-   0.9402,
-   0.9404,
-   0.9401,
-   0.9403,
-   0.9403,
-   0.9403,
-   0.9406,
-   0.9408,
-   0.9402,
-   0.9404,
-   0.9401,
-   0.9405,
-   0.9406,
-   0.9407,
-   0.9406,
-   0.941,
-   0.9408,
-   0.9407,
-   0.9408,
-   0.941,
-   0.941,
-   0.9409,
-   0.9409,
-   0.941,
-   0.9406,
-   0.941,
-   0.9407,
-   0.9406,
-   0.9398,
-   0.9403,
-   0.9403,
-   0.9401,
-   0.9403,
-   0.9402,
-   0.9406,
-   0.9407,
-   0.9401,
-   0.9403,
-   0.9399,
-   0.9402,
-   0.9408,
-   0.9408,
-   0.9404,
-   0.9401
-  ],
-  "trees": [
-   5,
-   10,
-   15,
-   20,
-   25,
-   30,
-   35,
-   40,
-   45,
-   50,
-   55,
-   60,
-   65,
-   70,
-   75,
-   80,
-   85,
-   90,
-   95,
-   100,
-   105,
-   110,
-   115,
-   120,
-   125,
-   130,
-   135,
-   140,
-   145,
-   150,
-   155,
-   160,
-   165,
-   170,
-   175,
-   180,
-   185,
-   190,
-   195,
-   200,
-   205,
-   210,
-   215,
-   220,
-   225,
-   230,
-   235,
-   240,
-   245,
-   250,
-   255,
-   260,
-   265,
-   270,
-   275,
-   280,
-   285,
-   290,
-   295,
-   300,
-   305,
-   310,
-   315,
-   320,
-   325,
-   330,
-   335,
-   340,
-   345,
-   350,
-   355,
-   360,
-   365,
-   370,
-   375,
-   380,
-   385,
-   390,
-   395,
-   400,
-   405,
-   410,
-   415,
-   420,
-   425,
-   430,
-   435,
-   440,
-   445,
-   450,
-   455,
-   460,
-   465,
-   470,
-   475,
-   480,
-   485,
-   490,
-   495,
-   500,
-   505,
-   510,
-   515,
-   520,
-   525,
-   530,
-   535,
-   540,
-   545,
-   550,
-   555,
-   560,
-   565,
-   570,
-   575,
-   580,
-   585,
-   590,
-   595,
-   600,
-   605,
-   610,
-   615,
-   620,
-   625,
-   630,
-   635,
-   640,
-   645,
-   650,
-   655,
-   660,
-   665,
-   670,
-   675,
-   680,
-   685,
-   690,
-   695,
-   700,
-   705,
-   710,
-   715,
-   720,
-   725,
-   730,
-   735,
-   740,
-   745,
-   750,
-   755,
-   760,
-   765,
-   770,
-   775,
-   780,
-   785,
-   790,
-   795,
-   800,
-   805,
-   810,
-   815,
-   820,
-   825,
-   830,
-   835,
-   840,
-   845,
-   850,
-   855,
-   860,
-   865,
-   870,
-   875,
-   880,
-   885,
-   890,
-   895,
-   900,
-   905,
-   910,
-   915,
-   920,
-   925,
-   930,
-   935,
-   940,
-   945,
-   950,
-   955,
-   960,
-   965,
-   970,
-   975,
-   980,
-   985,
-   990,
-   995,
-   1000
-  ]
- },
- "tree_count_tradeoff": [
-  {
-   "bytes": 307607,
-   "gold_auroc": 0.9749,
-   "loro_auroc": 0.93,
-   "nodes": 5800,
-   "trees": 200
-  },
-  {
-   "bytes": 469285,
-   "gold_auroc": 0.9772,
-   "loro_auroc": 0.9361,
-   "nodes": 8845,
-   "trees": 305
-  },
-  {
-   "bytes": 1363098,
-   "gold_auroc": 0.9817,
-   "loro_auroc": 0.941,
-   "nodes": 25665,
-   "trees": 885
-  },
-  {
-   "bytes": 1540621,
-   "gold_auroc": 0.9817,
-   "loro_auroc": 0.9401,
-   "nodes": 29000,
-   "trees": 1000
-  }
- ]
+ }
 }

@@ -346,7 +346,8 @@ Both are repeatable.
 reviewer can skip it, from a small model trained offline on labelled reviews
 (`scripts/hunch-train.py`). The code pane shows it as a muted `Hunch: 72%
 skippable` badge, and the why pane names the three features that moved it
-most, each signed toward skipping in log-odds. Where the model is confident
+most, each signed toward skipping in log-odds, then how likely the rationale
+is faithful and what moved that. Where the model is confident
 it also moves the engine's noise flag: a hunk the engine hid as noise but
 the model says a reviewer should read comes back into the view, marked
 `Hunch: shown`; one the engine showed but the model is sure can be skipped

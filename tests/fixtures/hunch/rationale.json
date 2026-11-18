@@ -1,0 +1,27 @@
+{
+ "changes": [
+  {
+   "path": "a.py",
+   "old": "import os\n\n\ndef keep():\n    return 1\n",
+   "new": "import os\nimport re\nimport sys\nimport json\nimport time\nimport math\n\n\ndef keep():\n    return 1\n\n\ndef normalise_the_incoming_configuration_value_before_saving_it(v):\n    return v.strip()\n"
+  },
+  {
+   "path": "b.py",
+   "old": "from a import keep\n\n\ndef main():\n    return keep()\n",
+   "new": "from a import keep, normalise_the_incoming_configuration_value_before_saving_it\n\n\ndef main():\n    x = normalise_the_incoming_configuration_value_before_saving_it(' a ')\n    return keep() + len(x)\n"
+  },
+  {
+   "path": "c.yaml",
+   "old": "svc:\n  port: 80\n  host: a\n",
+   "new": "svc:\n  port: 443\n  host: b\n  tls: on\n"
+  },
+  {
+   "path": "NOTES.md",
+   "old": "# Notes\n\n## How the configuration loader resolves every layered value it reads\n\nIt reads files.\n",
+   "new": "# Notes\n\n## How the configuration loader resolves each layered setting it is handed\n\nIt reads files.\n"
+  }
+ ],
+ "options": {
+  "features": true
+ }
+}

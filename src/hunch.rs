@@ -204,7 +204,49 @@ fn columns() -> &'static [Column] {
                     .to_string()
             },
         ));
+        // the rationale's own shape, for the faithful head: how much it
+        // claims, and whether it points at other hunks or cuts a list short
+        cols.extend([
+            column("rationale_words", |f| {
+                f.hunk.rationale.split_whitespace().count() as f64
+            }),
+            column("rationale_clauses", |f| {
+                f.hunk.rationale.matches("; ").count() as f64
+            }),
+            column("rationale_commas", |f| {
+                f.hunk.rationale.matches(',').count() as f64
+            }),
+            column("rationale_more", |f| {
+                flag(rationale_re().more.is_match(&f.hunk.rationale))
+            }),
+            column("rationale_cut", |f| flag(f.hunk.rationale.contains('…'))),
+            column("rationale_used_at", |f| {
+                flag(rationale_re().used_at.is_match(&f.hunk.rationale))
+            }),
+            column("rationale_added_at", |f| {
+                flag(rationale_re().added_at.is_match(&f.hunk.rationale))
+            }),
+            column("rationale_details", |f| f.hunk.details.len() as f64),
+        ]);
         cols
+    })
+}
+
+struct RationaleRe {
+    /// a list the rationale cut short: "a, b, and 3 more"
+    more: Regex,
+    /// a claim about where the hunk's names are used
+    used_at: Regex,
+    /// a claim about where the names it uses were added
+    added_at: Regex,
+}
+
+fn rationale_re() -> &'static RationaleRe {
+    static RE: OnceLock<RationaleRe> = OnceLock::new();
+    RE.get_or_init(|| RationaleRe {
+        more: Regex::new(r"and \d+ more").expect("valid"),
+        used_at: Regex::new(r"\bused (above|below|by|in)\b").expect("valid"),
+        added_at: Regex::new(r"\badded (above|below|in)\b").expect("valid"),
     })
 }
 
@@ -359,7 +401,7 @@ enum Node {
     Leaf(f32),
 }
 
-/// The trained model, as build.rs generates it from `src/hunch.json`: a
+/// One trained head, as build.rs generates it from `src/hunch.json`: a
 /// LightGBM forest whose leaf values sum to the log-odds, or a logistic
 /// regression over standardized features. Weights are f32, as the trainer
 /// exported and checked them; sums are f64, as LightGBM's are.
@@ -379,7 +421,25 @@ enum Model {
 
 include!(concat!(env!("OUT_DIR"), "/hunch_model.rs"));
 
-/// Whether the shipped model was trained on the columns this engine builds;
+/// What a head predicts, all from the one feature vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Head {
+    /// P(a reviewer can skip the hunk)
+    Skip,
+    /// P(the rationale states nothing false or misleading)
+    Faithful,
+}
+
+impl Head {
+    fn model(self) -> &'static Model {
+        match self {
+            Head::Skip => &SKIP,
+            Head::Faithful => &FAITHFUL,
+        }
+    }
+}
+
+/// Whether the shipped heads were trained on the columns this engine builds;
 /// a guess from any other vector would be wrong without looking wrong. Only
 /// the schema: the fingerprint needs the fixtures run through the engine,
 /// which is a test's job, not every run's (see `misfit`).
@@ -387,7 +447,7 @@ pub fn model_fits() -> bool {
     misfit(None).is_none()
 }
 
-/// How the shipped model and this engine disagree, and the command that
+/// How the shipped heads and this engine disagree, and the command that
 /// retrains it; `None` when they agree. The feature schema is always
 /// checked; the fixture fingerprint too when the caller computed it, as
 /// tests/hunch.rs does on every CI run.
@@ -409,7 +469,8 @@ pub fn misfit(fingerprint: Option<&str>) -> Option<String> {
         format!(
             "hunch: src/hunch.json was trained on {}; retrain it: cargo build --release && \
              ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py \
-             --extra ~/.cache/ordo-corpus/judged.should_skip.jsonl",
+             --extra ~/.cache/ordo-corpus/judged.should_skip.jsonl \
+             --extra-faithful ~/.cache/ordo-corpus/judged.faithful.jsonl",
             off.join(" and ")
         )
     })
@@ -418,13 +479,14 @@ pub fn misfit(fingerprint: Option<&str>) -> Option<String> {
 /// How many contributions a guess reports.
 const TOP: usize = 3;
 
-/// P(skip) for one feature vector, and each feature's share of the log-odds:
+/// `head`'s probability for one feature vector, and each feature's share of
+/// its log-odds:
 /// a tree's split credits its feature with how far the step moved the
 /// tree's value (Saabas), a regression's term is its own share. What is
 /// left over is the model's bias, credited to nothing.
-pub fn predict(x: &[f64]) -> (f64, Vec<f64>) {
+pub fn predict(head: Head, x: &[f64]) -> (f64, Vec<f64>) {
     let mut contrib = vec![0.0; NAMES.len()];
-    let raw = match &MODEL {
+    let raw = match head.model() {
         Model::Trees { nodes, roots } => roots
             .iter()
             .map(|&root| {
@@ -503,20 +565,28 @@ pub fn decide(noise: bool, p: f64, policy: Option<Policy>) -> Option<HunchChange
     }
 }
 
-/// The guess a hunk carries: P(skip), the `TOP` features that moved it most,
-/// either way, in four decimals, and what the policy does to its `noise`
-/// flag, decided on the unrounded P(skip).
-fn guess(x: &[f64], noise: bool) -> Hunch {
-    let (p, contrib) = predict(x);
+/// The `TOP` features that moved a guess most, either way, in four decimals.
+fn top(contrib: &[f64]) -> Vec<(String, f64)> {
     let mut by_size: Vec<usize> = (0..contrib.len()).filter(|&i| contrib[i] != 0.0).collect();
     by_size.sort_by(|&a, &b| contrib[b].abs().total_cmp(&contrib[a].abs()));
+    by_size
+        .into_iter()
+        .take(TOP)
+        .map(|i| (NAMES[i].to_string(), round4(contrib[i])))
+        .collect()
+}
+
+/// The guess a hunk carries: each head's probability in four decimals and
+/// the features that moved it most, and what the skip policy does to the
+/// hunk's `noise` flag, decided on the unrounded P(skip).
+fn guess(x: &[f64], noise: bool) -> Hunch {
+    let (p, contrib) = predict(Head::Skip, x);
+    let (f, f_contrib) = predict(Head::Faithful, x);
     Hunch {
         noise: round4(p),
-        top: by_size
-            .into_iter()
-            .take(TOP)
-            .map(|i| (NAMES[i].to_string(), round4(contrib[i])))
-            .collect(),
+        top: top(&contrib),
         changed: decide(noise, p, POLICY),
+        faithful: round4(f),
+        faithful_top: top(&f_contrib),
     }
 }
