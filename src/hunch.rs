@@ -3,11 +3,13 @@
 //! code path serves training (`Options.features`) and inference, so the two
 //! cannot disagree on what a position means. Every column is named, and the
 //! names hash to the value a trained model records: a column added, removed
-//! or reordered is a different schema, and the model no longer fits.
+//! or reordered is a different schema, and the model no longer fits. A
+//! column whose name stays but whose values move is caught by the vectors of
+//! a few fixed sample diffs, which hash to the fingerprint the model records.
 
 use crate::model::{
     Category, Edge, Extent, FeatureSchema, FileOut, FindingSource, History, Hunch, HunkOut, Level,
-    Options,
+    Options, Output,
 };
 use crate::readability::DefDelta;
 use crate::{lang, readability, PerFileHunks};
@@ -211,14 +213,37 @@ pub fn names() -> Vec<String> {
     columns().iter().map(|c| c.name.clone()).collect()
 }
 
-/// FNV-1a over the version and the names: stable across builds and
-/// platforms, which `std`'s hasher does not promise.
-pub fn schema_hash() -> String {
-    let text = format!("v{VERSION}\n{}", names().join("\n"));
+/// FNV-1a: stable across builds and platforms, which `std`'s hasher does not
+/// promise.
+fn fnv1a(text: &str) -> String {
     let h = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     });
     format!("{h:016x}")
+}
+
+/// The hash of the version and the names.
+pub fn schema_hash() -> String {
+    fnv1a(&format!("v{VERSION}\n{}", names().join("\n")))
+}
+
+/// The hash of the feature vectors in engine outputs, each named: per output
+/// its name on a line, then a line per hunk of its values to six decimals.
+/// scripts/hunch-train.py's `fingerprint` writes the same text for the
+/// fixtures in tests/fixtures/hunch.
+pub fn fingerprint<'a>(outputs: impl IntoIterator<Item = (&'a str, &'a Output)>) -> String {
+    let mut text = String::new();
+    for (name, out) in outputs {
+        text.push_str(name);
+        text.push('\n');
+        for h in out.files.iter().flat_map(|f| &f.hunks) {
+            let v = h.features.as_ref().expect("an output with features");
+            let row: Vec<String> = v.iter().map(|x| format!("{x:.6}")).collect();
+            text.push_str(&row.join(","));
+            text.push('\n');
+        }
+    }
+    fnv1a(&text)
 }
 
 pub fn schema() -> FeatureSchema {
@@ -296,6 +321,11 @@ pub(crate) fn annotate(
         })
         .collect();
     let guess_too = options.hunch && model_fits();
+    debug_assert!(
+        guess_too || !options.hunch,
+        "{}",
+        misfit(None).unwrap_or_default()
+    );
     for (file, vs) in files.iter_mut().zip(vectors) {
         for (hunk, v) in file.hunks.iter_mut().zip(vs) {
             if guess_too {
@@ -343,17 +373,39 @@ enum Model {
 include!(concat!(env!("OUT_DIR"), "/hunch_model.rs"));
 
 /// Whether the shipped model was trained on the columns this engine builds;
-/// a guess from any other vector would be wrong without looking wrong.
+/// a guess from any other vector would be wrong without looking wrong. Only
+/// the schema: the fingerprint needs the fixtures run through the engine,
+/// which is a test's job, not every run's (see `misfit`).
 pub fn model_fits() -> bool {
-    SCHEMA_HASH == schema_hash()
+    misfit(None).is_none()
 }
 
-/// Why `Options.hunch` got no guesses, for `Output.problems`.
-pub(crate) fn misfit() -> String {
-    format!(
-        "hunch: the model was trained on feature schema {SCHEMA_HASH}, this engine builds {}; no guesses",
-        schema_hash()
-    )
+/// How the shipped model and this engine disagree, and the command that
+/// retrains it; `None` when they agree. The feature schema is always
+/// checked; the fixture fingerprint too when the caller computed it, as
+/// tests/hunch.rs does on every CI run.
+pub fn misfit(fingerprint: Option<&str>) -> Option<String> {
+    let mut off = vec![];
+    let schema = schema_hash();
+    if SCHEMA_HASH != schema {
+        off.push(format!(
+            "feature schema {SCHEMA_HASH}, this engine builds {schema}"
+        ));
+    }
+    if let Some(fp) = fingerprint.filter(|&fp| FINGERPRINT != Some(fp)) {
+        off.push(format!(
+            "fixture fingerprint {}, this engine computes {fp}",
+            FINGERPRINT.unwrap_or("none")
+        ));
+    }
+    (!off.is_empty()).then(|| {
+        format!(
+            "hunch: src/hunch.json was trained on {}; retrain it: cargo build --release && \
+             ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py \
+             --extra ~/.cache/ordo-corpus/judged.should_skip.jsonl",
+            off.join(" and ")
+        )
+    })
 }
 
 /// How many contributions a guess reports.

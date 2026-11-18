@@ -1,0 +1,17 @@
+{
+ "changes": [
+  {
+   "path": "cmd/kind/main.go",
+   "old": "package main\n\nimport \"fmt\"\n\nfunc kind(n int) string {\n\tif n < 0 {\n\t\treturn \"neg\"\n\t}\n\treturn \"pos\"\n}\n\nfunc main() {\n\tfmt.Println(kind(1))\n}\n",
+   "new": "package main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc kind(n int) string {\n\tif n < 0 {\n\t\treturn \"neg\"\n\t} else if n == 0 {\n\t\treturn \"zero\"\n\t} else if n < 10 {\n\t\tfor i := 0; i < n; i++ {\n\t\t\tif i == 5 {\n\t\t\t\treturn \"five\"\n\t\t\t}\n\t\t}\n\t\treturn \"small\"\n\t}\n\treturn strings.ToUpper(\"pos\")\n}\n\n// main prints one kind.\nfunc main() {\n\tfmt.Println(kind(1))\n}\n"
+  },
+  {
+   "path": "cmd/kind/main_test.go",
+   "old": "",
+   "new": "package main\n\nimport \"testing\"\n\nfunc TestKind(t *testing.T) {\n\tif kind(0) != \"zero\" {\n\t\tt.Fatal(kind(0))\n\t}\n}\n"
+  }
+ ],
+ "options": {
+  "features": true
+ }
+}

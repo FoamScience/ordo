@@ -1,0 +1,88 @@
+{
+ "changes": [
+  {
+   "path": "src/pkg/report.py",
+   "old": "import os\nimport sys\n\n\ndef grade(score):\n    if score > 90:\n        return \"A\"\n    return \"F\"\n\n\ndef label(score):\n    \"\"\"Old label.\"\"\"\n    return grade(score)\n\n\ndef total(xs):\n    return sum(xs)\n",
+   "new": "import sys\nimport os\n\n\ndef grade(score):\n    if score > 90:\n        return \"A\"\n    elif score > 80:\n        return \"B\"\n    elif score > 70:\n        if score % 2:\n            return \"C+\"\n        return \"C\"\n    else:\n        return \"F\"\n\n\ndef label(score):\n    \"\"\"The letter for a score, top band first.\"\"\"\n    return grade(score)\n\n\ndef total(xs):\n    t = 0\n    for x in xs:\n        if x is not None:\n            t += x\n    return t\n"
+  },
+  {
+   "path": "tests/test_report.py",
+   "old": "from pkg.report import grade\n\n\ndef test_grade():\n    assert grade(95) == \"A\"\n",
+   "new": "from pkg.report import grade\n\n\ndef test_grade():\n    assert grade(95) == \"A\"\n    assert grade(85) == \"B\"\n"
+  }
+ ],
+ "options": {
+  "features": true,
+  "rules": [
+   {
+    "name": "deeper",
+    "when": {
+     "max_nesting_delta": 1
+    },
+    "warn": "nesting grew"
+   },
+   {
+    "name": "pkg",
+    "when": {
+     "path": "src/pkg/**"
+    },
+    "note": "package code"
+   },
+   {
+    "name": "tests",
+    "when": {
+     "path": "tests/**"
+    },
+    "verdict": "tests changed"
+   }
+  ]
+ },
+ "history": {
+  "at": 1700000000,
+  "commits": [
+   {
+    "time": 1699913600,
+    "subject": "Fix rounding in total",
+    "paths": [
+     "src/pkg/report.py"
+    ]
+   },
+   {
+    "time": 1697408000,
+    "subject": "move report into pkg",
+    "paths": [
+     "src/pkg/report.py"
+    ]
+   },
+   {
+    "time": 1696544000,
+    "subject": "Revert \"faster grade\"",
+    "paths": [
+     "src/pkg/report.py",
+     "tests/test_report.py"
+    ]
+   },
+   {
+    "time": 1695680000,
+    "subject": "add label",
+    "paths": [
+     "src/pkg/report.py"
+    ]
+   },
+   {
+    "time": 1694816000,
+    "subject": "docs",
+    "paths": [
+     "README.md"
+    ]
+   },
+   {
+    "time": 1689632000,
+    "subject": "fix ancient bug",
+    "paths": [
+     "src/pkg/report.py"
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "changes": [
+  {
+   "path": "lib/clamp.c",
+   "old": "#include <stdio.h>\n\nstatic int clamp(int v) {\n    if (v < 0) return 0;\n    return v;\n}\n\nint run(int n) {\n    return clamp(n);\n}\n",
+   "new": "#include <stdio.h>\n#include <stdlib.h>\n\nstatic int clamp(int v) {\n    if (v < 0) {\n        return 0;\n    } else if (v > 255) {\n        return 255;\n    } else if (v > 127) {\n        return v - 1;\n    }\n    return v;\n}\n\nint run(int n) {\n    if (n) goto done;\n    n = clamp(n);\ndone:\n    return n;\n}\n"
+  },
+  {
+   "path": "web/pick.ts",
+   "old": "import { a } from \"./a\";\nimport { b } from \"./b\";\n\nexport function pick(x: number): string {\n  if (x > 1) {\n    return a(x);\n  }\n  return b(x);\n}\n\nexport function unused(): number {\n  return 1;\n}\n",
+   "new": "import { b } from \"./b\";\nimport { a } from \"./a\";\n\n// pick the branch by size\nexport function pick(x: number): string {\n  if (x > 1) {\n    return a(x);\n  } else if (x < -1) {\n    return b(-x);\n  } else {\n    return b(x);\n  }\n}\n"
+  },
+  {
+   "path": "README.md",
+   "old": "# Kind\n\nPrints a kind.\n",
+   "new": "# Kind\n\nPrints a kind: neg, zero, small or pos.\n"
+  }
+ ],
+ "options": {
+  "features": true
+ },
+ "history": {
+  "at": 1700000000,
+  "commits": []
+ }
+}

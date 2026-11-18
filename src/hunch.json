@@ -97,6 +97,7 @@
   ],
   "version": 1
  },
+ "fingerprint": "1a75cbbfef6f99e6",
  "head": "should_skip",
  "model": {
   "link": "sigmoid",

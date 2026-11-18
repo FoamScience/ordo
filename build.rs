@@ -40,8 +40,12 @@ fn hunch_model() {
     let hash = doc["feature_schema"]["hash"]
         .as_str()
         .expect("feature_schema.hash");
+    // absent from a model trained before fingerprints: tests/hunch.rs then
+    // asks for a retrain rather than the build failing
+    let fingerprint = doc["fingerprint"].as_str();
     let mut out = format!(
-        "static NAMES: [&str; {}] = {names:?};\nstatic SCHEMA_HASH: &str = {hash:?};\n",
+        "static NAMES: [&str; {}] = {names:?};\nstatic SCHEMA_HASH: &str = {hash:?};\n\
+         static FINGERPRINT: Option<&str> = {fingerprint:?};\n",
         names.len()
     );
     match model["type"].as_str() {
