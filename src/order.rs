@@ -1863,8 +1863,9 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
     if s.new_empty && s.imports.is_empty() {
         return None;
     }
+    let noun = if s.reexport { "re-export" } else { "import" };
     if s.imports.is_empty() {
-        return Some("import".to_string());
+        return Some(noun.to_string());
     }
     let names: Vec<&str> = s.imports.iter().map(String::as_str).collect();
     if s.new_empty {
@@ -1877,7 +1878,7 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
         }
         let frags: Vec<String> = import_rename_phrase(&pairs)
             .into_iter()
-            .chain((!gone.is_empty()).then(|| format!("removes import {}", name_list(&gone))))
+            .chain((!gone.is_empty()).then(|| format!("removes {noun} {}", name_list(&gone))))
             .collect();
         return Some(join_frags(&frags));
     }
@@ -1887,11 +1888,11 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
             .is_some_and(|o| o.old_imports.contains(im))
     });
     let verb = match (s.import_moved, all_new) {
-        (true, _) => "moves import",
-        (false, true) => "adds import",
-        (false, false) => "changes import",
+        (true, _) => "moves",
+        (false, true) => "adds",
+        (false, false) => "changes",
     };
-    Some(format!("{verb} {}", name_list(&names)))
+    Some(format!("{verb} {noun} {}", name_list(&names)))
 }
 
 // code switched off (or back on) is neither an edit nor a comment change: it

@@ -581,7 +581,8 @@ fn file_hunks(change: &Change, facts: &TemplateFacts, options: &Options) -> PerF
         // diff put it. Dropping it outright made ordo asymmetric in a way
         // reviewers noticed: a removed import was reported ("removes import
         // loguru", from the deletion path) while an added one vanished, so a
-        // moved import read as a deletion with no counterpart.
+        // moved import read as a deletion with no counterpart. A re-export is
+        // the exception (see `classify_reexports`).
         if s.category == Category::Import {
             s.noise = true;
         }
@@ -607,9 +608,76 @@ fn classify_imports(
     lang::par_map(files, |(((f, change), symbols), changed)| {
         name_deleted_imports(f, change, symbols);
         mark_moved_imports(f, change);
+        classify_reexports(f, change);
         mark_import_residue(f, change, symbols, changed);
         keep_removed_definitions(f, changed);
     });
+}
+
+/// A re-export is classified as an import, but it is the module's API: one
+/// that arrives or leaves is shown, not dimmed. It stays noise when it only
+/// moved — whole statements the other side still has — or when the hunk's
+/// two sides spell the same names (rustfmt sorting a `pub use` list), and in a
+/// generated file. The old side is read too, so a re-export deleted outright
+/// or replaced by a plain import is not hidden as import noise.
+fn classify_reexports(f: &mut PerFileHunks, change: &Change) {
+    let Some(spec) = lang::for_path(&change.path) else {
+        return;
+    };
+    if lang::is_generated_path(&change.path) {
+        return;
+    }
+    let old_src = change.old.as_deref().unwrap_or("");
+    let new_src = change.new.as_deref().unwrap_or("");
+    let old_reexports = extract::reexport_row_set(spec, old_src);
+    let after = extract::import_statements(spec, new_src);
+    let old_lines: Vec<&str> = old_src.lines().collect();
+    let new_lines: Vec<&str> = new_src.lines().collect();
+    let rows = |lines: &[&str], [a, b]: [usize; 2]| -> Vec<String> {
+        (a.max(1)..=b)
+            .filter_map(|r| lines.get(r - 1))
+            .map(|l| extract::squeeze(l))
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    let PerFileHunks { raw, sem: sems, .. } = f;
+    for (li, sem) in sems.iter_mut().enumerate() {
+        if sem.category != Category::Import {
+            continue;
+        }
+        let [o0, o1] = sem.old_range;
+        let gone: Vec<String> = (o0.max(1)..=o1)
+            .filter(|r| old_reexports.contains(r))
+            .filter_map(|r| old_lines.get(r - 1))
+            .map(|l| extract::squeeze(l))
+            .filter(|l| !l.is_empty())
+            .collect();
+        let new_side = sem.reexport;
+        if !new_side && gone.is_empty() {
+            continue;
+        }
+        sem.reexport = true;
+        let removed = gone.iter().any(|l| !after.contains(l));
+        let arrived = new_side && !sem.import_moved;
+        let (old, new) = (
+            rows(&old_lines, sem.old_range),
+            rows(&new_lines, raw[li].new_range),
+        );
+        let same_names = names(&old) == names(&new);
+        sem.noise = same_names || !(removed || arrived);
+    }
+}
+
+/// The sorted identifier-ish words of some lines: equal for two spellings of
+/// one list of names.
+fn names(lines: &[String]) -> Vec<&str> {
+    let mut out: Vec<&str> = lines
+        .iter()
+        .flat_map(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')))
+        .filter(|w| !w.is_empty())
+        .collect();
+    out.sort_unstable();
+    out
 }
 
 /// A hunk is classified from its new side, so one that deletes a definition

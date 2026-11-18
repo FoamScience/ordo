@@ -39,10 +39,10 @@ fn a_cpp_macro_body_is_attributed_to_the_macro() {
 }
 
 #[test]
-fn a_re_export_is_module_bookkeeping_like_an_import() {
-    // `export * from "./b"` forwards names defined elsewhere: it follows from
-    // the real change rather than being it, exactly as an import does — so it
-    // is classified as one, and carries an import's noise flag
+fn a_re_export_is_classified_as_an_import_but_is_not_noise() {
+    // `export * from "./b"` forwards names defined elsewhere, so it orders and
+    // binds like an import — but it widens the module's API, which a reviewer
+    // has to see
     let out = one(
         "i.ts",
         "export * from \"./a\";\n\nexport const x = 1;\n",
@@ -54,7 +54,7 @@ fn a_re_export_is_module_bookkeeping_like_an_import() {
         .find(|h| h.new_range[0] == 2)
         .expect("the export hunk");
     assert_eq!(h.category, Category::Import);
-    assert!(h.noise, "bookkeeping is skippable");
+    assert!(!h.noise, "a re-export is API, not bookkeeping");
 }
 
 #[test]
@@ -860,27 +860,98 @@ fn a_default_exported_call_keeps_its_contents_too() {
 }
 
 #[test]
-fn the_bookkeeping_forms_are_still_bookkeeping() {
-    for (old, new) in [
+fn re_exports_are_shown_whether_added_or_removed() {
+    for (path, old, new, rationale) in [
         (
-            "export * from \"./a\";\n",
-            "export * from \"./a\";\nexport * from \"./b\";\n",
-        ),
-        (
+            "b.ts",
             "export { a } from \"./a\";\n",
             "export { a } from \"./a\";\nexport { b } from \"./b\";\n",
+            "adds re-export b",
+        ),
+        (
+            "b.ts",
+            "const a = 1;\nexport {};\n",
+            "const a = 1;\nexport { a };\n",
+            "adds re-export a",
+        ),
+        (
+            "b.ts",
+            "export * from \"./a\";\nexport * from \"./b\";\n",
+            "export * from \"./a\";\n",
+            "removes 1 line",
+        ),
+        (
+            "lib.rs",
+            "pub use a::X;\n",
+            "pub use a::X;\npub use b::Y;\n",
+            "adds re-export Y, b",
+        ),
+        (
+            "lib.rs",
+            "pub use a::X;\npub use b::Y;\n",
+            "pub use a::X;\n",
+            "removes re-export Y, b",
+        ),
+        (
+            "b.ts",
+            "export { a } from \"./a\";\n",
+            "import { a } from \"./a\";\n",
+            "changes re-export a",
         ),
     ] {
-        let out = one("b.ts", old, new);
-        assert!(
-            out.files[0]
-                .hunks
-                .iter()
-                .any(|h| h.category == Category::Import && h.noise),
-            "{old:?} -> {new:?}: {:?}",
-            rationales(&out)
-        );
+        let out = one(path, old, new);
+        let h = out.files[0].hunks.last().expect("the re-export hunk");
+        assert_eq!(h.category, Category::Import, "{old:?} -> {new:?}");
+        assert!(!h.noise, "{old:?} -> {new:?}");
+        assert_eq!(h.rationale, rationale, "{old:?} -> {new:?}");
     }
+}
+
+#[test]
+fn imports_and_restricted_uses_stay_noise() {
+    for (path, old, new) in [
+        ("lib.rs", "use a::X;\n", "use a::X;\nuse b::Y;\n"),
+        (
+            "lib.rs",
+            "pub(crate) use a::X;\n",
+            "pub(crate) use a::X;\npub(crate) use b::Y;\n",
+        ),
+        (
+            "b.ts",
+            "import a from \"a\";\n",
+            "import a from \"a\";\nimport b from \"b\";\n",
+        ),
+    ] {
+        let out = one(path, old, new);
+        let h = out.files[0].hunks.last().expect("the import hunk");
+        assert_eq!(h.category, Category::Import, "{old:?} -> {new:?}");
+        assert!(h.noise, "{old:?} -> {new:?}");
+    }
+}
+
+#[test]
+fn a_re_export_list_sorted_in_place_is_noise() {
+    // rustfmt reordering the names of a `pub use` adds and removes nothing
+    let out = one(
+        "lib.rs",
+        "pub use crate::{\n    a::{b, C},\n    d::e,\n};\n",
+        "pub use crate::{\n    a::{C, b},\n    d::e,\n};\n",
+    );
+    let h = &out.files[0].hunks[0];
+    assert_eq!(h.category, Category::Import);
+    assert!(h.noise, "{:?}", rationales(&out));
+}
+
+#[test]
+fn a_moved_re_export_is_noise_on_both_halves() {
+    let out = one(
+        "b.ts",
+        "export * from \"./a\";\nexport * from \"./b\";\n",
+        "export * from \"./b\";\nexport * from \"./a\";\n",
+    );
+    let hunks = &out.files[0].hunks;
+    assert!(hunks.len() >= 2, "{:?}", rationales(&out));
+    assert!(hunks.iter().all(|h| h.noise), "{:?}", rationales(&out));
 }
 
 #[test]
