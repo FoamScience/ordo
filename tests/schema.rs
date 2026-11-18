@@ -39,7 +39,8 @@ fn declared(schema: &Value, path: &str) -> Vec<String> {
 /// rename whose old name survives at one call site (a `notes` entry), a
 /// cross-file use, a removal, a rule hit, a local binding that is used again
 /// (a `uses_at` entry), a definition that gained a loop (a `deltas` entry),
-/// a config edit whose changed keys produce `details`, and hunch's guess.
+/// a config edit whose changed keys produce `details`, and hunch's guess,
+/// which un-hides the import-only new file.
 fn rich() -> Input {
     serde_json::from_value(serde_json::json!({
         "changes": [
@@ -54,7 +55,10 @@ fn rich() -> Input {
               "new": "def tally(xs):\n    total = 0\n    for x in xs:\n        total += x\n    return total\n" },
             { "path": "c.yaml",
               "old": "svc:\n  port: 80\n  host: a\n",
-              "new": "svc:\n  port: 443\n  host: a\n  tls: on\n" }
+              "new": "svc:\n  port: 443\n  host: a\n  tls: on\n" },
+            { "path": "test/fixtures/stdin-both.js",
+              "old": null,
+              "new": "import process from 'node:process';\nimport {text} from 'node:stream/consumers';\n\nconst input = await text(process.stdin);\nprocess.stdout.write(`${input}:stdout`);\n" }
         ],
         "options": { "hunch": true, "rules": [
             { "name": "py-note", "when": { "lang": "python" }, "note": "python touched" }
@@ -191,6 +195,11 @@ fn the_fixture_reaches_the_optional_output_fields() {
             "no hunk carries `{field}`; the schema check would not cover it"
         );
     }
+    assert!(
+        ordo_diff::hunch::policy().is_none()
+            || hunks.iter().any(|h| h["hunch"].get("changed").is_some()),
+        "no hunk carries `hunch.changed`; the schema check would not cover it"
+    );
     assert!(out.get("ledger").is_some(), "fixture produced no ledger");
     assert!(out.get("summary").is_some(), "fixture produced no summary");
     assert!(

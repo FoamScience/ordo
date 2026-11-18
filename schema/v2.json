@@ -300,7 +300,7 @@
             "hunch": {
               "type": "boolean",
               "default": false,
-              "description": "put a trained model's guess on every hunk (`hunks[].hunch`): P(skip) and the features that moved it most. Shadow only: no flag and no order changes. Its history features read `history`"
+              "description": "put a trained model's guess on every hunk (`hunks[].hunch`): P(skip) and the features that moved it most. When the shipped model passed its promotion gate, a confident guess also moves the hunk's `noise` flag (`hunks[].hunch.changed`); the reading order never moves. Its history features read `history`"
             }
           }
         },
@@ -638,7 +638,7 @@
                     },
                     "hunch": {
                       "type": "object",
-                      "description": "a trained model's guess, when `options.hunch` asked for it: shadow only, it changes no flag and no order. Omitted otherwise",
+                      "description": "a trained model's guess, when `options.hunch` asked for it: it may move the hunk's `noise` flag (see `changed`), never the reading order. Omitted otherwise",
                       "required": [
                         "noise",
                         "top"
@@ -667,6 +667,14 @@
                             "maxItems": 2
                           },
                           "maxItems": 3
+                        },
+                        "changed": {
+                          "type": "string",
+                          "enum": [
+                            "unhid",
+                            "hid"
+                          ],
+                          "description": "how the guess moved this hunk's `noise` flag: `unhid` clears a flag the engine set (P(skip) under the model's un-hide threshold), `hid` sets one it left clear (P(skip) at its hide threshold or above). Only from a model that passed its promotion gate; omitted when the flag stands"
                         }
                       }
                     },

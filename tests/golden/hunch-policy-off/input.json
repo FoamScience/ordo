@@ -1,0 +1,159 @@
+{
+  "changes": [
+    {
+      "path": "test/fixtures/stdin-both.js",
+      "old": null,
+      "new": "#!/usr/bin/env node\nimport process from 'node:process';\nimport {text} from 'node:stream/consumers';\n\nconst input = await text(process.stdin);\nprocess.stdout.write(`${input}:stdout`);\nprocess.stderr.write(`${input}:stderr`);\n"
+    },
+    {
+      "path": "lib/vtls/schannel.c",
+      "old": "#include <stdio.h>\n\nstatic int set_version(int *enabled, int v)\n{\n  switch(v) {\n    case 3:\n\n      /* Windows Server 2022 and newer */\n      if(check_version(10, 0, 20348)) {\n        *enabled |= 4;\n      }\n      break;\n  }\n  return 0;\n}\n",
+      "new": "#include <stdio.h>\n\nstatic int set_version(int *enabled, int v)\n{\n  switch(v) {\n    case 3:\n\n      /* Windows Server 2022 and later */\n      if(check_version(10, 0, 20348)) {\n        *enabled |= 4;\n      }\n      break;\n  }\n  return 0;\n}\n"
+    }
+  ],
+  "history": {
+    "at": 1700000000,
+    "commits": [
+      {
+        "time": 1699913600,
+        "subject": "fix: crash 0",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699827200,
+        "subject": "fix: crash 1",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699740800,
+        "subject": "fix: crash 2",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699654400,
+        "subject": "fix: crash 3",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699568000,
+        "subject": "fix: crash 4",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699481600,
+        "subject": "fix: crash 5",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699395200,
+        "subject": "schannel: tidy 6",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699308800,
+        "subject": "schannel: tidy 7",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699222400,
+        "subject": "schannel: tidy 8",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699136000,
+        "subject": "schannel: tidy 9",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1699049600,
+        "subject": "schannel: tidy 10",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698963200,
+        "subject": "schannel: tidy 11",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698876800,
+        "subject": "schannel: tidy 12",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698790400,
+        "subject": "schannel: tidy 13",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698704000,
+        "subject": "schannel: tidy 14",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698617600,
+        "subject": "schannel: tidy 15",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698531200,
+        "subject": "schannel: tidy 16",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698444800,
+        "subject": "schannel: tidy 17",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698358400,
+        "subject": "schannel: tidy 18",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      },
+      {
+        "time": 1698272000,
+        "subject": "schannel: tidy 19",
+        "paths": [
+          "lib/vtls/schannel.c"
+        ]
+      }
+    ]
+  }
+}

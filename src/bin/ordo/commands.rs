@@ -188,6 +188,12 @@ pub(super) fn build_audit(
         hidden.noise,
         "generated/formatting noise (:all shows them)",
     ));
+    if hidden.hunch > 0 {
+        out.push(row(
+            hidden.hunch,
+            "hidden by hunch's guess (:all shows them)",
+        ));
+    }
     out.push(row(
         ledger.hunks_import,
         "of which import hunks — noise, but shown by default where the diff put them",

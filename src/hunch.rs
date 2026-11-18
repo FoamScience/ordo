@@ -8,8 +8,8 @@
 //! a few fixed sample diffs, which hash to the fingerprint the model records.
 
 use crate::model::{
-    Category, Edge, Extent, FeatureSchema, FileOut, FindingSource, History, Hunch, HunkOut, Level,
-    Options, Output,
+    Category, Edge, Extent, FeatureSchema, FileOut, FindingSource, History, Hunch, HunchChange,
+    HunkOut, Level, Options, Output,
 };
 use crate::readability::DefDelta;
 use crate::{lang, readability, PerFileHunks};
@@ -282,7 +282,10 @@ pub(crate) fn file_history(history: &History) -> HashMap<&str, (usize, usize)> {
 }
 
 /// Every hunk's vector, on the hunk when `options.features` asks for it, and
-/// the model's guess from it when `options.hunch` does.
+/// the model's guess from it when `options.hunch` does, with the guess moving
+/// the hunk's `noise` flag as `decide` says. The reading order is settled
+/// before this runs, so a moved flag hides or shows a hunk where it already
+/// stands.
 pub(crate) fn annotate(
     files: &mut [FileOut],
     hunks: &[PerFileHunks],
@@ -329,7 +332,11 @@ pub(crate) fn annotate(
     for (file, vs) in files.iter_mut().zip(vectors) {
         for (hunk, v) in file.hunks.iter_mut().zip(vs) {
             if guess_too {
-                hunk.hunch = Some(guess(&v));
+                let g = guess(&v, hunk.noise);
+                if let Some(c) = g.changed {
+                    hunk.noise = c == HunchChange::Hid;
+                }
+                hunk.hunch = Some(g);
             }
             if options.features {
                 hunk.features = Some(v);
@@ -467,9 +474,39 @@ fn round4(v: f64) -> f64 {
     (v * 1e4).round() / 1e4
 }
 
-/// The guess a hunk carries: P(skip) and the `TOP` features that moved it
-/// most, either way, in four decimals.
-fn guess(x: &[f64]) -> Hunch {
+/// The thresholds at which `--hunch` moves a hunk's `noise` flag, from the
+/// trainer's promotion gate (scripts/hunch-train.py `promotion`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Policy {
+    /// show a hunk the engine hid when P(skip) is under this
+    pub unhide: f64,
+    /// hide a hunk the engine showed when P(skip) is at least this
+    pub hide: f64,
+}
+
+/// The shipped model's policy; `None` when it failed the promotion gate,
+/// and the guess then stays a shadow.
+pub fn policy() -> Option<Policy> {
+    POLICY
+}
+
+/// How a guess of `p` moves a hunk whose `noise` flag is `noise`, under
+/// `policy`; `None` leaves the flag alone.
+pub fn decide(noise: bool, p: f64, policy: Option<Policy>) -> Option<HunchChange> {
+    let policy = policy?;
+    if noise && p < policy.unhide {
+        Some(HunchChange::Unhid)
+    } else if !noise && p >= policy.hide {
+        Some(HunchChange::Hid)
+    } else {
+        None
+    }
+}
+
+/// The guess a hunk carries: P(skip), the `TOP` features that moved it most,
+/// either way, in four decimals, and what the policy does to its `noise`
+/// flag, decided on the unrounded P(skip).
+fn guess(x: &[f64], noise: bool) -> Hunch {
     let (p, contrib) = predict(x);
     let mut by_size: Vec<usize> = (0..contrib.len()).filter(|&i| contrib[i] != 0.0).collect();
     by_size.sort_by(|&a, &b| contrib[b].abs().total_cmp(&contrib[a].abs()));
@@ -480,5 +517,6 @@ fn guess(x: &[f64]) -> Hunch {
             .take(TOP)
             .map(|i| (NAMES[i].to_string(), round4(contrib[i])))
             .collect(),
+        changed: decide(noise, p, POLICY),
     }
 }

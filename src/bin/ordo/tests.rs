@@ -823,6 +823,7 @@ fn hidden_breakdown_partitions_the_hidden_set_exactly() {
         Hidden {
             comment: 0,
             noise: 2,
+            hunch: 0,
             glob: 1,
             wave: 0,
             unaccounted: 0
@@ -832,6 +833,22 @@ fn hidden_breakdown_partitions_the_hidden_set_exactly() {
         compute_view(&items, false, false, Some(&globs), None).len() + h.noise + h.glob,
         items.len()
     );
+}
+
+#[test]
+fn hidden_breakdown_charges_hunchs_hides_apart_from_the_engines_noise() {
+    let mut engine = test_item("a.rs");
+    engine.noise = true;
+    let mut guessed = test_item("b.rs");
+    guessed.noise = true;
+    guessed.hunch = Some(ordo_diff::model::Hunch {
+        noise: 0.95,
+        top: vec![],
+        changed: Some(ordo_diff::model::HunchChange::Hid),
+    });
+    let items = vec![engine, guessed, test_item("c.rs")];
+    let h = hidden_breakdown(&items, false, false, None, None);
+    assert_eq!((h.noise, h.hunch, h.unaccounted), (1, 1, 0));
 }
 
 #[test]
@@ -848,6 +865,7 @@ fn hidden_breakdown_charges_only_comments_before_noise() {
         Hidden {
             comment: 1,
             noise: 0,
+            hunch: 0,
             glob: 0,
             wave: 0,
             unaccounted: 0
@@ -874,6 +892,7 @@ fn build_audit_reports_every_reason_and_flags_an_unaccounted_remainder() {
     let clean = Hidden {
         comment: 0,
         noise: 1,
+        hunch: 0,
         glob: 0,
         wave: 0,
         unaccounted: 0,
@@ -894,6 +913,7 @@ fn build_audit_reports_every_reason_and_flags_an_unaccounted_remainder() {
     let leak = Hidden {
         comment: 0,
         noise: 0,
+        hunch: 0,
         glob: 0,
         wave: 0,
         unaccounted: 1,

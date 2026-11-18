@@ -1,0 +1,125 @@
+{
+  "schema": 2,
+  "order": [
+    {
+      "path": "test/fixtures/stdin-both.js",
+      "hunk": "h0"
+    },
+    {
+      "path": "lib/vtls/schannel.c",
+      "hunk": "h1"
+    }
+  ],
+  "files": [
+    {
+      "path": "test/fixtures/stdin-both.js",
+      "hunks": [
+        {
+          "id": "h0",
+          "old_range": [
+            1,
+            0
+          ],
+          "new_range": [
+            1,
+            7
+          ],
+          "category": "import",
+          "enclosing": null,
+          "defines": [],
+          "uses": [
+            "input",
+            "stderr",
+            "stdin",
+            "stdout",
+            "write"
+          ],
+          "group": "g0",
+          "order_index": 0,
+          "rationale": "adds import process, text",
+          "noise": true,
+          "extent": "added",
+          "uses_at": [
+            {
+              "name": "input",
+              "rows": [
+                6,
+                7
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "lib/vtls/schannel.c",
+      "hunks": [
+        {
+          "id": "h1",
+          "old_range": [
+            8,
+            8
+          ],
+          "new_range": [
+            8,
+            8
+          ],
+          "category": "other",
+          "enclosing": "set_version",
+          "defines": [],
+          "uses": [],
+          "group": "g1",
+          "order_index": 0,
+          "rationale": "edits comment in set_version",
+          "extent": "edited",
+          "comment": true
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "g0",
+      "reason": "same scope: imports",
+      "members": [
+        "h0"
+      ]
+    },
+    {
+      "id": "g1",
+      "reason": "same definition: set_version",
+      "members": [
+        "h1"
+      ]
+    }
+  ],
+  "edges": [],
+  "clusters": [
+    [
+      "h0"
+    ],
+    [
+      "h1"
+    ]
+  ],
+  "ledger": [
+    {
+      "name": "set_version",
+      "path": "lib/vtls/schannel.c",
+      "at": "h1",
+      "change": "body",
+      "used_by": []
+    }
+  ],
+  "notes": [
+    "test/fixtures/stdin-both.js touched, but none of its uses reference the 1 changed def"
+  ],
+  "summary": {
+    "label": "test",
+    "verdict": "unknown",
+    "sentences": [
+      "Edits tests only: test/fixtures/stdin-both.js.",
+      "Behaviour change not ruled out: 1 hunk edits beyond a rename, move, extraction or reformat."
+    ]
+  }
+}

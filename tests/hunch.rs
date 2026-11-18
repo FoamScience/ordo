@@ -1,8 +1,9 @@
 //! hunch's feature export: off unless asked, one named column per position,
 //! and git history read only inside its window; its guess: off unless asked,
-//! the trained library's own numbers, and nothing else in the output moved.
-use ordo_diff::hunch;
-use ordo_diff::model::{HunkOut, Output};
+//! the trained library's own numbers, and nothing else in the output moved
+//! but the noise flags its policy overrides, and only once its gate passed.
+use ordo_diff::hunch::{self, Policy};
+use ordo_diff::model::{HunchChange, HunkOut, Output};
 use serde_json::json;
 mod fixture;
 use fixture::run_json as run;
@@ -263,16 +264,127 @@ fn the_guess_carries_a_probability_and_its_top_features() {
     }
 }
 
+/// Past both of the shipped policy's thresholds: a new file that only
+/// imports and runs top-level code, which the engine hides as import noise
+/// (P(skip) about 0.01), and a one-line comment edit in a busy C file, which
+/// it shows (about 0.91, close to the hide threshold: a retrain may need a
+/// busier file here).
+fn policy_input(hunch: bool) -> serde_json::Value {
+    let c = "static int set_version(int *enabled, int v)\n{\n  switch(v) {\n    case 3:\n\n      \
+             /* Windows Server 2022 and newer */\n      if(check_version(10, 0, 20348)) {\n        \
+             *enabled |= 4;\n      }\n      break;\n  }\n  return 0;\n}\n";
+    let commits: Vec<_> = (0..20)
+        .map(|i| {
+            let subject = if i < 6 { "fix: a crash" } else { "schannel: tidy" };
+            json!({ "time": AT - (i + 1) * DAY, "subject": subject, "paths": ["lib/vtls/schannel.c"] })
+        })
+        .collect();
+    json!({
+        "changes": [
+            {
+                "path": "test/fixtures/stdin-both.js",
+                "old": null,
+                "new": "#!/usr/bin/env node\nimport process from 'node:process';\n\
+                        import {text} from 'node:stream/consumers';\n\n\
+                        const input = await text(process.stdin);\n\
+                        process.stdout.write(`${input}:stdout`);\n\
+                        process.stderr.write(`${input}:stderr`);\n"
+            },
+            {
+                "path": "lib/vtls/schannel.c",
+                "old": c,
+                "new": c.replace("and newer", "and later")
+            }
+        ],
+        "history": { "at": AT, "commits": commits },
+        "options": { "hunch": hunch }
+    })
+}
+
+/// `with` stripped of hunch's guesses, each noise flag the policy moved put
+/// back, so it reads as the output without `--hunch`; and the moves, in
+/// hunk order.
+fn unmoved(mut with: serde_json::Value) -> (serde_json::Value, Vec<Option<HunchChange>>) {
+    let mut moves = vec![];
+    for f in with["files"].as_array_mut().unwrap() {
+        for h in f["hunks"].as_array_mut().unwrap() {
+            let h = h.as_object_mut().unwrap();
+            let changed = h.remove("hunch").and_then(|g| g.get("changed").cloned());
+            let changed: Option<HunchChange> = changed.map(|c| match c.as_str() {
+                Some("unhid") => HunchChange::Unhid,
+                Some("hid") => HunchChange::Hid,
+                other => panic!("changed: {other:?}"),
+            });
+            if let Some(c) = changed {
+                let noise = h.get("noise").and_then(|n| n.as_bool()).unwrap_or(false);
+                assert_eq!(noise, c == HunchChange::Hid, "{c:?} left noise {noise}");
+                if c == HunchChange::Hid {
+                    h.remove("noise");
+                } else {
+                    h.insert("noise".into(), json!(true));
+                }
+            }
+            moves.push(changed);
+        }
+    }
+    (with, moves)
+}
+
 #[test]
 fn the_guess_moves_nothing_else() {
-    let strip = |mut v: serde_json::Value| {
-        for h in v["files"][0]["hunks"].as_array_mut().unwrap() {
-            h.as_object_mut().unwrap().remove("hunch");
-        }
-        v
-    };
     let plain = serde_json::to_value(run(json!({ "changes": [change()] }))).unwrap();
-    assert_eq!(strip(with_hunch(json!({}))), plain);
+    let (with, moves) = unmoved(with_hunch(json!({})));
+    assert_eq!(with, plain);
+    assert!(moves.iter().all(Option::is_none), "{moves:?}");
+}
+
+#[test]
+fn the_policy_moves_only_noise_flags() {
+    let plain = serde_json::to_value(run(policy_input(false))).unwrap();
+    let (with, moves) = unmoved(serde_json::to_value(run(policy_input(true))).unwrap());
+    // the reading order, edges, groups and every other field stay the engine's
+    assert_eq!(with, plain);
+    let expected = match hunch::policy() {
+        Some(_) => vec![Some(HunchChange::Unhid), Some(HunchChange::Hid)],
+        None => vec![None, None],
+    };
+    assert_eq!(moves, expected);
+}
+
+#[test]
+fn the_policy_ships_only_when_its_gate_passed() {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hunch.json");
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(p).expect("src/hunch.json")).expect("json");
+    let policy = &doc["policy"];
+    let shipped = (policy["passes"] == true).then(|| Policy {
+        unhide: policy["unhide"].as_f64().expect("unhide"),
+        hide: policy["hide"].as_f64().expect("hide"),
+    });
+    assert_eq!(hunch::policy(), shipped);
+}
+
+#[test]
+fn the_policy_unhides_below_one_threshold_and_hides_at_the_other() {
+    let p = Some(Policy {
+        unhide: 0.05,
+        hide: 0.9,
+    });
+    assert_eq!(hunch::decide(true, 0.01, p), Some(HunchChange::Unhid));
+    assert_eq!(hunch::decide(true, 0.05, p), None);
+    assert_eq!(hunch::decide(true, 0.99, p), None);
+    assert_eq!(hunch::decide(false, 0.9, p), Some(HunchChange::Hid));
+    assert_eq!(hunch::decide(false, 0.89, p), None);
+    assert_eq!(hunch::decide(false, 0.01, p), None);
+}
+
+#[test]
+fn a_model_that_failed_its_gate_stays_a_shadow() {
+    for noise in [true, false] {
+        for p in [0.0, 0.01, 0.5, 0.95, 1.0] {
+            assert_eq!(hunch::decide(noise, p, None), None);
+        }
+    }
 }
 
 #[test]

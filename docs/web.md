@@ -346,8 +346,13 @@ Both are repeatable.
 reviewer can skip it, from a small model trained offline on labelled reviews
 (`scripts/hunch-train.py`). The code pane shows it as a muted `Hunch: 72%
 skippable` badge, and the why pane names the three features that moved it
-most, each signed toward skipping in log-odds. It is a shadow: nothing is
-hidden, dimmed or reordered by it, and the plain text output is unchanged.
+most, each signed toward skipping in log-odds. Where the model is confident
+it also moves the engine's noise flag: a hunk the engine hid as noise but
+the model says a reviewer should read comes back into the view, marked
+`Hunch: shown`; one the engine showed but the model is sure can be skipped
+is hidden like noise (`:all` shows it), marked `Hunch: hidden`. Only a model
+that passed its promotion gate does this (see `options.hunch` in
+[cli.md](cli.md)); nothing is reordered by it.
 
 The model reads each file's git history: the commits before the change (its
 ancestors, never the change itself or what came after) that touched the file
