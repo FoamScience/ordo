@@ -51,6 +51,8 @@ export interface Item {
   reviewed: boolean;
   delta: Delta;
   note: string | null;
+  /** catalog rules `:dismiss`ed on this hunk */
+  dismissed: string[];
 }
 
 /** a trained model's P(skip) and the three features that moved it most, as `[name, log-odds]`; `changed` when it moved the hunk's noise flag; the same for P(faithful rationale), which changes nothing; and for attention (0-1), by which the engine orders the groups its def->use order freed when that head passed its gate */

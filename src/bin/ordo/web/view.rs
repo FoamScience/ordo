@@ -90,6 +90,7 @@ pub(crate) fn review(app: &App) -> Value {
                 "reviewed": app.reviewed[i],
                 "delta": if first_run { Value::Null } else { delta(app.deltas.get(i)) },
                 "note": note_for(app, i),
+                "dismissed": crate::dismiss::dismissed_on(app, i),
             })
         })
         .collect();

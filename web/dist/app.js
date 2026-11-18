@@ -3932,6 +3932,17 @@ function smoothPath(ps) {
   return `${d} L ${last.x} ${last.y}`;
 }
 
+// src/dismiss.ts
+function dismissToggle(f, dismissed) {
+  if (f.source !== "catalog") return null;
+  const on2 = dismissed.includes(f.name);
+  return {
+    label: on2 ? "dismissed" : "dismiss",
+    title: on2 ? "Undo the dismissal (:dismiss)" : "Not worth a look here (:dismiss). After a few in this repository, ordo suggests a level for .ordo/rules.toml",
+    command: `dismiss ${f.name}`
+  };
+}
+
 // src/hunch.ts
 function badge(g) {
   return `Hunch: ${Math.round(g.noise * 100)}% skippable`;
@@ -4570,6 +4581,10 @@ function highlightHits(text, s, k) {
   out.push(document.createTextNode(text.slice(at2)));
   return out;
 }
+function dismissButton(f, dismissed) {
+  const t = dismissToggle(f, dismissed);
+  return t && h("button", { class: "at", title: t.title, onclick: () => act({ op: "command", line_text: t.command }) }, t.label);
+}
 function renderReading(it2) {
   const r = st2.review;
   const head = $("#code > .head");
@@ -4980,7 +4995,8 @@ function renderWhy() {
               { class: "h" },
               h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
               h("span", { class: "name" }, f.name),
-              f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`)
+              f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`),
+              dismissButton(f, it2.dismissed)
             ),
             h("p", null, f.message),
             h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : ""))
@@ -5422,6 +5438,7 @@ function argCandidates() {
     send: ["all"],
     theme: ["auto", ...themeNames()],
     size: Object.keys(SIZES),
+    dismiss: [...new Set(r.items[st2.sel]?.findings.filter((f) => f.source === "catalog").map((f) => f.name))],
     goto: [...new Set(r.items.map((i) => i.path))],
     filter: [...new Set(r.items.map((i) => i.path.replace(/[^/]*$/, "*")))]
   };

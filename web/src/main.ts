@@ -8,12 +8,13 @@ import { Keymap, keyLabel } from "./keys.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
+import { dismissToggle } from "./dismiss.ts";
 import { attention, badge, contributions, effect, faithfulness, flagBadge } from "./hunch.ts";
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
 import { moved, regressed } from "./readability.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
-import type { ActResult, ChangeSummary, FileData, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
+import type { ActResult, ChangeSummary, FileData, Finding, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
 
 type Pane = "list" | "code" | "why";
 const PANES: Pane[] = ["list", "code", "why"];
@@ -554,6 +555,11 @@ function highlightHits(text: string, s: Search, k: number): Node[] {
   return out;
 }
 
+function dismissButton(f: Finding, dismissed: string[]): HTMLElement | null {
+  const t = dismissToggle(f, dismissed);
+  return t && h("button", { class: "at", title: t.title, onclick: () => act({ op: "command", line_text: t.command }) }, t.label);
+}
+
 /** The reading column's words: where the hunk is, what it does, and what the reader can do next. */
 function renderReading(it: Item | undefined): void {
   const r = st.review!;
@@ -1017,6 +1023,7 @@ function renderWhy(): void {
                 h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
                 h("span", { class: "name" }, f.name),
                 f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row!), title: "Put the cursor on this line" }, `line ${f.row}`),
+                dismissButton(f, it.dismissed),
               ),
               h("p", null, f.message),
               h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : "")),
@@ -1513,6 +1520,7 @@ function argCandidates(): Record<string, string[]> {
     send: ["all"],
     theme: ["auto", ...themeNames()],
     size: Object.keys(SIZES),
+    dismiss: [...new Set(r.items[st.sel]?.findings.filter((f) => f.source === "catalog").map((f) => f.name))],
     goto: [...new Set(r.items.map((i) => i.path))],
     filter: [...new Set(r.items.map((i) => i.path.replace(/[^/]*$/, "*")))],
   };

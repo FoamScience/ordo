@@ -83,6 +83,7 @@ mod commands;
 mod comments;
 mod config;
 mod consumers;
+mod dismiss;
 mod editor;
 mod facts;
 mod findings;
@@ -1516,6 +1517,9 @@ struct App {
     /// line and range comments, every file of the repository (see `comments`)
     comments: Vec<LineComment>,
     comments_path: Option<PathBuf>,
+    /// catalog findings `:dismiss`ed, every hunk of the repository
+    dismissed: dismiss::Dismissals,
+    dismissed_path: Option<PathBuf>,
     /// the code-pane line a `v` selection started on, 0-based; the range runs
     /// from it to the cursor
     selection: Option<usize>,
@@ -2195,6 +2199,11 @@ impl Session {
             history,
         } = r;
         self.drift = fingerprint.map(Drift::new).unwrap_or_default();
+        let dismissed_path = notes_path.as_deref().and_then(dismiss::dismissed_file_path);
+        let dismissed = dismissed_path
+            .as_deref()
+            .map(dismiss::load_dismissals)
+            .unwrap_or_default();
         let sel0 = view[0];
         let cursor = cursor_for(&items[sel0], &sources);
         let mut fresh = App {
@@ -2243,6 +2252,8 @@ impl Session {
             notes_path,
             comments,
             comments_path,
+            dismissed,
+            dismissed_path,
             selection: None,
             watch: self.watch,
             stale: None,

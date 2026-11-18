@@ -82,6 +82,10 @@ magic-number = "warn"             # bare numbers have bitten this project before
 `note` is the lowest level, so an entry that is already a note (`goto`,
 `raw-new-delete`) goes quiet only through `disable`.
 
+The reviewer keeps count for you: `:dismiss` a catalog finding on a few hunks
+of one repository and it shows these lines for that rule (see
+[web.md](web.md#dismissing-a-catalog-finding)). It never writes them itself.
+
 ### Raising or lowering a level
 
 A `[levels]` table sets the level of any catalog entry or rule by name, without
