@@ -99,6 +99,11 @@ pub(super) const COMMANDS: &[Cmd] = &[
         help: "anchor a note to the selected hunk's symbol; no text clears it",
     },
     Cmd {
+        name: "dismiss",
+        args: "[rule]",
+        help: "dismiss a catalog finding on the selected hunk, or undo that; repeats suggest a per-repo level",
+    },
+    Cmd {
         name: "comment",
         args: "[text]",
         help: "comment on the code-pane line, or the `v` selection; no text deletes what is there",
@@ -524,6 +529,7 @@ pub(super) fn execute_command(app: &mut App, line: &str) -> Result<(), String> {
             set_note(app, arg.trim())?;
             Ok(())
         }
+        "dismiss" => crate::dismiss::dismiss(app, arg.trim()),
         "watch" => {
             let mode = match arg.trim() {
                 "" if app.watch == WatchMode::Off => WatchMode::Hint,

@@ -1588,6 +1588,8 @@ fn test_app() -> App {
         notes_path: None,
         comments: vec![],
         comments_path: None,
+        dismissed: Default::default(),
+        dismissed_path: None,
         selection: None,
         watch: WatchMode::Off,
         stale: None,
@@ -4174,4 +4176,150 @@ fn hunch_is_opt_in_and_works_with_json() {
         .ok()
         .unwrap();
     assert!(parsed.hunch && parsed.json);
+}
+
+fn catalog_finding(name: &str, level: ordo_diff::model::Level) -> ordo_diff::model::Finding {
+    ordo_diff::model::Finding {
+        source: ordo_diff::model::FindingSource::Catalog,
+        name: name.to_string(),
+        ..finding(level)
+    }
+}
+
+/// Three hunks, each with one catalog `hardcoded-version` warn and a rule hit.
+fn dismiss_app(tag: &str) -> (App, PathBuf) {
+    use ordo_diff::model::Level;
+    let mut app = test_app();
+    app.items = (0..3)
+        .map(|n| {
+            let mut it = test_item(&format!("{n}.rs"));
+            it.findings = vec![
+                finding(Level::Warn),
+                catalog_finding("hardcoded-version", Level::Warn),
+            ];
+            it
+        })
+        .collect();
+    app.view = (0..3).collect();
+    app.reviewed = vec![false; 3];
+    let dir = rules_dir(tag);
+    let notes = dir.join("notes").join("r.json");
+    let path = crate::dismiss::dismissed_file_path(&notes).unwrap();
+    assert_eq!(path, dir.join("dismissed").join("r.json"));
+    app.dismissed_path = Some(path.clone());
+    (app, dir)
+}
+
+/// The third hunk a catalog rule is dismissed on brings up the rules.toml
+/// lines that would lower it; nothing but the dismissal file is written.
+#[test]
+fn a_catalog_rule_dismissed_on_three_hunks_suggests_a_lower_level() {
+    let (mut app, dir) = dismiss_app("dismiss-three");
+    for i in 0..2 {
+        app.sel = i;
+        execute_command(&mut app, "dismiss").unwrap();
+        assert!(app.popup.is_none());
+        assert!(
+            app.notice
+                .take()
+                .unwrap()
+                .contains(&format!("{} of 3", i + 1)),
+            "the notice counts toward the suggestion"
+        );
+    }
+    app.sel = 2;
+    execute_command(&mut app, "dismiss hardcoded-version").unwrap();
+    let popup = app.popup.take().expect("a suggestion");
+    assert_eq!(popup.title, "hardcoded-version: dismissed on 3 hunks");
+    let text = popup.lines.join("\n");
+    assert!(
+        text.contains("    [levels]\n    hardcoded-version = \"note\""),
+        "{text}"
+    );
+    assert!(text.contains("ordo has changed nothing"), "{text}");
+    assert_eq!(crate::dismiss::dismissed_on(&app, 2), ["hardcoded-version"]);
+    let on_disk = crate::dismiss::load_dismissals(app.dismissed_path.as_deref().unwrap());
+    assert_eq!(on_disk["hardcoded-version"].len(), 3);
+    let mut written: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    written.sort();
+    assert_eq!(written, ["dismissed"], "no rules file is touched");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Dismissing the same hunk again undoes it, and a hunk dismissed twice still
+/// counts once.
+#[test]
+fn dismissing_again_undoes_it() {
+    let (mut app, dir) = dismiss_app("dismiss-undo");
+    execute_command(&mut app, "dismiss").unwrap();
+    execute_command(&mut app, "dismiss").unwrap();
+    assert_eq!(
+        app.notice.as_deref(),
+        Some("hardcoded-version is no longer dismissed here")
+    );
+    assert!(app.dismissed.is_empty());
+    assert!(crate::dismiss::dismissed_on(&app, 0).is_empty());
+    assert!(crate::dismiss::load_dismissals(app.dismissed_path.as_deref().unwrap()).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only catalog findings can be dismissed, and a hunk with several needs a name.
+#[test]
+fn dismiss_names_a_catalog_finding_on_the_selected_hunk() {
+    use ordo_diff::model::Level;
+    let (mut app, dir) = dismiss_app("dismiss-which");
+    assert_eq!(
+        execute_command(&mut app, "dismiss r").unwrap_err(),
+        "no catalog finding named 'r' on this hunk",
+        "a rule hit is the reviewer's own convention, not a catalog default"
+    );
+    app.items[0]
+        .findings
+        .push(catalog_finding("magic-number", Level::Note));
+    assert_eq!(
+        execute_command(&mut app, "dismiss").unwrap_err(),
+        "which one? :dismiss <rule> — hardcoded-version, magic-number"
+    );
+    app.items[1].findings.retain(|f| f.name == "r");
+    app.sel = 1;
+    assert_eq!(
+        execute_command(&mut app, "dismiss").unwrap_err(),
+        "this hunk has no catalog finding to dismiss"
+    );
+    assert!(app.dismissed.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A note cannot go lower, so the suggestion turns it off; a name TOML cannot
+/// write bare is quoted.
+#[test]
+fn the_suggestion_disables_a_note_and_quotes_a_name() {
+    use crate::dismiss::suggestion;
+    use ordo_diff::model::Level;
+    let note = suggestion("goto", Level::Note, 3).join("\n");
+    assert!(note.contains("    disable = [\"goto\"]"), "{note}");
+    let quoted = suggestion("eval/exec", Level::Verdict, 4).join("\n");
+    assert!(
+        quoted.contains("    [levels]\n    \"eval/exec\" = \"warn\""),
+        "{quoted}"
+    );
+}
+
+/// A dismissal file that is there but unreadable is left alone, not replaced
+/// by this one dismissal.
+#[test]
+fn an_unreadable_dismissal_file_is_not_overwritten() {
+    let (mut app, dir) = dismiss_app("dismiss-corrupt");
+    let path = app.dismissed_path.clone().unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{not json").unwrap();
+    assert!(execute_command(&mut app, "dismiss")
+        .unwrap_err()
+        .ends_with("cannot be read; not overwriting it"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json");
+    assert!(app.popup.is_none() && app.notice.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }

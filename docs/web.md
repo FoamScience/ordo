@@ -18,7 +18,7 @@ different version than the one running.
 The server is the review: Rust reads the diff (it owns git, and shells out for
 a commit's blobs), calls `ordo_diff::run`, and builds the view model; the page only
 lays it out and sends back what you did. The engine never learns what git is.
-Marks, notes and comments land in files under the cache directory, merged
+Marks, notes, comments and dismissals land in files under the cache directory, merged
 rather than overwritten, so two tabs or two servers open on the same revision
 do not undo each other. `Ctrl-C` stops the server.
 
@@ -251,6 +251,7 @@ command's own arguments; `:e <rev>` moves the tab to another revision, and
 | `:rule` | draft a rule matching the selected hunk's shape |
 | `:delta` | what changed since this review was last opened |
 | `:note [text]` | anchor a note to the selected hunk's symbol; no text clears it |
+| `:dismiss [rule]` | dismiss a catalog finding on the selected hunk, or undo that; repeats suggest a per-repo level |
 | `:comment [text]` | comment on the code-pane line, or the `v` selection; no text deletes what is there |
 | `:comments` | list every line comment in this review |
 | `:watch [on|off|auto]` | follow the working tree: mark the review stale (on), or reload by itself (auto) |
@@ -320,6 +321,31 @@ rulesets. Existing lines are replaced where they sit, so the commented-out
 defaults that document the file, and any note you left in it, survive. If a
 file cannot be read or written the dialog says so and keeps the change pending
 rather than reporting a save that did not happen.
+
+## Dismissing a catalog finding
+
+Whether a construct is worth flagging depends on the codebase (see
+[rules.md](rules.md#usefulness-depends-on-the-codebase)). When a catalog
+finding is not worth a look on this hunk, `dismiss` beside it in the why pane,
+or `:dismiss [rule]` (the rule's name is needed only when the hunk has several),
+records that, and the same again undoes it. A dismissal is kept per repository
+under the cache directory, by file and symbol, and changes nothing about the
+review: the finding stays where it was.
+
+Once one rule has been dismissed on three hunks of the repository, ordo shows
+the lines that would quiet it there, one level lower, or `disable` when it is
+already a note:
+
+```toml
+# <repo>/.ordo/rules.toml
+[levels]
+hardcoded-version = "note"
+```
+
+It only suggests. Nothing is written to a rules file until you copy the lines
+in, or set the same level for every repository with `:config`. Only catalog
+findings offer this; your own rules and an analyzer's are tuned where they are
+written.
 
 ## Analyzer findings and coverage
 
