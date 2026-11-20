@@ -12,9 +12,8 @@
 Review a code change in reading order: definitions before their uses.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/reviewer-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/readme/reviewer-light.png">
-  <img src="assets/readme/reviewer-dark.png" alt="The ordo reviewer on a Vue fix commit: a fix-candidate verdict with readability regressions above the reading order of 12 hunks grouped by symbol with def-to-use arcs; the hunk being read edits the canSetRef signature, with removed and added tokens highlighted inside the lines; beside it, what it needs, what needs it, a catalog finding on an any type, a readability line and the lines' history.">
+  <source srcset="assets/readme/ordo.avif" type="image/avif">
+  <img src="assets/readme/reviewer-dark.png" alt="A 51-second tour of ordo: a cobra commit whose call to postRun comes before its definition in git order is reordered so the definition is read first, with a def-to-use arc and one plain sentence per hunk; on a Vue commit the import is dimmed, --hunch moves the canSetRef logic ahead of 14 test hunks by attention, the verdict shows readability going from cognitive 29 to 37, and a catalog note flags an any type; then the real reviewer in a browser tab, the same order as JSON from ordo-engine, and the install command.">
 </picture>
 
 - **Reading order.** Each definition comes before the code that uses it, across
