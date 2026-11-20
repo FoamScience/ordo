@@ -66,6 +66,14 @@ pub(super) fn def_kinds(path: &str) -> &'static [&'static str] {
             "class_declaration",
             "interface_declaration",
         ],
+        "php" | "phtml" => &[
+            "function_definition",
+            "method_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "trait_declaration",
+            "enum_declaration",
+        ],
         _ => &[],
     }
 }

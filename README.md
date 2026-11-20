@@ -4,7 +4,7 @@
   <a href="https://github.com/FoamScience/ordo/actions/workflows/ci.yml"><img src="https://github.com/FoamScience/ordo/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://crates.io/crates/ordo-diff"><img src="https://img.shields.io/crates/v/ordo-diff" alt="ordo-diff on crates.io"></a>
   <!-- ordo:begin langs-badge -->
-  <img src="https://img.shields.io/badge/languages-29-5fd4c0" alt="29 supported languages">
+  <img src="https://img.shields.io/badge/languages-30-5fd4c0" alt="30 supported languages">
   <!-- ordo:end langs-badge -->
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>

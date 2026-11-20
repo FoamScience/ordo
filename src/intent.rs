@@ -358,6 +358,42 @@ static SPELLINGS: &[Spelling] = &[
         ],
     },
     Spelling {
+        langs: &["php"],
+        ifs: &["if_statement"],
+        exits: &[
+            ("return_statement", Exit::Return),
+            ("throw_expression", Exit::Throw),
+            ("continue_statement", Exit::Continue),
+            ("break_statement", Exit::Break),
+        ],
+        gotos: &[],
+        let_elses: &[],
+        blocks: &["compound_statement", "expression_statement"],
+        parens: C_LIKE_PARENS,
+        binding_conds: &[],
+        tries: Some(Tries {
+            kinds: &["try_statement"],
+            handlers: &["catch_clause"],
+            caught: &["type"],
+            word: "try/catch",
+        }),
+        binary: C_LIKE_BINARY,
+        and: &["&&", "and"],
+        or: &["||", "or"],
+        not: &["!"],
+        negations: &["unary_op_expression"],
+        params: &["formal_parameters"],
+        defaulted: &["default_value"],
+        keyword_rest: &[],
+        async_kw: None,
+        loops: &[
+            ("for_statement", "for loop"),
+            ("foreach_statement", "foreach loop"),
+            ("while_statement", "while loop"),
+            ("do_statement", "do/while loop"),
+        ],
+    },
+    Spelling {
         langs: &["lua"],
         ifs: &["if_statement"],
         exits: &[
@@ -776,7 +812,9 @@ fn guard(sp: &Spelling, side: Side, new: (usize, usize)) -> Option<Intent> {
         }
         (
             squeeze(side.text(unparen(sp, cond))),
-            stmt.child_by_field_name("consequence")?,
+            // php names it `body`
+            stmt.child_by_field_name("consequence")
+                .or_else(|| stmt.child_by_field_name("body"))?,
         )
     };
     let [exit] = statements(sp, leaves)[..] else {

@@ -161,6 +161,10 @@ pub(super) fn highlight_for_lang(lang: &str) -> Option<(tree_sitter::Language, S
             tree_sitter_java::LANGUAGE.into(),
             tree_sitter_java::HIGHLIGHTS_QUERY,
         ),
+        "php" => owned(
+            tree_sitter_php::LANGUAGE_PHP.into(),
+            tree_sitter_php::HIGHLIGHTS_QUERY,
+        ),
         "lua" => owned(
             tree_sitter_lua::LANGUAGE.into(),
             tree_sitter_lua::HIGHLIGHTS_QUERY,
@@ -265,6 +269,7 @@ fn fence_ext(name: &str) -> Option<&'static str> {
         "c" => "c",
         "cpp" | "c++" | "cc" | "cxx" | "hpp" => "cpp",
         "java" => "java",
+        "php" => "php",
         "lua" => "lua",
         "toml" => "toml",
         "jsonnet" | "libsonnet" | "jrsonnet" => "jsonnet",
