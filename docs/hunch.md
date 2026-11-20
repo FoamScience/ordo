@@ -81,8 +81,16 @@ that window, has no history and is marked so.
 cargo build --release
 ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py \
   --extra ~/.cache/ordo-corpus/judged.should_skip.jsonl \
-  --extra-faithful ~/.cache/ordo-corpus/judged.faithful.jsonl
+  --extra-faithful ~/.cache/ordo-corpus/judged.faithful.jsonl \
+  --extra-attention ~/.cache/ordo-corpus/attention.review.jsonl
 ```
+
+`--extra-attention` takes `scripts/review-label.py`'s output (rerun it after
+a feature schema change). The attention head then trains as a LightGBM
+lambdarank over Opus's levels and, per reviewed snapshot, commented hunks over
+uncommented ones, and must also beat file order leaving one review repo out
+(pairwise accuracy, top-3 and top-20% hits). If either gate fails the head
+falls back to the Opus-only training.
 
 Two tests stop a stale model from shipping: one compares the feature schema's
 hash, the other the features computed on fixed sample diffs. Either failure

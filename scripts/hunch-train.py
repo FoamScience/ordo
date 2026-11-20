@@ -22,13 +22,18 @@ rule-based noise flag and the faithful gate. tests/hunch-parity.json gets the
 gold rows with each shipped head's own predictions, for the Rust inference
 to match.
 
-usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--parity FILE] [--workers N] [--extra FILE] [--extra-faithful FILE]
+usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--parity FILE] [--workers N] [--extra FILE] [--extra-faithful FILE] [--extra-attention FILE]
 
 --extra adds labeled hunks to the skip head's training, one {key,
 should_skip} per line (e.g. $ORDO_CORPUS/judged.should_skip.jsonl);
 --extra-faithful does for the faithful head, one {key, faithful, rationale,
 details} per line (e.g. $ORDO_CORPUS/judged.faithful.jsonl), dropping a row
-whose rationale the engine has since changed. Skip evaluation stays on gold
+whose rationale the engine has since changed. --extra-attention adds
+the attention head's review labels (scripts/review-label.py's
+attention.review.jsonl): the head then trains as a LightGBM lambdarank over
+Opus's levels (a group per commit) and the reviewed snapshots (a group per
+snapshot, commented over uncommented), and is gated on the review set too (see
+`train_attention_ranked`). Skip evaluation stays on gold
 and silver. Rows of both must come from $ORDO_CORPUS/skip-sample.jsonl, whose
 stratum_n weights each row back to its stratum's share of the sweep (see
 extra_records).
@@ -38,7 +43,9 @@ scripts/corpus-fetch.sh.
 """
 import argparse
 import hashlib
+import itertools
 import json
+import math
 import os
 import re
 import sys
@@ -72,6 +79,12 @@ GOLD_RECALL, GOLD_FALSE_FLAGS = 0.25, 0.03
 ATTENTION_GATE = ("within-commit pairwise accuracy (pairs with different attention labels, a predicted tie half "
                   "right): above file-position order leaving one repo out overall, below it in at most 2 "
                   "repos, and above it on gold")
+REVIEW_OPUS_SHARE = 0.5
+REVIEW_LOSING_REPOS = 10
+REVIEW_GATE = ("leaving one repo out over the review repos, a commented hunk ranked above an uncommented one of its "
+               "snapshot more often than file-position order does, and found in the top 3 and the top 20% of "
+               "snapshots with more than 3 hunks more often, losing to file position in at most "
+               f"{REVIEW_LOSING_REPOS} repos on pairwise accuracy")
 LGBM = dict(n_estimators=TREE_MAX, learning_rate=0.05, num_leaves=15, min_child_samples=20,
             subsample=0.8, subsample_freq=1, colsample_bytree=0.8, random_state=SEED,
             deterministic=True, force_row_wise=True, n_jobs=1, verbose=-1)
@@ -838,6 +851,21 @@ def later_fix_by_attention(score, later):
             for b, name in enumerate(("low", "mid", "high"))}
 
 
+def attention_gate(loro_ev, gold_ev, h):
+    """`ATTENTION_GATE` for ranking `h` on the Opus-labeled `rank_metrics`."""
+    base = "file_position"
+    lost = sorted(k for k, v in loro_ev[h]["per_repo"].items()
+                  if v is not None and loro_ev[base]["per_repo"][k] is not None and v < loro_ev[base]["per_repo"][k])
+    gate = {"rule": ATTENTION_GATE, "model": h,
+            "loro": {"hunch": loro_ev[h]["pairwise"], "file_position": loro_ev[base]["pairwise"],
+                     "pairs": loro_ev[h]["pairs"], "losing_repos": lost},
+            "gold": {"hunch": gold_ev[h]["pairwise"], "file_position": gold_ev[base]["pairwise"],
+                     "pairs": gold_ev[h]["pairs"]}}
+    gate["passes"] = bool(gate["loro"]["hunch"] > gate["loro"]["file_position"] and len(lost) <= 2
+                          and gate["gold"]["hunch"] > gate["gold"]["file_position"])
+    return gate
+
+
 def train_attention(c, gold_path, silver_path):
     """The attention head: how much a hunk needs a reviewer's attention,
     from Opus's 1-3 rating, as a fractional logistic target (level-1)/2 (each
@@ -901,16 +929,9 @@ def train_attention(c, gold_path, silver_path):
         model = {"type": "lightgbm", "objective": "binary", "link": "sigmoid",
                  "score": "sum of the trees' leaf_value", "split": "x[feature] <= threshold goes left",
                  "trees": trees}
-    base, h = "file_position", shipped
-    lost = sorted(k for k, v in loro_ev[h]["per_repo"].items()
-                  if v is not None and loro_ev[base]["per_repo"][k] is not None and v < loro_ev[base]["per_repo"][k])
-    gate = {"rule": ATTENTION_GATE, "model": h,
-            "loro": {"hunch": loro_ev[h]["pairwise"], "file_position": loro_ev[base]["pairwise"],
-                     "pairs": loro_ev[h]["pairs"], "losing_repos": lost},
-            "gold": {"hunch": gold_ev[h]["pairwise"], "file_position": gold_ev[base]["pairwise"],
-                     "pairs": gold_ev[h]["pairs"]}}
-    gate["passes"] = bool(gate["loro"]["hunch"] > gate["loro"]["file_position"] and len(lost) <= 2
-                          and gate["gold"]["hunch"] > gate["gold"]["file_position"])
+    h = shipped
+    gate = attention_gate(loro_ev, gold_ev, h)
+    base, lost = "file_position", gate["loro"]["losing_repos"]
     provenance = {
         "label": "attention (Opus 1-3) as (level-1)/2",
         "train": {"file": silver_path.name, "sha256": sha256(silver_path), "hunks": len(t),
@@ -948,6 +969,205 @@ def train_attention(c, gold_path, silver_path):
     return head, report, proba(shipped, c.xg)
 
 
+Review = namedtuple("Review", "x repo unit y file_pos read slices")
+
+
+def review_rows(path, width):
+    """The review set: features, repo, snapshot id, commented, and the file
+    position and reading order rankings (higher = read first), rows grouped
+    by snapshot; `slices` is each snapshot's (start, end)."""
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    if any("read" not in r for r in rows):
+        sys.exit(f"{path} lacks file/read: rerun scripts/review-label.py")
+    if any(len(r["features"]) != width for r in rows):
+        sys.exit(f"{path} has feature vectors of another width than the schema's {width}: rerun scripts/review-label.py")
+    ids = {}
+    unit = np.array([ids.setdefault(f"{r['source']}:{r['repo']}:{r['pr']}:{r['snapshot']}", len(ids)) for r in rows])
+    o = np.argsort(unit, kind="stable")
+    rows, unit = [rows[i] for i in o], unit[o]
+    cut = np.flatnonzero(np.diff(unit)) + 1
+    return Review(np.array([r["features"] for r in rows], dtype=float), np.array([r["repo"] for r in rows]), unit,
+                  np.array([r["attention"] for r in rows]),
+                  -np.array([r["file"] * 1e6 + r["new_range"][0] for r in rows], dtype=float),
+                  -np.array([r["read"] for r in rows], dtype=float),
+                  list(zip([0, *cut], [*cut, len(rows)])))
+
+
+def review_metrics(scores, rv):
+    """Per ranking, within each snapshot with commented and uncommented
+    hunks: pairwise accuracy of commented over uncommented (a tie half right;
+    pooled over pairs, per snapshot's mean, per repo), and, over those with
+    more than 3 hunks, the share with a commented hunk in the top 3 and in the
+    top 20%. `chance` is what a random order gets for the top-k shares."""
+    mixed = [(a, b) for a, b in rv.slices if 0 < rv.y[a:b].sum() < b - a]
+    big = [(a, b) for a, b in mixed if b - a > 3]
+    k20 = lambda n: -(-n // 5)
+    hit = lambda n, c, k: 1 - math.comb(n - c, k) / math.comb(n, k)
+    chance = {"top3": round(float(np.mean([hit(b - a, rv.y[a:b].sum(), 3) for a, b in big])), 4),
+              "top20": round(float(np.mean([hit(b - a, rv.y[a:b].sum(), k20(b - a)) for a, b in big])), 4)}
+    out = {"chance": chance, "snapshots": len(mixed), "topk_snapshots": len(big)}
+    for name, s in scores.items():
+        right, pairs, macro, per = 0.0, 0, [], defaultdict(lambda: [0.0, 0])
+        for a, b in mixed:
+            pos, neg = s[a:b][rv.y[a:b]], s[a:b][~rv.y[a:b]]
+            r = float((pos[:, None] > neg[None]).sum() + 0.5 * (pos[:, None] == neg[None]).sum())
+            n = len(pos) * len(neg)
+            right, pairs = right + r, pairs + n
+            macro.append(r / n)
+            per[rv.repo[a]][0] += r
+            per[rv.repo[a]][1] += n
+        top = lambda k: float(np.mean([rv.y[a:b][np.argsort(-s[a:b], kind="stable")[:k(b - a)]].any() for a, b in big]))
+        out[name] = {"pairwise": round(right / pairs, 4), "pairs": pairs, "pairwise_macro": round(float(np.mean(macro)), 4),
+                     "top3": round(top(lambda n: 3), 4), "top20": round(top(k20), 4),
+                     "per_repo": {r: round(v[0] / v[1], 4) for r, v in sorted(per.items())}}
+    return out
+
+
+def review_gate(ev, h):
+    """`REVIEW_GATE` on `review_metrics` of a leave-one-repo-out run, `h`
+    against file position."""
+    base = "file_position"
+    lost = sorted(r for r, v in ev[h]["per_repo"].items() if v < ev[base]["per_repo"][r])
+    beats = {k: ev[h][k] > ev[base][k] for k in ("pairwise", "top3", "top20")}
+    return {"rule": REVIEW_GATE, "model": h, "beats_file_position": beats, "losing_repos": lost,
+            "passes": bool(all(beats.values()) and len(lost) <= REVIEW_LOSING_REPOS)}
+
+
+def head_scores(model, x):
+    """A shipped head's score for `x`, as src/hunch.json describes it."""
+    if model["type"] == "lightgbm":
+        return trees_proba(model["trees"], x)
+    z = (x - np.array(model["mean"])) / np.array(model["scale"])
+    return 1 / (1 + np.exp(-(z @ np.array(model["coef"]) + model["intercept"])))
+
+
+def run_lengths(ids):
+    return [len(list(g)) for _, g in itertools.groupby(ids)]
+
+
+def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model):
+    """The attention head trained as a LightGBM lambdarank: Opus's levels
+    (1-3, one group per commit, weighted to REVIEW_OPUS_SHARE of the review
+    rows' weight) and reviewed snapshots (one group per snapshot, relevance 1
+    for a hunk a human commented on, 0 for the rest). Only the order within a
+    group is learned, so a PR's comment density never leaks across PRs, and
+    uncommented hunks count only as lower-ranked than commented ones in the
+    same snapshot. The tree count is the smallest within TREE_TOL of the best
+    pooled leave-one-repo-out review pairwise accuracy. Two gates: the
+    attention gate on Opus's labels, each fold also training on every review
+    row, and `review_gate` over the review repos, each fold training on Opus
+    and the other review repos. `shipped_model` is the head in src/hunch.json
+    before this run, scored on the review set as the no-review-labels
+    reference. Returns None when either gate fails."""
+    names = c.schema["names"]
+    hist = [names.index(n) for n in HISTORY]
+    rv = review_rows(review_path, len(names))
+    si, ls, later, cs, sat = attention_rows(c, silver_path, c.s_recs, c.s_at)
+    gi, lg, _, cg, gat = attention_rows(c, gold_path, c.g_recs, c.g_at)
+    o = np.argsort(cs, kind="stable")
+    si, ls, cs, sat = si[o], ls[o], cs[o], [sat[i] for i in o]
+    later = [later[i] for i in o]
+    xo, ro, wo = c.xs[si], c.rs[si], c.ws[si]
+    wo = wo / wo.mean() * REVIEW_OPUS_SHARE * len(rv.y) / len(xo)
+    xg, rg = c.xg[gi], c.rg[gi]
+    rng = np.random.default_rng(SEED)
+    x = drop_history(np.vstack([xo, rv.x]), hist, rng)
+    rel = np.concatenate([ls - 1, rv.y.astype(int)])
+    w = np.concatenate([wo, np.ones(len(rv.y))])
+    grp = np.concatenate([[f"o{k}" for k in cs], [f"r{u}" for u in rv.unit]])
+    repo = np.concatenate([ro, rv.repo])
+    nopus = len(xo)
+
+    def fit_rank(m, n):
+        return lightgbm.LGBMRanker(**{**LGBM, "n_estimators": n}).fit(
+            x[m], rel[m], group=run_lengths(grp[m]), sample_weight=w[m])
+
+    grid = list(range(TREE_STEP, TREE_MAX + 1, TREE_STEP))
+    review_repos = sorted(set(rv.repo))
+
+    def review_fold(r):
+        m = repo != r
+        mod = fit_rank(m, TREE_MAX)
+        held = rv.repo == r
+        return held, np.array([mod.predict(rv.x[held], num_iteration=n) for n in grid])
+
+    curve = np.zeros((len(grid), len(rv.y)))
+    with ThreadPoolExecutor(c.workers) as ex:
+        for held, p in ex.map(review_fold, review_repos):
+            curve[:, held] = p
+    pooled = [review_metrics({"m": s}, rv)["m"]["pairwise"] for s in curve]
+    best = int(np.argmax(pooled))
+    ship = next(i for i, v in enumerate(pooled) if v >= pooled[best] - TREE_TOL)
+    n_trees = grid[ship]
+    review_loro = {**{k: v for k, v in {"file_position": rv.file_pos, "reading_order": rv.read}.items()},
+                   "lambdarank": curve[ship]}
+    review_ev = review_metrics(review_loro, rv)
+    rgate = review_gate(review_ev, "lambdarank")
+
+    def opus_fold(r):
+        held = ro == r
+        mod = fit_rank(~np.concatenate([ro == r, np.zeros(len(rv.y), dtype=bool)]), n_trees)
+        return held, mod.predict(xo[held])
+
+    opus_loro = np.zeros(len(xo))
+    with ThreadPoolExecutor(c.workers) as ex:
+        for held, p in ex.map(opus_fold, sorted(set(ro))):
+            opus_loro[held] = p
+    model_all = fit_rank(np.ones(len(x), dtype=bool), n_trees)
+    gold_raw = model_all.predict(xg)
+    loro_ev = rank_metrics({**baselines(xo, sat, names), "trees": opus_loro}, ls, cs, ro, sat)
+    gold_ev = rank_metrics({**baselines(xg, gat, names), "trees": gold_raw}, lg, cg, rg, gat)
+    trees = trimmed_trees(model_all.booster_, n_trees)
+    both = np.vstack([c.xs, c.xg])
+    export_err = float(np.abs(trees_proba(trees, both) - 1 / (1 + np.exp(-model_all.predict(both)))).max())
+    if export_err > 1e-4:
+        sys.exit(f"attention: trimmed trees disagree with LightGBM by {export_err:.2g}")
+    model = {"type": "lightgbm", "objective": "lambdarank", "link": "sigmoid",
+             "score": "sum of the trees' leaf_value; only the order within a commit means anything",
+             "split": "x[feature] <= threshold goes left", "trees": trees}
+    gate = attention_gate(loro_ev, gold_ev, "trees")
+    shipped_review = review_metrics({"file_position": rv.file_pos, "reading_order": rv.read,
+                                     "current_model": head_scores(shipped_model, rv.x)}, rv)
+    passes = gate["passes"] and rgate["passes"]
+    provenance = {
+        "label": "attention (Opus 1-3 as lambdarank levels) + review comments (commented over uncommented per snapshot)",
+        "train": {"file": silver_path.name, "sha256": sha256(silver_path), "hunks": nopus,
+                  "levels": {str(k): int((ls == k).sum()) for k in (1, 2, 3)}, "weight_share_of_review": REVIEW_OPUS_SHARE},
+        "review": {"file": review_path.name, "sha256": sha256(review_path), "hunks": len(rv.y),
+                   "commented": int(rv.y.sum()), "snapshots": len(rv.slices), "repos": len(review_repos),
+                   "snapshots_with_both": review_ev["snapshots"]},
+        "eval": {"file": "corpus/attention.gold.jsonl", "sha256": sha256(gold_path), "hunks": len(lg),
+                 "levels": {str(k): int((lg == k).sum()) for k in (1, 2, 3)}},
+        "history_drop": HISTORY_DROP, "seed": SEED, "lightgbm_params": {**LGBM, "n_estimators": n_trees},
+        "tree_count": {"rule": f"smallest count within {TREE_TOL} of the best pooled leave-one-repo-out review "
+                               f"pairwise accuracy, every {TREE_STEP} up to {TREE_MAX}",
+                       "best": grid[best], "shipped": n_trees, "shipped_review_pairwise": pooled[ship]},
+    }
+    selection = {"rule": "lightgbm lambdarank over Opus levels and review comments; no logistic alternative",
+                 "chosen": "trees"}
+    report = {"selection": selection, "provenance": provenance, "gate": gate, "review_gate": rgate,
+              "metrics": {"loro": loro_ev, "gold": gold_ev, "review_loro": review_ev,
+                          "review_shipped_without_review_labels": shipped_review},
+              "later_fix_by_attention_loro": later_fix_by_attention(opus_loro, later),
+              "tree_count_curve": {"trees": grid, "review_loro_pairwise": pooled}}
+    print(f"\nattention, review labels ({nopus} Opus, {len(rv.y)} review hunks in {review_ev['snapshots']} mixed "
+          f"snapshots of {len(review_repos)} repos), lambdarank {n_trees} trees")
+    print(f"{'review set':22} {'pairwise':>8} {'macro':>6} {'top3':>6} {'top20':>6}")
+    for name, e in [*shipped_review.items(), *[(k, v) for k, v in review_ev.items() if k == "lambdarank"]]:
+        if isinstance(e, dict) and "pairwise" in e:
+            tag = f"{name} (LORO)" if name == "lambdarank" else name
+            print(f"{tag:22} {e['pairwise']:8.3f} {e['pairwise_macro']:6.3f} {e['top3']:6.3f} {e['top20']:6.3f}")
+    print(f"{'chance (top-k)':22} {'':8} {'':6} {review_ev['chance']['top3']:6.3f} {review_ev['chance']['top20']:6.3f}")
+    print(f"review gate: {'PASS' if rgate['passes'] else 'FAIL'} {rgate['beats_file_position']}, "
+          f"losing repos {len(rgate['losing_repos'])}")
+    print(f"Opus attention gate: {'PASS' if gate['passes'] else 'FAIL'} LORO {gate['loro']['hunch']} vs "
+          f"{gate['loro']['file_position']}, gold {gate['gold']['hunch']} vs {gate['gold']['file_position']}")
+    head = {"model": model, "columns": names, "selection": selection, "provenance": provenance,
+            "policy": {"passes": gate["passes"], "rule": ATTENTION_GATE, "review_passes": rgate["passes"],
+                       "review_rule": REVIEW_GATE}}
+    return (head, report, 1 / (1 + np.exp(-model_all.predict(c.xg)))) if passes else (None, report, None)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=ROOT / "src/hunch.json")
@@ -957,6 +1177,8 @@ def main():
     ap.add_argument("--extra", type=Path, help="more training labels, {key, should_skip} per line")
     ap.add_argument("--extra-faithful", type=Path,
                     help="more training labels, {key, faithful, rationale, details} per line")
+    ap.add_argument("--extra-attention", type=Path,
+                    help="review labels for the attention head, scripts/review-label.py's output")
     a = ap.parse_args()
     fp = fingerprint()
     corpus = Path(os.environ.get("ORDO_CORPUS", "~/.cache/ordo-corpus")).expanduser()
@@ -978,8 +1200,18 @@ def main():
              a.workers)
     skip, skip_report, skip_gold = train_skip(c, a.extra)
     faithful, faithful_report, faithful_gold = train_faithful(c, a.extra_faithful)
-    attention, attention_report, attention_gold = train_attention(c, ROOT / "corpus/attention.gold.jsonl",
-                                                                  corpus / "attention.silver.jsonl")
+    attention_args = (c, ROOT / "corpus/attention.gold.jsonl", corpus / "attention.silver.jsonl")
+    attention = None
+    if a.extra_attention:
+        previous = json.loads(a.out.read_text())["heads"]["attention"]["model"]
+        attention, attention_report, attention_gold = train_attention_ranked(*attention_args, a.extra_attention, previous)
+        if attention is None:
+            print("review-label ranking fails a gate, keeping the head trained on Opus's labels only")
+            ranked_report = attention_report
+    if attention is None:
+        attention, attention_report, attention_gold = train_attention(*attention_args)
+        if a.extra_attention:
+            attention_report["rejected_review_candidate"] = ranked_report
     a.out.write_text(dump({"feature_schema": schema, "fingerprint": fp,
                            "heads": {"should_skip": skip, "faithful": faithful, "attention": attention}}))
     a.parity.write_text(parity(xg, {"should_skip": skip_gold, "faithful": faithful_gold, "attention": attention_gold}))
