@@ -1,0 +1,46 @@
+# Repos scripts/pr-mine.py reads review comments from: owner/name, one per
+# line, picked for line-level review on GitHub PRs across ordo's languages.
+# python
+pallets/flask
+psf/black
+pydantic/pydantic
+encode/httpx
+# rust
+tokio-rs/tokio
+rust-lang/cargo
+astral-sh/uv
+helix-editor/helix
+# go
+spf13/cobra
+prometheus/prometheus
+cli/cli
+etcd-io/etcd
+# c
+curl/curl
+redis/redis
+libuv/libuv
+# cpp
+duckdb/duckdb
+fmtlib/fmt
+godotengine/godot
+# java
+junit-team/junit-framework
+apache/kafka
+spring-projects/spring-boot
+# javascript / typescript / tsx
+nodejs/node
+vuejs/core
+vitejs/vite
+excalidraw/excalidraw
+facebook/react
+# lua
+neovim/neovim
+nvim-telescope/telescope.nvim
+# bash
+nvm-sh/nvm
+bats-core/bats-core
+ohmyzsh/ohmyzsh
+# github picks 2026-11-19
+systemd/systemd
+kubernetes/kubernetes
+servo/servo
