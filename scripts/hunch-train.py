@@ -22,7 +22,7 @@ rule-based noise flag and the faithful gate. tests/hunch-parity.json gets the
 gold rows with each shipped head's own predictions, for the Rust inference
 to match.
 
-usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--parity FILE] [--workers N] [--extra FILE] [--extra-faithful FILE] [--extra-attention FILE]
+usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/hunch-train.py [--out FILE] [--report FILE] [--parity FILE] [--workers N] [--extra FILE] [--extra-faithful FILE] [--extra-attention FILE] [--learning-curve [--curve-out FILE] [--curve-heads LIST]]
 
 --extra adds labeled hunks to the skip head's training, one {key,
 should_skip} per line (e.g. $ORDO_CORPUS/judged.should_skip.jsonl);
@@ -38,17 +38,27 @@ and silver. Rows of both must come from $ORDO_CORPUS/skip-sample.jsonl, whose
 stratum_n weights each row back to its stratum's share of the sweep (see
 extra_records).
 
+--learning-curve retrains each head on 10/25/50/100% of its training commits
+(review labels: snapshots), three seeds per point, and the review head on
+10/20/30/41 review repos, scoring every run on the full leave-one-repo-out
+folds and gold; it writes --curve-out (corpus/hunch-curve.json), prints a
+table, and writes no model, report or parity file.
+
 Build the engine first (cargo build --release); the corpus repos come from
 scripts/corpus-fetch.sh.
 """
 import argparse
+import contextlib
+import functools
 import hashlib
+import io
 import itertools
 import json
 import math
 import os
 import re
 import sys
+import zlib
 from collections import defaultdict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -107,12 +117,12 @@ def commit_features(corpus, repo, sha):
     graph = Graph(dict(succ))
     hunks = [(f"{repo}:{sha[:8]}:{f['path']}:{h['new_range'][0]}", h["old_range"], h["new_range"], h["features"],
               (h["rationale"], h.get("details", [])),
-              Where(fi, h["new_range"][0], read[f["path"], h["id"]], group[h["id"]], graph))
+              Where(fi, h["new_range"][0], read[f["path"], h["id"]], group[h["id"]], graph, f"{repo}:{sha[:8]}"))
              for fi, f in enumerate(out["files"]) for h in f["hunks"] if h.get("features") is not None]
     return hunks, out.get("feature_schema")
 
 
-Where = namedtuple("Where", "file row read group graph")
+Where = namedtuple("Where", "file row read group graph commit")
 
 
 class Graph:
@@ -166,7 +176,17 @@ def overlap(a, b):
     return inter / union if union else 0.0
 
 
+LOADED = {}
+
+
 def load(corpus, records, workers, label="should_skip"):
+    memo = (label, tuple(r["key"] for r in records))
+    if memo not in LOADED:
+        LOADED[memo] = load_features(corpus, records, workers, label)
+    return LOADED[memo]
+
+
+def load_features(corpus, records, workers, label):
     """Features and `label` for `records`, each matched to an engine hunk by
     key, else by overlap; the counts of both misses and overlap matches. With
     `label` None, every head's labels: the kept records come back in place of
@@ -471,7 +491,35 @@ def table(title, ev):
         print(f"{r:14} " + " ".join(f"{c['wrong_hides']:>6}/{c['missed_skips']:<6}" for c in cells))
 
 
-Data = namedtuple("Data", "corpus schema xs s_recs rs ws s_at xg g_recs rg g_at held_out provenance workers")
+Data = namedtuple("Data", "corpus schema xs s_recs rs ws s_at xg g_recs rg g_at held_out provenance workers subset",
+                  defaults=[None])
+
+
+class Subset:
+    """A seeded training subsample for the learning curve: `frac` of the
+    commits (or review snapshots), whole groups at a time, or, for the review
+    labels, only `repos` randomly drawn review repos besides the held-out one.
+    Evaluation rows are never dropped, only training rows."""
+    def __init__(self, frac=1.0, seed=0, repos=None):
+        self.frac, self.seed, self.repos = frac, seed, repos
+
+    def keep(self, groups):
+        groups = np.asarray(groups)
+        uniq = np.unique(groups)
+        chosen = np.random.default_rng(self.seed).permutation(uniq)[:max(1, round(self.frac * len(uniq)))]
+        return np.isin(groups, chosen)
+
+    def keep_repos(self, repos, held):
+        if self.repos is None:
+            return np.ones(len(repos), dtype=bool)
+        others = sorted(set(repos) - {held})
+        rng = np.random.default_rng([self.seed, zlib.crc32(str(held).encode())])
+        return np.isin(repos, rng.choice(others, min(self.repos, len(others)), replace=False))
+
+
+def train_keep(c, groups):
+    """Which of the rows in commit/snapshot `groups` the run trains on."""
+    return np.ones(len(groups), dtype=bool) if c.subset is None else c.subset.keep(groups)
 
 
 def labels(records, label):
@@ -493,11 +541,12 @@ def train_skip(c, extra):
     ys, yg = labels(c.s_recs, "should_skip"), labels(c.g_recs, "should_skip")
     noise, hist = names.index("noise"), [names.index(n) for n in HISTORY]
     xt, yt, rt, wt, e_match, e_gold, e_weights = xs, ys, rs, ws, None, 0, None
+    kt = train_keep(c, [a.commit for a in c.s_at])
     if extra:
         rows = list(extra_records(extra, c.corpus / "skip-sample.jsonl"))
         extra_kept = c.held_out(rows)
         e_gold = len(rows) - len(extra_kept)
-        xe, ye, re_, we, eschema, e_match, _ = load(c.corpus, extra_kept, c.workers)
+        xe, ye, re_, we, eschema, e_match, e_at = load(c.corpus, extra_kept, c.workers)
         if eschema != c.schema:
             sys.exit("silver and extra feature schemas differ")
         xe = xe[:, cols]
@@ -505,13 +554,14 @@ def train_skip(c, extra):
         e_weights = {"min": round(we.min(), 4), "max": round(we.max(), 4),
                      "skip_rate_raw": round(ye.mean(), 4), "skip_rate_weighted": round(np.average(ye, weights=we), 4)}
         xt, yt, rt, wt = np.vstack([xs, xe]), np.concatenate([ys, ye]), np.concatenate([rs, re_]), np.concatenate([ws, we])
+        kt = np.concatenate([kt, train_keep(c, [a.commit for a in e_at])])
     xt = drop_history(xt, hist, np.random.default_rng(SEED))
 
     # pooled leave-one-repo-out AUROC per tree count picks the trees' size
     grid = list(range(TREE_STEP, TREE_MAX + 1, TREE_STEP))
     loro, curve = {"lr": np.zeros(len(ys))}, np.zeros((len(grid), len(ys)))
     for r in sorted(set(rs)):
-        held, train = rs == r, rt != r
+        held, train = rs == r, (rt != r) & kt
         loro["lr"][held] = fit("lr", xt[train], yt[train], wt[train]).predict_proba(xs[held])[:, 1]
         m = fit("trees", xt[train], yt[train], wt[train])
         for i, n in enumerate(grid):
@@ -523,7 +573,7 @@ def train_skip(c, extra):
     loro["trees"] = curve[ship]
     loro_ev = evaluate(loro, xs[:, noise], ys, rs)
 
-    models = {k: fit(k, xt, yt, wt) for k in ("lr", "trees")}
+    models = {k: fit(k, xt[kt], yt[kt], wt[kt]) for k in ("lr", "trees")}
     proba = lambda k, x, n=n_trees: models[k].predict_proba(x, **({"num_iteration": n} if k == "trees" else {}))[:, 1]
     xg_nohist = xg.copy()
     xg_nohist[:, hist] = 0
@@ -671,11 +721,11 @@ def train_faithful(c, extra):
     hist = [names.index(n) for n in HISTORY]
     ys, yg = labels(c.s_recs, "faithful"), labels(c.g_recs, "faithful")
     xe, ye, re_, we = np.zeros((0, len(names))), np.zeros(0, dtype=bool), np.zeros(0, dtype=str), np.zeros(0)
-    e_prov = None
+    e_prov, e_at = None, []
     if extra:
         rows = list(extra_records(extra, c.corpus / "skip-sample.jsonl", "faithful"))
         kept = c.held_out(rows)
-        xe, ye, re_, we, eschema, e_match, _ = load(c.corpus, kept, c.workers, "faithful")
+        xe, ye, re_, we, eschema, e_match, e_at = load(c.corpus, kept, c.workers, "faithful")
         if eschema != c.schema:
             sys.exit("silver and extra feature schemas differ")
         we = we / we.mean()
@@ -684,14 +734,16 @@ def train_faithful(c, extra):
     x, y = np.vstack([c.xs, xe]), np.concatenate([ys, ye])
     r, w = np.concatenate([c.rs, re_]), np.concatenate([c.ws, we])
     silver = np.arange(len(y)) < len(ys)
+    kt = np.concatenate([train_keep(c, [a.commit for a in c.s_at]), train_keep(c, [a.commit for a in e_at])])
     xt = drop_history(x, hist, np.random.default_rng(SEED))
 
     grid = list(range(TREE_STEP, TREE_MAX + 1, TREE_STEP))
     loro, curve = {"lr": np.zeros(len(y))}, np.zeros((len(grid), len(y)))
     for repo in sorted(set(r)):
         held = r == repo
-        loro["lr"][held] = fit("lr", xt[~held], y[~held], w[~held]).predict_proba(x[held])[:, 1]
-        m = fit("trees", xt[~held], y[~held], w[~held])
+        train = ~held & kt
+        loro["lr"][held] = fit("lr", xt[train], y[train], w[train]).predict_proba(x[held])[:, 1]
+        m = fit("trees", xt[train], y[train], w[train])
         for i, n in enumerate(grid):
             curve[i, held] = m.predict_proba(x[held], num_iteration=n)[:, 1]
     loro_auroc = [roc_auc_score(y, s, sample_weight=w) for s in curve]
@@ -699,7 +751,7 @@ def train_faithful(c, extra):
     ship = next(i for i, v in enumerate(loro_auroc) if v >= loro_auroc[best] - TREE_TOL)
     n_trees = grid[ship]
     loro["trees"] = curve[ship]
-    models = {k: fit(k, xt, y, w) for k in ("lr", "trees")}
+    models = {k: fit(k, xt[kt], y[kt], w[kt]) for k in ("lr", "trees")}
     proba = lambda k, x_, n=n_trees: models[k].predict_proba(x_, **({"num_iteration": n} if k == "trees" else {}))[:, 1]
     # unfaithful is the class a doubt flag looks for, so the scores below rank it
     ap = lambda yy, s, ww=None: round(average_precision_score(~yy, 1 - s, sample_weight=ww), 4)
@@ -972,6 +1024,7 @@ def train_attention(c, gold_path, silver_path):
 Review = namedtuple("Review", "x repo unit y file_pos read slices")
 
 
+@functools.cache
 def review_rows(path, width):
     """The review set: features, repo, snapshot id, commented, and the file
     position and reading order rankings (higher = read first), rows grouped
@@ -1078,6 +1131,13 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
     repo = np.concatenate([ro, rv.repo])
     nopus = len(xo)
 
+    def train_rows(held):
+        keep = np.ones(len(x), dtype=bool)
+        if c.subset is not None:
+            keep[:nopus] = c.subset.keep(cs)
+            keep[nopus:] = c.subset.keep(rv.unit) & c.subset.keep_repos(rv.repo, held)
+        return keep
+
     def fit_rank(m, n):
         return lightgbm.LGBMRanker(**{**LGBM, "n_estimators": n}).fit(
             x[m], rel[m], group=run_lengths(grp[m]), sample_weight=w[m])
@@ -1086,8 +1146,7 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
     review_repos = sorted(set(rv.repo))
 
     def review_fold(r):
-        m = repo != r
-        mod = fit_rank(m, TREE_MAX)
+        mod = fit_rank((repo != r) & train_rows(r), TREE_MAX)
         held = rv.repo == r
         return held, np.array([mod.predict(rv.x[held], num_iteration=n) for n in grid])
 
@@ -1106,14 +1165,14 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
 
     def opus_fold(r):
         held = ro == r
-        mod = fit_rank(~np.concatenate([ro == r, np.zeros(len(rv.y), dtype=bool)]), n_trees)
+        mod = fit_rank(~np.concatenate([ro == r, np.zeros(len(rv.y), dtype=bool)]) & train_rows(r), n_trees)
         return held, mod.predict(xo[held])
 
     opus_loro = np.zeros(len(xo))
     with ThreadPoolExecutor(c.workers) as ex:
         for held, p in ex.map(opus_fold, sorted(set(ro))):
             opus_loro[held] = p
-    model_all = fit_rank(np.ones(len(x), dtype=bool), n_trees)
+    model_all = fit_rank(train_rows(None), n_trees)
     gold_raw = model_all.predict(xg)
     loro_ev = rank_metrics({**baselines(xo, sat, names), "trees": opus_loro}, ls, cs, ro, sat)
     gold_ev = rank_metrics({**baselines(xg, gat, names), "trees": gold_raw}, lg, cg, rg, gat)
@@ -1168,6 +1227,61 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
     return (head, report, 1 / (1 + np.exp(-model_all.predict(c.xg)))) if passes else (None, report, None)
 
 
+CURVE_FRACTIONS, CURVE_REPOS, CURVE_SEEDS = (0.1, 0.25, 0.5, 1.0), (10, 20, 30, 41), 3
+
+
+def curve_metrics(head, report):
+    """The numbers a learning curve tracks for one trained head."""
+    pct = lambda v: None if v is None else round(v, 4)
+    if head == "skip":
+        k = "lr" if report["selection"]["chosen"] == "logistic" else "trees"
+        lo, go = (report["metrics"][w][k] for w in ("leave_one_repo_out", "gold"))
+        return {"loro_auroc": lo["auroc"], "loro_pr_auc": lo["pr_auc"], "gold_auroc": go["auroc"],
+                "gold_pr_auc": go["pr_auc"], "policy_passes": float(report["promotion"]["gate"]["passes"])}
+    if head == "faithful":
+        k, g = report["selection"]["chosen"], report["gate"]
+        return {"loro_auroc": report["metrics"][k]["loro"]["auroc"], "gold_auroc": report["metrics"][k]["gold"]["auroc"],
+                "doubt": g["doubt"], "doubt_loro_recall": g["loro"] and g["loro"]["recall"],
+                "doubt_gold_recall": g["gold"] and g["gold"]["recall"], "passes": float(g["passes"])}
+    m, rv = report["metrics"], report["metrics"]["review_loro"]["lambdarank"]
+    return {"opus_loro_pairwise": m["loro"]["trees"]["pairwise"], "opus_gold_pairwise": m["gold"]["trees"]["pairwise"],
+            "review_pairwise": rv["pairwise"], "review_top3": rv["top3"], "review_top20": rv["top20"],
+            "passes": float(report["gate"]["passes"] and report["review_gate"]["passes"])}
+
+
+def learning_curve(c, a, out):
+    """Retrain each head on growing shares of its training labels (and the
+    review head on growing numbers of review repos), every run scored on the
+    full leave-one-repo-out folds and gold, `CURVE_SEEDS` seeds per point
+    (one at 100%). Results accumulate in `out` after every run."""
+    previous = json.loads((ROOT / "src/hunch.json").read_text())["heads"]["attention"]["model"]
+    gold_path, silver_path = ROOT / "corpus/attention.gold.jsonl", c.corpus / "attention.silver.jsonl"
+    results = json.loads(out.read_text()) if out.exists() else {}
+    trainers = {"skip": lambda cs: train_skip(cs, a.extra), "faithful": lambda cs: train_faithful(cs, a.extra_faithful),
+                "attention": lambda cs: train_attention_ranked(cs, ROOT / "corpus/attention.gold.jsonl", silver_path,
+                                                               a.extra_attention, previous)}
+    points = [(h, "fraction", f) for h in a.curve_heads if h in trainers for f in CURVE_FRACTIONS]
+    points += [("attention", "repos", n) for n in CURVE_REPOS] if "repos" in a.curve_heads else []
+    for head, axis, v in points:
+        full = v == (1.0 if axis == "fraction" else CURVE_REPOS[-1])
+        runs = []
+        for seed in range(1 if full else CURVE_SEEDS):
+            sub = Subset(frac=v, seed=seed) if axis == "fraction" else Subset(seed=seed, repos=None if full else v)
+            with contextlib.redirect_stdout(io.StringIO()):
+                _, report, _ = trainers[head](c._replace(subset=sub))[:3]
+            runs.append(curve_metrics(head, report))
+            print(f"{head} {axis} {v} seed {seed}: {runs[-1]}", flush=True)
+        agg = {k: {"mean": round(float(np.mean([r[k] for r in runs if r[k] is not None])), 4),
+                   "sd": round(float(np.std([r[k] for r in runs if r[k] is not None])), 4), "runs": [r[k] for r in runs]}
+               for k in runs[0]}
+        results.setdefault(head if axis == "fraction" else "review_repos", {})[str(v)] = agg
+        out.write_text(json.dumps(results, indent=1, sort_keys=True) + "\n")
+    for name, rows in results.items():
+        print(f"\n{name}")
+        for v, agg in sorted(rows.items(), key=lambda kv: float(kv[0])):
+            print(f"{v:>6} " + " ".join(f"{k}={m['mean']:.3f}+-{m['sd']:.3f}" for k, m in agg.items() if m["mean"] == m["mean"]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=ROOT / "src/hunch.json")
@@ -1179,7 +1293,13 @@ def main():
                     help="more training labels, {key, faithful, rationale, details} per line")
     ap.add_argument("--extra-attention", type=Path,
                     help="review labels for the attention head, scripts/review-label.py's output")
+    ap.add_argument("--learning-curve", action="store_true",
+                    help="retrain on subsets of the training labels and write --curve-out; writes no model")
+    ap.add_argument("--curve-out", type=Path, default=ROOT / "corpus/hunch-curve.json")
+    ap.add_argument("--curve-heads", default="skip,faithful,attention,repos",
+                    help="comma list of skip, faithful, attention, repos for --learning-curve")
     a = ap.parse_args()
+    a.curve_heads = a.curve_heads.split(",")
     fp = fingerprint()
     corpus = Path(os.environ.get("ORDO_CORPUS", "~/.cache/ordo-corpus")).expanduser()
     gold_path, silver_path = ROOT / "corpus/gold.jsonl", corpus / "silver.jsonl"
@@ -1198,12 +1318,14 @@ def main():
                         "dropped_in_gold_commits": len(silver_records) - len(silver_kept), **s_match},
               "eval": {"file": "corpus/gold.jsonl", "sha256": sha256(gold_path), "hunks": len(rg), **g_match}},
              a.workers)
+    if a.learning_curve:
+        return learning_curve(c, a, a.curve_out)
     skip, skip_report, skip_gold = train_skip(c, a.extra)
     faithful, faithful_report, faithful_gold = train_faithful(c, a.extra_faithful)
     attention_args = (c, ROOT / "corpus/attention.gold.jsonl", corpus / "attention.silver.jsonl")
     attention = None
     if a.extra_attention:
-        previous = json.loads(a.out.read_text())["heads"]["attention"]["model"]
+        previous = json.loads((ROOT / "src/hunch.json").read_text())["heads"]["attention"]["model"]
         attention, attention_report, attention_gold = train_attention_ranked(*attention_args, a.extra_attention, previous)
         if attention is None:
             print("review-label ranking fails a gate, keeping the head trained on Opus's labels only")
