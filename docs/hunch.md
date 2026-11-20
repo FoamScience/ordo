@@ -92,6 +92,16 @@ uncommented ones, and must also beat file order leaving one review repo out
 (pairwise accuracy, top-3 and top-20% hits). If either gate fails the head
 falls back to the Opus-only training.
 
+`--learning-curve` retrains each head on 10/25/50/100% of its training labels
+(whole commits, or review snapshots) and the review head on 10/20/30/41 review
+repos, each run scored on the full leave-one-repo-out folds and gold, and writes
+[`corpus/hunch-curve.json`](../corpus/hunch-curve.json) without touching the
+model. Skip and attention have plateaued (doubling from 50% gains under 0.01
+AUROC or pairwise accuracy); faithful is still rising (+0.05 LORO AUROC from 50%
+to 100%) and is the head more labels would help. Review pairwise accuracy gains
+about 0.004 per added repo-decile at 30-41 repos, so new repos beat more rows
+from the same ones.
+
 Two tests stop a stale model from shipping: one compares the feature schema's
 hash, the other the features computed on fixed sample diffs. Either failure
 prints the exact command to run.
