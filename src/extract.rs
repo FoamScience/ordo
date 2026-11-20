@@ -3239,6 +3239,12 @@ impl<'a> Walker<'a> {
         if !lang::is_ident(node.kind()) {
             return false;
         }
+        let php = self.spec.name == "php";
+        // `name` is php's identifier kind; rst's footnote and target labels
+        // share it and are not references
+        if node.kind() == "name" && !php {
+            return false;
+        }
         let src = self.src;
         // the guard name in `#ifndef X` is not a use of anything either: the
         // only thing that ever defines X is the `#define` right below it,
@@ -3258,13 +3264,33 @@ impl<'a> Walker<'a> {
             let (row, id) = (node.start_position().row, node.id());
             // `util.Trim` in go, `ns.helper` after `import * as ns`: qualified
             // by an import, the name is that package's own, not a field
-            if lang::is_member_ident(node.kind()) && !self.qualified_by_package(node) {
+            if let Some(member) = php.then(|| php_member_name(node, t)).flatten() {
+                self.c.push_member_use(row, member, id);
+            } else if lang::is_member_ident(node.kind()) && !self.qualified_by_package(node) {
                 self.c.push_member_use(row, t.to_string(), id);
             } else {
                 self.c.push_use(row, t.to_string(), id);
             }
         }
-        false
+        // `$x` is read whole: the `name` inside it is not a second reference
+        php && node.kind() == "variable_name"
+    }
+}
+
+/// The member a php `name` reaches through `->` or `?->`: a property by the
+/// `$`-spelled name it is declared under (`$this->count` is `$count`), a
+/// method by its own.
+fn php_member_name(node: Node, text: &str) -> Option<String> {
+    let parent = node.parent()?;
+    if parent.child_by_field_name("name") != Some(node) {
+        return None;
+    }
+    match parent.kind() {
+        "member_access_expression" | "nullsafe_member_access_expression" => {
+            Some(format!("${text}"))
+        }
+        "member_call_expression" | "nullsafe_member_call_expression" => Some(text.to_string()),
+        _ => None,
     }
 }
 
@@ -3277,7 +3303,10 @@ fn binding_idents<'t>(node: Node<'t>, kind: &str, src: &[u8]) -> Vec<Node<'t>> {
     let field = match kind {
         // xonsh `$FOO = …`: `left` is an `env_variable` wrapping the plain
         // identifier, so the bound name matches a use of `$FOO` elsewhere
-        "assignment" | "short_var_declaration" | "env_assignment" => "left",
+        // php `$x = …`, `[$a, $b] = …`
+        "assignment" | "short_var_declaration" | "env_assignment" | "assignment_expression" => {
+            "left"
+        }
         // bash `APP_DIR=/srv/app`, and the same node inside a `local` /
         // `readonly` / `declare` wrapper the walk descends through
         "variable_assignment" => "name",
@@ -3359,7 +3388,16 @@ fn rust_pattern_idents<'t>(node: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
 // tuple/destructuring pattern, bar a js key or default) is a genuine new
 // local name.
 fn target_idents(node: Node) -> Vec<Node> {
-    if matches!(node.kind(), "attribute" | "subscript") {
+    // php's `$this->a = …`, `$a[0] = …`, `self::$a = …` alike
+    if matches!(
+        node.kind(),
+        "attribute"
+            | "subscript"
+            | "member_access_expression"
+            | "nullsafe_member_access_expression"
+            | "subscript_expression"
+            | "scoped_property_access_expression"
+    ) {
         return vec![];
     }
     if lang::is_ident(node.kind()) {
@@ -5644,6 +5682,14 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let name = if last == "*" { segs.next()? } else { last };
             (!name.is_empty()).then(|| vec![(row, name.to_string())])
         }
+        // php: `use A\B\C;` binds `C`, `use A\{B, C as D};` binds `B` and `D`
+        ("php", "namespace_use_declaration") => Some(php_use_names(node, src)),
+        // php: the file `require_once __DIR__ . '/helpers.php'` pulls in
+        ("php", _) => {
+            let path = descendant_of_kind(node, &["string", "encapsed_string"])?;
+            let text = unquote(path.utf8_text(src).ok()?.trim());
+            (!text.is_empty()).then(|| vec![(row, text.to_string())])
+        }
         ("go", "import_spec") => Some(go_import_name(node, src).into_iter().collect()),
         ("go", "import_declaration") => Some(go_import_names(node, src)),
         ("python" | "xonsh", "import_statement" | "import_from_statement") => {
@@ -5670,6 +5716,46 @@ fn namespace_imports(node: Node, src: &[u8]) -> Vec<String> {
         stack.extend(n.named_children(&mut cur));
     }
     out
+}
+
+/// the name each clause of a php `use` binds: its alias, or the last segment
+fn php_use_names(node: Node, src: &[u8]) -> Vec<(usize, String)> {
+    let mut cur = node.walk();
+    let mut stack: Vec<Node> = node.named_children(&mut cur).collect();
+    let mut out = vec![];
+    while let Some(n) = stack.pop() {
+        if n.kind() != "namespace_use_clause" {
+            stack.extend(n.named_children(&mut n.walk()));
+            continue;
+        }
+        let name = n.child_by_field_name("alias").or_else(|| {
+            let mut c = n.walk();
+            let last = n.named_children(&mut c).last()?;
+            match last.kind() {
+                "qualified_name" => last
+                    .child_by_field_name("name")
+                    .or_else(|| last.named_children(&mut last.walk()).last()),
+                _ => Some(last),
+            }
+        });
+        if let Some(t) = name.and_then(|x| x.utf8_text(src).ok()) {
+            out.push((n.start_position().row, t.trim().to_string()));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// the first node under `node`, itself included, of one of `kinds`
+fn descendant_of_kind<'t>(node: Node<'t>, kinds: &[&str]) -> Option<Node<'t>> {
+    if kinds.contains(&node.kind()) {
+        return Some(node);
+    }
+    let mut cur = node.walk();
+    let children: Vec<Node> = node.named_children(&mut cur).collect();
+    children
+        .into_iter()
+        .find_map(|c| descendant_of_kind(c, kinds))
 }
 
 /// every package a go `import (...)` block or single import names

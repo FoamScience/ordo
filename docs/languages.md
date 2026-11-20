@@ -2,8 +2,8 @@
 
 
 <!-- ordo:begin langs -->
-python, xonsh, javascript, rust, typescript, tsx, go, c, cpp, java, lua,
-markdown, rst, json, yaml, toml, ini, cmake, make, nix, jsonnet, bash,
+python, xonsh, javascript, rust, typescript, tsx, go, c, cpp, java, php,
+lua, markdown, rst, json, yaml, toml, ini, cmake, make, nix, jsonnet, bash,
 jinja, css, scss, html, svelte, gotmpl, erb
 <!-- ordo:end langs -->
 
@@ -72,6 +72,16 @@ named by position (`document 3`). `document`
 is the one container kind that *scopes*; every other region names only itself,
 because `#ifdef X` is a fact about where a definition sits, not part of its
 name. A single-document file is unaffected and keeps its bare key paths.
+
+### php
+
+`.php` and `.phtml`, the html around `<?php … ?>` tags included. Functions,
+methods, classes, interfaces, traits and enums define, and so do a property
+and a `const`, the way a java field does. A variable keeps its `$`, so `$user`
+and a function `user()` are never the same name; a property is declared as
+`$count` and `$this->count` reads as a use of `$count`. `use A\B\C;` binds
+`C` (or its `as` alias), a group `use A\{B, C}` binds each, and `require` /
+`include` (and their `_once` forms) record the path they pull in.
 
 ### cmake
 

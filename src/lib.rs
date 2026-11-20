@@ -3054,6 +3054,7 @@ fn comment_markers(ext: &str) -> &'static [&'static str] {
     match ext {
         "py" | "pyi" | "xsh" | "xonsh" | "xonshrc" => &["\"\"\"", "'''", "#"],
         "lua" => &["---", "--"],
+        "php" | "phtml" => &["///", "//", "/*", "*", "#"],
         // `#`-comment formats the C-family default would otherwise misread
         "sh" | "bash" | "zsh" | "rb" | "yaml" | "yml" | "toml" | "j2" | "jinja" | "jinja2"
         | "tf" | "tfvars" | "conf" | "pl" | "r" | "jl" | "nix" | "mk" | "dockerfile"

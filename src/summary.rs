@@ -994,7 +994,7 @@ fn order_free(lang: &str, d: &Def) -> bool {
             // a macro_rules! is in scope only below where it stands
             "rust" => !d.kind.contains("macro"),
             // package-level variables initialise in the order they stand
-            "go" | "java" | "c" | "cpp" => callable,
+            "go" | "java" | "c" | "cpp" | "php" => callable,
             "python" | "xonsh" => d.nested && d.kind == "function_definition",
             "javascript" | "typescript" | "tsx" => {
                 matches!(

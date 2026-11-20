@@ -91,6 +91,11 @@ fn cpp() -> Language {
 fn java() -> Language {
     tree_sitter_java::LANGUAGE.into()
 }
+// the grammar that reads a whole `.php` file, `<?php` tags and the html text
+// around them included; `LANGUAGE_PHP_ONLY` would need the tags gone
+fn php() -> Language {
+    tree_sitter_php::LANGUAGE_PHP.into()
+}
 fn lua() -> Language {
     tree_sitter_lua::LANGUAGE.into()
 }
@@ -413,6 +418,40 @@ static SPECS: &[LangSpec] = &[
         data: false,
         template: None,
         locals: &["local_variable_declaration"],
+    },
+    // php: a variable keeps its `$`, so `$user` and a function `user()` never
+    // meet. A property is a def like a java field — `$this->count` reads as a
+    // use of `$count` — and `const X = 1` names its `const_element`. `use`
+    // statements and `require`/`include` are the imports.
+    LangSpec {
+        name: "php",
+        language: php,
+        test_blocks: &[],
+        imports: &[
+            "namespace_use_declaration",
+            "require_expression",
+            "require_once_expression",
+            "include_expression",
+            "include_once_expression",
+        ],
+        defs: &[
+            "function_definition",
+            "method_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "trait_declaration",
+            "enum_declaration",
+            "property_element",
+            "const_element",
+            // anonymous unless bound, like js's: `$f = fn($x) => …`
+            "anonymous_function",
+            "arrow_function",
+        ],
+        members: &["enum_case"],
+        prose: false,
+        data: false,
+        template: None,
+        locals: &["assignment_expression"],
     },
     LangSpec {
         // lua: `require()` is a call, not a distinct import node → no imports
@@ -875,6 +914,7 @@ pub fn for_shebang(content: &str) -> Option<&'static LangSpec> {
         "xonsh" => "xonsh",
         "node" | "nodejs" => "javascript",
         "lua" | "luajit" => "lua",
+        "php" => "php",
         _ => return None,
     };
     SPECS.iter().find(|s| s.name == name)
@@ -960,6 +1000,7 @@ fn for_path_plain(path: &str) -> Option<&'static LangSpec> {
         // `.c` is C, `.C` is not, so the extension is never lower-cased.
         "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "C" | "H" => "cpp",
         "java" => "java",
+        "php" | "phtml" => "php",
         "lua" => "lua",
         "md" | "markdown" => "markdown",
         "json" => "json",
@@ -1006,6 +1047,7 @@ pub fn for_lang_name(name: &str) -> Option<&'static LangSpec> {
         "c" => "c",
         "cpp" | "c++" | "cc" | "cxx" | "hpp" => "cpp",
         "java" => "java",
+        "php" | "phtml" => "php",
         "lua" => "lua",
         "md" | "markdown" => "markdown",
         "json" => "json",
@@ -1062,6 +1104,9 @@ pub const IDENT_KINDS: &[&str] = &[
     "variable_name",
     // jsonnet: a reference, a bound name, and the `a` of `self.a`
     "ident",
+    // php: a function, class, constant or member name, and the word inside
+    // `$x` (see `extract`'s `visit_ident`)
+    "name",
 ];
 
 /// How a qualified enclosing name joins its parts. Code nests through a dot
