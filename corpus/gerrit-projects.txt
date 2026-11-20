@@ -1,0 +1,8 @@
+# Gerrit projects scripts/gerrit-mine.py reads review comments from: host project.
+go-review.googlesource.com go
+webrtc-review.googlesource.com src
+dawn-review.googlesource.com dawn
+gerrit-review.googlesource.com gerrit
+pigweed-review.googlesource.com pigweed/pigweed
+aomedia-review.googlesource.com aom
+chromium-review.googlesource.com v8/v8
