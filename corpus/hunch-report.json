@@ -19,19 +19,118 @@
     "passes": true,
     "rule": "within-commit pairwise accuracy (pairs with different attention labels, a predicted tie half right): above file-position order leaving one repo out overall, below it in at most 2 repos, and above it on gold"
    },
-   "later_fix_by_attention_loro": {
-    "high": {
-     "hunks": 392,
-     "later_fix": 8
+   "later_fix_review": {
+    "chance": {
+     "top20": 0.3392,
+     "top3": 0.3041
     },
-    "low": {
-     "hunks": 391,
-     "later_fix": 5
+    "commented_not_fixed": 2267,
+    "current_model": {
+     "over_commented": {
+      "pairs": 2147,
+      "pairwise": 0.5219
+     },
+     "over_uncommented": {
+      "pairs": 144189,
+      "pairwise": 0.6831,
+      "top20": 0.5917,
+      "top3": 0.5216
+     },
+     "thirds": {
+      "first": {
+       "hunks": 39490,
+       "later_fix": 2465
+      },
+      "last": {
+       "hunks": 37168,
+       "later_fix": 774
+      },
+      "middle": {
+       "hunks": 38305,
+       "later_fix": 1064
+      }
+     }
     },
-    "mid": {
-     "hunks": 391,
-     "later_fix": 2
-    }
+    "file_position": {
+     "over_commented": {
+      "pairs": 2147,
+      "pairwise": 0.5547
+     },
+     "over_uncommented": {
+      "pairs": 144189,
+      "pairwise": 0.5584,
+      "top20": 0.4221,
+      "top3": 0.3633
+     },
+     "thirds": {
+      "first": {
+       "hunks": 39490,
+       "later_fix": 1888
+      },
+      "last": {
+       "hunks": 37168,
+       "later_fix": 1154
+      },
+      "middle": {
+       "hunks": 38305,
+       "later_fix": 1261
+      }
+     }
+    },
+    "lambdarank": {
+     "over_commented": {
+      "pairs": 2147,
+      "pairwise": 0.5205
+     },
+     "over_uncommented": {
+      "pairs": 144189,
+      "pairwise": 0.7734,
+      "top20": 0.6955,
+      "top3": 0.6181
+     },
+     "thirds": {
+      "first": {
+       "hunks": 39490,
+       "later_fix": 2872
+      },
+      "last": {
+       "hunks": 37168,
+       "later_fix": 504
+      },
+      "middle": {
+       "hunks": 38305,
+       "later_fix": 927
+      }
+     }
+    },
+    "later_fix": 4605,
+    "reading_order": {
+     "over_commented": {
+      "pairs": 2147,
+      "pairwise": 0.5338
+     },
+     "over_uncommented": {
+      "pairs": 144189,
+      "pairwise": 0.5084,
+      "top20": 0.3862,
+      "top3": 0.349
+     },
+     "thirds": {
+      "first": {
+       "hunks": 39490,
+       "later_fix": 1765
+      },
+      "last": {
+       "hunks": 37168,
+       "later_fix": 1287
+      },
+      "middle": {
+       "hunks": 38305,
+       "later_fix": 1251
+      }
+     }
+    },
+    "repos_with_later_fix": 41
    },
    "metrics": {
     "gold": {
@@ -601,6 +700,10 @@
      "subsample": 0.8,
      "subsample_freq": 1,
      "verbose": -1
+    },
+    "reference_model": {
+     "sha256": "ea84d1ca4592e5c947842a4e6b993d69af5713ea4878a0a14fe73ab695caa419",
+     "what": "attention head in src/hunch.json before this run, scored as current_model"
     },
     "review": {
      "commented": 7066,
