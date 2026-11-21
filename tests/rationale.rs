@@ -222,6 +222,23 @@ fn p12_move_detection() {
 }
 
 #[test]
+fn move_from_two_candidate_sources_names_neither() {
+    // the same def leaves a.py and c.py and lands once in b.py: either could
+    // be the origin, so the arrival must not name one of them
+    let rats = rationales(serde_json::json!({
+        "changes": [
+            { "path": "a.py", "old": "def helper():\n    return 42\ndef keep():\n    return 1\n", "new": "def keep():\n    return 1\n" },
+            { "path": "b.py", "old": "# b\n", "new": "# b\ndef helper():\n    return 42\n" },
+            { "path": "c.py", "old": "def helper():\n    return 42\ndef stay():\n    return 2\n", "new": "def stay():\n    return 2\n" }
+        ]
+    }));
+    assert!(
+        rats.iter().all(|r| !r.starts_with("moves helper from")),
+        "{rats:?}"
+    );
+}
+
+#[test]
 fn both_halves_of_an_import_move_name_it() {
     // two imports swap places: one line leaves, the same line lands elsewhere
     let rats = rationales(serde_json::json!({
