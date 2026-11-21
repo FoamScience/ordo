@@ -923,8 +923,11 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
     let n = symbols.len();
     let mut changed: Vec<FileChanges> = (0..n).map(|_| FileChanges::default()).collect();
     let appeared = appeared_defs(symbols);
-    for fi in 0..n {
-        let fs = &symbols[fi];
+    // A def several files lose and one file gains has no single origin, and
+    // naming whichever source came last is how a move got a wrong "from".
+    let mut sources: HashMap<(usize, String), usize> = HashMap::new();
+    let mut per_file = Vec::with_capacity(n);
+    for (fi, fs) in symbols.iter().enumerate() {
         let (od, nd) = (&fs.old_defs, &fs.new_defs);
         let mut removed_d: Vec<String> = od.difference(nd).cloned().collect();
         let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
@@ -932,8 +935,19 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
         added_d.sort();
         let ren = renames(fs, &removed_d, &added_d);
         let renamed_old: HashSet<String> = ren.values().cloned().collect();
+        let outs = moves_out(fs, fi, &removed_d, &renamed_old, &appeared);
+        for (name, tgt) in &outs {
+            *sources.entry((*tgt, name.clone())).or_default() += 1;
+        }
+        per_file.push((added_d, ren, renamed_old, outs));
+    }
+    for (fi, (added_d, ren, renamed_old, outs)) in per_file.into_iter().enumerate() {
+        let fs = &symbols[fi];
         let mut moved_to: HashMap<String, String> = HashMap::new();
-        for (name, tgt) in moves_out(fs, fi, &removed_d, &renamed_old, &appeared) {
+        for (name, tgt) in outs {
+            if sources[&(tgt, name.clone())] > 1 {
+                continue;
+            }
             changed[tgt]
                 .moved_in
                 .insert(name.clone(), paths[fi].clone());
