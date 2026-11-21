@@ -14,11 +14,11 @@ rationale and details the engine now writes; `faithful-collect` keeps that
 rationale beside each label, so the trainer drops a label once the engine
 writes another.
 
-Usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/skip-sample.py draw [--n 5000] [--seed 131]
+Usage: ORDO_CORPUS=~/.cache/ordo-corpus scripts/skip-sample.py draw [--n 5000] [--seed 131] [--more]
        scripts/skip-sample.py chunks DIR [--size 50]      # labeler inputs, DIR/cNNN.jsonl
        scripts/skip-sample.py collect DIR --model MODEL   # DIR/*.labels.jsonl -> judged.should_skip.jsonl
-       scripts/skip-sample.py faithful-chunks DIR [--size 50] [--seed 125]
-       scripts/skip-sample.py faithful-collect DIR --model MODEL   # -> judged.faithful.jsonl
+       scripts/skip-sample.py faithful-chunks DIR [--size 50] [--seed 125] [--unlabeled]
+       scripts/skip-sample.py faithful-collect DIR --model MODEL   # -> judged.faithful.jsonl, keeping its other rows
 """
 import argparse
 import importlib.util
@@ -60,7 +60,7 @@ def quotas(sizes, n):
 
 
 def draw(a):
-    if OUT.exists() or FAITHFUL_OUT.exists():
+    if not a.more and (OUT.exists() or FAITHFUL_OUT.exists()):
         sys.exit(f"{OUT} or {FAITHFUL_OUT} holds labels keyed to {SAMPLE}; move them aside before redrawing")
     taken = keys_of(ROOT / "corpus/gold.jsonl") | keys_of(CORPUS / "silver.jsonl")
     cells, seen = defaultdict(list), set()
@@ -73,6 +73,11 @@ def draw(a):
     rng = random.Random(a.seed)
     for k in sorted(cells):
         rng.shuffle(cells[k])
+    population = {k: len(v) for k, v in cells.items()}
+    old = {}
+    if a.more:
+        old = {r["key"]: r for l in SAMPLE.read_text().splitlines() if l.strip() for r in [json.loads(l)]}
+        cells = {k: [key for key in v if key not in old] for k, v in cells.items()}
     sizes = {k: len(v) for k, v in cells.items()}
     want = quotas(sizes, a.n)
     got, have, cursor = {}, defaultdict(int), {k: 0 for k in cells}
@@ -96,11 +101,11 @@ def draw(a):
             if h["key"] in stratum and h["key"] not in got:
                 k = stratum[h["key"]]
                 have[k] += 1
-                got[h["key"]] = {**{f: h[f] for f in SHOWN}, "noise": k[1], "stratum_n": sizes[k]}
+                got[h["key"]] = {**{f: h[f] for f in SHOWN}, "noise": k[1], "stratum_n": population[k]}
         print(f"  drawn {len(got)}/{a.n}", file=sys.stderr)
-    rows = sorted(got.values(), key=lambda r: r["key"])
+    rows = sorted({**old, **got}.values(), key=lambda r: r["key"])
     SAMPLE.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-    print(f"wrote {len(rows)} hunks to {SAMPLE}")
+    print(f"wrote {len(rows)} hunks ({len(got)} new) to {SAMPLE}")
 
 
 def chunks(a):
@@ -152,8 +157,9 @@ def faithful_chunks(a):
     out), shuffled; DIR/manifest.json records each chunk's keys and the
     rationale and details shown."""
     gold = {tuple(k.split(":")[:2]) for k in keys_of(ROOT / "corpus/gold.jsonl")}
+    labeled = keys_of(FAITHFUL_OUT) if a.unlabeled and FAITHFUL_OUT.exists() else set()
     sample = [r for l in SAMPLE.read_text().splitlines() if l.strip()
-              if tuple((r := json.loads(l))["key"].split(":")[:2]) not in gold]
+              if tuple((r := json.loads(l))["key"].split(":")[:2]) not in gold and r["key"] not in labeled]
     lang = {r["key"]: r["lang"] for r in sample}
     # a key two hunks share (one ends where the next starts) names the later
     # one, as the trainer's lookup does
@@ -194,6 +200,10 @@ def faithful_collect(a):
         print(b, file=sys.stderr)
     if bad:
         sys.exit(f"{len(bad)} problems; nothing written")
+    if FAITHFUL_OUT.exists():
+        old = [json.loads(l) for l in FAITHFUL_OUT.read_text().splitlines() if l.strip()]
+        new = {o["key"] for o in out}
+        out = [r for r in old if r["key"] not in new] + out
     out.sort(key=lambda r: r["key"])
     FAITHFUL_OUT.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out))
     print(f"wrote {len(out)} labels ({sum(not r['faithful'] for r in out)} unfaithful) to {FAITHFUL_OUT}")
@@ -205,6 +215,7 @@ def main():
     d = sub.add_parser("draw")
     d.add_argument("--n", type=int, default=5000)
     d.add_argument("--seed", type=int, default=131)
+    d.add_argument("--more", action="store_true", help="add --n hunks to the sample, keeping its rows and labels")
     c = sub.add_parser("chunks")
     c.add_argument("dir", type=Path)
     c.add_argument("--size", type=int, default=50)
@@ -216,6 +227,7 @@ def main():
     f.add_argument("dir", type=Path)
     f.add_argument("--size", type=int, default=50)
     f.add_argument("--seed", type=int, default=125)
+    f.add_argument("--unlabeled", action="store_true", help="leave out hunks already in judged.faithful.jsonl")
     fc = sub.add_parser("faithful-collect")
     fc.add_argument("dir", type=Path)
     fc.add_argument("--model", required=True)
