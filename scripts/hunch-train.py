@@ -1021,14 +1021,15 @@ def train_attention(c, gold_path, silver_path):
     return head, report, proba(shipped, c.xg)
 
 
-Review = namedtuple("Review", "x repo unit y file_pos read slices")
+Review = namedtuple("Review", "x repo unit y file_pos read slices later")
 
 
 @functools.cache
 def review_rows(path, width):
     """The review set: features, repo, snapshot id, commented, and the file
     position and reading order rankings (higher = read first), rows grouped
-    by snapshot; `slices` is each snapshot's (start, end)."""
+    by snapshot; `slices` is each snapshot's (start, end); `later` is
+    later_fix as 1/0, -1 when unknown or uncommented."""
     rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
     if any("read" not in r for r in rows):
         sys.exit(f"{path} lacks file/read: rerun scripts/review-label.py")
@@ -1043,7 +1044,8 @@ def review_rows(path, width):
                   np.array([r["attention"] for r in rows]),
                   -np.array([r["file"] * 1e6 + r["new_range"][0] for r in rows], dtype=float),
                   -np.array([r["read"] for r in rows], dtype=float),
-                  list(zip([0, *cut], [*cut, len(rows)])))
+                  list(zip([0, *cut], [*cut, len(rows)])),
+                  np.array([-1 if r["later_fix"] is None else int(r["later_fix"]) for r in rows]))
 
 
 def review_metrics(scores, rv):
@@ -1073,6 +1075,44 @@ def review_metrics(scores, rv):
         out[name] = {"pairwise": round(right / pairs, 4), "pairs": pairs, "pairwise_macro": round(float(np.mean(macro)), 4),
                      "top3": round(top(lambda n: 3), 4), "top20": round(top(k20), 4),
                      "per_repo": {r: round(v[0] / v[1], 4) for r, v in sorted(per.items())}}
+    return out
+
+
+def review_subset(rv, keep, y):
+    """`rv` restricted to the rows `keep`, labeled `y`, its snapshots re-sliced."""
+    unit = rv.unit[keep]
+    cut = np.flatnonzero(np.diff(unit)) + 1
+    return rv._replace(x=rv.x[keep], repo=rv.repo[keep], unit=unit, y=y[keep], file_pos=rv.file_pos[keep],
+                       read=rv.read[keep], later=rv.later[keep], slices=list(zip([0, *cut], [*cut, len(unit)])))
+
+
+def later_fix_review(scores, rv):
+    """Per ranking, how review hunks a later revision rewrote where a human
+    commented (later_fix) rank within their snapshot: `over_uncommented`,
+    `review_metrics` of later_fix hunks against uncommented ones; `over_commented`,
+    pairwise accuracy of later_fix hunks over commented ones no later revision
+    touched (does the ranking tell a fix-prompting comment from discussion);
+    `thirds`, later_fix hunks per third of each snapshot of 3 or more hunks
+    by the ranking's within-snapshot order."""
+    fix = rv.later == 1
+    quiet, talk = fix | ~rv.y, rv.later >= 0
+    quiet_ev = review_metrics({k: v[quiet] for k, v in scores.items()}, review_subset(rv, quiet, fix))
+    talk_ev = review_metrics({k: v[talk] for k, v in scores.items()}, review_subset(rv, talk, fix))
+    out = {"later_fix": int(fix.sum()), "commented_not_fixed": int((rv.later == 0).sum()),
+           "repos_with_later_fix": len(set(rv.repo[fix])), "chance": quiet_ev["chance"]}
+    for name, s in scores.items():
+        thirds = np.zeros((3, 2), dtype=int)
+        for a, b in rv.slices:
+            if b - a < 3:
+                continue
+            third = np.empty(b - a, dtype=int)
+            third[np.argsort(-s[a:b], kind="stable")] = np.arange(b - a) * 3 // (b - a)
+            np.add.at(thirds, (third, 0), 1)
+            np.add.at(thirds, (third, 1), fix[a:b])
+        out[name] = {"over_uncommented": {k: quiet_ev[name][k] for k in ("pairwise", "pairs", "top3", "top20")},
+                     "over_commented": {k: talk_ev[name][k] for k in ("pairwise", "pairs")},
+                     "thirds": {t: {"hunks": int(h), "later_fix": int(f)}
+                                for t, (h, f) in zip(("first", "middle", "last"), thirds)}}
     return out
 
 
@@ -1115,11 +1155,10 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
     names = c.schema["names"]
     hist = [names.index(n) for n in HISTORY]
     rv = review_rows(review_path, len(names))
-    si, ls, later, cs, sat = attention_rows(c, silver_path, c.s_recs, c.s_at)
+    si, ls, _, cs, sat = attention_rows(c, silver_path, c.s_recs, c.s_at)
     gi, lg, _, cg, gat = attention_rows(c, gold_path, c.g_recs, c.g_at)
     o = np.argsort(cs, kind="stable")
     si, ls, cs, sat = si[o], ls[o], cs[o], [sat[i] for i in o]
-    later = [later[i] for i in o]
     xo, ro, wo = c.xs[si], c.rs[si], c.ws[si]
     wo = wo / wo.mean() * REVIEW_OPUS_SHARE * len(rv.y) / len(xo)
     xg, rg = c.xg[gi], c.rg[gi]
@@ -1188,6 +1227,8 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
     shipped_review = review_metrics({"file_position": rv.file_pos, "reading_order": rv.read,
                                      "current_model": head_scores(shipped_model, rv.x)}, rv)
     passes = gate["passes"] and rgate["passes"]
+    later_ev = later_fix_review({"file_position": rv.file_pos, "reading_order": rv.read,
+                                 "current_model": head_scores(shipped_model, rv.x), "lambdarank": curve[ship]}, rv)
     provenance = {
         "label": "attention (Opus 1-3 as lambdarank levels) + review comments (commented over uncommented per snapshot)",
         "train": {"file": silver_path.name, "sha256": sha256(silver_path), "hunks": nopus,
@@ -1197,6 +1238,8 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
                    "snapshots_with_both": review_ev["snapshots"]},
         "eval": {"file": "corpus/attention.gold.jsonl", "sha256": sha256(gold_path), "hunks": len(lg),
                  "levels": {str(k): int((lg == k).sum()) for k in (1, 2, 3)}},
+        "reference_model": {"what": "attention head in src/hunch.json before this run, scored as current_model",
+                            "sha256": hashlib.sha256(json.dumps(shipped_model, sort_keys=True).encode()).hexdigest()},
         "history_drop": HISTORY_DROP, "seed": SEED, "lightgbm_params": {**LGBM, "n_estimators": n_trees},
         "tree_count": {"rule": f"smallest count within {TREE_TOL} of the best pooled leave-one-repo-out review "
                                f"pairwise accuracy, every {TREE_STEP} up to {TREE_MAX}",
@@ -1207,7 +1250,7 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
     report = {"selection": selection, "provenance": provenance, "gate": gate, "review_gate": rgate,
               "metrics": {"loro": loro_ev, "gold": gold_ev, "review_loro": review_ev,
                           "review_shipped_without_review_labels": shipped_review},
-              "later_fix_by_attention_loro": later_fix_by_attention(opus_loro, later),
+              "later_fix_review": later_ev,
               "tree_count_curve": {"trees": grid, "review_loro_pairwise": pooled}}
     print(f"\nattention, review labels ({nopus} Opus, {len(rv.y)} review hunks in {review_ev['snapshots']} mixed "
           f"snapshots of {len(review_repos)} repos), lambdarank {n_trees} trees")
@@ -1217,6 +1260,15 @@ def train_attention_ranked(c, gold_path, silver_path, review_path, shipped_model
             tag = f"{name} (LORO)" if name == "lambdarank" else name
             print(f"{tag:22} {e['pairwise']:8.3f} {e['pairwise_macro']:6.3f} {e['top3']:6.3f} {e['top20']:6.3f}")
     print(f"{'chance (top-k)':22} {'':8} {'':6} {review_ev['chance']['top3']:6.3f} {review_ev['chance']['top20']:6.3f}")
+    print(f"\nlater_fix ({later_ev['later_fix']} hunks in {later_ev['repos_with_later_fix']} repos, "
+          f"{later_ev['commented_not_fixed']} commented not fixed)")
+    print(f"{'ranking':22} {'vs quiet':>8} {'top3':>6} {'top20':>6} {'vs talk':>8}  first/middle/last third")
+    for name in ("file_position", "reading_order", "current_model", "lambdarank"):
+        e = later_ev[name]
+        q, t = e["over_uncommented"], e["over_commented"]
+        print(f"{name:22} {q['pairwise']:8.3f} {q['top3']:6.3f} {q['top20']:6.3f} {t['pairwise']:8.3f}  "
+              + "/".join(f"{v['later_fix'] / v['hunks']:.3f}" for v in e["thirds"].values()))
+    print(f"{'chance (top-k)':22} {'':8} {later_ev['chance']['top3']:6.3f} {later_ev['chance']['top20']:6.3f}")
     print(f"review gate: {'PASS' if rgate['passes'] else 'FAIL'} {rgate['beats_file_position']}, "
           f"losing repos {len(rgate['losing_repos'])}")
     print(f"Opus attention gate: {'PASS' if gate['passes'] else 'FAIL'} LORO {gate['loro']['hunch']} vs "
