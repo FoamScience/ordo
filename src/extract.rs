@@ -1131,7 +1131,15 @@ impl Parsed<'_> {
         let imports = if own_rows.is_empty() {
             statement
         } else {
-            own_rows
+            // a statement written wholly inside the hunk counts in full: its
+            // names sit on its own row, which `import_rows_of` leaves out
+            let whole = self
+                .c
+                .import_decls
+                .iter()
+                .filter(|(s, e, _)| r0 <= *s && *e <= r1)
+                .map(|(_, _, n)| n.clone());
+            sorted_unique(own_rows.into_iter().chain(whole).collect())
         };
         (defines, imports)
     }

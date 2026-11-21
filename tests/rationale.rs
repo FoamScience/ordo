@@ -2555,3 +2555,11 @@ fn a_function_made_async_is_named() {
         ]
     );
 }
+
+#[test]
+fn an_added_file_counts_every_import_in_its_more() {
+    let new = "import {a, b, c} from 'x';\nimport {\n\td,\n\te,\n} from 'y';\n\nf(a, b, c, d, e);\n";
+    let hs = fixture::hunks("a.ts", "", new);
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rats, vec!["adds import a, b, c, and 2 more"], "{hs:?}");
+}
