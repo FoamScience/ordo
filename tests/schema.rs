@@ -58,8 +58,16 @@ fn rich() -> Input {
               "new": "svc:\n  port: 443\n  host: a\n  tls: on\n" },
             { "path": "test/fixtures/stdin-both.js",
               "old": null,
-              "new": "import process from 'node:process';\nimport {text} from 'node:stream/consumers';\n\nconst input = await text(process.stdin);\nprocess.stdout.write(`${input}:stdout`);\n" }
+              "new": "import process from 'node:process';\nimport {text} from 'node:stream/consumers';\n\nconst input = await text(process.stdin);\nprocess.stdout.write(`${input}:stdout`);\n" },
+            { "path": "ci/jobs.yaml",
+              "old": "name: lint\n# runs nightly\ncommand: ruff check .\n",
+              "new": "name: lint\n# runs every night\ncommand: ruff check .\n" }
         ],
+        "history": { "at": 1_700_000_000_i64, "commits": (0..20_i64).map(|i| serde_json::json!({
+            "time": 1_700_000_000_i64 - (i + 1) * 86_400,
+            "subject": if i < 6 { "fix: a crash" } else { "ci: tidy" },
+            "paths": ["ci/jobs.yaml"]
+        })).collect::<Vec<_>>() },
         "options": { "hunch": true, "rules": [
             { "name": "py-note", "when": { "lang": "python" }, "note": "python touched" }
         ]}

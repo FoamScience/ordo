@@ -24,7 +24,7 @@
             1,
             7
           ],
-          "category": "import",
+          "category": "other",
           "enclosing": null,
           "defines": [],
           "uses": [
@@ -36,8 +36,7 @@
           ],
           "group": "g0",
           "order_index": 0,
-          "rationale": "adds import process, text",
-          "noise": true,
+          "rationale": "adds input (2 uses)",
           "extent": "added",
           "uses_at": [
             {
@@ -80,7 +79,7 @@
   "groups": [
     {
       "id": "g0",
-      "reason": "same scope: imports",
+      "reason": "same scope: top-level",
       "members": [
         "h0"
       ]

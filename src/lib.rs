@@ -647,6 +647,54 @@ fn classify_imports(
     });
 }
 
+/// Rows that frame a file's imports without being code: a module declaration,
+/// a preprocessor line (include guards, `#pragma once`), a shebang, a directive
+/// prologue.
+fn import_frame(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('#')
+        || t.starts_with("package ")
+        || t.starts_with("module ")
+        || t.trim_end_matches(';') == "'use strict'"
+        || t.trim_end_matches(';') == "\"use strict\""
+}
+
+/// A hunk is an import hunk only when imports are all it says: executable code
+/// written beside them (a script's body under its imports, a bare call) makes
+/// it an ordinary change, or "adds import" would hide it.
+fn demote_mixed_imports(
+    raw: &[RawHunk],
+    sems: &mut [HunkSem],
+    new_lines: &[&str],
+    ext: &str,
+    doc: Option<&HashSet<usize>>,
+    spec: &LangSpec,
+    new: &str,
+) {
+    if !sems.iter().any(|s| s.category == Category::Import) {
+        return;
+    }
+    let import_rows = extract::import_row_set(spec, new);
+    for (h, sem) in raw.iter().zip(sems) {
+        let [r0, r1] = h.new_range;
+        if sem.category != Category::Import || r0 == 0 {
+            continue;
+        }
+        let beside = (r0..=r1).any(|r| {
+            new_lines.get(r - 1).is_some_and(|l| {
+                !l.trim().is_empty()
+                    && !import_rows.contains(&r)
+                    && !comment_row(r, l, ext, doc)
+                    && !import_frame(l)
+            })
+        });
+        if beside {
+            sem.category = Category::Other;
+            sem.noise = false;
+        }
+    }
+}
+
 /// A re-export is classified as an import, but it is the module's API: one
 /// that arrives or leaves is shown, not dimmed. It stays noise when it only
 /// moved — whole statements the other side still has — or when the hunk's
@@ -2413,6 +2461,7 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         }
     }
     if let Some(spec) = lang::for_path(&change.path) {
+        demote_mixed_imports(&raw, &mut sems, &new_lines, ext, new_doc.as_ref(), spec, &new);
         fill_details(&raw, &mut sems, (old, &new), spec);
         fill_single_changes(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
         intent::fill(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
