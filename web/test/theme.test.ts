@@ -15,3 +15,8 @@ test("a theme with light text sits on a dark base", () => {
   assert.equal(baseOf({ fg: "#4c4f69" }), "light");
   assert.equal(baseOf({ fg: null }), null);
 });
+
+test("a plain theme leaves its text to the page, so its band decides the base", () => {
+  assert.equal(baseOf({ fg: null, "band-bg": "#dce0e8" }), "light");
+  assert.equal(baseOf({ fg: null, "band-bg": "#313244" }), "dark");
+});
