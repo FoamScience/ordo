@@ -4078,11 +4078,16 @@ function cssVar(role) {
   return ["fg", "dim", "accent", "reviewed", "warn"].includes(role) || role.endsWith("-bg") ? `--${role}` : null;
 }
 function baseOf(theme) {
-  const fg = theme["fg"];
-  if (!fg || !/^#[0-9a-f]{6}$/i.test(fg)) return null;
-  const n = parseInt(fg.slice(1), 16);
-  const lum = (0.299 * (n >> 16) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) / 255;
-  return lum > 0.5 ? "dark" : "light";
+  const lum = (v) => {
+    if (!v || !/^#[0-9a-f]{6}$/i.test(v)) return null;
+    const n = parseInt(v.slice(1), 16);
+    return (0.299 * (n >> 16) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) / 255;
+  };
+  const text = lum(theme["fg"]);
+  if (text !== null) return text > 0.5 ? "dark" : "light";
+  const band = lum(theme["band-bg"]);
+  if (band !== null) return band > 0.5 ? "light" : "dark";
+  return null;
 }
 async function loadThemes(api2) {
   try {
