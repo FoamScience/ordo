@@ -1935,12 +1935,37 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
             .get(my_file)
             .is_some_and(|o| o.old_imports.contains(im))
     });
+    if all_new && !s.import_moved {
+        if let Some(gone) = replaced_imports(s, ctx, my_file) {
+            return Some(format!(
+                "replaces {noun} {} with {}",
+                name_list(&gone),
+                name_list(&names)
+            ));
+        }
+    }
     let verb = match (s.import_moved, all_new) {
         (true, _) => "moves",
         (false, true) => "adds",
         (false, false) => "changes",
     };
     Some(format!("{verb} {noun} {}", name_list(&names)))
+}
+
+/// The old imports on the hunk's own old rows that the new side no longer
+/// has: what an "adds import" hunk took out in the same breath.
+fn replaced_imports<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Option<Vec<&'c str>> {
+    let fs = ctx.symbols.get(my_file)?;
+    let [o0, o1] = s.old_range;
+    let mut gone: Vec<&str> = fs
+        .old_rows
+        .1
+        .iter()
+        .filter(|(n, row)| (o0..=o1).contains(row) && !fs.new_imports.contains(n))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    gone.dedup();
+    (!gone.is_empty()).then_some(gone)
 }
 
 // code switched off (or back on) is neither an edit nor a comment change: it

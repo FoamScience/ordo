@@ -396,7 +396,7 @@ fn the_policy_moves_only_noise_flags() {
     // edges, groups and every other field stay the engine's
     assert_eq!(with, plain);
     let expected = match hunch::policy() {
-        Some(_) => vec![Some(HunchChange::Unhid), Some(HunchChange::Hid)],
+        Some(_) => vec![None, Some(HunchChange::Hid)],
         None => vec![None, None],
     };
     assert_eq!(

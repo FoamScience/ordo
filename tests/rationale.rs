@@ -2558,8 +2558,51 @@ fn a_function_made_async_is_named() {
 
 #[test]
 fn an_added_file_counts_every_import_in_its_more() {
-    let new = "import {a, b, c} from 'x';\nimport {\n\td,\n\te,\n} from 'y';\n\nf(a, b, c, d, e);\n";
+    let new = "import {a, b, c} from 'x';\nimport {\n\td,\n\te,\n} from 'y';\n";
     let hs = fixture::hunks("a.ts", "", new);
     let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
     assert_eq!(rats, vec!["adds import a, b, c, and 2 more"], "{hs:?}");
+}
+
+#[test]
+fn an_import_swapped_in_place_replaces_rather_than_adds() {
+    let old = "#include \"fvcDiv.H\"\n#include \"zeroGradient.H\"\n";
+    let new = "#include \"fviDiv.H\"\n#include \"zeroGradient.H\"\n";
+    let hs = fixture::hunks("a.C", old, new);
+    let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(rats, vec!["replaces import fvcDiv.H with fviDiv.H"], "{hs:?}");
+}
+
+#[test]
+fn a_new_file_with_code_under_its_imports_is_not_an_import_hunk() {
+    let new = "import {a} from 'x';\n\nawait a();\nawait a();\n";
+    let hs = fixture::hunks("a.js", "", new);
+    assert!(
+        hs.iter().all(|h| !h.rationale.contains("import")),
+        "{hs:?}"
+    );
+}
+
+#[test]
+fn a_package_line_and_imports_stay_an_import_hunk() {
+    for (path, new) in [
+        ("A.java", "package a.b;\n\nimport java.util.List;\nimport java.util.Map;\n"),
+        ("a.go", "package a\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n"),
+    ] {
+        let hs = fixture::hunks(path, "", new);
+        assert!(
+            hs.iter().all(|h| h.rationale.starts_with("adds import")),
+            "{path}: {hs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_header_include_guard_around_includes_stays_an_import_hunk() {
+    let new = "#ifndef A_H\n#define A_H\n\n#include <stdio.h>\n#include <stdlib.h>\n\n#endif\n";
+    let hs = fixture::hunks("a.h", "", new);
+    assert!(
+        hs.iter().all(|h| h.rationale.starts_with("adds import")),
+        "{hs:?}"
+    );
 }
