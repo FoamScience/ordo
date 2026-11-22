@@ -2679,11 +2679,21 @@ fn mark_shape(
 /// place of old rather than the old text edited.
 const EDITED_SHARE: f32 = 0.5;
 
-/// Every non-blank changed line, on both sides, opens with `@`: a java
-/// annotation, a python or ts decorator. A multi-line one whose later lines do
-/// not start with `@` is left out rather than guessed at.
+/// Every non-blank changed line, on both sides, opens with `@` (a java
+/// annotation, a python or ts decorator) or continues one whose brackets are
+/// still open.
 fn annotations_only(changed: &[&str]) -> bool {
-    !changed.is_empty() && changed.iter().all(|l| l.starts_with('@'))
+    let mut open = 0i32;
+    !changed.is_empty()
+        && changed.iter().all(|l| {
+            let part_of = open > 0 || l.starts_with('@');
+            open += l.chars().fold(0, |d, c| match c {
+                '(' | '[' | '{' => d + 1,
+                ')' | ']' | '}' => d - 1,
+                _ => d,
+            });
+            part_of
+        })
 }
 
 /// A hunk's non-blank lines on both sides, trimmed.

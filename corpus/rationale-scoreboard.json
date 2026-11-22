@@ -3,13 +3,13 @@
  "unmatched": 0,
  "matched_by_overlap": 0,
  "surviving": {
-  "n": 8548,
-  "unfaithful": 188,
+  "n": 8523,
+  "unfaithful": 179,
   "by_verb": {
    "adds": {
-    "n": 2824,
-    "unfaithful": 68,
-    "rate": 0.0241
+    "n": 2803,
+    "unfaithful": 60,
+    "rate": 0.0214
    },
    "changes": {
     "n": 795,
@@ -52,9 +52,9 @@
     "rate": 0.0423
    },
    "moves": {
-    "n": 210,
-    "unfaithful": 5,
-    "rate": 0.0238
+    "n": 206,
+    "unfaithful": 4,
+    "rate": 0.0194
    },
    "generated": {
     "n": 866,
@@ -123,15 +123,15 @@
     "unfaithful": 33,
     "rate": 0.0359
    },
-   "click": {
-    "n": 842,
-    "unfaithful": 23,
-    "rate": 0.0273
-   },
    "curl": {
     "n": 720,
     "unfaithful": 17,
     "rate": 0.0236
+   },
+   "click": {
+    "n": 817,
+    "unfaithful": 14,
+    "rate": 0.0171
    },
    "ripgrep": {
     "n": 485,
@@ -176,14 +176,14 @@
   }
  },
  "dropped": {
-  "n": 773,
-  "unfaithful": 166,
-  "faithful": 607,
+  "n": 798,
+  "unfaithful": 175,
+  "faithful": 623,
   "by_verb": {
    "adds": {
-    "n": 439,
-    "unfaithful": 93,
-    "rate": 0.2118
+    "n": 460,
+    "unfaithful": 101,
+    "rate": 0.2196
    },
    "changes": {
     "n": 159,
@@ -191,9 +191,9 @@
     "rate": 0.1761
    },
    "moves": {
-    "n": 134,
-    "unfaithful": 22,
-    "rate": 0.1642
+    "n": 138,
+    "unfaithful": 23,
+    "rate": 0.1667
    },
    "formatting": {
     "n": 21,
@@ -223,7 +223,7 @@
   },
   "verb_changes": {
    "adds -> replaces": 226,
-   "moves -> adds": 123,
+   "moves -> adds": 127,
    "changes -> formatting": 55,
    "adds -> uses": 36,
    "changes -> removes": 35,
@@ -1332,6 +1332,18 @@
     "why": "sys import added (subprocess dropped, omitted)"
    },
    {
+    "key": "click:240603f2:tests/test_basic.py:830",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "commit adds the decorated cli in new test"
+   },
+   {
     "key": "click:25edc1e3:tests/test_compat.py:1",
     "old": [
      "adds import annotations, click, pytest, and 1 more",
@@ -1342,6 +1354,42 @@
      []
     ],
     "why": "4 imports added"
+   },
+   {
+    "key": "click:47cc96fb:tests/test_utils/test_open_file.py:105",
+    "old": [
+     "moves test_open_file_atomic_permissions_new_file from tests/test_utils_2/test_open_file.py",
+     []
+    ],
+    "new": [
+     "adds decorator to test_open_file_atomic_permissions_new_file",
+     []
+    ],
+    "why": "test moved between files plausible"
+   },
+   {
+    "key": "click:47cc96fb:tests/test_utils/test_open_file.py:109",
+    "old": [
+     "moves cli from tests/test_utils_2/test_open_file.py",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli moved to new file"
+   },
+   {
+    "key": "click:63274a79:tests/test_termui.py:771",
+    "old": [
+     "adds test_get_pager_file_nullpager_wraps_textio_stream",
+     []
+    ],
+    "new": [
+     "adds decorator to test_get_pager_file_nullpager_wraps_textio_stream",
+     []
+    ],
+    "why": "adds parametrized new test in add-tests commit"
    },
    {
     "key": "click:71f2bafa:tests/test_compat.py:9",
@@ -1356,6 +1404,18 @@
     "why": "4 imports, count correct"
    },
    {
+    "key": "click:84a42d35:tests/test_options.py:3386",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "decorated cli added in merge"
+   },
+   {
     "key": "click:8c1a0a7a:tests/test_compat.py:9",
     "old": [
      "adds import _ansi_re, _truncate_visible, strip_ansi, and 1 more",
@@ -1366,6 +1426,18 @@
      []
     ],
     "why": "4 imports, names correct"
+   },
+   {
+    "key": "click:9ab346f6:tests/test_utils/test_prompt.py:67",
+    "old": [
+     "moves echo from tests/test_utils.py",
+     []
+    ],
+    "new": [
+     "adds decorator to echo",
+     []
+    ],
+    "why": "moved test file, echo decorator"
    },
    {
     "key": "click:a1d87858:tests/typing/typing_edit.py:1",
@@ -1384,6 +1456,18 @@
     "why": "new file with those imports"
    },
    {
+    "key": "click:a28d839d:tests/test_compat.py:142",
+    "old": [
+     "adds test_strip_ansi_mixed_content",
+     []
+    ],
+    "new": [
+     "adds decorator to test_strip_ansi_mixed_content",
+     []
+    ],
+    "why": "test absent in parent; new test"
+   },
+   {
     "key": "click:a28d839d:tests/test_compat.py:9",
     "old": [
      "adds import _ansi_re, _truncate_visible, strip_ansi, and 1 more",
@@ -1394,6 +1478,18 @@
      []
     ],
     "why": "4 imports added"
+   },
+   {
+    "key": "click:bc36cd1a:tests/test_defaults.py:324",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "adds decorated cli command"
    },
    {
     "key": "click:cd4674a6:tests/test_compat.py:1",
@@ -1408,6 +1504,42 @@
     "why": "adds 4 imports, count right"
    },
    {
+    "key": "click:cd4674a6:tests/test_options.py:2873",
+    "old": [
+     "adds test_bool_flag_group_competition_with_default_map",
+     []
+    ],
+    "new": [
+     "adds decorator to test_bool_flag_group_competition_with_default_map",
+     []
+    ],
+    "why": "test new in commit vs first parent"
+   },
+   {
+    "key": "click:cd4674a6:tests/test_options.py:3225",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli command new vs parent"
+   },
+   {
+    "key": "click:cd4674a6:tests/test_options.py:3276",
+    "old": [
+     "adds test_flag_group_competition_four_flags",
+     []
+    ],
+    "new": [
+     "adds decorator to test_flag_group_competition_four_flags",
+     []
+    ],
+    "why": "test function new in commit, hunk adds its parametrize"
+   },
+   {
     "key": "click:cf0c36d3:tests/test_compat.py:1",
     "old": [
      "adds import annotations, click, pytest, and 1 more",
@@ -1418,6 +1550,42 @@
      []
     ],
     "why": "four imports added"
+   },
+   {
+    "key": "click:d42f15b7:tests/test_defaults.py:324",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "adds decorated cli command"
+   },
+   {
+    "key": "click:d65315cf:tests/test_options.py:2839",
+    "old": [
+     "adds test_bool_flag_group_competition_with_envvar",
+     []
+    ],
+    "new": [
+     "adds decorator to test_bool_flag_group_competition_with_envvar",
+     []
+    ],
+    "why": "test absent in parent; new test"
+   },
+   {
+    "key": "click:d65315cf:tests/test_options.py:3265",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "adds decorated cli command"
    },
    {
     "key": "click:e1fd5946:tests/typing/typing_edit.py:1",
@@ -1446,6 +1614,30 @@
      []
     ],
     "why": "class and encoding added"
+   },
+   {
+    "key": "click:ec822695:tests/test_options.py:3177",
+    "old": [
+     "adds test_flag_group_unset_vs_none_vs_explicit",
+     []
+    ],
+    "new": [
+     "adds decorator to test_flag_group_unset_vs_none_vs_explicit",
+     []
+    ],
+    "why": "adds parametrized test"
+   },
+   {
+    "key": "click:ec822695:tests/test_options.py:3225",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "decorators making cli command"
    },
    {
     "key": "cobra:652c755d:cobra/cmd/helpers.go:21",
@@ -7946,6 +8138,30 @@
     "why": "ctx is class attribute annotation, not local"
    },
    {
+    "key": "click:587e3cc7:tests/test_options.py:2887",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli exists; only decorators added"
+   },
+   {
+    "key": "click:587e3cc7:tests/test_options.py:3225",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli def is context; only decorators added"
+   },
+   {
     "key": "click:77bd81f3:src/click/types.py:861",
     "old": [
      "adds local atomic (7 uses), errors (5 uses)",
@@ -7956,6 +8172,18 @@
      []
     ],
     "why": "class attribute annotations called locals"
+   },
+   {
+    "key": "click:7925a341:tests/test_utils/test_echo.py:95",
+    "old": [
+     "moves test_echo_writing_to_standard_error from tests/test_utils.py",
+     []
+    ],
+    "new": [
+     "adds decorator to test_echo_writing_to_standard_error",
+     []
+    ],
+    "why": "hunk only adds skipif decorator, not a move"
    },
    {
     "key": "click:831c8f09:src/click/exceptions.py:239",
@@ -7980,6 +8208,54 @@
      []
     ],
     "why": "class attrs not locals; count 12 vs 15"
+   },
+   {
+    "key": "click:8c1a0a7a:tests/test_compat.py:202",
+    "old": [
+     "adds test_strip_ansi_leaves_incomplete_sequences",
+     []
+    ],
+    "new": [
+     "adds decorator to test_strip_ansi_leaves_incomplete_sequences",
+     []
+    ],
+    "why": "test def is context; only parametrize added"
+   },
+   {
+    "key": "click:a6256bfb:tests/test_termui.py:793",
+    "old": [
+     "adds test_pipepager_less_detection_case_insensitive_on_windows",
+     []
+    ],
+    "new": [
+     "adds decorator to test_pipepager_less_detection_case_insensitive_on_windows",
+     []
+    ],
+    "why": "only adds skipif decorator, test pre-exists"
+   },
+   {
+    "key": "click:c07bb936:tests/test_testing.py:482",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli exists; only decorator added"
+   },
+   {
+    "key": "click:c07bb936:tests/test_testing.py:536",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "only adds decorators; def cli existed"
    },
    {
     "key": "click:c2ed4149:src/click/testing.py:773",
@@ -8032,6 +8308,30 @@
      []
     ],
     "why": "class attribute annotations, not locals"
+   },
+   {
+    "key": "click:d65315cf:tests/test_options.py:2827",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli exists; only decorator added"
+   },
+   {
+    "key": "click:d65315cf:tests/test_options.py:3241",
+    "old": [
+     "adds cli",
+     []
+    ],
+    "new": [
+     "adds decorator to cli",
+     []
+    ],
+    "why": "cli exists; only decorators added"
    },
    {
     "key": "click:e34e526e:src/click/core.py:1018",
@@ -9774,18 +10074,6 @@
    "why": "details claim ids added to params; whole new params added"
   },
   {
-   "key": "click:587e3cc7:tests/test_options.py:2887",
-   "rationale": "adds cli",
-   "details": [],
-   "why": "cli exists; only decorators added"
-  },
-  {
-   "key": "click:587e3cc7:tests/test_options.py:3225",
-   "rationale": "adds cli",
-   "details": [],
-   "why": "cli def is context; only decorators added"
-  },
-  {
    "key": "click:5989375d:src/click/types.py:1127",
    "rationale": "changes signature of name, used by ParamTypeInfoDict above",
    "details": [],
@@ -9804,12 +10092,6 @@
    "why": "FuncParamTypeInfoDict does not use FloatParamType"
   },
   {
-   "key": "click:7925a341:tests/test_utils/test_echo.py:95",
-   "rationale": "moves test_echo_writing_to_standard_error from tests/test_utils.py",
-   "details": [],
-   "why": "hunk only adds skipif decorator, not a move"
-  },
-  {
    "key": "click:8a2b4890:src/click/types.py:453",
    "rationale": "changes signature of to_info_dict",
    "details": [
@@ -9818,40 +10100,16 @@
    "why": "formats already present; not added"
   },
   {
-   "key": "click:8c1a0a7a:tests/test_compat.py:202",
-   "rationale": "adds test_strip_ansi_leaves_incomplete_sequences",
-   "details": [],
-   "why": "test def is context; only parametrize added"
-  },
-  {
    "key": "click:a0147960:src/click/types.py:1135",
    "rationale": "changes signature of arity",
    "details": [],
    "why": "only type-ignore comment changed, not signature"
   },
   {
-   "key": "click:a6256bfb:tests/test_termui.py:793",
-   "rationale": "adds test_pipepager_less_detection_case_insensitive_on_windows",
-   "details": [],
-   "why": "only adds skipif decorator, test pre-exists"
-  },
-  {
    "key": "click:a9a218cd:docs/quickstart.md:155",
    "rationale": "formatting only",
    "details": [],
    "why": "dedent changes example semantics"
-  },
-  {
-   "key": "click:c07bb936:tests/test_testing.py:482",
-   "rationale": "adds cli",
-   "details": [],
-   "why": "cli exists; only decorator added"
-  },
-  {
-   "key": "click:c07bb936:tests/test_testing.py:536",
-   "rationale": "adds cli",
-   "details": [],
-   "why": "only adds decorators; def cli existed"
   },
   {
    "key": "click:c0d16f32:docs/quickstart.md:155",
@@ -9892,18 +10150,6 @@
     "adds allow_dash, dir_okay, exists, and 3 more to Path.to_info_dict"
    ],
    "why": "keys already existed; not added"
-  },
-  {
-   "key": "click:d65315cf:tests/test_options.py:2827",
-   "rationale": "adds cli",
-   "details": [],
-   "why": "cli exists; only decorator added"
-  },
-  {
-   "key": "click:d65315cf:tests/test_options.py:3241",
-   "rationale": "adds cli",
-   "details": [],
-   "why": "cli exists; only decorators added"
   },
   {
    "key": "cobra:0745e557:completions_test.go:674",

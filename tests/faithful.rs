@@ -812,3 +812,52 @@ fn a_dropped_duplicate_name_is_not_a_move() {
         hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
     );
 }
+
+/// A large insertion is cut at its definitions, and a decorated one is cut
+/// above its decorators and again at its `def`: the piece between holds the
+/// decorator alone, and that is all it adds.
+fn decorated_test(n: usize, filler: usize) -> String {
+    let pad: String = (0..filler).map(|i| format!("    v{i} = {i}\n")).collect();
+    format!("@pytest.mark.skipif(WIN, reason=\"shell\")\ndef test_{n}(monkeypatch):\n{pad}    assert 1\n\n\n")
+}
+
+const PYTEST_OLD: &str = "import pytest\n\n\ndef test_a():\n    assert 1\n";
+
+fn texts(hs: &[ordo_diff::model::HunkOut]) -> Vec<&str> {
+    hs.iter().map(|h| h.rationale.as_str()).collect()
+}
+
+#[test]
+fn decorators_of_an_added_test_are_not_the_test() {
+    let new = format!(
+        "{PYTEST_OLD}\n\n{}{}",
+        decorated_test(1, 40),
+        decorated_test(2, 40)
+    );
+    let hs = hunks("test_termui.py", PYTEST_OLD, &new);
+    let r = texts(&hs);
+    assert!(r.contains(&"adds decorator to test_2"), "{r:?}");
+    assert!(r.contains(&"adds test_2"), "{r:?}");
+    assert!(
+        r.iter()
+            .all(|t| !t.starts_with("moves") && *t != "adds cli"),
+        "{r:?}"
+    );
+}
+
+/// A decorator added above a definition the file already had still reads
+/// "changes", not "adds decorator", however many decorators stack on it.
+#[test]
+fn a_decorator_added_above_an_existing_test_changes_it() {
+    for stack in [1, 5] {
+        let decorators: String = (0..stack)
+            .map(|i| format!("@pytest.mark.parametrize(\n    \"a{i}\",\n    [1, 2],\n)\n"))
+            .collect();
+        let hs = hunks(
+            "test_termui.py",
+            PYTEST_OLD,
+            &format!("import pytest\n\n\n{decorators}def test_a():\n    assert 1\n"),
+        );
+        assert_eq!(texts(&hs), ["changes test_a"], "{stack} decorators");
+    }
+}
