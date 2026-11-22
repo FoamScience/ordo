@@ -57,6 +57,9 @@ pub struct HunkSem {
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
     pub member_uses: Vec<String>,
+    /// the subset of `uses` this hunk only ever wrote as the name of a
+    /// parameter it declares: a declaration, not a reference
+    pub param_uses: Vec<String>,
     /// the subset of `uses` bound where this hunk can see it — in its enclosing
     /// definition or at top level: the file's own variable, never another
     /// file's definition
@@ -168,6 +171,7 @@ impl HunkSem {
             imports_moved_out: vec![],
             uses: vec![],
             member_uses: vec![],
+            param_uses: vec![],
             own_bound: vec![],
             adds_enclosing: false,
             is_type: false,
@@ -661,6 +665,7 @@ struct Collected {
     /// graph can refuse a cross-file definition for a name that only ever
     /// appeared as `obj.name`
     member_uses: Vec<(usize, String)>,
+    param_uses: Vec<(usize, String)>,
     /// every name an import statement in this file binds
     import_names: HashSet<String>,
     /// the imported names that stand for a whole package (every go import,
@@ -961,6 +966,7 @@ impl Parsed<'_> {
                 .filter(|k| *k != ContainerKind::Definition),
             in_header: container.is_some_and(|d| d.callable && d.header_e.is_some_and(|e| r1 <= e)),
             member_uses: self.member_uses(r0, r1),
+            param_uses: self.param_uses(r0, r1),
             own_bound,
             uses,
             adds_enclosing: container.is_some_and(|d| {
@@ -1194,8 +1200,18 @@ impl Parsed<'_> {
     /// also wrote bare is left out: one plain mention is enough for the edge
     /// graph to take it as a real reference.
     fn member_uses(&self, r0: usize, r1: usize) -> Vec<String> {
-        // every member occurrence is also in `uses`, so a name is member-only
-        // when the two counts agree
+        self.only_as(&self.c.member_uses, r0, r1)
+    }
+
+    fn param_uses(&self, r0: usize, r1: usize) -> Vec<String> {
+        self.only_as(&self.c.param_uses, r0, r1)
+    }
+
+    /// The names every use of which, in the rows, is one of `kind` — a
+    /// name also written bare is left out: one plain mention is enough to
+    /// take it as a real reference. Every occurrence of a kind is also in
+    /// `uses`, so the two counts agree exactly when no other use exists.
+    fn only_as(&self, kind: &[(usize, String)], r0: usize, r1: usize) -> Vec<String> {
         fn count(v: &[(usize, String)], r0: usize, r1: usize) -> HashMap<&str, usize> {
             let mut m: HashMap<&str, usize> = HashMap::new();
             for (_, n) in v.iter().filter(|(row, _)| (r0..=r1).contains(row)) {
@@ -1205,7 +1221,7 @@ impl Parsed<'_> {
         }
         let all = count(&self.c.uses, r0, r1);
         sorted_unique(
-            count(&self.c.member_uses, r0, r1)
+            count(kind, r0, r1)
                 .into_iter()
                 .filter(|(n, k)| all.get(n) == Some(k))
                 .map(|(n, _)| n.to_string())
@@ -3305,12 +3321,42 @@ impl<'a> Walker<'a> {
             } else if lang::is_member_ident(node.kind()) && !self.qualified_by_package(node) {
                 self.c.push_member_use(row, t.to_string(), id);
             } else {
+                if declares_param(node) {
+                    self.c.param_uses.push((row, t.to_string()));
+                }
                 self.c.push_use(row, t.to_string(), id);
             }
         }
         // `$x` is read whole: the `name` inside it is not a second reference
         php && node.kind() == "variable_name"
     }
+}
+
+/// Is this identifier the name a parameter declaration gives, rather than its
+/// type, default or annotation? `const T& F2` and `x: Foo` declare `F2` and
+/// `x`; `T`, `Foo` and `y=FOO`'s `FOO` are references.
+fn declares_param(node: Node) -> bool {
+    if node.kind() != "identifier" {
+        return false;
+    }
+    let mut child = node;
+    for _ in 0..6 {
+        let Some(parent) = child.parent() else {
+            return false;
+        };
+        let kind = parent.kind();
+        if kind.contains("parameter") && !kind.ends_with('s') && !kind.contains("list") {
+            return true;
+        }
+        let in_field = ["type", "value", "default"]
+            .iter()
+            .any(|f| parent.child_by_field_name(f) == Some(child));
+        if in_field || kind.contains("type") {
+            return false;
+        }
+        child = parent;
+    }
+    false
 }
 
 /// The member a php `name` reaches through `->` or `?->`: a property by the
