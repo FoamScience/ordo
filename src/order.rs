@@ -1856,7 +1856,7 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
 // names the import it moved, like the half that landed does: "removes 1 line"
 // would claim something left, and "formatting only" hid that it moved at all.
 fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
-    let reordered = s.category == Category::Import && s.import_reordered && !s.import_moved;
+    let reordered = s.category == Category::Import && s.import_reordered;
     let import_speaks = s.category == Category::Import
         && !reordered
         && (!s.new_empty
@@ -1979,6 +1979,7 @@ fn old_import_names<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Vec<&'
         .filter(|(_, row)| (o0..=o1).contains(row))
         .map(|(n, _)| n.as_str())
         .collect();
+    names.sort_unstable();
     names.dedup();
     names
 }
@@ -2104,6 +2105,8 @@ struct DefVerbs<'a> {
     bodied: Vec<&'a str>,
     edited: Vec<&'a str>,
     signature_changed: Vec<&'a str>,
+    /// an annotation or decorator added to a definition the file had
+    marked: Vec<&'a str>,
     type_changed: Vec<&'a str>,
 }
 
@@ -2134,18 +2137,18 @@ fn classify_defs<'a>(
             // already had marks it differently; the name is not new
             let [o0, o1] = s.old_range;
             let marked = s.annotations_only
+                && o0 > o1
                 && ctx.symbols.get(my_file).is_some_and(|fs| {
                     fs.old_rows
                         .0
                         .iter()
                         .any(|(n, r)| n == d && (o0..=o1.max(o0) + 3).contains(r))
                 });
-            let verb = if marked {
-                "changes signature of"
-            } else {
-                ctx.def_verb(my_file, d, s.is_type, s.old_range, new_range)
-            };
-            match verb {
+            if marked {
+                v.marked.push(d);
+                continue;
+            }
+            match ctx.def_verb(my_file, d, s.is_type, s.old_range, new_range) {
                 "adds" => v.added.push(d),
                 "adds body to" => v.bodied.push(d),
                 "adds type" => v.added_types.push(d),
@@ -2201,6 +2204,9 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
         frags.push(format!("{verb} {label}"));
     }
     frags.extend(valued);
+    if !v.marked.is_empty() {
+        frags.push(format!("changes {}", name_list(&v.marked)));
+    }
     // "changes signature of f" only for something that *has* a signature.
     // A value touched on its own declaration line — a cmake `set()`, a
     // make variable, a yaml key, a rust `const` — simply changes. The kind
@@ -2336,7 +2342,9 @@ fn def_side_rationale(s: &HunkSem, sem: &[&HunkSem], mine: usize, ctx: &RatCtx) 
 
 // use side: a symbol used here that some other group defines (this change)
 fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> {
-    if s.uses.is_empty() {
+    // a parameter's name is declared where it is written, not used from
+    // anything defined elsewhere
+    if s.uses.iter().all(|u| s.param_uses.contains(u)) {
         return None;
     }
     let my_file = ctx.group_file[mine];
@@ -2398,13 +2406,16 @@ fn defined_elsewhere<'a>(
     ctx: &RatCtx,
     accept: impl Fn(usize) -> bool,
 ) -> Option<(&'a String, usize)> {
-    s.uses.iter().find_map(|u| {
-        ctx.definers(u)
-            .iter()
-            .copied()
-            .find(|&b| ctx.ok_for(mine, b, u) && accept(b))
-            .map(|b| (u, b))
-    })
+    s.uses
+        .iter()
+        .filter(|u| !s.param_uses.contains(u))
+        .find_map(|u| {
+            ctx.definers(u)
+                .iter()
+                .copied()
+                .find(|&b| ctx.ok_for(mine, b, u) && accept(b))
+                .map(|b| (u, b))
+        })
 }
 
 // what the hunk did within its own scope, tried in order: P17, a local
@@ -2584,6 +2595,14 @@ fn container_phrase(s: &HunkSem, nm: &str) -> String {
     }
     if let Some(d) = s.directive.as_ref().filter(|_| s.adds_conditional) {
         return format!("adds {} to {nm}", conditional_block(d));
+    }
+    // the hunk that opens a guard adds it; the guard it sits in is not edited
+    if let Some(d) = s
+        .directive
+        .as_ref()
+        .filter(|d| pure_insertion(s) && *d == nm)
+    {
+        return format!("adds {d}");
     }
     if let Some(p) = s.intent.as_ref().and_then(|i| intent_phrase(i, nm)) {
         return p;

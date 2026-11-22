@@ -3,8 +3,8 @@
  "unmatched": 0,
  "matched_by_overlap": 0,
  "surviving": {
-  "n": 8653,
-  "unfaithful": 207,
+  "n": 8548,
+  "unfaithful": 188,
   "by_verb": {
    "adds": {
     "n": 2824,
@@ -16,35 +16,30 @@
     "unfaithful": 24,
     "rate": 0.0302
    },
-   "uses": {
-    "n": 309,
-    "unfaithful": 23,
-    "rate": 0.0744
-   },
    "formatting": {
     "n": 559,
     "unfaithful": 22,
     "rate": 0.0394
    },
-   "moves": {
-    "n": 306,
+   "uses": {
+    "n": 307,
     "unfaithful": 21,
-    "rate": 0.0686
+    "rate": 0.0684
    },
    "renames": {
     "n": 27,
     "unfaithful": 12,
     "rate": 0.4444
    },
-   "edits": {
-    "n": 2156,
-    "unfaithful": 10,
-    "rate": 0.0046
-   },
    "removes": {
     "n": 512,
     "unfaithful": 10,
     "rate": 0.0195
+   },
+   "edits": {
+    "n": 2149,
+    "unfaithful": 9,
+    "rate": 0.0042
    },
    "tests": {
     "n": 14,
@@ -55,6 +50,11 @@
     "n": 142,
     "unfaithful": 6,
     "rate": 0.0423
+   },
+   "moves": {
+    "n": 210,
+    "unfaithful": 5,
+    "rate": 0.0238
    },
    "generated": {
     "n": 866,
@@ -123,15 +123,15 @@
     "unfaithful": 33,
     "rate": 0.0359
    },
-   "curl": {
-    "n": 734,
-    "unfaithful": 25,
-    "rate": 0.0341
-   },
    "click": {
     "n": 842,
     "unfaithful": 23,
     "rate": 0.0273
+   },
+   "curl": {
+    "n": 720,
+    "unfaithful": 17,
+    "rate": 0.0236
    },
    "ripgrep": {
     "n": 485,
@@ -153,32 +153,32 @@
     "unfaithful": 10,
     "rate": 0.0202
    },
-   "openfoam": {
-    "n": 775,
-    "unfaithful": 9,
-    "rate": 0.0116
-   },
    "junit5": {
-    "n": 656,
+    "n": 629,
     "unfaithful": 9,
-    "rate": 0.0137
+    "rate": 0.0143
+   },
+   "openfoam": {
+    "n": 773,
+    "unfaithful": 7,
+    "rate": 0.0091
    },
    "cobra": {
-    "n": 586,
-    "unfaithful": 8,
-    "rate": 0.0137
+    "n": 574,
+    "unfaithful": 5,
+    "rate": 0.0087
    },
    "buildtheworld": {
-    "n": 540,
-    "unfaithful": 7,
-    "rate": 0.013
+    "n": 490,
+    "unfaithful": 1,
+    "rate": 0.002
    }
   }
  },
  "dropped": {
-  "n": 668,
-  "unfaithful": 147,
-  "faithful": 521,
+  "n": 773,
+  "unfaithful": 166,
+  "faithful": 607,
   "by_verb": {
    "adds": {
     "n": 439,
@@ -190,20 +190,30 @@
     "unfaithful": 28,
     "rate": 0.1761
    },
+   "moves": {
+    "n": 134,
+    "unfaithful": 22,
+    "rate": 0.1642
+   },
    "formatting": {
     "n": 21,
     "unfaithful": 18,
     "rate": 0.8571
    },
-   "moves": {
-    "n": 38,
-    "unfaithful": 6,
-    "rate": 0.1579
+   "uses": {
+    "n": 2,
+    "unfaithful": 2,
+    "rate": 1.0
    },
    "removes": {
     "n": 10,
     "unfaithful": 1,
     "rate": 0.1
+   },
+   "edits": {
+    "n": 7,
+    "unfaithful": 1,
+    "rate": 0.1429
    },
    "replaces": {
     "n": 1,
@@ -213,16 +223,20 @@
   },
   "verb_changes": {
    "adds -> replaces": 226,
-   "changes -> formatting": 54,
-   "moves -> adds": 36,
+   "moves -> adds": 123,
+   "changes -> formatting": 55,
    "adds -> uses": 36,
    "changes -> removes": 35,
    "changes -> adds": 32,
    "adds -> changes": 18,
    "changes -> moves": 18,
    "formatting -> moves": 15,
+   "edits -> adds": 7,
+   "moves -> formatting": 7,
    "adds -> edits": 6,
-   "formatting -> removes": 6
+   "formatting -> removes": 6,
+   "uses -> changes": 1,
+   "uses -> edits": 1
   },
   "faithful_rows": [
    {
@@ -240,6 +254,42 @@
      ]
     ],
     "why": "new script imports yaml; co['name'] present"
+   },
+   {
+    "key": "buildtheworld:45dc63c8:build_order.d/32-qs.yaml:38",
+    "old": [
+     "moves name from build_order.d/31-qs.yaml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "name line added, plausible move"
+   },
+   {
+    "key": "buildtheworld:45dc63c8:build_order.d/32-qs.yaml:51",
+    "old": [
+     "moves name from build_order.d/31-qs.yaml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds name, move plausible"
+   },
+   {
+    "key": "buildtheworld:45dc63c8:build_order.d/32-qs.yaml:61",
+    "old": [
+     "moves url from build_order.d/31-qs.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "adds url, plausible move"
    },
    {
     "key": "buildtheworld:bb0adee9:build_py_env.xsh:9",
@@ -430,6 +480,30 @@
     "why": "adds url line"
    },
    {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:190",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "adds user; move plausible"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:214",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "adds user field; move plausible"
+   },
+   {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:217",
     "old": [
      "moves host from build_order.d/90-other.yaml",
@@ -488,6 +562,18 @@
      []
     ],
     "why": "adds repo_name, move plausible"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:350",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "user key added, move plausible"
    },
    {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:371",
@@ -610,6 +696,18 @@
     "why": "url moved into used_repos"
    },
    {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:502",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "adds user moved from build order"
+   },
+   {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:547",
     "old": [
      "moves repo_name from build_order.d/90-other.yaml",
@@ -620,6 +718,18 @@
      []
     ],
     "why": "repo_name added, move plausible"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:550",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "adds user line; move claim positional"
    },
    {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:595",
@@ -730,6 +840,18 @@
     "why": "host line added, move plausible"
    },
    {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:734",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "user added, move plausible"
+   },
+   {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:745",
     "old": [
      "moves host from build_order.d/90-other.yaml",
@@ -764,6 +886,426 @@
      []
     ],
     "why": "adds host line; move claim plausible for commit"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:822",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "user moved from 30-pydandic.yaml, verified"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1030",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "adds url, plausible move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1100",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote added, reorg move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:111",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote key added in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1233",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "reorg move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1241",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url line added"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1305",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url line added in reorg move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1349",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "content moved from build_order.yaml"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1365",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "project key added, move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1405",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url key added in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1446",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url line added, move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1488",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "adds primary_remote in reorg move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1510",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "reorg move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1554",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "project key added, reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:157",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url added, move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1576",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "adds primary_remote key in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1709",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url line added in reorg move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:173",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url line added in reorg move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1775",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "adds url, move plausible in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1854",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote key added, reorg move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:1860",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "reorg move, plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:217",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "project key added in reorganized file"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:392",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote added, move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:408",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote key added in reorg move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:41",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url line moved in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:428",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "adds primary_remote in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:478",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "adds project key, plausible move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:480",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote key added"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:486",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "adds url; move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:582",
+    "old": [
+     "moves project from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds project",
+     []
+    ],
+    "why": "project entry from reorganized file"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:743",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "adds url, plausible move"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:809",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "reorg move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:877",
+    "old": [
+     "moves url from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds url",
+     []
+    ],
+    "why": "url added, reorg move plausible"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:91",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "primary_remote moved in reorg"
+   },
+   {
+    "key": "buildtheworld:ea47ad6e:build_order.d/01-build.yaml:911",
+    "old": [
+     "moves primary_remote from build_order.yaml",
+     []
+    ],
+    "new": [
+     "adds primary_remote",
+     []
+    ],
+    "why": "adds primary_remote line; move plausible"
    },
    {
     "key": "buildtheworld:ea47ad6e:repo_report.xsh:1",
@@ -966,6 +1508,114 @@
     "why": "4 imports and two consts added"
    },
    {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:18",
+    "old": [
+     "moves go-version from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds go-version",
+     []
+    ],
+    "why": "go-version added; move plausible"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:40",
+    "old": [
+     "moves runs-on from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds runs-on",
+     []
+    ],
+    "why": "runs-on was in old Test.yml"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:43",
+    "old": [
+     "moves uses from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds uses",
+     []
+    ],
+    "why": "uses line moved from renamed file"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:44",
+    "old": [
+     "moves with from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds with",
+     []
+    ],
+    "why": "adds with: line; move claim plausible"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:50",
+    "old": [
+     "moves with from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds with",
+     []
+    ],
+    "why": "file renamed from Test.yml"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:71",
+    "old": [
+     "moves runs-on from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds runs-on",
+     []
+    ],
+    "why": "plausible move from renamed file"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:74",
+    "old": [
+     "moves shell from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds shell",
+     []
+    ],
+    "why": "line carried over from renamed Test.yml"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:91",
+    "old": [
+     "moves path from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds path",
+     []
+    ],
+    "why": "new-file hunk, plausible move from Test.yml"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:93",
+    "old": [
+     "moves restore-keys from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds restore-keys",
+     []
+    ],
+    "why": "restore-keys added"
+   },
+   {
     "key": "curl:69a224d6:lib/amigaos.c:28",
     "old": [
      "adds import vdns/hostip.h",
@@ -988,6 +1638,54 @@
      []
     ],
     "why": "vdns/hostip.h include added"
+   },
+   {
+    "key": "curl:69a224d6:lib/vdns/asyn-ares.c:533",
+    "old": [
+     "edits #ifdef USE_HTTPSRR",
+     []
+    ],
+    "new": [
+     "adds #ifdef USE_HTTPSRR",
+     []
+    ],
+    "why": "adds #ifdef USE_HTTPSRR"
+   },
+   {
+    "key": "curl:69a224d6:lib/vdns/asyn-base.c:58",
+    "old": [
+     "edits #ifdef CURLRES_ASYNCH",
+     []
+    ],
+    "new": [
+     "adds #ifdef CURLRES_ASYNCH",
+     []
+    ],
+    "why": "adds #ifdef CURLRES_ASYNCH"
+   },
+   {
+    "key": "curl:69a224d6:lib/vdns/asyn-base.c:71",
+    "old": [
+     "edits #ifdef USE_ARES",
+     []
+    ],
+    "new": [
+     "adds #ifdef USE_ARES",
+     []
+    ],
+    "why": "adds #ifdef USE_ARES; edits loose but true"
+   },
+   {
+    "key": "curl:69a224d6:lib/vdns/asyn-thrdd.c:514",
+    "old": [
+     "edits #ifdef CURLVERBOSE",
+     []
+    ],
+    "new": [
+     "adds #ifdef CURLVERBOSE",
+     []
+    ],
+    "why": "adds #ifdef CURLVERBOSE line"
    },
    {
     "key": "curl:69a224d6:lib/vdns/asyn.h:28",
@@ -1024,6 +1722,18 @@
      []
     ],
     "why": "new header includes curl_setup.h"
+   },
+   {
+    "key": "curl:69a224d6:lib/vdns/dnscache.c:571",
+    "old": [
+     "edits #ifdef USE_HTTPSRR",
+     []
+    ],
+    "new": [
+     "adds #ifdef USE_HTTPSRR",
+     []
+    ],
+    "why": "adds #ifdef USE_HTTPSRR line"
    },
    {
     "key": "curl:69a224d6:lib/vdns/dnscache.h:1",
@@ -1300,6 +2010,18 @@
      []
     ],
     "why": "three wolfssl includes added"
+   },
+   {
+    "key": "curl:a8881e5e:lib/curl_gssapi.c:438",
+    "old": [
+     "edits #ifdef HAVE_GSS_SET_NEG_MECHS",
+     []
+    ],
+    "new": [
+     "adds #ifdef HAVE_GSS_SET_NEG_MECHS",
+     []
+    ],
+    "why": "#ifdef line added"
    },
    {
     "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/DropdownMenuContent.tsx:2",
@@ -1812,7 +2534,7 @@
      []
     ],
     "new": [
-     "removes re-export isElementInsideBBox, elementPartiallyOverlapsWithOrContainsBBox",
+     "removes re-export elementPartiallyOverlapsWithOrContainsBBox, isElementInsideBBox",
      []
     ],
     "why": "re-export changed; terse"
@@ -1944,7 +2666,7 @@
      []
     ],
     "new": [
-     "removes import isPointInShape, isPointOnShape, GeometricShape, and 3 more",
+     "removes import GeometricShape, LocalPoint, Polygon, and 3 more",
      []
     ],
     "why": "imports changed"
@@ -1980,7 +2702,7 @@
      []
     ],
     "new": [
-     "removes import GeometricShape, ElementsSegmentsMap",
+     "removes import ElementsSegmentsMap, GeometricShape",
      []
     ],
     "why": "import changed"
@@ -2572,7 +3294,7 @@
      []
     ],
     "new": [
-     "removes import Readable, Duplex",
+     "removes import Duplex, Readable",
      []
     ],
     "why": "import line changed, names kept"
@@ -2632,7 +3354,7 @@
      []
     ],
     "new": [
-     "adds import isUint8Array, uint8ArrayToString; removes import isBinary, binaryToString",
+     "adds import isUint8Array, uint8ArrayToString; removes import binaryToString, isBinary",
      []
     ],
     "why": "import line changed"
@@ -3116,7 +3838,7 @@
      []
     ],
     "new": [
-     "removes import execaSync, execaNode, FIXTURES_DIR_URL",
+     "removes import FIXTURES_DIR_URL, execaNode, execaSync",
      []
     ],
     "why": "import lines changed"
@@ -3468,7 +4190,7 @@
      []
     ],
     "new": [
-     "adds import getFromStream, getToStream; removes import getWritable, getReadable",
+     "adds import getFromStream, getToStream; removes import getReadable, getWritable",
      []
     ],
     "why": "import names changed"
@@ -3708,7 +4430,7 @@
      []
     ],
     "new": [
-     "adds import FIXTURES_DIRECTORY, setFixtureDirectory; removes import setFixtureDir, FIXTURES_DIR",
+     "adds import FIXTURES_DIRECTORY, setFixtureDirectory; removes import FIXTURES_DIR, setFixtureDir",
      []
     ],
     "why": "imports changed; terse"
@@ -4044,7 +4766,7 @@
      []
     ],
     "new": [
-     "removes import getOutputsGenerator, convertTransformToFinal, multibyteChar, and 4 more",
+     "removes import breakingLength, brokenSymbol, convertTransformToFinal, and 4 more",
      []
     ],
     "why": "import narrowed to these names"
@@ -4302,16 +5024,340 @@
     "why": "SummaryGeneratingListener import added (replacing)"
    },
    {
-    "key": "junit5:4dbd5561:.github/workflows/ci.yml:5",
+    "key": "junit5:4dbd5561:.github/workflows/_build.yml:14",
     "old": [
-     "moves branches from .github/workflows/zizmor-analysis.yml",
+     "moves steps from .github/workflows/main.yml",
      []
     ],
     "new": [
-     "adds branches",
+     "adds steps",
      []
     ],
-    "why": "adds branches; move plausible"
+    "why": "steps key added, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_build.yml:43",
+    "old": [
+     "moves steps from .github/workflows/main.yml",
+     []
+    ],
+    "new": [
+     "adds steps",
+     []
+    ],
+    "why": "adds steps key, move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_build.yml:56",
+    "old": [
+     "moves steps from .github/workflows/main.yml",
+     []
+    ],
+    "new": [
+     "adds steps",
+     []
+    ],
+    "why": "steps moved in restructure, plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_build.yml:70",
+    "old": [
+     "moves steps from .github/workflows/main.yml",
+     []
+    ],
+    "new": [
+     "adds steps",
+     []
+    ],
+    "why": "adds steps, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:1",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds name line, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:102",
+    "old": [
+     "moves arguments from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds arguments",
+     []
+    ],
+    "why": "arguments block added, move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:113",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds name line, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:13",
+    "old": [
+     "moves strategy from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds strategy",
+     []
+    ],
+    "why": "strategy key added, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:27",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds name line, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:29",
+    "old": [
+     "moves steps from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds steps",
+     []
+    ],
+    "why": "steps key from moved workflow"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:37",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds step name, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:44",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "name line moved"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:45",
+    "old": [
+     "moves if from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds if",
+     []
+    ],
+    "why": "adds if line, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:49",
+    "old": [
+     "moves java-version from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds java-version",
+     []
+    ],
+    "why": "file renamed from cross-version.yml"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:54",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:59",
+    "old": [
+     "moves arguments from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds arguments",
+     []
+    ],
+    "why": "adds arguments, plausible move"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:67",
+    "old": [
+     "moves if from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds if",
+     []
+    ],
+    "why": "adds if; move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:69",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds name line, move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:72",
+    "old": [
+     "moves strategy from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds strategy",
+     []
+    ],
+    "why": "strategy key added; move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:74",
+    "old": [
+     "moves matrix from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds matrix",
+     []
+    ],
+    "why": "file renamed from cross-version.yml; matrix line carried over"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:78",
+    "old": [
+     "moves steps from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds steps",
+     []
+    ],
+    "why": "steps key added, move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:79",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "step name added in moved workflow"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:84",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "step name moved from old workflow"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:88",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "adds name step line, moved"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:91",
+    "old": [
+     "moves distribution from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds distribution",
+     []
+    ],
+    "why": "adds distribution, move plausible"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_cross-version.yml:97",
+    "old": [
+     "moves name from .github/workflows/cross-version.yml",
+     []
+    ],
+    "new": [
+     "adds name",
+     []
+    ],
+    "why": "name line moved into new reusable workflow"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_publish.yml:1",
+    "old": [
+     "moves ORG_GRADLE_PROJECT_mavenCentralPassword, ORG_GRADLE_PROJECT_mavenCentralUsername, if, and 1 more from .github/workflows/main.yml; adds DEVELOCITY_ACCESS_KEY, Documentation, actions, and 17 more",
+     []
+    ],
+    "new": [
+     "moves ORG_GRADLE_PROJECT_mavenCentralPassword, ORG_GRADLE_PROJECT_mavenCentralUsername, subject-path from .github/workflows/main.yml; adds DEVELOCITY_ACCESS_KEY, Documentation, actions, and 18 more",
+     []
+    ],
+    "why": "new workflow with listed keys"
+   },
+   {
+    "key": "junit5:4dbd5561:.github/workflows/_zizmor-analysis.yml:1",
+    "old": [
+     "moves jobs, steps, zizmor from .github/workflows/zizmor-analysis.yml; adds name, on, permissions, and 6 more",
+     []
+    ],
+    "new": [
+     "moves jobs, steps, with, and 1 more from .github/workflows/zizmor-analysis.yml; adds name, on, permissions, and 5 more",
+     []
+    ],
+    "why": "new workflow file, move claim plausible"
    },
    {
     "key": "junit5:58259dbf:junit-vintage-engine/src/testFixtures/java/org/junit/vintage/engine/samples/junit4/JUnit4ParallelClassesTestCase.java:15",
@@ -6504,7 +7550,7 @@
      []
     ],
     "new": [
-     "changes import Hir, Literal, Regex, and 2 more",
+     "formatting only",
      []
     ],
     "why": "Hir added to import"
@@ -6708,6 +7754,18 @@
     "why": "headline 'and 4 more' undercounts removed keys (6 more)"
    },
    {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:254",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "pyyaml user came from 01-build.yaml, not 30-pydandic"
+   },
+   {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:259",
     "old": [
      "moves repo_name from build_order.d/90-other.yaml",
@@ -6730,6 +7788,18 @@
      []
     ],
     "why": "distributed url came from 01-build.yaml"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:302",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "dask distributed user came from 01-build.yaml, not 30-pydandic.yaml"
    },
    {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:337",
@@ -6766,6 +7836,54 @@
      []
     ],
     "why": "happi came from 01-build.yaml"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:510",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "suitcase-csv came from 01-build.yaml"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:582",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "suitcase-tiff remote came from 01-build.yaml, not 30-pydandic"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:686",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "user: matplotlib not from 30-pydandic.yaml (that file had python-greenlet/ijl)"
+   },
+   {
+    "key": "buildtheworld:e9d91fe2:used_repos.yaml:70",
+    "old": [
+     "moves user from build_order.d/30-pydandic.yaml",
+     []
+    ],
+    "new": [
+     "adds user",
+     []
+    ],
+    "why": "meson user came from 01-build.yaml"
    },
    {
     "key": "buildtheworld:e9d91fe2:used_repos.yaml:747",
@@ -7024,6 +8142,42 @@
     "why": "import removal, not formatting"
    },
    {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:13",
+    "old": [
+     "moves runs-on from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds runs-on",
+     []
+    ],
+    "why": "runs-on newly added, not moved"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:17",
+    "old": [
+     "moves with from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds with",
+     []
+    ],
+    "why": "with: is part of new lint job, not moved"
+   },
+   {
+    "key": "cobra:ff2c55e3:.github/workflows/test.yml:22",
+    "old": [
+     "moves uses from .github/workflows/Test.yml",
+     []
+    ],
+    "new": [
+     "adds uses",
+     []
+    ],
+    "why": "lint action is newly introduced, not moved"
+   },
+   {
     "key": "curl:69a224d6:tests/unit/unit1305.c:38",
     "old": [
      "adds import vdns/dnscache.h",
@@ -7034,6 +8188,102 @@
      []
     ],
     "why": "replaces include path, not new include"
+   },
+   {
+    "key": "curl:7e7ee16d:tests/libtest/cli_ws_write_err.c:28",
+    "old": [
+     "edits #ifndef CURL_DISABLE_WEBSOCKETS",
+     []
+    ],
+    "new": [
+     "adds #ifndef CURL_DISABLE_WEBSOCKETS",
+     []
+    ],
+    "why": "guard is added, not edited"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:193",
+    "old": [
+     "moves import sys/types.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "only indentation change, not a move"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:196",
+    "old": [
+     "moves import unistd.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "whitespace-only reindent, nothing moved"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:220",
+    "old": [
+     "moves import sys/types.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "whitespace in include, not moved"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:223",
+    "old": [
+     "moves import unistd.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "whitespace-only reindent, nothing moved"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:250",
+    "old": [
+     "moves import sys/types.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "whitespace change in place, not a move"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:341",
+    "old": [
+     "moves import sys/types.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "whitespace in directive, not a move"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:344",
+    "old": [
+     "moves import unistd.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include reindented in place, not moved"
    },
    {
     "key": "curl:e13362c2:tests/http/test_17_ssl_use.py:38",
@@ -7210,7 +8460,7 @@
      []
     ],
     "new": [
-     "removes import ToolButton, HamburgerMenuIcon, palette, and 1 more",
+     "removes import HamburgerMenuIcon, ToolButton, palette, and 1 more",
      []
     ],
     "why": "HelpIconThin unchanged; hunk removes other imports"
@@ -7722,7 +8972,7 @@
      []
     ],
     "new": [
-     "removes import join, basename",
+     "removes import basename, join",
      []
     ],
     "why": "really removes join, basename; delimiter unchanged"
@@ -7950,7 +9200,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertArrayEquals",
+     "changes assertArrayEquals",
      []
     ],
     "why": "only adds annotation to existing method"
@@ -7962,7 +9212,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertArrayEquals",
+     "changes assertArrayEquals",
      []
     ],
     "why": "only adds annotation; method exists"
@@ -7974,7 +9224,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertArrayEquals",
+     "changes assertArrayEquals",
      []
     ],
     "why": "only adds annotation to existing method"
@@ -7986,7 +9236,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertArrayEquals",
+     "changes assertArrayEquals",
      []
     ],
     "why": "only adds annotation to existing method"
@@ -7998,7 +9248,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertArrayEquals",
+     "changes assertArrayEquals",
      []
     ],
     "why": "only adds annotation, method exists"
@@ -8010,7 +9260,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertIterableEquals",
+     "changes assertIterableEquals",
      []
     ],
     "why": "only adds annotation to existing method"
@@ -8022,7 +9272,7 @@
      []
     ],
     "new": [
-     "changes annotations of assertNotSame",
+     "changes assertNotSame",
      []
     ],
     "why": "only adds annotation to existing method"
@@ -8034,7 +9284,7 @@
      []
     ],
     "new": [
-     "changes annotations of create",
+     "changes create",
      []
     ],
     "why": "create existed; only annotation added"
@@ -8046,7 +9296,7 @@
      []
     ],
     "new": [
-     "changes annotations of isResolved",
+     "changes isResolved",
      []
     ],
     "why": "isResolved exists; only annotation added"
@@ -8058,7 +9308,7 @@
      []
     ],
     "new": [
-     "changes annotations of withListener",
+     "changes withListener",
      []
     ],
     "why": "only adds annotation; withListener already exists"
@@ -8070,7 +9320,7 @@
      []
     ],
     "new": [
-     "changes annotations of add",
+     "changes add",
      []
     ],
     "why": "only adds annotation; add exists already"
@@ -8082,7 +9332,7 @@
      []
     ],
     "new": [
-     "changes annotations of findTestSource",
+     "changes findTestSource",
      []
     ],
     "why": "only annotation added; findTestSource already exists"
@@ -8196,6 +9446,18 @@
     "why": "replaces fvc.H, not pure add"
    },
    {
+    "key": "openfoam:2ec91f84:src/MomentumTransportModels/momentumTransportModels/Base/kOmegaSST/kOmegaSSTBase.C:162",
+    "old": [
+     "uses F2, defined above",
+     []
+    ],
+    "new": [
+     "changes signature of Foam.epsilonByk",
+     []
+    ],
+    "why": "F2 is a parameter retyped here, not used from above"
+   },
+   {
     "key": "openfoam:2ec91f84:src/MomentumTransportModels/momentumTransportModels/RAS/LaunderSharmaKE/LaunderSharmaKE.C:27",
     "old": [
      "adds import fviMagSqrGradGrad.H",
@@ -8266,6 +9528,18 @@
      []
     ],
     "why": "replaces include, not adds"
+   },
+   {
+    "key": "openfoam:627e2f90:src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.H:681",
+    "old": [
+     "uses interfaceBouCoeffs, defined above",
+     []
+    ],
+    "new": [
+     "edits Foam.lduMatrix",
+     []
+    ],
+    "why": "param type change, not a use"
    },
    {
     "key": "openfoam:aeae3893:applications/modules/multiphaseEuler/phaseSystem/phaseSystem/phaseSystem.H:49",
@@ -8482,42 +9756,6 @@
    "why": "import sys newly added, not moved"
   },
   {
-   "key": "buildtheworld:e9d91fe2:used_repos.yaml:254",
-   "rationale": "moves user from build_order.d/30-pydandic.yaml",
-   "details": [],
-   "why": "pyyaml user came from 01-build.yaml, not 30-pydandic"
-  },
-  {
-   "key": "buildtheworld:e9d91fe2:used_repos.yaml:302",
-   "rationale": "moves user from build_order.d/30-pydandic.yaml",
-   "details": [],
-   "why": "dask distributed user came from 01-build.yaml, not 30-pydandic.yaml"
-  },
-  {
-   "key": "buildtheworld:e9d91fe2:used_repos.yaml:510",
-   "rationale": "moves user from build_order.d/30-pydandic.yaml",
-   "details": [],
-   "why": "suitcase-csv came from 01-build.yaml"
-  },
-  {
-   "key": "buildtheworld:e9d91fe2:used_repos.yaml:582",
-   "rationale": "moves user from build_order.d/30-pydandic.yaml",
-   "details": [],
-   "why": "suitcase-tiff remote came from 01-build.yaml, not 30-pydandic"
-  },
-  {
-   "key": "buildtheworld:e9d91fe2:used_repos.yaml:686",
-   "rationale": "moves user from build_order.d/30-pydandic.yaml",
-   "details": [],
-   "why": "user: matplotlib not from 30-pydandic.yaml (that file had python-greenlet/ijl)"
-  },
-  {
-   "key": "buildtheworld:e9d91fe2:used_repos.yaml:70",
-   "rationale": "moves user from build_order.d/30-pydandic.yaml",
-   "details": [],
-   "why": "meson user came from 01-build.yaml"
-  },
-  {
    "key": "click:182944f9:tests/test_utils.py:69",
    "rationale": "moves test_prompts, test, test, and 2 more to tests/test_utils_2/test_confirm.py",
    "details": [],
@@ -8698,24 +9936,6 @@
    "why": "error-case helper wouldn't use expectSuccess"
   },
   {
-   "key": "cobra:ff2c55e3:.github/workflows/test.yml:13",
-   "rationale": "moves runs-on from .github/workflows/Test.yml",
-   "details": [],
-   "why": "runs-on newly added, not moved"
-  },
-  {
-   "key": "cobra:ff2c55e3:.github/workflows/test.yml:17",
-   "rationale": "moves with from .github/workflows/Test.yml",
-   "details": [],
-   "why": "with: is part of new lint job, not moved"
-  },
-  {
-   "key": "cobra:ff2c55e3:.github/workflows/test.yml:22",
-   "rationale": "moves uses from .github/workflows/Test.yml",
-   "details": [],
-   "why": "lint action is newly introduced, not moved"
-  },
-  {
    "key": "curl:2a380493:lib/curl_setup.h:1654",
    "rationale": "adds curlx_memzero_low, used by #ifndef curlx_memzero_low below",
    "details": [],
@@ -8748,58 +9968,10 @@
    "why": "hunk adds a forward prototype, not a move"
   },
   {
-   "key": "curl:7e7ee16d:tests/libtest/cli_ws_write_err.c:28",
-   "rationale": "edits #ifndef CURL_DISABLE_WEBSOCKETS",
-   "details": [],
-   "why": "guard is added, not edited"
-  },
-  {
    "key": "curl:7f6a7566:tests/http/testenv/env.py:166",
    "rationale": "uses curl_can_doh, added below",
    "details": [],
    "why": "hunk defines curl_can_doh, not uses"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:193",
-   "rationale": "moves import sys/types.h",
-   "details": [],
-   "why": "only indentation change, not a move"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:196",
-   "rationale": "moves import unistd.h",
-   "details": [],
-   "why": "whitespace-only reindent, nothing moved"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:220",
-   "rationale": "moves import sys/types.h",
-   "details": [],
-   "why": "whitespace in include, not moved"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:223",
-   "rationale": "moves import unistd.h",
-   "details": [],
-   "why": "whitespace-only reindent, nothing moved"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:250",
-   "rationale": "moves import sys/types.h",
-   "details": [],
-   "why": "whitespace change in place, not a move"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:341",
-   "rationale": "moves import sys/types.h",
-   "details": [],
-   "why": "whitespace in directive, not a move"
-  },
-  {
-   "key": "curl:8734b088:CMake/CurlTests.c:344",
-   "rationale": "moves import unistd.h",
-   "details": [],
-   "why": "include reindented in place, not moved"
   },
   {
    "key": "curl:8a8ff47b:docs/examples/httpput.c:76",
@@ -9602,22 +10774,10 @@
    "why": "nvm_json_awk_egrep used by tokenize, not _json_parse_value"
   },
   {
-   "key": "openfoam:2ec91f84:src/MomentumTransportModels/momentumTransportModels/Base/kOmegaSST/kOmegaSSTBase.C:162",
-   "rationale": "uses F2, defined above",
-   "details": [],
-   "why": "F2 is a parameter retyped here, not used from above"
-  },
-  {
    "key": "openfoam:2ec91f84:src/finiteVolume/finiteVolume/fvi/fviLaplacian.C:149",
    "rationale": "adds laplacian, used in applications/legacy/electromagnetics/magneticFoam/magneticFoam.C; adds local Gamma (1 use)",
    "details": [],
    "why": "magneticFoam.C uses fvm::laplacian/fvi::div, not fvi::laplacian"
-  },
-  {
-   "key": "openfoam:627e2f90:src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.H:681",
-   "rationale": "uses interfaceBouCoeffs, defined above",
-   "details": [],
-   "why": "param type change, not a use"
   },
   {
    "key": "openfoam:b4342759:src/finiteVolume/fields/fvFieldSources/fvFieldSource/fvFieldSource.H:206",

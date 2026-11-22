@@ -639,7 +639,7 @@ fn an_annotation_added_above_a_method_does_not_add_it() {
         "class A {\n\n\tstatic void assertNotSame(Object a, Object b) {\n\t\treturn;\n\t}\n}\n",
         "class A {\n\n\t@SuppressWarnings(\"ReferenceEquality\")\n\tstatic void assertNotSame(Object a, Object b) {\n\t\treturn;\n\t}\n}\n",
     );
-    assert_eq!(hs[0].rationale, "changes annotations of assertNotSame");
+    assert_eq!(hs[0].rationale, "changes assertNotSame");
 }
 
 /// curl e13362c2 test_17_ssl_use.py: `@dataclass` on an existing class.
@@ -677,6 +677,137 @@ fn a_redeclared_local_counts_only_its_own_uses() {
     assert!(
         hs.iter()
             .any(|h| h.rationale == "adds local pkgVersion (2 uses)"),
+        "{:?}",
+        hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
+    );
+}
+
+/// openfoam 2ec91f84 kOmegaSSTBase.C: the parameters of a signature being
+/// retyped are declared there, not used from the function `F2` above.
+#[test]
+fn a_parameter_in_a_retyped_signature_is_not_a_use() {
+    let f = |t: &str| {
+        format!(
+            "template<class M>\ntmp<{t}>\nK<M>::F2() const\n{{\n    return a;\n}}\n\n\
+             template<class M>\ntmp<{t}>\nK<M>::epsilonByk\n(\n    const {t}& F1,\n    const {t}& F2\n) const\n{{\n    return b;\n}}\n"
+        )
+    };
+    let hs = hunks("k.C", &f("volScalarField"), &f("volInternalScalarField"));
+    assert!(
+        hs.iter().all(|h| !h.rationale.starts_with("uses F2")),
+        "{:?}",
+        hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
+    );
+}
+
+/// buildtheworld e9d91fe2 used_repos.yaml: `user` is a key many entries have;
+/// naming the one file it came from is a guess.
+#[test]
+fn a_repeated_yaml_key_is_not_claimed_moved() {
+    let out = run(json!({"changes": [
+        {"path": "30.yaml",
+         "old": "- name: a\n  user: pyyaml-team\n- name: b\n",
+         "new": "- name: b\n"},
+        {"path": "used.yaml",
+         "old": "- name: c\n",
+         "new": "- name: c\n- name: d\n  user: pyyaml-team\n- name: e\n  user: pyyaml-team\n"}
+    ]}));
+    let r = rationales(&out);
+    assert!(r.iter().all(|x| !x.starts_with("moves")), "{r:?}");
+}
+
+/// curl e1450d8f-era CMake/CurlTests.c: re-indenting an `#include` in place
+/// moves nothing.
+#[test]
+fn a_reindented_include_is_formatting_only() {
+    let hs = hunks(
+        "CurlTests.c",
+        "#ifdef HAVE_X\n  #include <sys/types.h>\n#endif\nint main(void) { return 0; }\n",
+        "#ifdef HAVE_X\n#include <sys/types.h>\n#endif\nint main(void) { return 0; }\n",
+    );
+    assert_eq!(rationale_at(&hs, 2), "formatting only");
+}
+
+/// curl 7e7ee16d cli_ws_write_err.c: the hunk that opens a new `#ifndef`
+/// guard adds it.
+#[test]
+fn a_hunk_that_opens_a_guard_adds_it() {
+    let func = |n: usize| {
+        let body: String = (0..30).map(|i| format!("  x{n}_{i} = {i};\n")).collect();
+        format!("static int f{n}(void)\n{{\n{body}  return 0;\n}}\n\n")
+    };
+    let new = format!(
+        "#include \"first.h\"\n\n#ifndef CURL_DISABLE_WEBSOCKETS\n\n{}{}#endif\n",
+        func(1),
+        func(2)
+    );
+    let hs = hunks("cli_ws_write_err.c", "", &new);
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.starts_with("edits #ifndef")), "{r:?}");
+}
+
+/// tasks-3uv.167 branch review. A return annotation sits in a signature's
+/// header too, and what it names is a use.
+#[test]
+fn a_return_annotation_still_uses_the_class_added_above() {
+    let hs = hunks(
+        "m.py",
+        "def f(\n    x,\n) -> int:\n    return 1\n",
+        "class Foo:\n    pass\n\n\ndef f(\n    x,\n) -> Foo:\n    return 1\n",
+    );
+    assert_eq!(rationale_at(&hs, 3), "uses Foo, added above");
+}
+
+/// a glob binds no name: `super` and `crate` are path words
+#[test]
+fn a_glob_import_binds_no_path_word() {
+    for use_ in ["use super::*;", "use crate::*;", "use a::b::*;"] {
+        let hs = hunks("lib.rs", "fn f() {}\n", &format!("{use_}\n\nfn f() {{}}\n"));
+        let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+        assert!(
+            r.iter()
+                .all(|x| !["super", "crate", "b"].iter().any(|w| x.ends_with(w))),
+            "{use_}: {r:?}"
+        );
+    }
+}
+
+/// the same words in a different pairing are not a reorder
+#[test]
+fn swapping_names_between_use_statements_is_not_formatting() {
+    let hs = hunks(
+        "lib.rs",
+        "use a::b;\nuse c::d;\n\nfn f() {}\n",
+        "use a::d;\nuse c::b;\n\nfn f() {}\n",
+    );
+    assert_ne!(rationale_at(&hs, 1), "formatting only");
+}
+
+/// php scopes a variable to its function: the second assignment is the same
+/// variable, so its uses are all of them
+#[test]
+fn a_php_variable_assigned_in_two_blocks_counts_every_use() {
+    let fill = "    echo 0;\n".repeat(6);
+    let old = format!("<?php\nfunction p($a) {{\n    if ($a) {{\n        skip();\n    }}\n{fill}    if (!$a) {{\n        skip();\n    }}\n}}\n");
+    let new = format!("<?php\nfunction p($a) {{\n    if ($a) {{\n        $v = 1;\n        echo $v;\n        log($v);\n    }}\n{fill}    if (!$a) {{\n        $v = 2;\n        echo $v;\n        log($v);\n    }}\n}}\n");
+    let hs = hunks("a.php", &old, &new);
+    assert!(
+        hs.iter().any(|h| h.rationale == "adds local $v (4 uses)"),
+        "{:?}",
+        hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
+    );
+}
+
+/// a deleted `other::foo` line is not the import `a::foo` that is still there
+#[test]
+fn a_dropped_duplicate_name_is_not_a_move() {
+    let hs = hunks(
+        "lib.rs",
+        "use std::{\n    a::foo,\n    other::foo,\n    io,\n};\n",
+        "use std::{\n    a::foo,\n    io,\n};\n",
+    );
+    assert!(
+        hs.iter().all(|h| h.rationale != "moves import foo"),
         "{:?}",
         hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
     );

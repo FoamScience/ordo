@@ -1022,7 +1022,7 @@ fn old_member_keys(spec: &LangSpec, change: &Change) -> HashSet<String> {
 fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges> {
     let n = symbols.len();
     let mut changed: Vec<FileChanges> = (0..n).map(|_| FileChanges::default()).collect();
-    let appeared = appeared_defs(symbols);
+    let appeared = appeared_defs(symbols, paths);
     // A def several files lose and one file gains has no single origin, and
     // naming whichever source came last is how a move got a wrong "from".
     let mut sources: HashMap<(usize, String), usize> = HashMap::new();
@@ -1035,7 +1035,14 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
         added_d.sort();
         let ren = renames(fs, &removed_d, &added_d);
         let renamed_old: HashSet<String> = ren.values().cloned().collect();
-        let outs = moves_out(fs, fi, &removed_d, &renamed_old, &appeared);
+        let outs = moves_out(
+            fs,
+            fi,
+            &removed_d,
+            &renamed_old,
+            &appeared,
+            is_data_path(&paths[fi]),
+        );
         for (name, tgt) in &outs {
             *sources.entry((*tgt, name.clone())).or_default() += 1;
         }
@@ -1061,6 +1068,23 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
     changed
 }
 
+fn is_data_path(path: &str) -> bool {
+    lang::for_path(path).is_some_and(|s| s.data)
+}
+
+/// the definitions of `list` whose name nothing else in it shares
+fn unique_defs(list: &[extract::Body]) -> HashSet<&str> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for (nm, _, _, _) in list {
+        *counts.entry(nm.as_str()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, n)| n == 1)
+        .map(|(nm, _)| nm)
+        .collect()
+}
+
 fn body_of<'a>(list: &'a [extract::Body], name: &str) -> Option<&'a str> {
     list.iter()
         .find(|(nm, _, _, _)| nm == name)
@@ -1074,11 +1098,15 @@ fn header_of<'a>(list: &'a [extract::Body], name: &str) -> Option<&'a str> {
 }
 
 /// P12.1: freshly-appeared new defs by (name, body) → file, for moves
-fn appeared_defs(symbols: &[FileSymbols]) -> HashMap<(String, String), usize> {
+fn appeared_defs(symbols: &[FileSymbols], paths: &[String]) -> HashMap<(String, String), usize> {
     let mut appeared: HashMap<(String, String), Option<usize>> = HashMap::new();
     for (fi, fs) in symbols.iter().enumerate() {
+        let unique = is_data_path(&paths[fi]).then(|| unique_defs(&fs.new_body));
         for (name, _, body, _) in &fs.new_body {
-            if body.len() >= 8 && !fs.old_defs.contains(name) {
+            if body.len() >= 8
+                && !fs.old_defs.contains(name)
+                && unique.as_ref().is_none_or(|u| u.contains(name.as_str()))
+            {
                 // Two files receiving the same (name, body) name no
                 // destination: a yaml key with a common value, a boilerplate
                 // struct. Claiming the first is how a move ended up pointing
@@ -1201,9 +1229,15 @@ fn moves_out(
     removed: &[String],
     renamed_old: &HashSet<String>,
     appeared: &HashMap<(String, String), usize>,
+    data: bool,
 ) -> HashMap<String, usize> {
     let mut moved_out = HashMap::new();
+    let unique = data.then(|| unique_defs(&fs.old_body));
     for r in removed.iter().filter(|r| !renamed_old.contains(*r)) {
+        // a key repeated in a data file names no one place it came from
+        if unique.as_ref().is_some_and(|u| !u.contains(r.as_str())) {
+            continue;
+        }
         let rb = match body_of(&fs.old_body, r) {
             Some(b) if b.len() >= 8 => b,
             _ => continue,
