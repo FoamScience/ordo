@@ -2461,7 +2461,15 @@ fn build_change(change: &Change, full_context: bool) -> ChangeParts {
         }
     }
     if let Some(spec) = lang::for_path(&change.path) {
-        demote_mixed_imports(&raw, &mut sems, &new_lines, ext, new_doc.as_ref(), spec, &new);
+        demote_mixed_imports(
+            &raw,
+            &mut sems,
+            &new_lines,
+            ext,
+            new_doc.as_ref(),
+            spec,
+            &new,
+        );
         fill_details(&raw, &mut sems, (old, &new), spec);
         fill_single_changes(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
         intent::fill(&raw, &mut sems, (old.unwrap_or(""), &new), spec);
