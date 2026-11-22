@@ -40,7 +40,7 @@ fn declared(schema: &Value, path: &str) -> Vec<String> {
 /// cross-file use, a removal, a rule hit, a local binding that is used again
 /// (a `uses_at` entry), a definition that gained a loop (a `deltas` entry),
 /// a config edit whose changed keys produce `details`, and hunch's guess,
-/// which un-hides the import-only new file.
+/// which hides the comment-only edit to a file with recent fixes.
 fn rich() -> Input {
     serde_json::from_value(serde_json::json!({
         "changes": [
@@ -64,7 +64,7 @@ fn rich() -> Input {
               "new": "name: lint\n# runs every night\ncommand: ruff check .\n" }
         ],
         "history": { "at": 1_700_000_000_i64, "commits": (0..20_i64).map(|i| serde_json::json!({
-            "time": 1_700_000_000_i64 - (i + 1) * 86_400,
+            "time": 1_700_000_000_i64 - (i + 1) * 5 * 86_400,
             "subject": if i < 6 { "fix: a crash" } else { "ci: tidy" },
             "paths": ["ci/jobs.yaml"]
         })).collect::<Vec<_>>() },
