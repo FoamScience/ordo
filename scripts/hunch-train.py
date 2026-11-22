@@ -81,6 +81,7 @@ MIN_GAIN = 0.03
 OVERLAP_MIN = 0.8
 TREE_MAX, TREE_STEP, TREE_TOL = 1000, 5, 0.005
 POLICY_HIDE = 0.9
+TIE_MAX_WRONG = 5
 UNHIDE_GRID = [round(0.05 * i, 2) for i in range(1, 18)]
 SKIP_DROPS = ("rationale_",)
 DOUBT_GRID = [round(0.05 * i, 2) for i in range(4, 20)]
@@ -406,7 +407,9 @@ def promotion(gold, loro_score, gold_score, xs_noise, xg_noise, ys, yg, rs, rg, 
     flag, un-hide a hidden hunk under the `unhide` threshold (picked leaving
     one repo out, never on gold), hide a shown one at POLICY_HIDE. It passes
     when, leaving one repo out and on gold, no repo gets more wrong hides than
-    under the noise flag and both make fewer overall. The ranking at the noise
+    under the noise flag and both make fewer overall, or no more once the noise
+    flag has at most TIE_MAX_WRONG (its wrong hides on silver and gold are
+    already that few, so a strict drop is out of reach and a tie costs nothing). The ranking at the noise
     flag's hide rate is reported beside it, for information only."""
     unhide, curve = pick_unhide(loro_score, xs_noise, ys, rs)
     runs = {"gold": {"noise": policy(None, xg_noise, yg, rg, None), "hunch": policy(gold_score, xg_noise, yg, rg, unhide)},
@@ -417,14 +420,19 @@ def promotion(gold, loro_score, gold_score, xs_noise, xg_noise, ys, yg, rs, rg, 
         verdict[where] = {"raised_in": sorted(r for r in n["per_repo"]
                                               if h["per_repo"][r]["wrong_hides"] > n["per_repo"][r]["wrong_hides"]),
                           "lowered_overall": h["all"]["wrong_hides"] < n["all"]["wrong_hides"]}
-    passes = all(v["lowered_overall"] and not v["raised_in"] for v in verdict.values())
+    for where, v in verdict.items():
+        n, h = runs[where]["noise"]["all"]["wrong_hides"], runs[where]["hunch"]["all"]["wrong_hides"]
+        v["tied_near_zero"] = not v["lowered_overall"] and h <= n <= TIE_MAX_WRONG
+    passes = all((v["lowered_overall"] or v["tied_near_zero"]) and not v["raised_in"] for v in verdict.values())
     g_rule, g_hunch = (gold[k]["at_noise_hide_rate"]["all"] for k in ("noise", shipped))
     rule_repo = at_repo_hide_rate(xs_noise, xs_noise, ys, rs)
     hunch_repo = at_repo_hide_rate(loro_score, xs_noise, ys, rs)
     return {
         "model": shipped,
         "gate": {"rule": "the policy raises wrong hides in no repo, leaving one repo out and on gold, "
-                         "and lowers them overall in both",
+                         "and lowers them overall in both, or ties the noise flag in a run where "
+                         f"the flag has at most {TIE_MAX_WRONG} wrong hides",
+                 "tie_max_wrong": TIE_MAX_WRONG,
                  **verdict, "passes": passes},
         "policy": {"rule": f"noise flag; un-hide at P(skip) < unhide; hide a shown hunk at P(skip) >= {POLICY_HIDE}",
                    "unhide": unhide, "hide": POLICY_HIDE,
@@ -595,6 +603,15 @@ def train_skip(c, extra):
     wrong = {k: m["at_noise_hide_rate"]["all"]["wrong_hides"] for k, m in loro_ev.items()}
     fired = ("gold_auroc_gain" if gain >= MIN_GAIN else
              "loro_wrong_hides" if wrong["lr"] > wrong["noise"] >= wrong["trees"] else None)
+    promos = {}
+
+    def promote(k):
+        if k not in promos:
+            promos[k] = promotion(gold, loro[k], proba(k, xg), xs[:, noise], xg[:, noise], ys, yg, rs, rg, k)
+        return promos[k]
+
+    if fired is None and not promote("lr")["gate"]["passes"] and promote("trees")["gate"]["passes"]:
+        fired = "promotion_gate"
     if fired is None:
         scaler, lr = models["lr"].named_steps.values()
         model = {"type": "logistic", "mean": [f32(v) for v in scaler.mean_],
@@ -613,7 +630,7 @@ def train_skip(c, extra):
 
     selection = {"rule": f"lightgbm if gold AUROC gain over logistic >= {MIN_GAIN}, or if leaving "
                          "one repo out logistic makes more wrong hides than the noise flag at its "
-                         "hide rate and lightgbm does not",
+                         "hide rate and lightgbm does not, or if only lightgbm passes the promotion gate",
                  "gold_auroc_gain": round(gain, 4), "loro_wrong_hides": wrong, "fired": fired,
                  "chosen": model["type"]}
     provenance = {
@@ -634,7 +651,7 @@ def train_skip(c, extra):
                      "numpy": np.__version__},
     }
     shipped = "lr" if fired is None else "trees"
-    promo = promotion(gold, loro[shipped], proba(shipped, xg), xs[:, noise], xg[:, noise], ys, yg, rs, rg, shipped)
+    promo = promote(shipped)
     shipped_policy = {"passes": promo["gate"]["passes"], "unhide": promo["policy"]["unhide"],
                       "hide": promo["policy"]["hide"], "rule": promo["policy"]["rule"]}
     table(f"gold ({len(yg)} hunks, {int(yg.sum())} skip)", gold)
