@@ -2107,6 +2107,8 @@ struct DefVerbs<'a> {
     signature_changed: Vec<&'a str>,
     /// an annotation or decorator added to a definition the file had
     marked: Vec<&'a str>,
+    /// decorators of a definition whose own line another hunk adds
+    decorated: Vec<&'a str>,
     type_changed: Vec<&'a str>,
 }
 
@@ -2125,7 +2127,27 @@ fn classify_defs<'a>(
     // existing name, a second `impl` block. The name may be old; this
     // occurrence of it is not (see `def_verb`).
     for &d in real {
-        if let Some(src) = changed.and_then(|c| c.moved_in.get(d)) {
+        // a decorator or annotation added above a definition the file
+        // already had marks it differently; the name is not new. A hunk of
+        // decorators alone skips the moved / renamed / extracted checks
+        // below on purpose: whatever happened to the definition happened in
+        // the hunk that holds its `def` line.
+        let [o0, o1] = s.old_range;
+        let inserted_marks = s.annotations_only && o0 > o1;
+        let marked = inserted_marks
+            && ctx.symbols.get(my_file).is_some_and(|fs| {
+                fs.old_rows
+                    .0
+                    .iter()
+                    .any(|(n, r)| n == d && (o0..=o1.max(o0) + 3).contains(r))
+            });
+        if marked {
+            v.marked.push(d);
+        } else if inserted_marks {
+            // the definition's own line sits in a neighbouring hunk of the
+            // same insertion; this one only carries its decorators
+            v.decorated.push(d);
+        } else if let Some(src) = changed.and_then(|c| c.moved_in.get(d)) {
             v.moved.push((d, src.as_str()));
         } else if let Some(old) = changed.and_then(|c| c.rename.get(d)) {
             v.renamed.push((old.as_str(), d));
@@ -2133,21 +2155,6 @@ fn classify_defs<'a>(
             v.extracted.push((d, src.as_str()));
         } else {
             let new_range = [s.start_row + 1, s.start_row + s.new_len];
-            // a decorator or annotation added above a definition the file
-            // already had marks it differently; the name is not new
-            let [o0, o1] = s.old_range;
-            let marked = s.annotations_only
-                && o0 > o1
-                && ctx.symbols.get(my_file).is_some_and(|fs| {
-                    fs.old_rows
-                        .0
-                        .iter()
-                        .any(|(n, r)| n == d && (o0..=o1.max(o0) + 3).contains(r))
-                });
-            if marked {
-                v.marked.push(d);
-                continue;
-            }
             match ctx.def_verb(my_file, d, s.is_type, s.old_range, new_range) {
                 "adds" => v.added.push(d),
                 "adds body to" => v.bodied.push(d),
@@ -2206,6 +2213,9 @@ fn def_frags(v: &DefVerbs, s: &HunkSem, prose: bool) -> Vec<String> {
     frags.extend(valued);
     if !v.marked.is_empty() {
         frags.push(format!("changes {}", name_list(&v.marked)));
+    }
+    if !v.decorated.is_empty() {
+        frags.push(format!("adds decorator to {}", name_list(&v.decorated)));
     }
     // "changes signature of f" only for something that *has* a signature.
     // A value touched on its own declaration line — a cmake `set()`, a
