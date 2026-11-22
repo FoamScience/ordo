@@ -50,6 +50,9 @@ pub struct HunkSem {
     /// imports. On a deletion-only import hunk (no new side) it holds instead
     /// the names that left, filled in by `classify_imports`.
     pub imports: Vec<String>,
+    /// on a deletion-only import hunk: the names it dropped that the new
+    /// side still imports, so the hunk moved them rather than removing them
+    pub imports_moved_out: Vec<String>,
     pub uses: Vec<String>,
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
@@ -95,6 +98,9 @@ pub struct HunkSem {
     /// the hunk is a pure-import hunk whose statements all existed in the old
     /// file: the import moved rather than arriving or changing
     pub import_moved: bool,
+    /// an import hunk whose two sides hold the same words: a sorted or
+    /// re-wrapped import list, nothing arrived or left
+    pub import_reordered: bool,
     /// an import-category hunk that touches a re-export (see `is_reexport`):
     /// it widens or narrows the module's API, so it is not noise
     pub reexport: bool,
@@ -159,6 +165,7 @@ impl HunkSem {
             in_header: false,
             defines: vec![],
             imports: vec![],
+            imports_moved_out: vec![],
             uses: vec![],
             member_uses: vec![],
             own_bound: vec![],
@@ -175,6 +182,7 @@ impl HunkSem {
             symbols: vec![],
             local_defs: vec![],
             import_moved: false,
+            import_reordered: false,
             reexport: false,
             priority: 0,
             bindings: vec![],
@@ -995,6 +1003,7 @@ impl Parsed<'_> {
                 .map(|(_, name, s, e)| (name.clone(), *s, *e))
                 .collect(),
             import_moved: false,
+            import_reordered: false,
             reexport: (r0..=r1).any(|r| self.c.reexport_rows.contains(&r)),
             priority: 0,
             bindings: self.bindings(r0, r1),
@@ -1036,6 +1045,7 @@ impl Parsed<'_> {
             deltas: vec![],
             defines,
             imports,
+            imports_moved_out: vec![],
             enclosing,
         }
     }
@@ -1380,12 +1390,38 @@ impl Parsed<'_> {
                     _ => false,
                 })
                 .min_by_key(|d| d.e - d.s);
+            // an annotated attribute in a class body belongs to the class
+            if scope_def.is_some_and(|d| c.type_rows.contains(&d.s)) {
+                continue;
+            }
             let (lo, hi) = scope_def.map(|d| (d.s, d.e)).unwrap_or((0, usize::MAX));
+            // the same name declared again in this scope (sibling blocks each
+            // with their own `const x`) is another binding: a use counts for
+            // the nearest declaration above it
+            let redeclared: Vec<usize> = c
+                .local_binds
+                .iter()
+                .filter(|(r, n)| n == name && *r >= lo && *r <= hi)
+                .map(|(r, _)| *r)
+                .collect();
+            let block_scoped = !self.spec.function_scoped;
+            let owner = |r: usize| {
+                redeclared
+                    .iter()
+                    .copied()
+                    .filter(|&b| b <= r)
+                    .max()
+                    .or_else(|| redeclared.iter().copied().min())
+            };
             let uses_here: Vec<(usize, usize)> = c
                 .all_idents
                 .iter()
                 .filter(|(r, i, id)| {
-                    c.uses[*i].1 == *name && *r >= lo && *r <= hi && !c.bind_ids.contains(id)
+                    c.uses[*i].1 == *name
+                        && *r >= lo
+                        && *r <= hi
+                        && !c.bind_ids.contains(id)
+                        && (!block_scoped || redeclared.len() < 2 || owner(*r) == Some(*row))
                 })
                 .map(|(r, _, id)| (r + 1, *id))
                 .collect();
@@ -5246,10 +5282,12 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
     let row = node.start_position().row + 1; // 1-based
     let import = !in_import && import_like(node, src, spec);
     if import {
-        let names = import_bound_names(node, src, spec)
-            .map(|names| names.into_iter().map(|(_, n)| n).collect())
-            .unwrap_or_else(|| ident_texts(node, src));
-        o.imports.extend(names.into_iter().map(|n| (n, row)));
+        match import_bound_names(node, src, spec) {
+            Some(names) => o.imports.extend(names.into_iter().map(|(r, n)| (n, r + 1))),
+            None => o
+                .imports
+                .extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
+        }
     }
     let def = is_def_node(node, spec)
         .then(|| node_name(node, src))
@@ -5542,6 +5580,17 @@ pub fn import_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
     import_rows_where(spec, content, |_| true)
 }
 
+/// The 1-based `[first, last]` rows of every import statement in a file.
+pub fn import_spans(spec: &LangSpec, content: &str) -> Vec<[usize; 2]> {
+    let mut out = vec![];
+    if let Some(tree) = lang::parse(spec, content) {
+        each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
+            out.push([n.start_position().row + 1, n.end_position().row + 1]);
+        });
+    }
+    out
+}
+
 /// The 1-based rows every re-export (see `is_reexport`) in a file covers.
 pub fn reexport_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
     import_rows_where(spec, content, |n| is_reexport(n, content.as_bytes(), spec))
@@ -5690,6 +5739,11 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
             let text = unquote(path.utf8_text(src).ok()?.trim());
             (!text.is_empty()).then(|| vec![(row, text.to_string())])
         }
+        ("rust", "use_declaration") => {
+            let mut names = vec![];
+            rust_use_names(node.child_by_field_name("argument")?, src, None, &mut names);
+            Some(names.into_iter().map(|n| (row, n)).collect())
+        }
         ("go", "import_spec") => Some(go_import_name(node, src).into_iter().collect()),
         ("go", "import_declaration") => Some(go_import_names(node, src)),
         ("python" | "xonsh", "import_statement" | "import_from_statement") => {
@@ -5776,6 +5830,35 @@ fn go_import_names(node: Node, src: &[u8]) -> Vec<(usize, String)> {
         }
     }
     out
+}
+
+/// rust: the names a `use` tree binds, not the path words it walks through:
+/// `use a::b::{c, d as e, self}` binds `c`, `e` and `b`. `prefix` is the last
+/// segment of the path above, which a bare `self` stands for.
+fn rust_use_names(node: Node, src: &[u8], prefix: Option<&str>, out: &mut Vec<String>) {
+    let text = |n: Node| n.utf8_text(src).unwrap_or_default().to_string();
+    let last_segment = |n: Node| n.child_by_field_name("name").map_or_else(|| text(n), text);
+    match node.kind() {
+        "self" => out.extend(prefix.map(str::to_string)),
+        "crate" | "super" => {}
+        "scoped_identifier" => out.push(last_segment(node)),
+        "scoped_use_list" => {
+            let path = node.child_by_field_name("path").map(last_segment);
+            if let Some(list) = node.child_by_field_name("list") {
+                rust_use_names(list, src, path.as_deref().or(prefix), out);
+            }
+        }
+        "use_list" => {
+            let mut cur = node.walk();
+            for ch in node.named_children(&mut cur) {
+                rust_use_names(ch, src, prefix, out);
+            }
+        }
+        "use_as_clause" => out.extend(node.child_by_field_name("alias").map(text)),
+        // a glob binds nothing by name
+        "use_wildcard" => {}
+        _ => out.push(text(node)),
+    }
 }
 
 /// python: `import a.b` binds `a`; `from a.b import c, d as e` binds c, e

@@ -884,13 +884,13 @@ fn re_exports_are_shown_whether_added_or_removed() {
             "lib.rs",
             "pub use a::X;\n",
             "pub use a::X;\npub use b::Y;\n",
-            "adds re-export Y, b",
+            "adds re-export Y",
         ),
         (
             "lib.rs",
             "pub use a::X;\npub use b::Y;\n",
             "pub use a::X;\n",
-            "removes re-export Y, b",
+            "removes re-export Y",
         ),
         (
             "b.ts",

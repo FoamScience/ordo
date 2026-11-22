@@ -1856,7 +1856,9 @@ fn rationale_for(i: usize, sem: &[&HunkSem], group_idx: &[usize], ctx: &RatCtx) 
 // names the import it moved, like the half that landed does: "removes 1 line"
 // would claim something left, and "formatting only" hid that it moved at all.
 fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> {
+    let reordered = s.category == Category::Import && s.import_reordered && !s.import_moved;
     let import_speaks = s.category == Category::Import
+        && !reordered
         && (!s.new_empty
             || !s.imports.is_empty()
             || ctx.changed.get(my_file).is_some_and(|c| {
@@ -1869,6 +1871,10 @@ fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> 
     }
     if let Some(moved) = moved_import_phrase(s, ctx, my_file) {
         return Some(moved);
+    }
+    if !s.imports_moved_out.is_empty() {
+        let names: Vec<&str> = s.imports_moved_out.iter().map(String::as_str).collect();
+        return Some(format!("moves import {}", name_list(&names)));
     }
     Some(if crate::lang::is_generated_path(&ctx.paths[my_file]) {
         "generated file".to_string()
@@ -1924,9 +1930,11 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
                 None => gone.push(n),
             }
         }
+        let moved: Vec<&str> = s.imports_moved_out.iter().map(String::as_str).collect();
         let frags: Vec<String> = import_rename_phrase(&pairs)
             .into_iter()
             .chain((!gone.is_empty()).then(|| format!("removes {noun} {}", name_list(&gone))))
+            .chain((!moved.is_empty()).then(|| format!("moves {noun} {}", name_list(&moved))))
             .collect();
         return Some(join_frags(&frags));
     }
@@ -1947,9 +1955,78 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
     let verb = match (s.import_moved, all_new) {
         (true, _) => "moves",
         (false, true) => "adds",
-        (false, false) => "changes",
+        (false, false) => {
+            if let Some(phrase) = changed_import_phrase(s, ctx, my_file, noun, &names) {
+                return Some(phrase);
+            }
+            "changes"
+        }
     };
     Some(format!("{verb} {noun} {}", name_list(&names)))
+}
+
+/// The imports on the hunk's old rows, which the statement-start rows of a
+/// multi-line import leave unnamed.
+fn old_import_names<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Vec<&'c str> {
+    let Some(fs) = ctx.symbols.get(my_file) else {
+        return vec![];
+    };
+    let [o0, o1] = s.old_range;
+    let mut names: Vec<&str> = fs
+        .old_rows
+        .1
+        .iter()
+        .filter(|(_, row)| (o0..=o1).contains(row))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    names.dedup();
+    names
+}
+
+/// What an import hunk that touched a statement did to the names on it: only
+/// the names that arrived or left are said, never the ones it kept.
+fn changed_import_phrase(
+    s: &HunkSem,
+    ctx: &RatCtx,
+    my_file: usize,
+    noun: &str,
+    names: &[&str],
+) -> Option<String> {
+    let before = old_import_names(s, ctx, my_file);
+    if before.is_empty() {
+        return None;
+    }
+    let fs = ctx.symbols.get(my_file)?;
+    let (mut added, mut moved, mut removed) = (vec![], vec![], vec![]);
+    for &n in names.iter().filter(|n| !before.contains(n)) {
+        if fs.old_imports.contains(n) {
+            moved.push(n);
+        } else {
+            added.push(n);
+        }
+    }
+    for &n in before.iter().filter(|n| !names.contains(n)) {
+        if fs.new_imports.contains(n) {
+            moved.push(n);
+        } else {
+            removed.push(n);
+        }
+    }
+    moved.sort_unstable();
+    moved.dedup();
+    // naming the kept names beside an arrival is the old wording; only an
+    // import that also lost something has a claim to correct here
+    if moved.is_empty() && removed.is_empty() {
+        return None;
+    }
+    added.sort_unstable();
+    added.dedup();
+    let frags: Vec<String> = [("adds", added), ("moves", moved), ("removes", removed)]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(verb, v)| format!("{verb} {noun} {}", name_list(&v)))
+        .collect();
+    (!frags.is_empty()).then(|| join_frags(&frags))
 }
 
 /// The old imports on the hunk's own old rows that the new side no longer
@@ -2053,7 +2130,22 @@ fn classify_defs<'a>(
             v.extracted.push((d, src.as_str()));
         } else {
             let new_range = [s.start_row + 1, s.start_row + s.new_len];
-            match ctx.def_verb(my_file, d, s.is_type, s.old_range, new_range) {
+            // a decorator or annotation added above a definition the file
+            // already had marks it differently; the name is not new
+            let [o0, o1] = s.old_range;
+            let marked = s.annotations_only
+                && ctx.symbols.get(my_file).is_some_and(|fs| {
+                    fs.old_rows
+                        .0
+                        .iter()
+                        .any(|(n, r)| n == d && (o0..=o1.max(o0) + 3).contains(r))
+                });
+            let verb = if marked {
+                "changes signature of"
+            } else {
+                ctx.def_verb(my_file, d, s.is_type, s.old_range, new_range)
+            };
+            match verb {
                 "adds" => v.added.push(d),
                 "adds body to" => v.bodied.push(d),
                 "adds type" => v.added_types.push(d),
