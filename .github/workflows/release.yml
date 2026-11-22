@@ -140,36 +140,17 @@ jobs:
     needs: [release-please, build]
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
-          registry-url: https://registry.npmjs.org
       - uses: actions/download-artifact@v8
         with:
           pattern: bin-*
           path: bins
       - name: Stage
         run: node packaging/npm/stage.js "${{ needs.release-please.outputs.version || '0.0.0-dev' }}" bins out
-      - name: Publish
-        if: needs.release-please.outputs.created == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          # the platform packages first: ordo-diff depends on them. A re-run
-          # after a failure skips what is already up.
-          for pkg in out/ordo-diff-*/ out/ordo-diff/; do
-            spec=$(node -p "const p = require('./$pkg/package.json'); p.name + '@' + p.version")
-            if npm view "$spec" version > /dev/null 2>&1; then
-              echo "$spec is already on npm"
-            else
-              npm publish --provenance --access public "$pkg"
-            fi
-          done
 
   wheels:
     needs: [release-please, build]
@@ -201,19 +182,3 @@ jobs:
         with:
           name: wheels
           path: wheels/
-
-  pypi:
-    needs: [release-please, wheels]
-    if: always() && needs.wheels.result == 'success' && needs.release-please.outputs.created == 'true'
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: wheels
-          path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
