@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.7.0](https://github.com/FoamScience/ordo/compare/v0.6.0...v0.7.0) (2026-11-22)
+
+
+### Features
+
+* **corpus:** attention labels for gold (SZZ later_fix + Opus attention) ([6401ba3](https://github.com/FoamScience/ordo/commit/6401ba32248ad955edea81e16bbc1c8fcf198887))
+* **corpus:** extend the skip sample and merge new faithful labels without redrawing ([e62d972](https://github.com/FoamScience/ordo/commit/e62d9721d078cf58caf93d9938add7294f912f99))
+* **corpus:** gold audit re-run by claude-fable-5-2 on the 30 rows the refresh made stale; dropped sample key resampled ([2f2cf8c](https://github.com/FoamScience/ordo/commit/2f2cf8c528922873e454e5d0689dc984fe045f40))
+* **corpus:** gold audit sample labeled by claude-fable-5-2 in labels_audit ([e0c8b8c](https://github.com/FoamScience/ordo/commit/e0c8b8cdb336da01472ea9d90fd0dbc5cbcc36a6))
+* **corpus:** gold faithful relabelled by Opus under the clarified wording ([15a455d](https://github.com/FoamScience/ordo/commit/15a455d4ae2644ce349e7a6b58358ae6ec9680e2))
+* **corpus:** gold refreshed against the current engine, changed rows relabelled by Opus ([6a48dfc](https://github.com/FoamScience/ordo/commit/6a48dfcad4f2ff46c1b84d321eb55bc468ef02b8))
+* **corpus:** gold set labeled with should_skip ([3b6b4fe](https://github.com/FoamScience/ordo/commit/3b6b4fe8e0d3b82ce13699344015b93e140562f6))
+* **corpus:** mine GitHub and Gerrit review comments into per-hunk attention and later-fix labels ([a162369](https://github.com/FoamScience/ordo/commit/a162369c0507eaa3cd7e57f0f20beb6cb9e5832d))
+* **corpus:** rationale scoreboard re-scores faithful labels against the current engine ([23a38b4](https://github.com/FoamScience/ordo/commit/23a38b4b06a82ef48db0b29397f2433b32f4073f))
+* **engine:** --hunch applies the gated policy to noise flags and marks each change ([ed078b6](https://github.com/FoamScience/ordo/commit/ed078b63c1c936553bc56e6bf73e418c99a4c208))
+* export per-hunk hunch feature vectors with git history and a hashed schema ([ae804e6](https://github.com/FoamScience/ordo/commit/ae804e600cf61856f1739a541f3d77c0af224fd9))
+* **hunch:** --learning-curve retrains each head on label subsets and review repo counts ([8de50d5](https://github.com/FoamScience/ordo/commit/8de50d595fb8da91b170d5313a041a637e9ec537))
+* **hunch:** attention head orders the groups the def-&gt;use order freed under --hunch; gate passes (LORO .820 vs file position .559, gold .817 vs .500) ([4c6ae6b](https://github.com/FoamScience/ordo/commit/4c6ae6bb4991d675d369f7af6658130698a446a0))
+* **hunch:** faithful head as a shadow guess beside P(skip); doubt gate fails, so no rationale marker yet ([67b465a](https://github.com/FoamScience/ordo/commit/67b465aa933048fd50f6ed6518992529574e7213))
+* **hunch:** promotion gate tests the shipped policy; model records its thresholds and verdict ([1f93dfd](https://github.com/FoamScience/ordo/commit/1f93dfd5bd4a3751ae12be84bcc0c51318bb4b09))
+* **hunch:** review labels train the attention head as within-snapshot lambdarank, gated leave-one-repo-out on review repos ([e3e7894](https://github.com/FoamScience/ordo/commit/e3e78948c91067322c5b56d872b8f3eea8760636))
+* **hunch:** score later_fix on review hunks within each snapshot against file order and the previous model ([b54450f](https://github.com/FoamScience/ordo/commit/b54450feff956ce7847394ab8ecec0d4fdde160d))
+* **hunch:** shadow P(skip) guess from build-time model arrays, opt-in via --hunch and options.hunch ([2581117](https://github.com/FoamScience/ordo/commit/25811176e4a7914663f589f6c5284c2e4bba36c2))
+* **hunch:** skip promotion gate accepts a tie once the noise flag is near zero, and retrain ships lightgbm ([b923d34](https://github.com/FoamScience/ordo/commit/b923d34f3c3b54291d220a649ae723e02c9c28d1))
+* **hunch:** trainer reports the promotion gate (per-repo equal hide rate) and the promoted policy's numbers ([5f9323d](https://github.com/FoamScience/ordo/commit/5f9323d99199a813323aadcc79a9a70b4680db13))
+* per-definition readability deltas as rule conditions and a summary line ([0f1693a](https://github.com/FoamScience/ordo/commit/0f1693ab6d61f4a2d802ea3dd181fa3237590614))
+* per-definition readability deltas on json hunks, quoted in delta findings and shown in the web reviewer ([6839fc9](https://github.com/FoamScience/ordo/commit/6839fc999859797aa4cdf63168228c383bfdd184))
+* **php:** php support, $-spelled variables, properties used through $this, use and require as imports ([f356241](https://github.com/FoamScience/ordo/commit/f356241de64e02dd3956956a9270ef7d1f52fd0e))
+* **scripts:** attention-label computes SZZ later_fix and collects Opus 1-3 attention labels ([680ce0f](https://github.com/FoamScience/ordo/commit/680ce0fa6888ef781e47d1aa92c2042184c2f005))
+* **scripts:** corpus-fetch deepens clones to cover the hunch history window ([abe597f](https://github.com/FoamScience/ordo/commit/abe597f72e269a3c5ab98dd8958c4f5414496382))
+* **scripts:** faithful asks for nothing false or misleading; terse but true is faithful ([44cb5d5](https://github.com/FoamScience/ordo/commit/44cb5d511fad44aa65d25e71a202b4558755e7f2))
+* **scripts:** finding-sample labels catalog findings with Opus; finding-eval shows P(finding warranted) does not carry across repos ([d85cf74](https://github.com/FoamScience/ordo/commit/d85cf74cd7729819ea745991ab0d0428bad8a06f))
+* **scripts:** gold-label --audit-render/--audit-merge make the model audit reproducible ([c4b91f1](https://github.com/FoamScience/ordo/commit/c4b91f1ed904e1f039e07d5926c696c425b5de8d))
+* **scripts:** gold-label --audit-report for a model auditor's labels_audit, with rejected-pool counts ([53c3b90](https://github.com/FoamScience/ordo/commit/53c3b90604569517e35832cfe1420aa631c061cf))
+* **scripts:** gold-label audit re-audit mode keeps prior audits, --keys subset render, --audit-replace for dropped sample keys ([480d1c8](https://github.com/FoamScience/ordo/commit/480d1c8c2f995456dfa91f69146a92716c242754))
+* **scripts:** gold-sample --refresh reruns the engine on a labeled set and nulls stale labels ([de2608a](https://github.com/FoamScience/ordo/commit/de2608a871fc8ab951c46ddbf1a582129b73d566))
+* **scripts:** human audit mode for the gold judge with seeded sample and agreement report ([68ec7e8](https://github.com/FoamScience/ordo/commit/68ec7e8d99f59514e1d7543c745935544bf9bae0))
+* **scripts:** hunch history features follow renames ([bb07064](https://github.com/FoamScience/ordo/commit/bb07064f17b153e0c81f0f503d38356fa3ac6776))
+* **scripts:** hunch trainer for should_skip with logistic and LightGBM, writing src/hunch.json ([c09052d](https://github.com/FoamScience/ordo/commit/c09052daf4cb5fc08f5200152d94a91caf23fd74))
+* **scripts:** hunch-train holds gold out, matches drifted labels by overlap, picks trees on LORO wrong hides ([6ebe347](https://github.com/FoamScience/ordo/commit/6ebe347f7d2cad6d5ce3b381e4d5662743fcc558))
+* **scripts:** hunch-train weights extra labels by stratum, stops trees on LORO and ships a trimmed f32 model ([67a6f8a](https://github.com/FoamScience/ordo/commit/67a6f8ac7ed8a0463959baefce29dc79b8159481))
+* **scripts:** stratified should_skip sample of the judged sweep for Opus labels ([b70d811](https://github.com/FoamScience/ordo/commit/b70d811387aec9bd0870181295eaa2807b242e6a))
+* **scripts:** two-sided should_skip question for every hunk in the judge flow ([7262c55](https://github.com/FoamScience/ordo/commit/7262c559d5424197c5f73a96c69c9200fc55c1fa))
+* **web:** :dismiss a catalog finding; repeated dismissals suggest a per-repo rules.toml level ([c68c555](https://github.com/FoamScience/ordo/commit/c68c5558a7ab7ca9e7c1e3fbd5b629873da34ca8))
+
+
+### Bug Fixes
+
+* **engine:** re-exports are API, not import noise ([b371022](https://github.com/FoamScience/ordo/commit/b3710225026ad2a79d20eff8066cae81fc719723))
+* **hunch:** history excludes the change by topology, not timestamp ([6e98cff](https://github.com/FoamScience/ordo/commit/6e98cffbbf26bc95c636c5fc8f288d5fb887db1f))
+* **rationale:** a move with several candidate sources names none ([66cfddf](https://github.com/FoamScience/ordo/commit/66cfddf4cb82c54962b49fd62919d019e710cebe))
+* **rationale:** an import hunk's 'and N more' counts imports written whole inside it ([8d63f90](https://github.com/FoamScience/ordo/commit/8d63f9028aed7a767acdcb082c9c2a3998e2bba6))
+* **rationale:** an import swapped in place replaces, and imports beside code are not an import hunk ([d0d44b5](https://github.com/FoamScience/ordo/commit/d0d44b56d1784b85db6019cf40fee154824cace4))
+* **rationale:** self-check import, add, local and count claims against the engine's facts ([c55d7b9](https://github.com/FoamScience/ordo/commit/c55d7b918f5fdae93a7c8ba77193142dffe268c0))
+* **rationale:** self-check parameter uses, repeated data-file moves, reindented includes and guard adds ([a9f7ff7](https://github.com/FoamScience/ordo/commit/a9f7ff7fb6423f05e3d76693d9f2b11f45017970))
+* **scripts:** hunch history follows a rename made by the sampled commit itself ([4669459](https://github.com/FoamScience/ordo/commit/4669459332354b97376dc213db97301b516635b2))
+* slide ambiguous insert/delete hunks onto syntax boundaries ([407cd96](https://github.com/FoamScience/ordo/commit/407cd9631f58e8b1142e55d9476dfed1e98d4d63))
+* **web:** light :theme takes its base from the band when the page owns the text ([66cfdb9](https://github.com/FoamScience/ordo/commit/66cfdb948c417a2171b948fcd4fec06b0b7200ae))
+* **web:** summary padding, labelled next hunk, row text, dialog focus and listbox semantics ([590d56e](https://github.com/FoamScience/ordo/commit/590d56ebf33ec74fe459ba5d58470d5699c23331))
+
 ## [0.6.0](https://github.com/FoamScience/ordo/compare/v0.5.0...v0.6.0) (2026-11-10)
 
 
