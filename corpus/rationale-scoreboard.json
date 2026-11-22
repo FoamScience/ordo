@@ -3,33 +3,33 @@
  "unmatched": 0,
  "matched_by_overlap": 0,
  "surviving": {
-  "n": 8863,
-  "unfaithful": 282,
+  "n": 8653,
+  "unfaithful": 207,
   "by_verb": {
    "adds": {
-    "n": 2858,
-    "unfaithful": 97,
-    "rate": 0.0339
+    "n": 2824,
+    "unfaithful": 68,
+    "rate": 0.0241
    },
    "changes": {
-    "n": 946,
-    "unfaithful": 51,
-    "rate": 0.0539
-   },
-   "formatting": {
-    "n": 580,
-    "unfaithful": 40,
-    "rate": 0.069
+    "n": 795,
+    "unfaithful": 24,
+    "rate": 0.0302
    },
    "uses": {
     "n": 309,
     "unfaithful": 23,
     "rate": 0.0744
    },
+   "formatting": {
+    "n": 559,
+    "unfaithful": 22,
+    "rate": 0.0394
+   },
    "moves": {
-    "n": 308,
+    "n": 306,
     "unfaithful": 21,
-    "rate": 0.0682
+    "rate": 0.0686
    },
    "renames": {
     "n": 27,
@@ -42,7 +42,7 @@
     "rate": 0.0046
    },
    "removes": {
-    "n": 513,
+    "n": 512,
     "unfaithful": 10,
     "rate": 0.0195
    },
@@ -52,9 +52,9 @@
     "rate": 0.6429
    },
    "replaces": {
-    "n": 143,
-    "unfaithful": 7,
-    "rate": 0.049
+    "n": 142,
+    "unfaithful": 6,
+    "rate": 0.0423
    },
    "generated": {
     "n": 866,
@@ -114,49 +114,39 @@
   },
   "by_repo": {
    "execa": {
-    "n": 849,
-    "unfaithful": 52,
-    "rate": 0.0612
-   },
-   "excalidraw": {
-    "n": 904,
-    "unfaithful": 38,
-    "rate": 0.042
+    "n": 809,
+    "unfaithful": 45,
+    "rate": 0.0556
    },
    "lazy": {
-    "n": 920,
-    "unfaithful": 34,
-    "rate": 0.037
-   },
-   "click": {
-    "n": 854,
-    "unfaithful": 34,
-    "rate": 0.0398
+    "n": 919,
+    "unfaithful": 33,
+    "rate": 0.0359
    },
    "curl": {
-    "n": 748,
-    "unfaithful": 26,
-    "rate": 0.0348
+    "n": 734,
+    "unfaithful": 25,
+    "rate": 0.0341
    },
-   "junit5": {
-    "n": 670,
+   "click": {
+    "n": 842,
     "unfaithful": 23,
-    "rate": 0.0343
+    "rate": 0.0273
    },
    "ripgrep": {
-    "n": 551,
-    "unfaithful": 23,
-    "rate": 0.0417
-   },
-   "cobra": {
-    "n": 593,
+    "n": 485,
     "unfaithful": 14,
-    "rate": 0.0236
+    "rate": 0.0289
+   },
+   "excalidraw": {
+    "n": 851,
+    "unfaithful": 13,
+    "rate": 0.0153
    },
    "vue": {
-    "n": 963,
-    "unfaithful": 12,
-    "rate": 0.0125
+    "n": 962,
+    "unfaithful": 11,
+    "rate": 0.0114
    },
    "nvm": {
     "n": 494,
@@ -164,9 +154,19 @@
     "rate": 0.0202
    },
    "openfoam": {
-    "n": 777,
+    "n": 775,
     "unfaithful": 9,
     "rate": 0.0116
+   },
+   "junit5": {
+    "n": 656,
+    "unfaithful": 9,
+    "rate": 0.0137
+   },
+   "cobra": {
+    "n": 586,
+    "unfaithful": 8,
+    "rate": 0.0137
    },
    "buildtheworld": {
     "n": 540,
@@ -176,37 +176,53 @@
   }
  },
  "dropped": {
-  "n": 458,
-  "unfaithful": 72,
-  "faithful": 386,
+  "n": 668,
+  "unfaithful": 147,
+  "faithful": 521,
   "by_verb": {
    "adds": {
-    "n": 405,
-    "unfaithful": 64,
-    "rate": 0.158
-   },
-   "moves": {
-    "n": 36,
-    "unfaithful": 6,
-    "rate": 0.1667
-   },
-   "removes": {
-    "n": 9,
-    "unfaithful": 1,
-    "rate": 0.1111
+    "n": 439,
+    "unfaithful": 93,
+    "rate": 0.2118
    },
    "changes": {
-    "n": 8,
+    "n": 159,
+    "unfaithful": 28,
+    "rate": 0.1761
+   },
+   "formatting": {
+    "n": 21,
+    "unfaithful": 18,
+    "rate": 0.8571
+   },
+   "moves": {
+    "n": 38,
+    "unfaithful": 6,
+    "rate": 0.1579
+   },
+   "removes": {
+    "n": 10,
     "unfaithful": 1,
-    "rate": 0.125
+    "rate": 0.1
+   },
+   "replaces": {
+    "n": 1,
+    "unfaithful": 1,
+    "rate": 1.0
    }
   },
   "verb_changes": {
-   "adds -> replaces": 225,
+   "adds -> replaces": 226,
+   "changes -> formatting": 54,
    "moves -> adds": 36,
    "adds -> uses": 36,
-   "adds -> edits": 2,
-   "adds -> changes": 1
+   "changes -> removes": 35,
+   "changes -> adds": 32,
+   "adds -> changes": 18,
+   "changes -> moves": 18,
+   "formatting -> moves": 15,
+   "adds -> edits": 6,
+   "formatting -> removes": 6
   },
   "faithful_rows": [
    {
@@ -878,6 +894,30 @@
     "why": "imports and edit filename calls"
    },
    {
+    "key": "click:e94e8dc4:tests/test_termui.py:655",
+    "old": [
+     "adds type TextStreamWithoutBuffer, used by test_get_pager_file_keeps_text_stream_without_buffer.TextStreamWithoutBuffer.flush below; +1 more binding",
+     []
+    ],
+    "new": [
+     "adds type TextStreamWithoutBuffer, used by test_get_pager_file_keeps_text_stream_without_buffer.TextStreamWithoutBuffer.flush below",
+     []
+    ],
+    "why": "class and encoding added"
+   },
+   {
+    "key": "cobra:652c755d:cobra/cmd/helpers.go:21",
+    "old": [
+     "adds import cobra",
+     []
+    ],
+    "new": [
+     "replaces import template with cobra",
+     []
+    ],
+    "why": "adds cobra import; omits template removal"
+   },
+   {
     "key": "cobra:68b6b24f:flag_groups.go:1",
     "old": [
      "adds import flag, fmt, sort, and 1 more",
@@ -1094,6 +1134,162 @@
     "why": "new vdns include paths"
    },
    {
+    "key": "curl:8734b088:CMake/CurlTests.c:136",
+    "old": [
+     "changes import winsock2.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include indentation changed"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:163",
+    "old": [
+     "changes import sys/ioctl.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include whitespace change"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:178",
+    "old": [
+     "changes import winsock2.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line changed (whitespace)"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:199",
+    "old": [
+     "changes import sys/socket.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include indentation change"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:202",
+    "old": [
+     "changes import sys/ioctl.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "ioctl include reformatted"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:205",
+    "old": [
+     "changes import stropts.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line changed (whitespace)"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:226",
+    "old": [
+     "changes import sys/socket.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line changed (indent)"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:229",
+    "old": [
+     "changes import sys/ioctl.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line whitespace changed"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:232",
+    "old": [
+     "changes import stropts.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line changed"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:247",
+    "old": [
+     "changes import winsock2.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line reformatted"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:253",
+    "old": [
+     "changes import sys/socket.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line changed (indent only), not false"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:347",
+    "old": [
+     "changes import stdatomic.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include indentation change"
+   },
+   {
+    "key": "curl:8734b088:CMake/CurlTests.c:377",
+    "old": [
+     "changes import _mingw.h",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "include line changed (spacing)"
+   },
+   {
     "key": "curl:a5573105:lib/curl_ed25519.c:86",
     "old": [
      "adds import wolfssl/wolfcrypt/ed25519.h, wolfssl/wolfcrypt/error-crypt.h, wolfssl/wolfcrypt/random.h",
@@ -1104,6 +1300,18 @@
      []
     ],
     "why": "three wolfssl includes added"
+   },
+   {
+    "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/DropdownMenuContent.tsx:2",
+    "old": [
+     "changes import CLASSES, EVENT, KEYS, and 4 more",
+     []
+    ],
+    "new": [
+     "adds import CLASSES, useCallback; moves import EVENT, KEYS",
+     []
+    ],
+    "why": "import lines changed, count plausible"
    },
    {
     "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/DropdownMenuSubContent.tsx:1",
@@ -1160,7 +1368,7 @@
      []
     ],
     "new": [
-     "changes import DEFAULT_EXPORT_PADDING, EDITOR_LS_KEYS, THEME, and 2 more",
+     "moves import THEME, convertToExcalidrawElements, exportToCanvas",
      []
     ],
     "why": "THEME added to import; other new imports omitted, not false"
@@ -1188,6 +1396,18 @@
      []
     ],
     "why": "type imports, likely moved source"
+   },
+   {
+    "key": "excalidraw:320af405:packages/element/src/binding.ts:63",
+    "old": [
+     "changes import aabbForElement, elementCenterPoint",
+     []
+    ],
+    "new": [
+     "moves import elementCenterPoint",
+     []
+    ],
+    "why": "import line gains elementCenterPoint"
    },
    {
     "key": "excalidraw:339d3c37:excalidraw-app/components/ExportToExcalidrawPlus.tsx:8",
@@ -1224,6 +1444,18 @@
      []
     ],
     "why": "IconButton import replaces ToolButton"
+   },
+   {
+    "key": "excalidraw:339d3c37:packages/excalidraw/components/Actions.tsx:47",
+    "old": [
+     "changes import AppClassProperties, AppState, UIAppState",
+     []
+    ],
+    "new": [
+     "removes import AppProps",
+     []
+    ],
+    "why": "import statement changed"
    },
    {
     "key": "excalidraw:339d3c37:packages/excalidraw/components/FontPicker/FontPickerTrigger.tsx:8",
@@ -1298,6 +1530,30 @@
     "why": "both imports added"
    },
    {
+    "key": "excalidraw:47cbb5b6:packages/excalidraw/components/HintViewer.tsx:23",
+    "old": [
+     "changes import AppClassProperties, UIAppState",
+     []
+    ],
+    "new": [
+     "removes import Device",
+     []
+    ],
+    "why": "import line changed (Device dropped)"
+   },
+   {
+    "key": "excalidraw:47cbb5b6:packages/excalidraw/components/IconPicker.tsx:11",
+    "old": [
+     "changes import useEditorInterface, useExcalidrawContainer",
+     []
+    ],
+    "new": [
+     "adds import useEditorInterface; removes import useDevice",
+     []
+    ],
+    "why": "changes that import line"
+   },
+   {
     "key": "excalidraw:47cbb5b6:packages/excalidraw/components/LibraryMenuItems.tsx:35",
     "old": [
      "adds import useEditorInterface",
@@ -1322,6 +1578,18 @@
     "why": "useEditorInterface import added (replaces useDevice)"
    },
    {
+    "key": "excalidraw:47cbb5b6:packages/excalidraw/components/Sidebar/Sidebar.tsx:23",
+    "old": [
+     "changes import useEditorInterface, useExcalidrawSetAppState",
+     []
+    ],
+    "new": [
+     "adds import useEditorInterface; removes import useDevice",
+     []
+    ],
+    "why": "import changed"
+   },
+   {
     "key": "excalidraw:47cbb5b6:packages/excalidraw/components/dropdownMenu/DropdownMenuItemContentRadio.tsx:1",
     "old": [
      "adds import useEditorInterface",
@@ -1344,6 +1612,18 @@
      []
     ],
     "why": "new re-exports correct"
+   },
+   {
+    "key": "excalidraw:4c3d037f:packages/excalidraw/components/App.tsx:445",
+    "old": [
+     "changes import isPointHittingLink",
+     []
+    ],
+    "new": [
+     "removes import isPointHittingLinkIcon",
+     []
+    ],
+    "why": "import narrowed to isPointHittingLink"
    },
    {
     "key": "excalidraw:51ca8abd:packages/excalidraw/components/LayerUI.tsx:28",
@@ -1388,7 +1668,7 @@
      []
     ],
     "new": [
-     "changes import DEFAULT_CHART_COLOR_INDEX, ExcalidrawLineElement, ExcalidrawTextElement, and 6 more",
+     "adds import DEFAULT_CHART_COLOR_INDEX, ExcalidrawLineElement, ExcalidrawTextElement, and 4 more; removes import VALID_SPREADSHEET",
      []
     ],
     "why": "import changes; 8 names count fits"
@@ -1404,6 +1684,54 @@
      []
     ],
     "why": "imports added; count roughly right"
+   },
+   {
+    "key": "excalidraw:6c908553:excalidraw-app/App.tsx:51",
+    "old": [
+     "changes import bumpElementVersions, restoreAppState, restoreElements",
+     []
+    ],
+    "new": [
+     "adds import bumpElementVersions, restoreElements; removes import restore",
+     []
+    ],
+    "why": "import list changed"
+   },
+   {
+    "key": "excalidraw:6c908553:packages/excalidraw/data/blob.ts:22",
+    "old": [
+     "changes import restoreAppState, restoreElements, restoreLibraryItems",
+     []
+    ],
+    "new": [
+     "adds import restoreAppState, restoreElements; removes import restore",
+     []
+    ],
+    "why": "restore imports changed"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionZindex.tsx:1",
+    "old": [
+     "changes import CODES, KEYS, isDarwin",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "import changed, getShortcutKey dropped"
+   },
+   {
+    "key": "excalidraw:84e96e93:packages/element/src/binding.ts:36",
+    "old": [
+     "changes import getCenterForBounds, getElementBounds",
+     []
+    ],
+    "new": [
+     "moves import doBoundsIntersect",
+     []
+    ],
+    "why": "import changed; remaining names correct"
    },
    {
     "key": "excalidraw:92d25446:packages/excalidraw/tests/appStateHooks.test.tsx:1",
@@ -1442,6 +1770,78 @@
     "why": "import list changed, names correct"
    },
    {
+    "key": "excalidraw:b42b1a19:packages/excalidraw/lasso/index.ts:28",
+    "old": [
+     "changes import AnimatedTrail",
+     []
+    ],
+    "new": [
+     "removes import AnimationFrameHandler",
+     []
+    ],
+    "why": "AnimatedTrail import path changed; omission not false"
+   },
+   {
+    "key": "excalidraw:b6d80e42:packages/element/src/frame.ts:2",
+    "old": [
+     "changes import isPointWithinBounds, pointFrom, segmentsIntersectAt",
+     []
+    ],
+    "new": [
+     "adds import segmentsIntersectAt; removes import doLineSegmentsIntersect",
+     []
+    ],
+    "why": "import changed to include segmentsIntersectAt"
+   },
+   {
+    "key": "excalidraw:b6d80e42:packages/element/src/selection.ts:9",
+    "old": [
+     "changes import elementsOverlappingBBox, getElementAbsoluteCoords",
+     []
+    ],
+    "new": [
+     "adds import elementsOverlappingBBox; removes import boundsContainBounds, doBoundsIntersect, elementCenterPoint, and 3 more",
+     []
+    ],
+    "why": "import list changed, names correct"
+   },
+   {
+    "key": "excalidraw:b6d80e42:packages/excalidraw/index.tsx:401",
+    "old": [
+     "changes re-export elementsOverlappingBBox",
+     []
+    ],
+    "new": [
+     "removes re-export isElementInsideBBox, elementPartiallyOverlapsWithOrContainsBBox",
+     []
+    ],
+    "why": "re-export changed; terse"
+   },
+   {
+    "key": "excalidraw:b9a25540:packages/excalidraw/components/ColorPicker/ColorPicker.tsx:33",
+    "old": [
+     "changes import activeColorPickerSectionAtom",
+     []
+    ],
+    "new": [
+     "moves import isColorDark",
+     []
+    ],
+    "why": "import trimmed"
+   },
+   {
+    "key": "excalidraw:b9a25540:packages/excalidraw/components/ColorPicker/colorPickerUtils.ts:1",
+    "old": [
+     "changes import MAX_CUSTOM_COLORS_USED_IN_CANVAS",
+     []
+    ],
+    "new": [
+     "removes import isTransparent, tinycolor",
+     []
+    ],
+    "why": "import narrowed"
+   },
+   {
     "key": "excalidraw:c09e170b:packages/excalidraw/actions/actionDeselect.ts:1",
     "old": [
      "adds import getElementsInGroup, isSomeElementSelected, makeNextSelectedElementIds, and 1 more",
@@ -1452,6 +1852,30 @@
      []
     ],
     "why": "adds those imports"
+   },
+   {
+    "key": "excalidraw:c141960a:packages/common/src/utils.ts:3",
+    "old": [
+     "changes import FontFamilyValues, FontString",
+     []
+    ],
+    "new": [
+     "removes import ExcalidrawBindableElement",
+     []
+    ],
+    "why": "import trimmed"
+   },
+   {
+    "key": "excalidraw:c141960a:packages/element/src/linearElementEditor.ts:62",
+    "old": [
+     "changes import isArrowElement, isBindingElement, isElbowArrow",
+     []
+    ],
+    "new": [
+     "adds import isArrowElement; removes import isFixedPointBinding",
+     []
+    ],
+    "why": "import list changed"
    },
    {
     "key": "excalidraw:c141960a:packages/element/tests/binding.test.tsx:17",
@@ -1478,6 +1902,18 @@
     "why": "does add that import; removal omitted"
    },
    {
+    "key": "excalidraw:c141960a:packages/excalidraw/actions/actionFlip.ts:7",
+    "old": [
+     "changes import isArrowElement, isElbowArrow",
+     []
+    ],
+    "new": [
+     "removes import isLinearElement",
+     []
+    ],
+    "why": "import list changed"
+   },
+   {
     "key": "excalidraw:c141960a:packages/excalidraw/data/transform.ts:19",
     "old": [
      "adds import bindBindingElement",
@@ -1502,6 +1938,18 @@
     "why": "distanceToElement import added (replacing old)"
    },
    {
+    "key": "excalidraw:ca1a4f25:packages/element/src/collision.ts:21",
+    "old": [
+     "changes import GlobalPoint, LineSegment, Radians",
+     []
+    ],
+    "new": [
+     "removes import isPointInShape, isPointOnShape, GeometricShape, and 3 more",
+     []
+    ],
+    "why": "imports changed"
+   },
+   {
     "key": "excalidraw:ca1a4f25:packages/element/src/elbowArrow.ts:34",
     "old": [
      "adds import distanceToElement",
@@ -1512,6 +1960,78 @@
      []
     ],
     "why": "imports distanceToElement"
+   },
+   {
+    "key": "excalidraw:ca1a4f25:packages/excalidraw/components/App.tsx:189",
+    "old": [
+     "changes import getVisibleSceneBounds",
+     []
+    ],
+    "new": [
+     "moves import FlowChartCreator, FlowChartNavigator, getLinkDirectionFromKey",
+     []
+    ],
+    "why": "merges getVisibleSceneBounds import"
+   },
+   {
+    "key": "excalidraw:ca1a4f25:packages/excalidraw/eraser/index.ts:16",
+    "old": [
+     "changes import GlobalPoint, LineSegment",
+     []
+    ],
+    "new": [
+     "removes import GeometricShape, ElementsSegmentsMap",
+     []
+    ],
+    "why": "import changed"
+   },
+   {
+    "key": "excalidraw:cf212b2f:packages/excalidraw/components/App.cursor.ts:1",
+    "old": [
+     "changes import CURSOR_TYPE, MIME_TYPES, THEME",
+     []
+    ],
+    "new": [
+     "removes import getBucketFillBackgroundColor",
+     []
+    ],
+    "why": "import list changed"
+   },
+   {
+    "key": "excalidraw:d6a934ed:excalidraw-app/components/DebugCanvas.tsx:12",
+    "old": [
+     "changes import useCallback",
+     []
+    ],
+    "new": [
+     "removes import useImperativeHandle, useRef",
+     []
+    ],
+    "why": "react import line changed"
+   },
+   {
+    "key": "excalidraw:d87620b2:packages/element/src/heading.ts:1",
+    "old": [
+     "changes import Bounds, invariant, isDevEnv, and 1 more",
+     []
+    ],
+    "new": [
+     "moves import Bounds",
+     []
+    ],
+    "why": "import changed adding Bounds"
+   },
+   {
+    "key": "excalidraw:d87620b2:packages/utils/src/withinBounds.ts:1",
+    "old": [
+     "changes import Bounds, arrayToMap",
+     []
+    ],
+    "new": [
+     "moves import Bounds",
+     []
+    ],
+    "why": "import line changed adding Bounds"
    },
    {
     "key": "excalidraw:dd8296af:packages/excalidraw/components/Stats/MultiAngle.tsx:10",
@@ -1548,6 +2068,18 @@
      []
     ],
     "why": "adds type import"
+   },
+   {
+    "key": "excalidraw:f0458cc2:packages/excalidraw/actions/actionLinearEditor.tsx:9",
+    "old": [
+     "changes import CaptureUpdateAction, toggleLinePolygonState",
+     []
+    ],
+    "new": [
+     "moves import toggleLinePolygonState",
+     []
+    ],
+    "why": "import gains toggleLinePolygonState"
    },
    {
     "key": "execa:0a13f2b9:types/methods/command.d.ts:3",
@@ -1866,6 +2398,18 @@
     "why": "4 imports correct; properties appear"
    },
    {
+    "key": "execa:18d320f9:test/fixtures/nested-pipe-file.js:2",
+    "old": [
+     "changes import execa, getOneMessage",
+     []
+    ],
+    "new": [
+     "adds import getOneMessage; removes import process",
+     []
+    ],
+    "why": "import line changed, adds getOneMessage"
+   },
+   {
     "key": "execa:18d320f9:test/helpers/verbose.js:5",
     "old": [
      "adds import nestedSubprocess",
@@ -1938,6 +2482,18 @@
     "why": "5 imports added"
    },
    {
+    "key": "execa:26e91508:test/stdio/split.js:2",
+    "old": [
+     "changes import execa",
+     []
+    ],
+    "new": [
+     "removes import execaSync",
+     []
+    ],
+    "why": "execa import statement changed (execaSync dropped); terse"
+   },
+   {
     "key": "execa:2ef91865:index.d.ts:8",
     "old": [
      "adds re-export Result, ResultPromise, Subprocess, and 1 more",
@@ -1948,6 +2504,30 @@
      []
     ],
     "why": "four new re-exports, count right"
+   },
+   {
+    "key": "execa:2ef91865:test-d/methods/node.test-d.ts:2",
+    "old": [
+     "changes import Result, ResultPromise, execaNode",
+     []
+    ],
+    "new": [
+     "adds import Result, ResultPromise; removes import ExecaResult, ExecaResultPromise",
+     []
+    ],
+    "why": "import names changed"
+   },
+   {
+    "key": "execa:2ef91865:test-d/subprocess/subprocess.test-d.ts:2",
+    "old": [
+     "changes import Subprocess, execa",
+     []
+    ],
+    "new": [
+     "adds import Subprocess; removes import ExecaSubprocess",
+     []
+    ],
+    "why": "import changed"
    },
    {
     "key": "execa:2ef91865:types/methods/script.d.ts:7",
@@ -1986,6 +2566,30 @@
     "why": "those three imports added"
    },
    {
+    "key": "execa:35c0fb02:test/stdio/node-stream.js:4",
+    "old": [
+     "changes import PassThrough, Writable",
+     []
+    ],
+    "new": [
+     "removes import Readable, Duplex",
+     []
+    ],
+    "why": "import line changed, names kept"
+   },
+   {
+    "key": "execa:381dee2a:lib/async.js:6",
+    "old": [
+     "changes import handleEarlyError, handleInputAsync, pipeOutputAsync",
+     []
+    ],
+    "new": [
+     "adds import handleEarlyError; removes import cleanupStdioStreams",
+     []
+    ],
+    "why": "imports changed"
+   },
+   {
     "key": "execa:3ab34de5:test/fixtures/ipc-echo-twice-fail.js:1",
     "old": [
      "adds import getOneMessage, process, sendMessage",
@@ -1998,6 +2602,18 @@
     "why": "adds those imports"
    },
    {
+    "key": "execa:3ab34de5:test/fixtures/ipc-process-error.js:3",
+    "old": [
+     "changes import getOneMessage",
+     []
+    ],
+    "new": [
+     "removes import sendMessage",
+     []
+    ],
+    "why": "import line changed"
+   },
+   {
     "key": "execa:3ab34de5:test/fixtures/ipc-send-error.js:1",
     "old": [
      "adds import sendMessage",
@@ -2008,6 +2624,18 @@
      []
     ],
     "why": "new file imports sendMessage"
+   },
+   {
+    "key": "execa:410bac3f:lib/script.js:2",
+    "old": [
+     "changes import isSubprocess, isUint8Array, uint8ArrayToString",
+     []
+    ],
+    "new": [
+     "adds import isUint8Array, uint8ArrayToString; removes import isBinary, binaryToString",
+     []
+    ],
+    "why": "import line changed"
    },
    {
     "key": "execa:410bac3f:lib/stdio/validate.js:1",
@@ -2164,6 +2792,66 @@
      []
     ],
     "why": "9 imported names, count matches"
+   },
+   {
+    "key": "execa:5944b2d1:test/fixtures/ipc-iterate-back-serial.js:5",
+    "old": [
+     "changes import getFirst, isAlwaysTrue",
+     []
+    ],
+    "new": [
+     "adds import isAlwaysTrue; removes import alwaysPass",
+     []
+    ],
+    "why": "import line changed, names its symbols"
+   },
+   {
+    "key": "execa:5944b2d1:test/fixtures/ipc-iterate-back.js:5",
+    "old": [
+     "changes import getFirst, isAlwaysTrue",
+     []
+    ],
+    "new": [
+     "adds import isAlwaysTrue; removes import alwaysPass",
+     []
+    ],
+    "why": "import line changed"
+   },
+   {
+    "key": "execa:5944b2d1:test/ipc/forward.js:5",
+    "old": [
+     "changes import isAlwaysTrue, iterateAllMessages",
+     []
+    ],
+    "new": [
+     "adds import isAlwaysTrue; removes import alwaysPass",
+     []
+    ],
+    "why": "import line changed, names present"
+   },
+   {
+    "key": "execa:5944b2d1:test/ipc/outgoing.js:5",
+    "old": [
+     "changes import isAlwaysTrue, subprocessGetFirst, subprocessGetOne",
+     []
+    ],
+    "new": [
+     "adds import isAlwaysTrue; removes import alwaysPass",
+     []
+    ],
+    "why": "import changed incl isAlwaysTrue"
+   },
+   {
+    "key": "execa:5abc4292:test/helpers/stream.js:1",
+    "old": [
+     "changes import PassThrough, Readable, Writable",
+     []
+    ],
+    "new": [
+     "adds import PassThrough; removes import Duplex",
+     []
+    ],
+    "why": "import list changed"
    },
    {
     "key": "execa:672c2d7e:lib/stdio/generator.js:6",
@@ -2410,6 +3098,30 @@
     "why": "new file imports $, process"
    },
    {
+    "key": "execa:8074d853:test/arguments/options.js:3",
+    "old": [
+     "changes import pathToFileURL",
+     []
+    ],
+    "new": [
+     "removes import fileURLToPath",
+     []
+    ],
+    "why": "import line changed"
+   },
+   {
+    "key": "execa:8074d853:test/arguments/options.js:6",
+    "old": [
+     "changes import $, PATH_KEY, execa, and 1 more",
+     []
+    ],
+    "new": [
+     "removes import execaSync, execaNode, FIXTURES_DIR_URL",
+     []
+    ],
+    "why": "import lines changed"
+   },
+   {
     "key": "execa:8074d853:test/arguments/template.js:1",
     "old": [
      "adds import $, setFixtureDir, test",
@@ -2420,6 +3132,30 @@
      []
     ],
     "why": "adds those imports"
+   },
+   {
+    "key": "execa:8ad9ee70:lib/stream/subprocess.js:3",
+    "old": [
+     "changes import handleStreamError, isInputFileDescriptor, waitForStream",
+     []
+    ],
+    "new": [
+     "removes import getFileDescriptor",
+     []
+    ],
+    "why": "import line changed"
+   },
+   {
+    "key": "execa:8daf3484:lib/verbose/output.js:3",
+    "old": [
+     "changes import isFullVerbose, serializeVerboseMessage, verboseLog",
+     []
+    ],
+    "new": [
+     "adds import serializeVerboseMessage; removes import serializeLogMessage",
+     []
+    ],
+    "why": "import lines changed"
    },
    {
     "key": "execa:8fe23432:lib/async.js:10",
@@ -2444,6 +3180,18 @@
      []
     ],
     "why": "new import names added"
+   },
+   {
+    "key": "execa:8fe23432:lib/stream/resolve.js:8",
+    "old": [
+     "changes import getBufferedData, waitForSubprocessStream",
+     []
+    ],
+    "new": [
+     "adds import waitForSubprocessStream; removes import waitForChildStream",
+     []
+    ],
+    "why": "import changed as stated"
    },
    {
     "key": "execa:8fe23432:test/fixtures/nested-pipe-subprocess.js:1",
@@ -2714,6 +3462,42 @@
     "why": "import renamed"
    },
    {
+    "key": "execa:bd3b478a:lib/pipe/pipe-arguments.js:3",
+    "old": [
+     "changes import SUBPROCESS_OPTIONS, getFromStream, getToStream",
+     []
+    ],
+    "new": [
+     "adds import getFromStream, getToStream; removes import getWritable, getReadable",
+     []
+    ],
+    "why": "import names changed"
+   },
+   {
+    "key": "execa:c5f9f094:lib/stdio/sync.js:1",
+    "old": [
+     "changes import readFileSync",
+     []
+    ],
+    "new": [
+     "removes import writeFileSync",
+     []
+    ],
+    "why": "import line changed, keeps readFileSync"
+   },
+   {
+    "key": "execa:ccfa4121:test-d/return/result-all.test-d.ts:2",
+    "old": [
+     "changes import ExecaError, ExecaSyncError, execa, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reformatted"
+   },
+   {
     "key": "execa:ccfa4121:test/arguments/cwd.js:8",
     "old": [
      "adds import FIXTURES_DIRECTORY, setFixtureDirectory",
@@ -2724,6 +3508,18 @@
      []
     ],
     "why": "new import names added"
+   },
+   {
+    "key": "execa:ccfa4121:test/arguments/env.js:4",
+    "old": [
+     "changes import PATH_KEY, setFixtureDirectory",
+     []
+    ],
+    "new": [
+     "adds import setFixtureDirectory; removes import setFixtureDir",
+     []
+    ],
+    "why": "import line changed, names imported symbols"
    },
    {
     "key": "execa:ccfa4121:test/arguments/fd-options.js:6",
@@ -2738,6 +3534,18 @@
     "why": "import renamed"
    },
    {
+    "key": "execa:ccfa4121:test/arguments/local.js:6",
+    "old": [
+     "changes import PATH_KEY, setFixtureDirectory",
+     []
+    ],
+    "new": [
+     "adds import setFixtureDirectory; removes import setFixtureDir",
+     []
+    ],
+    "why": "import line changed"
+   },
+   {
     "key": "execa:ccfa4121:test/convert/iterable.js:3",
     "old": [
      "adds import setFixtureDirectory",
@@ -2748,6 +3556,30 @@
      []
     ],
     "why": "setFixtureDirectory import added"
+   },
+   {
+    "key": "execa:ccfa4121:test/convert/readable.js:3",
+    "old": [
+     "changes import PassThrough, Readable, Writable, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reformatted"
+   },
+   {
+    "key": "execa:ccfa4121:test/convert/writable.js:23",
+    "old": [
+     "changes import foobarBuffer, foobarObject, foobarObjectString, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reformatted"
    },
    {
     "key": "execa:ccfa4121:test/fixtures/stdin-script.js:3",
@@ -2768,7 +3600,7 @@
      []
     ],
     "new": [
-     "changes import foobarArrayBuffer, foobarBuffer, foobarDataView, and 7 more",
+     "adds import setFixtureDirectory; removes import setFixtureDir",
      []
     ],
     "why": "imports changed, count roughly right"
@@ -2846,13 +3678,25 @@
     "why": "renamed imports are added; terse"
    },
    {
+    "key": "execa:ccfa4121:test/methods/create-main.js:3",
+    "old": [
+     "changes import $, execa, execaNode, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reformatted"
+   },
+   {
     "key": "execa:ccfa4121:test/methods/parameters-args.js:2",
     "old": [
      "changes import $, execa, execaCommand, and 3 more",
      []
     ],
     "new": [
-     "changes import $, execa, execaCommand, and 4 more",
+     "adds import setFixtureDirectory; removes import setFixtureDir",
      []
     ],
     "why": "6 imports reformatted/changed"
@@ -2864,7 +3708,7 @@
      []
     ],
     "new": [
-     "changes import $, FIXTURES_DIRECTORY, execa, and 5 more",
+     "adds import FIXTURES_DIRECTORY, setFixtureDirectory; removes import setFixtureDir, FIXTURES_DIR",
      []
     ],
     "why": "imports changed; terse"
@@ -2916,6 +3760,18 @@
      []
     ],
     "why": "setFixtureDirectory import added"
+   },
+   {
+    "key": "execa:ccfa4121:test/resolve/wait-epipe.js:8",
+    "old": [
+     "changes import destroyOptionStream, destroySubprocessStream, endOptionStream, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reformatted"
    },
    {
     "key": "execa:ccfa4121:test/return/output.js:3",
@@ -3038,6 +3894,30 @@
     "why": "new import name added"
    },
    {
+    "key": "execa:ccfa4121:types/stdio/type.d.ts:2",
+    "old": [
+     "changes import And, AndUnless, DuplexTransform, and 6 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reflow, 9 names"
+   },
+   {
+    "key": "execa:ccfa4121:types/subprocess/subprocess.d.ts:7",
+    "old": [
+     "changes import DuplexOptions, ReadableOptions, SubprocessAsyncIterable, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import statement reflowed, names correct"
+   },
+   {
     "key": "execa:d30fcbc8:lib/stdio/lines.js:1",
     "old": [
      "adds import MaxBufferError, stripFinalNewlineFunction",
@@ -3050,6 +3930,18 @@
     "why": "two imports added as named"
    },
    {
+    "key": "execa:d7c6853e:lib/return/error.js:3",
+    "old": [
+     "changes import createMessages, getFinalError",
+     []
+    ],
+    "new": [
+     "adds import createMessages; removes import DiscardedError, isExecaError",
+     []
+    ],
+    "why": "import changes correct"
+   },
+   {
     "key": "execa:d7c6853e:lib/stdio/async.js:7",
     "old": [
      "adds import generatorToStream",
@@ -3060,6 +3952,30 @@
      []
     ],
     "why": "generatorToStream import added; terse"
+   },
+   {
+    "key": "execa:d7c6853e:lib/stdio/handle.js:7",
+    "old": [
+     "changes import getFdObjectMode, normalizeTransforms",
+     []
+    ],
+    "new": [
+     "adds import getFdObjectMode; removes import getObjectMode",
+     []
+    ],
+    "why": "imports changed"
+   },
+   {
+    "key": "execa:d7c6853e:lib/stream/resolve.js:8",
+    "old": [
+     "changes import getBufferedData, waitForExit, waitForSubprocessStreams, and 1 more",
+     []
+    ],
+    "new": [
+     "adds import waitForSubprocessStreams; moves import waitForSuccessfulExit; removes import waitForSubprocessStream",
+     []
+    ],
+    "why": "import changes correct"
    },
    {
     "key": "execa:d7c6853e:lib/sync.js:12",
@@ -3120,6 +4036,18 @@
      []
     ],
     "why": "adds pathToFileURL import"
+   },
+   {
+    "key": "execa:d7c6853e:test/stdio/encoding-transform.js:7",
+    "old": [
+     "changes import getOutputGenerator, noopGenerator",
+     []
+    ],
+    "new": [
+     "removes import getOutputsGenerator, convertTransformToFinal, multibyteChar, and 4 more",
+     []
+    ],
+    "why": "import narrowed to these names"
    },
    {
     "key": "execa:d7c6853e:test/stdio/file-path-error.js:1",
@@ -3854,6 +4782,18 @@
     "why": "new include added"
    },
    {
+    "key": "openfoam:2ec91f84:applications/modules/XiFluid/thermophysicalPredictor.C:35",
+    "old": [
+     "removes import fvcSup.H",
+     []
+    ],
+    "new": [
+     "removes import fvcSup.H; moves import fvcFlux.H",
+     []
+    ],
+    "why": "removes fvcSup.H include (and another)"
+   },
+   {
     "key": "openfoam:2ec91f84:applications/modules/compressibleMultiphaseVoF/compressibleMultiphaseVoF.C:28",
     "old": [
      "adds import fviDdt.H, fviDiv.H",
@@ -4454,6 +5394,18 @@
     "why": "includes added"
    },
    {
+    "key": "openfoam:5c091b73:src/thermophysicalModels/chemistryModel/Standard/reduction/EFA/EFA.H:51",
+    "old": [
+     "adds type EFA, used in src/thermophysicalModels/chemistryModel/Standard/reduction/EFA/EFA.C; adds local ~EFA, no uses in Foam.chemistryReductionMethods.EFA — check nested scopes; adds local EFA (3 uses)",
+     []
+    ],
+    "new": [
+     "adds type EFA, used in src/thermophysicalModels/chemistryModel/Standard/reduction/EFA/EFA.C",
+     []
+    ],
+    "why": "class EFA declared with ctor/dtor"
+   },
+   {
     "key": "openfoam:5c091b73:src/thermophysicalModels/chemistryModel/Standard/reduction/EFA/EFAChemistryReductionMethods.C:1",
     "old": [
      "adds import EFA.H, chemistryReductionMethod.H, forGases.H, and 2 more",
@@ -5018,6 +5970,690 @@
     "why": "adds ODESolver.H include"
    },
    {
+    "key": "ripgrep:292bc54e:crates/printer/src/json.rs:17",
+    "old": [
+     "changes import CounterWriter, Replacer, Stats, and 5 more",
+     []
+    ],
+    "new": [
+     "changes import CounterWriter, Replacer, Stats, and 2 more",
+     []
+    ],
+    "why": "import list changed, Replacer added"
+   },
+   {
+    "key": "ripgrep:292bc54e:crates/printer/src/json.rs:4",
+    "old": [
+     "adds import Arc, sync",
+     []
+    ],
+    "new": [
+     "changes import Arc, Instant, Path, and 2 more",
+     []
+    ],
+    "why": "adds sync::Arc import"
+   },
+   {
+    "key": "ripgrep:59212d08:crates/cli/src/wtr.rs:3",
+    "old": [
+     "changes import HyperlinkSpec, termcolor",
+     []
+    ],
+    "new": [
+     "removes import termcolor",
+     []
+    ],
+    "why": "termcolor import changed"
+   },
+   {
+    "key": "ripgrep:59212d08:crates/core/logger.rs:9",
+    "old": [
+     "changes import Log, log",
+     []
+    ],
+    "new": [
+     "removes import log",
+     []
+    ],
+    "why": "use log::{self, Log} changed"
+   },
+   {
+    "key": "ripgrep:59212d08:crates/ignore/src/walk.rs:14",
+    "old": [
+     "changes import WalkDir, walkdir",
+     []
+    ],
+    "new": [
+     "changes import Deque, Handle, Stealer, and 1 more",
+     []
+    ],
+    "why": "import change on walkdir/WalkDir"
+   },
+   {
+    "key": "ripgrep:59212d08:crates/searcher/src/line_buffer.rs:551",
+    "old": [
+     "changes import ByteVec, bstr",
+     []
+    ],
+    "new": [
+     "moves import ByteSlice",
+     []
+    ],
+    "why": "import narrowed"
+   },
+   {
+    "key": "ripgrep:66aa4a63:crates/core/flags/defs.rs:20",
+    "old": [
+     "changes import LazyLock, PathBuf, path, and 2 more",
+     []
+    ],
+    "new": [
+     "changes import LazyLock, PathBuf",
+     []
+    ],
+    "why": "use line changed, counts fit"
+   },
+   {
+    "key": "ripgrep:66aa4a63:crates/printer/src/lib.rs:66",
+    "old": [
+     "changes re-export HyperlinkAlias, HyperlinkConfig, HyperlinkEnvironment, and 3 more",
+     []
+    ],
+    "new": [
+     "changes re-export ColorError, ColorSpecs, HyperlinkAlias, and 17 more",
+     []
+    ],
+    "why": "re-export list changed, 6 names"
+   },
+   {
+    "key": "ripgrep:827082a3:tests/util.rs:12",
+    "old": [
+     "adds import ByteSlice, bstr",
+     []
+    ],
+    "new": [
+     "adds import ByteSlice",
+     []
+    ],
+    "why": "bstr::ByteSlice import added"
+   },
+   {
+    "key": "ripgrep:9d8016d1:crates/printer/src/json.rs:10",
+    "old": [
+     "changes import Searcher, Sink, SinkContext, and 3 more",
+     []
+    ],
+    "new": [
+     "changes import Match, Matcher, Searcher, and 5 more",
+     []
+    ],
+    "why": "import changed, SinkContextKind dropped"
+   },
+   {
+    "key": "ripgrep:a6e0be3c:crates/printer/src/standard.rs:14",
+    "old": [
+     "changes import LineStep, Searcher, Sink, and 3 more",
+     []
+    ],
+    "new": [
+     "changes import ByteSlice, ColorSpec, LineStep, and 9 more",
+     []
+    ],
+    "why": "import list changed"
+   },
+   {
+    "key": "ripgrep:b610d1cb:crates/ignore/src/walk.rs:8",
+    "old": [
+     "changes import Arc, OnceLock, sync",
+     []
+    ],
+    "new": [
+     "changes import Arc, AtomicBool, AtomicOrdering, and 10 more",
+     []
+    ],
+    "why": "adds sync Arc, OnceLock import"
+   },
+   {
+    "key": "ripgrep:b9c77493:crates/ignore/src/dir.rs:22",
+    "old": [
+     "changes import Arc, RwLock, Weak, and 1 more",
+     []
+    ],
+    "new": [
+     "changes import Arc, BufRead, File, and 9 more",
+     []
+    ],
+    "why": "sync import changed, Weak added"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/cli/src/hostname.rs:19",
+    "old": [
+     "changes import ComputerNameKind, get_computer_name, sysinfo, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import order change"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/cli/src/lib.rs:136",
+    "old": [
+     "changes re-export DecompressionMatcher, DecompressionMatcherBuilder, DecompressionReader, and 2 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "5 re-exports reordered, count right"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/cli/src/lib.rs:141",
+    "old": [
+     "changes re-export ParseSizeError, human, parse_human_readable_size",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "re-export line reordered; claim neutral"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/cli/src/lib.rs:143",
+    "old": [
+     "changes re-export InvalidPatternError, pattern_from_bytes, pattern_from_os, and 3 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "re-export list reordered"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/complete/fish.rs:5",
+    "old": [
+     "changes import CompletionType, FLAGS, defs, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/config.rs:13",
+    "old": [
+     "changes import BufReadExt, ByteSlice, bstr, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/defs.rs:25",
+    "old": [
+     "changes import Category, Flag, FlagValue",
+     []
+    ],
+    "new": [
+     "changes import BinaryMode, BoundaryMode, BufferMode, and 19 more",
+     []
+    ],
+    "why": "names added to use list"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/doc/help.rs:11",
+    "old": [
+     "changes import Category, FLAGS, Flag, and 4 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/doc/man.rs:7",
+    "old": [
+     "changes import FLAGS, Flag, defs, and 3 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reordered"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/mod.rs:39",
+    "old": [
+     "changes import ParseResult, parse",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder of those names"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/core/flags/parse.rs:10",
+    "old": [
+     "changes import Flag, FlagValue",
+     []
+    ],
+    "new": [
+     "changes import FLAGS, Flag, FlagValue, and 4 more",
+     []
+    ],
+    "why": "Flag, FlagValue import moved in"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/globset/src/glob.rs:6",
+    "old": [
+     "changes import Candidate, Error, ErrorKind, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder, 4 names"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/globset/src/lib.rs:123",
+    "old": [
+     "changes import B, ByteSlice, ByteVec, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/globset/src/lib.rs:125",
+    "old": [
+     "changes import PatternSet",
+     []
+    ],
+    "new": [
+     "changes import AhoCorasick, B, ByteSlice, and 5 more",
+     []
+    ],
+    "why": "PatternSet import line changed"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/globset/src/lib.rs:128",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import PatternSet",
+     []
+    ],
+    "why": "rustfmt import reorder, PatternSet moved up"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/globset/src/pathutil.rs:91",
+    "old": [
+     "changes import B, ByteVec, bstr",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "reorders bstr import names"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/gitignore.rs:23",
+    "old": [
+     "changes import Error, Match, PartialErrorBuilder",
+     []
+    ],
+    "new": [
+     "changes import Error, Match, PartialErrorBuilder, and 2 more",
+     []
+    ],
+    "why": "import reshuffle"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/overrides.rs:11",
+    "old": [
+     "changes import Error, Match",
+     []
+    ],
+    "new": [
+     "changes import Error, Gitignore, GitignoreBuilder, and 2 more",
+     []
+    ],
+    "why": "import line Error, Match changed by rustfmt"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/types.rs:94",
+    "old": [
+     "changes import DEFAULT_TYPES, Error, Match, and 3 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder, names correct"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/walk.rs:18",
+    "old": [
+     "changes import Error, PartialErrorBuilder",
+     []
+    ],
+    "new": [
+     "changes import Error, GitignoreBuilder, Ignore, and 4 more",
+     []
+    ],
+    "why": "import list changed with those names"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/walk.rs:1897",
+    "old": [
+     "changes import Handle, file, winapi_util",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder of those names"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/walk.rs:7",
+    "old": [
+     "changes import Arc, sync",
+     []
+    ],
+    "new": [
+     "changes import Arc, AtomicBool, AtomicOrdering, and 9 more",
+     []
+    ],
+    "why": "adds sync::Arc import"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/walk.rs:9",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import Arc",
+     []
+    ],
+    "why": "rustfmt reorder of import"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/matcher/src/interpolate.rs:147",
+    "old": [
+     "changes import CaptureRef, find_cap_ref, interpolate",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reordered, symbols correct"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/json.rs:17",
+    "old": [
+     "changes import CounterWriter, Replacer, Stats, and 5 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import list reordered"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/json.rs:972",
+    "old": [
+     "changes import JSON, JSONBuilder",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import order changed"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/lib.rs:64",
+    "old": [
+     "changes re-export ColorError, ColorSpecs, UserColorSpec, and 2 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "re-export reordered"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/lib.rs:76",
+    "old": [
+     "changes re-export JSON, JSONBuilder, JSONSink, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "re-export reordered"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/standard.rs:25",
+    "old": [
+     "changes import DecimalFormatter, PrinterPath, Replacer, and 1 more",
+     []
+    ],
+    "new": [
+     "changes import ColorSpecs, CounterWriter, DecimalFormatter, and 9 more",
+     []
+    ],
+    "why": "use list changed"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/summary.rs:20",
+    "old": [
+     "changes import PrinterPath, find_iter_at_in_context, util",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/util.rs:11",
+    "old": [
+     "changes import HyperlinkPath, MAX_LOOK_AHEAD, hyperlink",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/regex/src/literal.rs:4",
+    "old": [
+     "changes import Hir",
+     []
+    ],
+    "new": [
+     "changes import Hir, Literal, Regex, and 2 more",
+     []
+    ],
+    "why": "Hir added to import"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/regex/src/literal.rs:6",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import Hir",
+     []
+    ],
+    "why": "Hir moved within use list by rustfmt"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/regex/src/matcher.rs:7",
+    "old": [
+     "changes import AutomataCaptures, Captures, Input, and 5 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reordered; not false"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/regex/src/strip.rs:125",
+    "old": [
+     "changes import LineTerminator, strip_from_match",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import order changed"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/searcher/examples/search-stdin.rs:7",
+    "old": [
+     "moves import Searcher, grep_searcher",
+     []
+    ],
+    "new": [
+     "moves import Searcher",
+     []
+    ],
+    "why": "rustfmt import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/searcher/examples/search-stdin.rs:9",
+    "old": [
+     "moves import grep_searcher, Searcher",
+     []
+    ],
+    "new": [
+     "moves import Searcher",
+     []
+    ],
+    "why": "rustfmt reorders Searcher import"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/searcher/src/lib.rs:93",
+    "old": [
+     "changes re-export Sink, SinkContext, SinkContextKind, and 4 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "re-export list reordered"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/searcher/src/searcher/glue.rs:4",
+    "old": [
+     "changes import DEFAULT_BUFFER_CAPACITY, LineBufferReader, line_buffer",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/searcher/src/searcher/glue.rs:6",
+    "old": [
+     "changes import Config, Core, Range, and 3 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import line reordered, names right"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/searcher/src/searcher/mod.rs:16",
+    "old": [
+     "changes import BufferAllocation, DEFAULT_BUFFER_CAPACITY, LineBuffer, and 3 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder"
+   },
+   {
+    "key": "ripgrep:bb8172fe:tests/regression.rs:2",
+    "old": [
+     "changes import Dir, TestCommand, sort_lines, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "import reorder; count off by one only"
+   },
+   {
+    "key": "ripgrep:c9ebcbd8:crates/globset/src/glob.rs:1",
+    "old": [
+     "changes import Write, fmt, std",
+     []
+    ],
+    "new": [
+     "adds import Write",
+     []
+    ],
+    "why": "adds std::fmt::Write import"
+   },
+   {
+    "key": "ripgrep:e0a85678:crates/core/flags/complete/fish.rs:5",
+    "old": [
+     "changes import CompletionType, FLAGS, defs, and 1 more",
+     []
+    ],
+    "new": [
+     "changes import CompletionType, FLAGS",
+     []
+    ],
+    "why": "import changed to add CompletionType"
+   },
+   {
     "key": "vue:e24ff7d3:packages/compiler-sfc/__tests__/compileScript.spec.ts:11",
     "old": [
      "adds import warnOnce",
@@ -5144,6 +6780,66 @@
     "why": "greenlet repo_name came from 30-pydandic.yaml, not 90-other"
    },
    {
+    "key": "click:18c2451f:src/click/shell_completion.py:225",
+    "old": [
+     "adds local cli (4 uses), complete_var (4 uses), ctx_args (4 uses), and 1 more",
+     []
+    ],
+    "new": [
+     "adds 5 lines to ShellComplete",
+     []
+    ],
+    "why": "class attribute annotations, not locals"
+   },
+   {
+    "key": "click:1a994adb:src/click/exceptions.py:132",
+    "old": [
+     "adds local param (5 uses)",
+     []
+    ],
+    "new": [
+     "edits BadParameter",
+     []
+    ],
+    "why": "class attribute annotations, not local"
+   },
+   {
+    "key": "click:1a994adb:src/click/exceptions.py:314",
+    "old": [
+     "adds local option_name (3 uses)",
+     []
+    ],
+    "new": [
+     "edits BadOptionUsage",
+     []
+    ],
+    "why": "class attribute annotation, not local"
+   },
+   {
+    "key": "click:1a994adb:src/click/exceptions.py:333",
+    "old": [
+     "adds local ctx (5 uses)",
+     []
+    ],
+    "new": [
+     "edits NoArgsIsHelpError",
+     []
+    ],
+    "why": "ctx is class attribute annotation, not local"
+   },
+   {
+    "key": "click:77bd81f3:src/click/types.py:861",
+    "old": [
+     "adds local atomic (7 uses), errors (5 uses)",
+     []
+    ],
+    "new": [
+     "adds 6 lines to File",
+     []
+    ],
+    "why": "class attribute annotations called locals"
+   },
+   {
     "key": "click:831c8f09:src/click/exceptions.py:239",
     "old": [
      "adds import get_close_matches",
@@ -5154,6 +6850,18 @@
      []
     ],
     "why": "logic change framed as import only"
+   },
+   {
+    "key": "click:8a1b1a33:src/click/core.py:2879",
+    "old": [
+     "adds local _flag_needs_value (4 uses), allow_from_autoenv (5 uses), confirmation_prompt (5 uses), and 9 more",
+     []
+    ],
+    "new": [
+     "adds 18 lines to Option",
+     []
+    ],
+    "why": "class attrs not locals; count 12 vs 15"
    },
    {
     "key": "click:c2ed4149:src/click/testing.py:773",
@@ -5172,6 +6880,18 @@
     "why": "whole warn call is new, not just stacklevel"
    },
    {
+    "key": "click:c2ed4149:tests/test_testing.py:451",
+    "old": [
+     "adds test_isolated_runner_custom_tempdir",
+     []
+    ],
+    "new": [
+     "changes test_isolated_runner_custom_tempdir",
+     []
+    ],
+    "why": "only adds decorator, test pre-exists"
+   },
+   {
     "key": "click:cd4674a6:src/click/exceptions.py:239",
     "old": [
      "adds import get_close_matches",
@@ -5182,6 +6902,126 @@
      []
     ],
     "why": "import framing hides possibilities filtering logic change"
+   },
+   {
+    "key": "click:cd4674a6:src/click/utils.py:120",
+    "old": [
+     "adds local _f (10 uses), atomic (5 uses), encoding (5 uses), and 2 more",
+     []
+    ],
+    "new": [
+     "adds 8 lines to LazyFile",
+     []
+    ],
+    "why": "class attribute annotations, not locals"
+   },
+   {
+    "key": "click:e34e526e:src/click/core.py:1018",
+    "old": [
+     "adds local _help_option (4 uses), add_help_option (4 uses), deprecated (10 uses), and 3 more",
+     []
+    ],
+    "new": [
+     "adds 14 lines to Command",
+     []
+    ],
+    "why": "class attr annotations not locals; 13 added not 6"
+   },
+   {
+    "key": "click:e34e526e:src/click/core.py:2073",
+    "old": [
+     "adds local sources (6 uses)",
+     []
+    ],
+    "new": [
+     "edits CommandCollection",
+     []
+    ],
+    "why": "class attribute annotation, not local"
+   },
+   {
+    "key": "click:e34e526e:src/click/core.py:308",
+    "old": [
+     "adds local _close_callbacks (1 use), _depth (6 uses), _exit_stack (5 uses), and 9 more",
+     []
+    ],
+    "new": [
+     "adds 28 lines to Context",
+     []
+    ],
+    "why": "class attribute annotations, not locals; 27 added not 12"
+   },
+   {
+    "key": "cobra:511af59c:doc/md_docs_test.go:19",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "removes import ioutil",
+     []
+    ],
+    "why": "removes ioutil import, not formatting"
+   },
+   {
+    "key": "cobra:652c755d:cobra/cmd/golden_test.go:6",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "removes import flag",
+     []
+    ],
+    "why": "removes flag import, not formatting"
+   },
+   {
+    "key": "cobra:652c755d:cobra/cmd/helpers.go:17",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "removes import bytes, fmt, io",
+     []
+    ],
+    "why": "removes 3 imports, not formatting"
+   },
+   {
+    "key": "cobra:8eaca5f0:cobra/cmd/root.go:20",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "removes import homedir",
+     []
+    ],
+    "why": "removes homedir import, not formatting"
+   },
+   {
+    "key": "cobra:988bd761:fish_completions_test.go:21",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "removes import log",
+     []
+    ],
+    "why": "removes log import, not formatting"
+   },
+   {
+    "key": "cobra:d1e9d85f:command.go:26",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "removes import filepath",
+     []
+    ],
+    "why": "import removal, not formatting"
    },
    {
     "key": "curl:69a224d6:tests/unit/unit1305.c:38",
@@ -5196,6 +7036,30 @@
     "why": "replaces include path, not new include"
    },
    {
+    "key": "curl:e13362c2:tests/http/test_17_ssl_use.py:38",
+    "old": [
+     "adds TLSDefs",
+     []
+    ],
+    "new": [
+     "changes TLSDefs",
+     []
+    ],
+    "why": "only adds decorator to existing class"
+   },
+   {
+    "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/common.ts:3",
+    "old": [
+     "changes import composeEventHandlers",
+     []
+    ],
+    "new": [
+     "removes import EVENT",
+     []
+    ],
+    "why": "EVENT removed, not composeEventHandlers"
+   },
+   {
     "key": "excalidraw:2423819e:packages/excalidraw/tests/interactivity.test.tsx:1",
     "old": [
      "adds import GlobalTestState, act, fireEvent, and 4 more",
@@ -5206,6 +7070,42 @@
      []
     ],
     "why": "far more than 7 imports added"
+   },
+   {
+    "key": "excalidraw:28691e14:packages/element/src/distribute.ts:72",
+    "old": [
+     "adds local updatedElement (2 uses)",
+     []
+    ],
+    "new": [
+     "adds local updatedElement (1 use)",
+     []
+    ],
+    "why": "this updatedElement has 1 use, not 2"
+   },
+   {
+    "key": "excalidraw:320af405:packages/element/src/collision.ts:1",
+    "old": [
+     "changes import isTransparent",
+     []
+    ],
+    "new": [
+     "moves import elementCenterPoint",
+     []
+    ],
+    "why": "isTransparent unchanged; elementCenterPoint removed"
+   },
+   {
+    "key": "excalidraw:320af405:packages/excalidraw/tests/helpers/ui.ts:23",
+    "old": [
+     "changes import KEYS, arrayToMap",
+     []
+    ],
+    "new": [
+     "moves import elementCenterPoint",
+     []
+    ],
+    "why": "names unchanged imports, omits removed elementCenterPoint"
    },
    {
     "key": "excalidraw:339d3c37:packages/excalidraw/components/MobileMenu.tsx:11",
@@ -5268,6 +7168,30 @@
     "why": "17 imports claimed, ~34 added"
    },
    {
+    "key": "excalidraw:47cbb5b6:packages/excalidraw/components/App.tsx:57",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import isIOS",
+     []
+    ],
+    "why": "removes isIOS import, not formatting"
+   },
+   {
+    "key": "excalidraw:51ca8abd:packages/excalidraw/actions/actionCanvas.tsx:48",
+    "old": [
+     "changes import AppState",
+     []
+    ],
+    "new": [
+     "removes import Offsets",
+     []
+    ],
+    "why": "AppState unchanged; Offsets removed, not named"
+   },
+   {
     "key": "excalidraw:51ca8abd:packages/excalidraw/viewport.ts:1",
     "old": [
      "adds import AppState, CaptureUpdateAction, ExcalidrawElement, and 22 more",
@@ -5278,6 +7202,18 @@
      []
     ],
     "why": "33 imported names, not 25"
+   },
+   {
+    "key": "excalidraw:5fffc474:packages/excalidraw/actions/actionMenu.tsx:5",
+    "old": [
+     "changes import HelpIconThin",
+     []
+    ],
+    "new": [
+     "removes import ToolButton, HamburgerMenuIcon, palette, and 1 more",
+     []
+    ],
+    "why": "HelpIconThin unchanged; hunk removes other imports"
    },
    {
     "key": "excalidraw:60b27588:packages/excalidraw/charts/charts.bar.ts:1",
@@ -5304,6 +7240,102 @@
     "why": "omits ~30 new exported constants, framed as imports"
    },
    {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionAlign.tsx:7",
+    "old": [
+     "changes import KEYS, arrayToMap",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "removes getShortcutKey; KEYS, arrayToMap unchanged"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionCanvas.tsx:10",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "removes import, not formatting"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionDuplicateSelection.tsx:6",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "removes import, not formatting"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionLink.tsx:3",
+    "old": [
+     "changes import KEYS",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "KEYS unchanged; getShortcutKey removed"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/actions/shortcuts.ts:1",
+    "old": [
+     "changes import isDarwin",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "change drops getShortcutKey; isDarwin unchanged"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/components/App.tsx:83",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "removes import, not formatting"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/components/ColorPicker/ColorInput.tsx:4",
+    "old": [
+     "changes import KEYS",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "change drops getShortcutKey; KEYS unchanged"
+   },
+   {
+    "key": "excalidraw:8013eb5e:packages/excalidraw/components/HelpDialog.tsx:5",
+    "old": [
+     "changes import KEYS",
+     []
+    ],
+    "new": [
+     "moves import getShortcutKey",
+     []
+    ],
+    "why": "names KEYS; actual change removes getShortcutKey"
+   },
+   {
     "key": "excalidraw:8492b144:packages/element/tests/distribute.test.tsx:1",
     "old": [
      "adds import act, distributeHorizontally, distributeVertically, and 2 more",
@@ -5314,6 +7346,66 @@
      []
     ],
     "why": "12 imported names, not 5"
+   },
+   {
+    "key": "excalidraw:84e96e93:packages/element/src/collision.ts:29",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import doBoundsIntersect",
+     []
+    ],
+    "why": "removes doBoundsIntersect import, not formatting"
+   },
+   {
+    "key": "excalidraw:9357f98a:packages/excalidraw/components/hyperlink/helpers.ts:15",
+    "old": [
+     "changes import AppState",
+     []
+    ],
+    "new": [
+     "removes import UIAppState",
+     []
+    ],
+    "why": "UIAppState removed, AppState unchanged"
+   },
+   {
+    "key": "excalidraw:958597df:packages/element/src/binding.ts:27",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import doBoundsIntersect",
+     []
+    ],
+    "why": "removes import, not formatting"
+   },
+   {
+    "key": "excalidraw:958597df:packages/element/src/collision.ts:14",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import doBoundsIntersect",
+     []
+    ],
+    "why": "removes an import, not formatting"
+   },
+   {
+    "key": "excalidraw:958597df:packages/excalidraw/lasso/utils.ts:7",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import doBoundsIntersect",
+     []
+    ],
+    "why": "removes an import, not formatting"
    },
    {
     "key": "excalidraw:a0b98a94:packages/excalidraw/components/TTDDialog/hooks/useTextGeneration.ts:1",
@@ -5328,6 +7420,18 @@
     "why": "16 imports plus constants, not 5 imports"
    },
    {
+    "key": "excalidraw:a1d9b16b:packages/excalidraw/components/MobileMenu.tsx:19",
+    "old": [
+     "changes import AppClassProperties, AppState, UIAppState",
+     []
+    ],
+    "new": [
+     "removes import AppProps",
+     []
+    ],
+    "why": "names unchanged imports, omits removed AppProps"
+   },
+   {
     "key": "excalidraw:abeeaeba:packages/excalidraw/components/ColorPicker/topPicksDnD.tsx:1",
     "old": [
      "adds import createContext, useContext, useEffect, and 3 more",
@@ -5340,6 +7444,30 @@
     "why": "8 imports not 6; also adds constants"
    },
    {
+    "key": "excalidraw:b4ce7c71:packages/excalidraw/components/IconPicker.tsx:11",
+    "old": [
+     "changes import useExcalidrawContainer",
+     []
+    ],
+    "new": [
+     "removes import useEditorInterface",
+     []
+    ],
+    "why": "removes useEditorInterface; names untouched symbol"
+   },
+   {
+    "key": "excalidraw:c141960a:packages/element/src/binding.ts:72",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import ExcalidrawTextElement, NonDeletedSceneElementsMap",
+     []
+    ],
+    "why": "removes two type imports, not formatting"
+   },
+   {
     "key": "excalidraw:c1dbbdf6:packages/excalidraw/components/TTDDialog/CodeMirrorEditor.tsx:1",
     "old": [
      "adds import Decoration, EditorView, cmPlaceholder, and 8 more",
@@ -5350,6 +7478,30 @@
      []
     ],
     "why": "20 imports added, claims 11"
+   },
+   {
+    "key": "excalidraw:ec070911:packages/excalidraw/components/LibraryUnit.tsx:2",
+    "old": [
+     "changes import memo, useRef, useState",
+     []
+    ],
+    "new": [
+     "removes import useEffect",
+     []
+    ],
+    "why": "hides useEffect removal; names unchanged ones"
+   },
+   {
+    "key": "excalidraw:ed7c0c1d:packages/excalidraw/components/Actions.tsx:5",
+    "old": [
+     "changes import CLASSES, KEYS, capitalizeString",
+     []
+    ],
+    "new": [
+     "removes import isTransparent",
+     []
+    ],
+    "why": "names unchanged imports, omits removed isTransparent"
    },
    {
     "key": "excalidraw:f0458cc2:packages/element/src/shape.ts:1",
@@ -5440,6 +7592,18 @@
     "why": "12 imported names, not 8"
    },
    {
+    "key": "execa:2fd9351c:test/error.js:4",
+    "old": [
+     "changes import setFixtureDir",
+     []
+    ],
+    "new": [
+     "removes import FIXTURES_DIR",
+     []
+    ],
+    "why": "change removes FIXTURES_DIR, not setFixtureDir"
+   },
+   {
     "key": "execa:4b2e316e:test/transform/generator-input.js:1",
     "old": [
      "adds import foobarBuffer, foobarHex, foobarObject, and 4 more",
@@ -5450,6 +7614,30 @@
      []
     ],
     "why": "15 names imported, not 7; plus setFixtureDir call"
+   },
+   {
+    "key": "execa:52c4bde4:lib/stdio/generator.js:7",
+    "old": [
+     "changes import isAsyncGenerator",
+     []
+    ],
+    "new": [
+     "removes import isGeneratorOptions",
+     []
+    ],
+    "why": "names unchanged isAsyncGenerator; change drops isGeneratorOptions"
+   },
+   {
+    "key": "execa:52c4bde4:test/stdio/transform.js:13",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import getOutputGenerator",
+     []
+    ],
+    "why": "removes an imported name, not formatting"
    },
    {
     "key": "execa:666f7f9d:lib/convert/readable.js:1",
@@ -5528,6 +7716,18 @@
     "why": "6 imports, claims 4"
    },
    {
+    "key": "execa:8074d853:test/arguments/options.js:1",
+    "old": [
+     "changes import delimiter",
+     []
+    ],
+    "new": [
+     "removes import join, basename",
+     []
+    ],
+    "why": "really removes join, basename; delimiter unchanged"
+   },
+   {
     "key": "execa:839c2fe3:test/verbose/ipc.js:1",
     "old": [
      "adds import getIpcLine, getIpcLines, ipcFullOption, and 3 more",
@@ -5564,6 +7764,18 @@
     "why": "7 names imported, 'and 1 more' implies 4"
    },
    {
+    "key": "execa:9de73355:lib/convert/readable.js:9",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import createDeferred",
+     []
+    ],
+    "why": "removes createDeferred import, not formatting"
+   },
+   {
     "key": "execa:acc2b685:test/fixtures/ipc-echo-twice.js:1",
     "old": [
      "adds import getOneMessage, sendMessage",
@@ -5574,6 +7786,30 @@
      []
     ],
     "why": "imports-only framing; adds executable logic"
+   },
+   {
+    "key": "execa:acc2b685:test/resolve/no-buffer.js:6",
+    "old": [
+     "changes import fullStdio",
+     []
+    ],
+    "new": [
+     "removes import getStdio",
+     []
+    ],
+    "why": "change removes getStdio; fullStdio unchanged"
+   },
+   {
+    "key": "execa:bdda4757:lib/stream/subprocess.js:5",
+    "old": [
+     "changes import isInputFileDescriptor, waitForStream",
+     []
+    ],
+    "new": [
+     "removes import handleStreamError",
+     []
+    ],
+    "why": "named imports unchanged; handleStreamError removed"
    },
    {
     "key": "execa:ccfa4121:test/resolve/wait-subprocess.js:3",
@@ -5606,7 +7842,7 @@
      []
     ],
     "new": [
-     "changes import foobarObject, foobarString, foobarUppercase, and 2 more",
+     "adds import setFixtureDirectory; removes import setFixtureDir",
      []
     ],
     "why": "hides setFixtureDir rename; foobar imports only reformatted"
@@ -5708,6 +7944,174 @@
     "why": "new annotation framed as imports"
    },
    {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:184",
+    "old": [
+     "adds assertArrayEquals",
+     []
+    ],
+    "new": [
+     "changes annotations of assertArrayEquals",
+     []
+    ],
+    "why": "only adds annotation to existing method"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:229",
+    "old": [
+     "adds assertArrayEquals",
+     []
+    ],
+    "new": [
+     "changes annotations of assertArrayEquals",
+     []
+    ],
+    "why": "only adds annotation; method exists"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:275",
+    "old": [
+     "adds assertArrayEquals",
+     []
+    ],
+    "new": [
+     "changes annotations of assertArrayEquals",
+     []
+    ],
+    "why": "only adds annotation to existing method"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:368",
+    "old": [
+     "adds assertArrayEquals",
+     []
+    ],
+    "new": [
+     "changes annotations of assertArrayEquals",
+     []
+    ],
+    "why": "only adds annotation to existing method"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:415",
+    "old": [
+     "adds assertArrayEquals",
+     []
+    ],
+    "new": [
+     "changes annotations of assertArrayEquals",
+     []
+    ],
+    "why": "only adds annotation, method exists"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertIterableEquals.java:59",
+    "old": [
+     "adds assertIterableEquals",
+     []
+    ],
+    "new": [
+     "changes annotations of assertIterableEquals",
+     []
+    ],
+    "why": "only adds annotation to existing method"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertNotSame.java:35",
+    "old": [
+     "adds assertNotSame",
+     []
+    ],
+    "new": [
+     "changes annotations of assertNotSame",
+     []
+    ],
+    "why": "only adds annotation to existing method"
+   },
+   {
+    "key": "junit5:5a29b878:junit-jupiter-engine/src/main/java/org/junit/jupiter/engine/execution/ExtensionContextSupplier.java:32",
+    "old": [
+     "adds create",
+     []
+    ],
+    "new": [
+     "changes annotations of create",
+     []
+    ],
+    "why": "create existed; only annotation added"
+   },
+   {
+    "key": "junit5:5a29b878:junit-platform-engine/src/main/java/org/junit/platform/engine/support/discovery/SelectorResolver.java:521",
+    "old": [
+     "adds isResolved",
+     []
+    ],
+    "new": [
+     "changes annotations of isResolved",
+     []
+    ],
+    "why": "isResolved exists; only annotation added"
+   },
+   {
+    "key": "junit5:5a29b878:junit-platform-engine/src/main/java/org/junit/platform/engine/support/hierarchical/NodeTestTaskContext.java:23",
+    "old": [
+     "adds withListener",
+     []
+    ],
+    "new": [
+     "changes annotations of withListener",
+     []
+    ],
+    "why": "only adds annotation; withListener already exists"
+   },
+   {
+    "key": "junit5:5a29b878:junit-platform-engine/src/main/java/org/junit/platform/engine/support/hierarchical/ThrowableCollector.java:89",
+    "old": [
+     "adds add",
+     []
+    ],
+    "new": [
+     "changes annotations of add",
+     []
+    ],
+    "why": "only adds annotation; add exists already"
+   },
+   {
+    "key": "junit5:5a29b878:junit-vintage-engine/src/main/java/org/junit/vintage/engine/descriptor/TestSourceProvider.java:47",
+    "old": [
+     "adds findTestSource",
+     []
+    ],
+    "new": [
+     "changes annotations of findTestSource",
+     []
+    ],
+    "why": "only annotation added; findTestSource already exists"
+   },
+   {
+    "key": "junit5:7e7183fe:platform-tests/src/test/java/org/junit/platform/suite/engine/SuiteEngineTests.java:924",
+    "old": [
+     "adds type AbstractInnerSuite",
+     []
+    ],
+    "new": [
+     "changes AbstractInnerSuite",
+     []
+    ],
+    "why": "only adds annotation; AbstractInnerSuite pre-exists"
+   },
+   {
+    "key": "junit5:7e7183fe:platform-tests/src/test/java/org/junit/platform/suite/engine/SuiteEngineTests.java:930",
+    "old": [
+     "adds type InnerSuite",
+     []
+    ],
+    "new": [
+     "changes InnerSuite",
+     []
+    ],
+    "why": "only adds annotation to existing class"
+   },
+   {
     "key": "junit5:b39d4f41:junit-jupiter-engine/src/main/java/org/junit/jupiter/engine/extension/TimeoutInvocationParameters.java:1",
     "old": [
      "adds import InvocationInterceptor, Nullable, Preconditions, and 1 more",
@@ -5718,6 +8122,18 @@
      []
     ],
     "why": "imports-only framing hides new record definition"
+   },
+   {
+    "key": "lazy:c02268ac:lua/lazy/core/plugin.lua:182",
+    "old": [
+     "replaces local self.importing with err (3 uses)",
+     []
+    ],
+    "new": [
+     "replaces local self.importing with err (2 uses)",
+     []
+    ],
+    "why": "logic change framed as local replacement; self.importing not local"
    },
    {
     "key": "openfoam:0834aa67:src/thermophysicalModels/specie/transport/icoTabulated/icoTabulatedTransportI.H:26",
@@ -5924,16 +8340,136 @@
     "why": "imports-only framing, adds fuzz target logic"
    },
    {
+    "key": "ripgrep:59212d08:crates/pcre2/src/matcher.rs:431",
+    "old": [
+     "changes import LineMatchKind, grep_matcher",
+     []
+    ],
+    "new": [
+     "moves import Matcher",
+     []
+    ],
+    "why": "Matcher removed, not LineMatchKind"
+   },
+   {
     "key": "ripgrep:66aa4a63:crates/printer/src/hyperlink/mod.rs:1",
     "old": [
      "adds import ByteSlice, HyperlinkSpec, WriteColor, and 2 more",
      []
     ],
     "new": [
-     "adds import Arc, ByteSlice, DecimalFormatter, and 14 more",
+     "adds import Arc, ByteSlice, DecimalFormatter, and 6 more",
      []
     ],
     "why": "9 names imported, rationale implies 5"
+   },
+   {
+    "key": "ripgrep:b610d1cb:crates/ignore/src/walk.rs:7",
+    "old": [
+     "formatting only",
+     []
+    ],
+    "new": [
+     "moves import Arc",
+     []
+    ],
+    "why": "removes sync::Arc import, not formatting"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/cli/src/lib.rs:148",
+    "old": [
+     "changes re-export StandardStream, stdout, stdout_buffered_block, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "pure reorder called changes re-export"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/globset/src/glob.rs:2",
+    "old": [
+     "changes import Path, is_separator, path, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "pure rustfmt reorder called changes import"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/ignore/src/dir.rs:894",
+    "old": [
+     "changes import Error, Gitignore, IgnoreBuilder, and 4 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "only 4 names reordered, not 7"
+   },
+   {
+    "key": "ripgrep:bb8172fe:crates/printer/src/lib.rs:66",
+    "old": [
+     "changes re-export HyperlinkAlias, HyperlinkConfig, HyperlinkEnvironment, and 3 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "pure rustfmt reorder, re-export set unchanged; 'changes re-export' implies API change"
+   },
+   {
+    "key": "ripgrep:bb8172fe:tests/feature.rs:2",
+    "old": [
+     "changes import Dir, TestCommand, sort_lines, and 1 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "3 names, rationale implies 4; reorder only"
+   },
+   {
+    "key": "ripgrep:bb8172fe:tests/misc.rs:2",
+    "old": [
+     "changes import Dir, TestCommand, cmd_exists, and 2 more",
+     []
+    ],
+    "new": [
+     "formatting only",
+     []
+    ],
+    "why": "only 4 names; 'and 2 more' implies 5"
+   },
+   {
+    "key": "ripgrep:be739c79:crates/index/src/literal.rs:1",
+    "old": [
+     "adds import BString, ByteVec, Hir, and 7 more",
+     []
+    ],
+    "new": [
+     "adds import BString, ByteVec, Hir, and 4 more",
+     []
+    ],
+    "why": "import count wrong: 7 names, claims 10"
+   },
+   {
+    "key": "vue:30ba6473:scripts/release.js:482",
+    "old": [
+     "adds local pkgVersion (4 uses)",
+     []
+    ],
+    "new": [
+     "adds local pkgVersion (2 uses)",
+     []
+    ],
+    "why": "pkgVersion used twice, not 4"
    }
   ]
  },
@@ -5988,30 +8524,6 @@
    "why": "hunk moves test_prompts, test, test_no; lists 5 names"
   },
   {
-   "key": "click:18c2451f:src/click/shell_completion.py:225",
-   "rationale": "adds local cli (4 uses), complete_var (4 uses), ctx_args (4 uses), and 1 more",
-   "details": [],
-   "why": "class attribute annotations, not locals"
-  },
-  {
-   "key": "click:1a994adb:src/click/exceptions.py:132",
-   "rationale": "adds local param (5 uses)",
-   "details": [],
-   "why": "class attribute annotations, not local"
-  },
-  {
-   "key": "click:1a994adb:src/click/exceptions.py:314",
-   "rationale": "adds local option_name (3 uses)",
-   "details": [],
-   "why": "class attribute annotation, not local"
-  },
-  {
-   "key": "click:1a994adb:src/click/exceptions.py:333",
-   "rationale": "adds local ctx (5 uses)",
-   "details": [],
-   "why": "ctx is class attribute annotation, not local"
-  },
-  {
    "key": "click:45293511:tests/test_termui.py:466",
    "rationale": "adds 36 lines to test_editor_path_normalization",
    "details": [
@@ -6054,22 +8566,10 @@
    "why": "FuncParamTypeInfoDict does not use FloatParamType"
   },
   {
-   "key": "click:77bd81f3:src/click/types.py:861",
-   "rationale": "adds local atomic (7 uses), errors (5 uses)",
-   "details": [],
-   "why": "class attribute annotations called locals"
-  },
-  {
    "key": "click:7925a341:tests/test_utils/test_echo.py:95",
    "rationale": "moves test_echo_writing_to_standard_error from tests/test_utils.py",
    "details": [],
    "why": "hunk only adds skipif decorator, not a move"
-  },
-  {
-   "key": "click:8a1b1a33:src/click/core.py:2879",
-   "rationale": "adds local _flag_needs_value (4 uses), allow_from_autoenv (5 uses), confirmation_prompt (5 uses), and 9 more",
-   "details": [],
-   "why": "class attrs not locals; count 12 vs 15"
   },
   {
    "key": "click:8a2b4890:src/click/types.py:453",
@@ -6122,22 +8622,10 @@
    "why": "dedent changes Python example semantics"
   },
   {
-   "key": "click:c2ed4149:tests/test_testing.py:451",
-   "rationale": "adds test_isolated_runner_custom_tempdir",
-   "details": [],
-   "why": "only adds decorator, test pre-exists"
-  },
-  {
    "key": "click:c69643b6:src/click/_termui_impl.py:369",
    "rationale": "renames pager → _pager_contextmanager; adds type MaybeStripAnsi, write; changes type __init__, MaybeStripAnsi used by get_pager_file below",
    "details": [],
    "why": "__init__ is new, not changed; rename hides signature change"
-  },
-  {
-   "key": "click:cd4674a6:src/click/utils.py:120",
-   "rationale": "adds local _f (10 uses), atomic (5 uses), encoding (5 uses), and 2 more",
-   "details": [],
-   "why": "class attribute annotations, not locals"
   },
   {
    "key": "click:cf938687:src/click/types.py:1131",
@@ -6180,34 +8668,10 @@
    "why": "cli exists; only decorators added"
   },
   {
-   "key": "click:e34e526e:src/click/core.py:1018",
-   "rationale": "adds local _help_option (4 uses), add_help_option (4 uses), deprecated (10 uses), and 3 more",
-   "details": [],
-   "why": "class attr annotations not locals; 13 added not 6"
-  },
-  {
-   "key": "click:e34e526e:src/click/core.py:2073",
-   "rationale": "adds local sources (6 uses)",
-   "details": [],
-   "why": "class attribute annotation, not local"
-  },
-  {
-   "key": "click:e34e526e:src/click/core.py:308",
-   "rationale": "adds local _close_callbacks (1 use), _depth (6 uses), _exit_stack (5 uses), and 9 more",
-   "details": [],
-   "why": "class attribute annotations, not locals; 27 added not 12"
-  },
-  {
    "key": "cobra:0745e557:completions_test.go:674",
    "rationale": "adds type GetSlice, Set, String, and 2 more, used by TestFlagNameCompletionRepeat below",
    "details": [],
    "why": "GetSlice/Set/String are methods, not types"
-  },
-  {
-   "key": "cobra:511af59c:doc/md_docs_test.go:19",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes ioutil import, not formatting"
   },
   {
    "key": "cobra:5b2b9e9f:Makefile:12",
@@ -6222,46 +8686,16 @@
    "why": "helper calls CheckErr, does not test it"
   },
   {
-   "key": "cobra:652c755d:cobra/cmd/golden_test.go:6",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes flag import, not formatting"
-  },
-  {
-   "key": "cobra:652c755d:cobra/cmd/helpers.go:17",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes 3 imports, not formatting"
-  },
-  {
    "key": "cobra:652c755d:doc/man_examples_test.go:33",
    "rationale": "tests CheckErr (cobra.go)",
    "details": [],
    "why": "wraps GenMan in CheckErr, does not test it"
   },
   {
-   "key": "cobra:8eaca5f0:cobra/cmd/root.go:20",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes homedir import, not formatting"
-  },
-  {
-   "key": "cobra:988bd761:fish_completions_test.go:21",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes log import, not formatting"
-  },
-  {
    "key": "cobra:9e1d6f1c:args_test.go:20",
    "rationale": "adds expectSuccess, extracted from TestOnlyValidArgs, used by rangeArgsWithInvalidCount below",
    "details": [],
    "why": "error-case helper wouldn't use expectSuccess"
-  },
-  {
-   "key": "cobra:d1e9d85f:command.go:26",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "import removal, not formatting"
   },
   {
    "key": "cobra:ff2c55e3:.github/workflows/test.yml:13",
@@ -6398,12 +8832,6 @@
    "why": "arch/build/cc not removed; only desc changed"
   },
   {
-   "key": "curl:e13362c2:tests/http/test_17_ssl_use.py:38",
-   "rationale": "adds TLSDefs",
-   "details": [],
-   "why": "only adds decorator to existing class"
-  },
-  {
    "key": "curl:e1450d8f:tests/libtest/lib3102.c:50",
    "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
    "details": [],
@@ -6446,12 +8874,6 @@
    "why": "uses CURL_CSTRLEN, doesn't test it"
   },
   {
-   "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/common.ts:3",
-   "rationale": "changes import composeEventHandlers",
-   "details": [],
-   "why": "EVENT removed, not composeEventHandlers"
-  },
-  {
    "key": "excalidraw:2423819e:packages/excalidraw/actions/actionCanvas.tsx:399",
    "rationale": "edits keyTest",
    "details": [
@@ -6459,90 +8881,6 @@
     "changes keyTest in perform"
    ],
    "why": "keyTest not inside perform; misplaced"
-  },
-  {
-   "key": "excalidraw:28691e14:packages/element/src/distribute.ts:72",
-   "rationale": "adds local updatedElement (2 uses)",
-   "details": [],
-   "why": "this updatedElement has 1 use, not 2"
-  },
-  {
-   "key": "excalidraw:320af405:packages/element/src/collision.ts:1",
-   "rationale": "changes import isTransparent",
-   "details": [],
-   "why": "isTransparent unchanged; elementCenterPoint removed"
-  },
-  {
-   "key": "excalidraw:320af405:packages/excalidraw/tests/helpers/ui.ts:23",
-   "rationale": "changes import KEYS, arrayToMap",
-   "details": [],
-   "why": "names unchanged imports, omits removed elementCenterPoint"
-  },
-  {
-   "key": "excalidraw:47cbb5b6:packages/excalidraw/components/App.tsx:57",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes isIOS import, not formatting"
-  },
-  {
-   "key": "excalidraw:51ca8abd:packages/excalidraw/actions/actionCanvas.tsx:48",
-   "rationale": "changes import AppState",
-   "details": [],
-   "why": "AppState unchanged; Offsets removed, not named"
-  },
-  {
-   "key": "excalidraw:5fffc474:packages/excalidraw/actions/actionMenu.tsx:5",
-   "rationale": "changes import HelpIconThin",
-   "details": [],
-   "why": "HelpIconThin unchanged; hunk removes other imports"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionAlign.tsx:7",
-   "rationale": "changes import KEYS, arrayToMap",
-   "details": [],
-   "why": "removes getShortcutKey; KEYS, arrayToMap unchanged"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionCanvas.tsx:10",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes import, not formatting"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionDuplicateSelection.tsx:6",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes import, not formatting"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/actions/actionLink.tsx:3",
-   "rationale": "changes import KEYS",
-   "details": [],
-   "why": "KEYS unchanged; getShortcutKey removed"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/actions/shortcuts.ts:1",
-   "rationale": "changes import isDarwin",
-   "details": [],
-   "why": "change drops getShortcutKey; isDarwin unchanged"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/components/App.tsx:83",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes import, not formatting"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/components/ColorPicker/ColorInput.tsx:4",
-   "rationale": "changes import KEYS",
-   "details": [],
-   "why": "change drops getShortcutKey; KEYS unchanged"
-  },
-  {
-   "key": "excalidraw:8013eb5e:packages/excalidraw/components/HelpDialog.tsx:5",
-   "rationale": "changes import KEYS",
-   "details": [],
-   "why": "names KEYS; actual change removes getShortcutKey"
   },
   {
    "key": "excalidraw:816c81c1:packages/excalidraw/components/icons.tsx:1342",
@@ -6553,52 +8891,10 @@
    "why": "literal replaced by shared props constant, not removed"
   },
   {
-   "key": "excalidraw:84e96e93:packages/element/src/collision.ts:29",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes doBoundsIntersect import, not formatting"
-  },
-  {
-   "key": "excalidraw:9357f98a:packages/excalidraw/components/hyperlink/helpers.ts:15",
-   "rationale": "changes import AppState",
-   "details": [],
-   "why": "UIAppState removed, AppState unchanged"
-  },
-  {
-   "key": "excalidraw:958597df:packages/element/src/binding.ts:27",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes import, not formatting"
-  },
-  {
-   "key": "excalidraw:958597df:packages/element/src/collision.ts:14",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes an import, not formatting"
-  },
-  {
-   "key": "excalidraw:958597df:packages/excalidraw/lasso/utils.ts:7",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes an import, not formatting"
-  },
-  {
    "key": "excalidraw:a0b98a94:packages/excalidraw/components/TTDDialog/hooks/useTextGeneration.ts:91",
    "rationale": "adds onGenerate, used by useTextGeneration.handleAbort below; adds local abortController (3 uses), error (9 uses), generatedResponse (1 use), and 4 more",
    "details": [],
    "why": "handleAbort does not use onGenerate"
-  },
-  {
-   "key": "excalidraw:a1d9b16b:packages/excalidraw/components/MobileMenu.tsx:19",
-   "rationale": "changes import AppClassProperties, AppState, UIAppState",
-   "details": [],
-   "why": "names unchanged imports, omits removed AppProps"
-  },
-  {
-   "key": "excalidraw:b4ce7c71:packages/excalidraw/components/IconPicker.tsx:11",
-   "rationale": "changes import useExcalidrawContainer",
-   "details": [],
-   "why": "removes useEditorInterface; names untouched symbol"
   },
   {
    "key": "excalidraw:c141960a:packages/element/src/binding.ts:1765",
@@ -6613,12 +8909,6 @@
    "rationale": "formatting only",
    "details": [],
    "why": "removes GlobalPoint import, not formatting"
-  },
-  {
-   "key": "excalidraw:c141960a:packages/element/src/binding.ts:72",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes two type imports, not formatting"
   },
   {
    "key": "excalidraw:c141960a:packages/element/src/linearElementEditor.ts:1954",
@@ -6680,18 +8970,6 @@
    "why": "removes import, not formatting"
   },
   {
-   "key": "excalidraw:ec070911:packages/excalidraw/components/LibraryUnit.tsx:2",
-   "rationale": "changes import memo, useRef, useState",
-   "details": [],
-   "why": "hides useEffect removal; names unchanged ones"
-  },
-  {
-   "key": "excalidraw:ed7c0c1d:packages/excalidraw/components/Actions.tsx:5",
-   "rationale": "changes import CLASSES, KEYS, capitalizeString",
-   "details": [],
-   "why": "names unchanged imports, omits removed isTransparent"
-  },
-  {
    "key": "execa:18d320f9:test/verbose/output-enable.js:85",
    "rationale": "changes signature of testPrintError, used above",
    "details": [],
@@ -6702,12 +8980,6 @@
    "rationale": "adds testStringToUint8Array, used by resultStringGenerator above",
    "details": [],
    "why": "uses resultUint8ArrayGenerator, not used by resultStringGenerator; removes tests"
-  },
-  {
-   "key": "execa:2fd9351c:test/error.js:4",
-   "rationale": "changes import setFixtureDir",
-   "details": [],
-   "why": "change removes FIXTURES_DIR, not setFixtureDir"
   },
   {
    "key": "execa:30a662d4:test/kill.js:467",
@@ -6724,18 +8996,6 @@
     "removes all, reject, uid from testSpawnError"
    ],
    "why": "rename hides removed spawn and code check"
-  },
-  {
-   "key": "execa:52c4bde4:lib/stdio/generator.js:7",
-   "rationale": "changes import isAsyncGenerator",
-   "details": [],
-   "why": "names unchanged isAsyncGenerator; change drops isGeneratorOptions"
-  },
-  {
-   "key": "execa:52c4bde4:test/stdio/transform.js:13",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes an imported name, not formatting"
   },
   {
    "key": "execa:55175e82:test-d/stdio/option/duplex.test-d.ts:9",
@@ -6792,12 +9052,6 @@
    "why": "not a rename: signature and logic changed"
   },
   {
-   "key": "execa:8074d853:test/arguments/options.js:1",
-   "rationale": "changes import delimiter",
-   "details": [],
-   "why": "really removes join, basename; delimiter unchanged"
-  },
-  {
    "key": "execa:839c2fe3:lib/ipc/get-each.js:5",
    "rationale": "changes signature of getEachMessage",
    "details": [],
@@ -6833,12 +9087,6 @@
    "why": "new tests add error arg, killSignal preexisting"
   },
   {
-   "key": "execa:9de73355:lib/convert/readable.js:9",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes createDeferred import, not formatting"
-  },
-  {
    "key": "execa:9e6e19eb:test/stdio/lines.js:130",
    "rationale": "replaces local maxBuffer with isMaxBuffer (1 use)",
    "details": [
@@ -6867,22 +9115,10 @@
    "why": "testInvalidPayload used by test() calls, not toJSON"
   },
   {
-   "key": "execa:acc2b685:test/resolve/no-buffer.js:6",
-   "rationale": "changes import fullStdio",
-   "details": [],
-   "why": "change removes getStdio; fullStdio unchanged"
-  },
-  {
    "key": "execa:b9474c38:types/methods/command.d.ts:71",
    "rationale": "uses parseCommandString, added in lib/methods/command.js",
    "details": [],
    "why": "declares type, not uses"
-  },
-  {
-   "key": "execa:bdda4757:lib/stream/subprocess.js:5",
-   "rationale": "changes import isInputFileDescriptor, waitForStream",
-   "details": [],
-   "why": "named imports unchanged; handleStreamError removed"
   },
   {
    "key": "execa:c5f9f094:test/stdio/encoding-final.js:101",
@@ -7025,94 +9261,10 @@
    "why": "removes type import, not formatting"
   },
   {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:184",
-   "rationale": "adds assertArrayEquals",
-   "details": [],
-   "why": "only adds annotation to existing method"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:229",
-   "rationale": "adds assertArrayEquals",
-   "details": [],
-   "why": "only adds annotation; method exists"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:275",
-   "rationale": "adds assertArrayEquals",
-   "details": [],
-   "why": "only adds annotation to existing method"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:368",
-   "rationale": "adds assertArrayEquals",
-   "details": [],
-   "why": "only adds annotation to existing method"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertArrayEquals.java:415",
-   "rationale": "adds assertArrayEquals",
-   "details": [],
-   "why": "only adds annotation, method exists"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertIterableEquals.java:59",
-   "rationale": "adds assertIterableEquals",
-   "details": [],
-   "why": "only adds annotation to existing method"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-api/src/main/java/org/junit/jupiter/api/AssertNotSame.java:35",
-   "rationale": "adds assertNotSame",
-   "details": [],
-   "why": "only adds annotation to existing method"
-  },
-  {
-   "key": "junit5:5a29b878:junit-jupiter-engine/src/main/java/org/junit/jupiter/engine/execution/ExtensionContextSupplier.java:32",
-   "rationale": "adds create",
-   "details": [],
-   "why": "create existed; only annotation added"
-  },
-  {
-   "key": "junit5:5a29b878:junit-platform-engine/src/main/java/org/junit/platform/engine/support/discovery/SelectorResolver.java:521",
-   "rationale": "adds isResolved",
-   "details": [],
-   "why": "isResolved exists; only annotation added"
-  },
-  {
-   "key": "junit5:5a29b878:junit-platform-engine/src/main/java/org/junit/platform/engine/support/hierarchical/NodeTestTaskContext.java:23",
-   "rationale": "adds withListener",
-   "details": [],
-   "why": "only adds annotation; withListener already exists"
-  },
-  {
-   "key": "junit5:5a29b878:junit-platform-engine/src/main/java/org/junit/platform/engine/support/hierarchical/ThrowableCollector.java:89",
-   "rationale": "adds add",
-   "details": [],
-   "why": "only adds annotation; add exists already"
-  },
-  {
-   "key": "junit5:5a29b878:junit-vintage-engine/src/main/java/org/junit/vintage/engine/descriptor/TestSourceProvider.java:47",
-   "rationale": "adds findTestSource",
-   "details": [],
-   "why": "only annotation added; findTestSource already exists"
-  },
-  {
    "key": "junit5:5bc7cb12:junit-jupiter-api/src/main/java/org/junit/jupiter/api/util/SystemPropertiesExtension.java:132",
    "rationale": "changes signature of findFirstRestoreAnnotationContext, used by SystemPropertiesExtension.applyForAllContexts above",
    "details": [],
    "why": "hides removal of ~60 lines of backup classes"
-  },
-  {
-   "key": "junit5:7e7183fe:platform-tests/src/test/java/org/junit/platform/suite/engine/SuiteEngineTests.java:924",
-   "rationale": "adds type AbstractInnerSuite",
-   "details": [],
-   "why": "only adds annotation; AbstractInnerSuite pre-exists"
-  },
-  {
-   "key": "junit5:7e7183fe:platform-tests/src/test/java/org/junit/platform/suite/engine/SuiteEngineTests.java:930",
-   "rationale": "adds type InnerSuite",
-   "details": [],
-   "why": "only adds annotation to existing class"
   },
   {
    "key": "junit5:9f8f3629:junit-jupiter-params/src/main/java/org/junit/jupiter/params/provider/CsvReaderFactory.java:82",
@@ -7357,12 +9509,6 @@
    "why": "also changes return logic, not just rename"
   },
   {
-   "key": "lazy:c02268ac:lua/lazy/core/plugin.lua:182",
-   "rationale": "replaces local self.importing with err (3 uses)",
-   "details": [],
-   "why": "logic change framed as local replacement; self.importing not local"
-  },
-  {
    "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:14",
    "rationale": "edits next_id",
    "details": [],
@@ -7518,12 +9664,6 @@
    "why": "adds test fn min_depth; not extracted from WalkBuilder"
   },
   {
-   "key": "ripgrep:59212d08:crates/pcre2/src/matcher.rs:431",
-   "rationale": "changes import LineMatchKind, grep_matcher",
-   "details": [],
-   "why": "Matcher removed, not LineMatchKind"
-  },
-  {
    "key": "ripgrep:66aa4a63:crates/printer/src/hyperlink/mod.rs:382",
    "rationale": "moves new from crates/printer/src/hyperlink.rs, used in crates/core/flags/defs.rs",
    "details": [],
@@ -7580,58 +9720,10 @@
    "why": "method sets config field; Config does not use it"
   },
   {
-   "key": "ripgrep:b610d1cb:crates/ignore/src/walk.rs:7",
-   "rationale": "formatting only",
-   "details": [],
-   "why": "removes sync::Arc import, not formatting"
-  },
-  {
-   "key": "ripgrep:bb8172fe:crates/cli/src/lib.rs:148",
-   "rationale": "changes re-export StandardStream, stdout, stdout_buffered_block, and 1 more",
-   "details": [],
-   "why": "pure reorder called changes re-export"
-  },
-  {
-   "key": "ripgrep:bb8172fe:crates/globset/src/glob.rs:2",
-   "rationale": "changes import Path, is_separator, path, and 1 more",
-   "details": [],
-   "why": "pure rustfmt reorder called changes import"
-  },
-  {
-   "key": "ripgrep:bb8172fe:crates/ignore/src/dir.rs:894",
-   "rationale": "changes import Error, Gitignore, IgnoreBuilder, and 4 more",
-   "details": [],
-   "why": "only 4 names reordered, not 7"
-  },
-  {
-   "key": "ripgrep:bb8172fe:crates/printer/src/lib.rs:66",
-   "rationale": "changes re-export HyperlinkAlias, HyperlinkConfig, HyperlinkEnvironment, and 3 more",
-   "details": [],
-   "why": "pure rustfmt reorder, re-export set unchanged; 'changes re-export' implies API change"
-  },
-  {
-   "key": "ripgrep:bb8172fe:tests/feature.rs:2",
-   "rationale": "changes import Dir, TestCommand, sort_lines, and 1 more",
-   "details": [],
-   "why": "3 names, rationale implies 4; reorder only"
-  },
-  {
-   "key": "ripgrep:bb8172fe:tests/misc.rs:2",
-   "rationale": "changes import Dir, TestCommand, cmd_exists, and 2 more",
-   "details": [],
-   "why": "only 4 names; 'and 2 more' implies 5"
-  },
-  {
    "key": "ripgrep:bdf01f46:CHANGELOG.md:1",
    "rationale": "renames 14.1.0 (TBD) → TBD",
    "details": [],
    "why": "adds new TBD section; 14.1.0 (TBD) not renamed"
-  },
-  {
-   "key": "ripgrep:be739c79:crates/index/src/literal.rs:1",
-   "rationale": "adds import BString, ByteVec, Hir, and 7 more",
-   "details": [],
-   "why": "import count wrong: 7 names, claims 10"
   },
   {
    "key": "ripgrep:be739c79:crates/index/src/literal.rs:386",
@@ -7656,12 +9748,6 @@
    "rationale": "adds WBaz, used by describe 'defineCustomElement' > describe 'styles' > test 'inject child component styles before parent styles'.render above",
    "details": [],
    "why": "WBaz used in render below, not above"
-  },
-  {
-   "key": "vue:30ba6473:scripts/release.js:482",
-   "rationale": "adds local pkgVersion (4 uses)",
-   "details": [],
-   "why": "pkgVersion used twice, not 4"
   },
   {
    "key": "vue:325eb1d9:packages/vue/__tests__/e2e/e2eBrowserUtils.ts:318",

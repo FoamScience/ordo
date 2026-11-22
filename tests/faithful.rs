@@ -528,3 +528,156 @@ fn a_deletion_below_an_insertion_is_placed_on_the_new_side() {
     let out = run(json!({"changes": [{"path": "m.py", "old": old, "new": new}]}));
     assert_eq!(out.clusters.len(), 2, "{:?}", out.clusters);
 }
+
+/// tasks-3uv.167. The self-check: a rationale claim has to hold against the
+/// facts the engine already has. Each case is a corpus hunk the scoreboard
+/// found unfaithful, reduced to the lines that mattered.
+fn rationale_at(hs: &[ordo_diff::model::HunkOut], row: usize) -> &str {
+    &hs.iter()
+        .find(|h| h.old_range[0] == row)
+        .unwrap_or_else(|| panic!("no hunk at old row {row}: {hs:?}"))
+        .rationale
+}
+
+/// cobra d1e9d85f command.go: a dropped line of a go import block was
+/// "formatting only", because go imports carried the block's row, not their own.
+#[test]
+fn a_dropped_go_import_is_a_removal_not_formatting() {
+    let hs = hunks(
+        "command.go",
+        "package cobra\n\nimport (\n\t\"io\"\n\t\"path/filepath\"\n\t\"sort\"\n)\n\nfunc f() { _ = filepath.Base(\"x\") }\n",
+        "package cobra\n\nimport (\n\t\"io\"\n\t\"sort\"\n)\n\nfunc f() { g() }\n",
+    );
+    assert_eq!(rationale_at(&hs, 5), "removes import filepath");
+}
+
+/// execa 9de73355 lib/convert/readable.js: a name that left a multi-line
+/// import for a line of its own moved; the residue is not "formatting only".
+#[test]
+fn a_name_moved_out_of_an_import_list_is_a_move() {
+    let hs = hunks(
+        "readable.js",
+        "import {a} from './a.js';\nimport {\n\tcreateDeferred,\n\tsafeWait,\n} from './x.js';\n",
+        "import {a} from './a.js';\nimport {createDeferred} from '../utils/deferred.js';\nimport {\n\tsafeWait,\n} from './x.js';\n",
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.rationale == "moves import createDeferred"),
+        "{:?}",
+        hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
+    );
+}
+
+/// ripgrep b610d1cb walk.rs: `sync::Arc` folded into `sync::{Arc, OnceLock}`.
+#[test]
+fn a_rust_use_folded_into_another_is_a_move() {
+    let hs = hunks(
+        "walk.rs",
+        "use std::{\n    io,\n    sync::Arc,\n    sync::atomic::AtomicBool,\n};\n",
+        "use std::{\n    io,\n    sync::atomic::AtomicBool,\n    sync::{Arc, OnceLock},\n};\n",
+    );
+    assert_eq!(rationale_at(&hs, 3), "moves import Arc");
+}
+
+/// excalidraw 8013eb5e actionLink.tsx: `changes import KEYS` named the name
+/// the hunk kept and hid `getShortcutKey`, which it dropped.
+#[test]
+fn a_changed_import_names_what_left_not_what_stayed() {
+    let hs = hunks(
+        "actionLink.tsx",
+        "import { KEYS, getShortcutKey } from \"@excalidraw/common\";\n\nexport const a = 1;\n",
+        "import { KEYS } from \"@excalidraw/common\";\n\nexport const a = KEYS;\n",
+    );
+    assert_eq!(rationale_at(&hs, 1), "removes import getShortcutKey");
+}
+
+/// ripgrep bb8172fe glob.rs: rustfmt re-sorted the names of two imports; the
+/// same names on both sides are not a change.
+#[test]
+fn a_sorted_import_list_is_formatting_only() {
+    let hs = hunks(
+        "glob.rs",
+        "use std::path::{is_separator, Path};\n\nfn f() {}\n",
+        "use std::path::{Path, is_separator};\n\nfn f() {}\n",
+    );
+    assert_eq!(rationale_at(&hs, 1), "formatting only");
+}
+
+/// a go import whose path moved to another module still binds the same name:
+/// the line changed, so it is not formatting.
+#[test]
+fn a_changed_go_import_path_is_not_formatting() {
+    let hs = hunks(
+        "yaml_docs.go",
+        "package doc\n\nimport (\n\t\"gopkg.in/yaml.v3\"\n)\n",
+        "package doc\n\nimport (\n\t\"go.yaml.in/yaml/v3\"\n)\n",
+    );
+    assert_eq!(rationale_at(&hs, 4), "changes import yaml");
+}
+
+/// ripgrep be739c79 literal.rs: "and 7 more" after three names counted the
+/// path words of every `use` as names; seven names are imported.
+#[test]
+fn an_import_list_counts_the_names_it_binds() {
+    let hs = hunks(
+        "literal.rs",
+        "fn f() {}\n",
+        "use std::cmp;\nuse std::mem;\n\nuse bstr::{BString, ByteVec};\nuse regex_syntax::hir::{self, Hir, HirKind};\n\nfn f() {}\n",
+    );
+    assert_eq!(
+        hs[0].rationale,
+        "adds import BString, ByteVec, Hir, and 4 more"
+    );
+}
+
+/// junit5 5a29b878 AssertNotSame.java: an annotation added above a method the
+/// file already had is not "adds assertNotSame".
+#[test]
+fn an_annotation_added_above_a_method_does_not_add_it() {
+    let hs = hunks(
+        "AssertNotSame.java",
+        "class A {\n\n\tstatic void assertNotSame(Object a, Object b) {\n\t\treturn;\n\t}\n}\n",
+        "class A {\n\n\t@SuppressWarnings(\"ReferenceEquality\")\n\tstatic void assertNotSame(Object a, Object b) {\n\t\treturn;\n\t}\n}\n",
+    );
+    assert_eq!(hs[0].rationale, "changes annotations of assertNotSame");
+}
+
+/// curl e13362c2 test_17_ssl_use.py: `@dataclass` on an existing class.
+#[test]
+fn a_decorator_added_to_a_class_does_not_add_it() {
+    let hs = hunks(
+        "test_ssl.py",
+        "import os\n\n\nclass TLSDefs:\n    pass\n",
+        "import os\n\n\n@dataclass\nclass TLSDefs:\n    pass\n",
+    );
+    assert_eq!(rationale_at(&hs, 4), "changes TLSDefs");
+}
+
+/// click 1a994adb exceptions.py: annotated attributes of a class body are the
+/// class's, not locals of anything.
+#[test]
+fn a_class_attribute_annotation_is_not_a_local() {
+    let hs = hunks(
+        "exceptions.py",
+        "class UsageError:\n    def show(self):\n        pass\n",
+        "class UsageError:\n    param: str\n    ctx: int\n\n    def show(self):\n        pass\n",
+    );
+    assert!(hs.iter().all(|h| !h.rationale.contains("local")), "{hs:?}");
+}
+
+/// vue 30ba6473 release.js: two sibling blocks each declare their own
+/// `pkgVersion`; the second is used twice, not four times.
+#[test]
+fn a_redeclared_local_counts_only_its_own_uses() {
+    let hs = hunks(
+        "release.js",
+        "function publish() {\n  if (a) {\n    skip()\n  }\n  try {\n    run()\n  } catch (e) {\n    log(e)\n  }\n}\n",
+        "function publish() {\n  if (a) {\n    const pkgVersion = `${x}`\n    log(pkgVersion)\n    all.push(pkgVersion)\n  }\n  try {\n    run()\n  } catch (e) {\n    const pkgVersion = `${y}`\n    log(pkgVersion)\n    all.push(pkgVersion)\n  }\n}\n",
+    );
+    assert!(
+        hs.iter()
+            .any(|h| h.rationale == "adds local pkgVersion (2 uses)"),
+        "{:?}",
+        hs.iter().map(|h| &h.rationale).collect::<Vec<_>>()
+    );
+}

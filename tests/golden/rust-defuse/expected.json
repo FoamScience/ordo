@@ -34,7 +34,7 @@
           "uses": [],
           "group": "g0",
           "order_index": 0,
-          "rationale": "adds import fmt, std",
+          "rationale": "adds import fmt",
           "noise": true,
           "extent": "added"
         },

@@ -805,7 +805,14 @@ fn name_deleted_imports(f: &mut PerFileHunks, change: &Change, symbols: &FileSym
         sem.category = Category::Import;
         sem.noise = true;
         let deleted = &old_lines[o0 - 1..o1.min(old_lines.len())];
-        sem.imports = gone_imports(symbols, deleted, o0..=o1);
+        let (gone, moved) = gone_imports(
+            symbols,
+            change.new.as_deref().unwrap_or(""),
+            deleted,
+            o0..=o1,
+        );
+        sem.imports = gone;
+        sem.imports_moved_out = moved;
     }
 }
 
@@ -813,30 +820,43 @@ fn name_deleted_imports(f: &mut PerFileHunks, change: &Change, symbols: &FileSym
 /// from a multi-line `import { a, b }`, which sits rows below the statement
 /// its removal is recorded against — a deleted line that is just that name. A
 /// name the new side still imports is a moved import, and the residue it
-/// leaves behind stays "formatting only".
+/// leaves behind is named by what moved, not called formatting. Returns
+/// `(left, moved)`.
 fn gone_imports(
     symbols: &FileSymbols,
+    new_src: &str,
     deleted: &[&str],
     rows: RangeInclusive<usize>,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<String>) {
     let member_line = |nm: &str| {
         deleted.iter().any(|l| {
             let l = l.trim().trim_end_matches(',').trim();
-            l == nm || l.ends_with(&format!(" as {nm}"))
+            // `sync::Arc` names `Arc`, and `sync` is still there if it moved
+            // elsewhere; `other::foo` left alone is not `a::foo` kept
+            let pathed = l.strip_suffix(&format!("::{nm}")).is_some_and(|head| {
+                head.rsplit("::")
+                    .next()
+                    .is_some_and(|seg| new_src.contains(seg))
+            });
+            l == nm || l.ends_with(&format!(" as {nm}")) || pathed
         })
     };
-    let mut gone: Vec<String> = symbols
-        .old_rows
-        .1
-        .iter()
-        .filter(|(nm, row)| {
-            !symbols.new_imports.contains(nm) && (rows.contains(row) || member_line(nm))
-        })
-        .map(|(nm, _)| nm.clone())
-        .collect();
-    gone.sort();
-    gone.dedup();
-    gone
+    let on_rows = |new_side: bool| {
+        let mut names: Vec<String> = symbols
+            .old_rows
+            .1
+            .iter()
+            .filter(|(nm, row)| {
+                symbols.new_imports.contains(nm) == new_side
+                    && (rows.contains(row) || member_line(nm))
+            })
+            .map(|(nm, _)| nm.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    };
+    (on_rows(false), on_rows(true))
 }
 
 // A pure-import hunk whose statements all existed in the old file is a
@@ -854,12 +874,44 @@ fn mark_moved_imports(f: &mut PerFileHunks, change: &Change) {
         return;
     }
     let new_lines: Vec<&str> = new_src.lines().collect();
+    let old_lines: Vec<&str> = old_src.lines().collect();
+    // each import statement a range of rows touches, as its words in no
+    // order: two sides whose statements have the same words one for one
+    // spell the same imports, sorted or re-wrapped
+    let (old_spans, new_spans) = (
+        extract::import_spans(spec, old_src),
+        extract::import_spans(spec, new_src),
+    );
+    let statements =
+        |spans: &[[usize; 2]], lines: &[&str], [a, b]: [usize; 2]| -> Vec<Vec<String>> {
+            let mut units: Vec<Vec<String>> = spans
+                .iter()
+                .copied()
+                .filter(|[s, e]| *s <= b && *e >= a)
+                .map(|[s, e]| {
+                    let mut w: Vec<String> = (s..=e)
+                        .filter_map(|r| lines.get(r - 1))
+                        .flat_map(|l| l.split(|c: char| !c.is_alphanumeric() && c != '_'))
+                        .filter(|t| !t.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    w.sort_unstable();
+                    w
+                })
+                .collect();
+            units.sort_unstable();
+            units
+        };
     let PerFileHunks { raw, sem: sems, .. } = f;
     for (li, sem) in sems.iter_mut().enumerate() {
         let [r0, r1] = raw[li].new_range;
         if sem.category != Category::Import || r0 == 0 || r0 > r1 {
             continue;
         }
+        sem.import_reordered = sem.old_range[0] <= sem.old_range[1] && {
+            let before = statements(&old_spans, &old_lines, sem.old_range);
+            !before.is_empty() && before == statements(&new_spans, &new_lines, [r0, r1])
+        };
         // every non-blank line of the hunk has to be an import the old file
         // already had; one new line among them makes this an arrival
         let mut lines = (r0..=r1)

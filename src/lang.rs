@@ -59,6 +59,9 @@ pub struct LangSpec {
     /// variable / assignment target) — drives the "adds local X, used at …"
     /// rationale wording. Verified against each grammar's node-types.json.
     pub locals: &'static [&'static str],
+    /// a variable belongs to its whole function, not the block it was first
+    /// assigned in, so a second assignment is the same binding
+    pub function_scoped: bool,
 }
 
 fn py() -> Language {
@@ -170,6 +173,7 @@ fn gotmpl() -> Language {
 static SPECS: &[LangSpec] = &[
     LangSpec {
         name: "python",
+        function_scoped: true,
         language: py,
         test_blocks: &[],
         imports: &[
@@ -192,6 +196,7 @@ static SPECS: &[LangSpec] = &[
     // grammar too (checked against its node-types.json), plus the shell forms.
     LangSpec {
         name: "xonsh",
+        function_scoped: true,
         language: xonsh,
         test_blocks: &[],
         imports: &[
@@ -214,6 +219,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "javascript",
+        function_scoped: false,
         language: js,
         test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
         imports: &["import_statement"],
@@ -241,6 +247,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "rust",
+        function_scoped: false,
         language: rs,
         test_blocks: &["test"],
         imports: &["use_declaration", "extern_crate_declaration"],
@@ -264,6 +271,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "typescript",
+        function_scoped: false,
         language: ts,
         test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
         imports: &["import_statement"],
@@ -296,6 +304,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "tsx",
+        function_scoped: false,
         language: tsx,
         test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
         imports: &["import_statement"],
@@ -326,6 +335,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "go",
+        function_scoped: false,
         language: go,
         test_blocks: &[],
         imports: &["import_declaration", "import_spec"],
@@ -342,6 +352,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "c",
+        function_scoped: false,
         language: c,
         test_blocks: &[],
         imports: &["preproc_include"],
@@ -367,6 +378,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "cpp",
+        function_scoped: false,
         language: cpp,
         test_blocks: &[],
         imports: &["preproc_include"],
@@ -395,6 +407,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "java",
+        function_scoped: false,
         language: java,
         test_blocks: &[],
         imports: &["import_declaration"],
@@ -425,6 +438,7 @@ static SPECS: &[LangSpec] = &[
     // statements and `require`/`include` are the imports.
     LangSpec {
         name: "php",
+        function_scoped: true,
         language: php,
         test_blocks: &[],
         imports: &[
@@ -456,6 +470,7 @@ static SPECS: &[LangSpec] = &[
     LangSpec {
         // lua: `require()` is a call, not a distinct import node → no imports
         name: "lua",
+        function_scoped: false,
         language: lua,
         test_blocks: &["describe", "it", "test", "context", "pending"],
         imports: &[],
@@ -477,6 +492,7 @@ static SPECS: &[LangSpec] = &[
         // double duty as both def and member lets a new subsection register
         // as a member of its parent for the P15 detail layer.
         name: "markdown",
+        function_scoped: false,
         language: md,
         test_blocks: &[],
         imports: &[],
@@ -493,6 +509,7 @@ static SPECS: &[LangSpec] = &[
     // headings around it instead (see `extract::rst_section`).
     LangSpec {
         name: "rst",
+        function_scoped: false,
         language: rst,
         test_blocks: &[],
         imports: &[],
@@ -513,6 +530,7 @@ static SPECS: &[LangSpec] = &[
     // key, so a list entry's position is not part of the path.
     LangSpec {
         name: "json",
+        function_scoped: false,
         language: json,
         test_blocks: &[],
         imports: &[],
@@ -525,6 +543,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "yaml",
+        function_scoped: false,
         language: yaml,
         test_blocks: &[],
         imports: &[],
@@ -539,6 +558,7 @@ static SPECS: &[LangSpec] = &[
     },
     LangSpec {
         name: "toml",
+        function_scoped: false,
         language: toml,
         test_blocks: &[],
         imports: &[],
@@ -558,6 +578,7 @@ static SPECS: &[LangSpec] = &[
     // because that is how the file names them.
     LangSpec {
         name: "ini",
+        function_scoped: false,
         language: ini,
         test_blocks: &[],
         imports: &[],
@@ -575,6 +596,7 @@ static SPECS: &[LangSpec] = &[
     // and is transparent, exactly as an anonymous def already is.
     LangSpec {
         name: "cmake",
+        function_scoped: false,
         language: cmake,
         test_blocks: &[],
         imports: &[],
@@ -592,6 +614,7 @@ static SPECS: &[LangSpec] = &[
     // are collected from the two parents that mean one (see `extract::walk`).
     LangSpec {
         name: "make",
+        function_scoped: false,
         language: make,
         test_blocks: &[],
         imports: &["include_directive"],
@@ -610,6 +633,7 @@ static SPECS: &[LangSpec] = &[
     // whose function happens to be named `import`; see `extract::import_like`.
     LangSpec {
         name: "nix",
+        function_scoped: false,
         language: nix,
         test_blocks: &[],
         imports: &[],
@@ -627,6 +651,7 @@ static SPECS: &[LangSpec] = &[
     // computed field `[k]: …` has no name of its own.
     LangSpec {
         name: "jsonnet",
+        function_scoped: false,
         language: jsonnet,
         test_blocks: &[],
         imports: &["import_expr"],
@@ -645,6 +670,7 @@ static SPECS: &[LangSpec] = &[
     // through IDENT_KINDS.
     LangSpec {
         name: "bash",
+        function_scoped: true,
         language: bash,
         test_blocks: &[],
         imports: &[],
@@ -664,6 +690,7 @@ static SPECS: &[LangSpec] = &[
     // `extract::mask_template`.
     LangSpec {
         name: "jinja",
+        function_scoped: false,
         language: jinja,
         template: Some(&Template {
             literal: &["content"],
@@ -691,6 +718,7 @@ static SPECS: &[LangSpec] = &[
     // a stylesheet has (see `extract::walk`), the way a yaml anchor is.
     LangSpec {
         name: "css",
+        function_scoped: false,
         language: css,
         test_blocks: &[],
         imports: &["import_statement"],
@@ -708,6 +736,7 @@ static SPECS: &[LangSpec] = &[
     // with a code symbol in the cross-file union.
     LangSpec {
         name: "scss",
+        function_scoped: false,
         language: scss,
         test_blocks: &[],
         imports: &["import_statement", "use_statement", "forward_statement"],
@@ -737,6 +766,7 @@ static SPECS: &[LangSpec] = &[
     // `tree-sitter-vue` pins tree-sitter 0.20 and could not be used anyway.
     LangSpec {
         name: "html",
+        function_scoped: false,
         language: html,
         test_blocks: &[],
         imports: &[],
@@ -757,6 +787,7 @@ static SPECS: &[LangSpec] = &[
     // so claiming it would need a language-gated branch.
     LangSpec {
         name: "svelte",
+        function_scoped: false,
         language: svelte,
         test_blocks: &[],
         imports: &[],
@@ -777,6 +808,7 @@ static SPECS: &[LangSpec] = &[
     // unchanged. Vendored: see grammars/tree-sitter-go-template/README.md.
     LangSpec {
         name: "gotmpl",
+        function_scoped: false,
         language: gotmpl,
         template: Some(&Template {
             literal: &["text"],
@@ -800,6 +832,7 @@ static SPECS: &[LangSpec] = &[
     // contributes no uses, and cannot host a format with no grammar of its own.
     LangSpec {
         name: "erb",
+        function_scoped: false,
         language: erb,
         template: Some(&Template {
             literal: &["content"],
