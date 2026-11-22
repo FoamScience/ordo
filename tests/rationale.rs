@@ -2570,23 +2570,27 @@ fn an_import_swapped_in_place_replaces_rather_than_adds() {
     let new = "#include \"fviDiv.H\"\n#include \"zeroGradient.H\"\n";
     let hs = fixture::hunks("a.C", old, new);
     let rats: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
-    assert_eq!(rats, vec!["replaces import fvcDiv.H with fviDiv.H"], "{hs:?}");
+    assert_eq!(
+        rats,
+        vec!["replaces import fvcDiv.H with fviDiv.H"],
+        "{hs:?}"
+    );
 }
 
 #[test]
 fn a_new_file_with_code_under_its_imports_is_not_an_import_hunk() {
     let new = "import {a} from 'x';\n\nawait a();\nawait a();\n";
     let hs = fixture::hunks("a.js", "", new);
-    assert!(
-        hs.iter().all(|h| !h.rationale.contains("import")),
-        "{hs:?}"
-    );
+    assert!(hs.iter().all(|h| !h.rationale.contains("import")), "{hs:?}");
 }
 
 #[test]
 fn a_package_line_and_imports_stay_an_import_hunk() {
     for (path, new) in [
-        ("A.java", "package a.b;\n\nimport java.util.List;\nimport java.util.Map;\n"),
+        (
+            "A.java",
+            "package a.b;\n\nimport java.util.List;\nimport java.util.Map;\n",
+        ),
         ("a.go", "package a\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n"),
     ] {
         let hs = fixture::hunks(path, "", new);
