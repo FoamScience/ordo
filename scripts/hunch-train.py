@@ -187,13 +187,10 @@ def load(corpus, records, workers, label="should_skip"):
     return LOADED[memo]
 
 
-def load_features(corpus, records, workers, label):
-    """Features and `label` for `records`, each matched to an engine hunk by
-    key, else by overlap; the counts of both misses and overlap matches. With
-    `label` None, every head's labels: the kept records come back in place of
-    the label array, for the caller to read. A record that carries the
-    rationale it was labeled on (`text`) is dropped as stale when the engine
-    no longer writes that rationale for its hunk."""
+def match_labeled(corpus, records, workers):
+    """Each record's engine hunk key (None when none matches), by key, else by
+    overlap; the engine's vectors, rationales (rationale, details) and places
+    by key, the one feature schema, and the count of overlap matches."""
     commits = sorted({(r["repo"], r["sha"]) for r in records})
     vecs, texts, where, per_file, schemas = {}, {}, {}, defaultdict(list), set()
     with ThreadPoolExecutor(workers) as ex:
@@ -208,7 +205,7 @@ def load_features(corpus, records, workers, label):
     if len(schemas) != 1:
         sys.exit(f"expected one feature schema, got {len(schemas)}")
     claimed = {r["key"] for r in records if r["key"] in vecs}
-    keys, missing, by_overlap = [], [], 0
+    keys, by_overlap = [], 0
     for r in records:
         key = r["key"] if r["key"] in vecs else None
         if key is None and r.get("diff"):
@@ -219,19 +216,34 @@ def load_features(corpus, records, workers, label):
                 key = best[1]
                 claimed.add(key)
                 by_overlap += 1
-        if key is None:
-            missing.append(r["key"])
         keys.append(key)
+    return keys, vecs, texts, where, json.loads(schemas.pop()), by_overlap
+
+
+def is_stale(r, text):
+    """Whether `r` carries the rationale it was labeled on and the engine
+    now writes another."""
+    return "text" in r and tuple(r["text"]) != text
+
+
+def load_features(corpus, records, workers, label):
+    """Features and `label` for `records`, each matched to an engine hunk by
+    key, else by overlap; the counts of both misses and overlap matches. With
+    `label` None, every head's labels: the kept records come back in place of
+    the label array, for the caller to read. A record that carries the
+    rationale it was labeled on (`text`) is dropped as stale when the engine
+    no longer writes that rationale for its hunk."""
+    keys, vecs, texts, where, schema, by_overlap = match_labeled(corpus, records, workers)
+    missing = [r["key"] for r, k in zip(records, keys) if k is None]
     if missing:
         print(f"{len(missing)} labeled hunks not found in engine output, dropped "
               f"(first: {missing[0]})", file=sys.stderr)
     kept = [(r, k) for r, k in zip(records, keys) if k is not None]
-    is_stale = lambda r, k: "text" in r and tuple(r["text"]) != texts[k]
-    stale = [r["key"] for r, k in kept if is_stale(r, k)]
+    stale = [r["key"] for r, k in kept if is_stale(r, texts[k])]
     if stale:
         print(f"{len(stale)} labeled hunks whose rationale the engine has since changed, dropped "
               f"(first: {stale[0]})", file=sys.stderr)
-        kept = [(r, k) for r, k in kept if not is_stale(r, k)]
+        kept = [(r, k) for r, k in kept if not is_stale(r, texts[k])]
     if label is not None:
         unlabeled = [r["key"] for r, _ in kept if not isinstance(r["labels"].get(label), bool)]
         if unlabeled:
@@ -240,7 +252,7 @@ def load_features(corpus, records, workers, label):
     y = [r for r, _ in kept] if label is None else np.array([r["labels"][label] for r, _ in kept])
     repos = np.array([r["repo"] for r, _ in kept])
     w = np.array([r.get("weight", 1.0) for r, _ in kept])
-    return x, y, repos, w, json.loads(schemas.pop()), {"unmatched": len(missing), "matched_by_overlap": by_overlap,
+    return x, y, repos, w, schema, {"unmatched": len(missing), "matched_by_overlap": by_overlap,
                                                        **({"stale_rationale": len(stale)} if stale else {})}, \
         [where[k] for _, k in kept]
 
