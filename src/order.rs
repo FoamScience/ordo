@@ -2151,6 +2151,11 @@ fn classify_defs<'a>(
             v.moved.push((d, src.as_str()));
         } else if let Some(old) = changed.and_then(|c| c.rename.get(d)) {
             v.renamed.push((old.as_str(), d));
+            match changed.and_then(|c| c.rename_edit.get(d)) {
+                Some((true, _)) => v.signature_changed.push(d),
+                Some((false, true)) => v.edited.push(d),
+                _ => {}
+            }
         } else if let Some(src) = changed.and_then(|c| c.relocated.get(d)) {
             v.extracted.push((d, src.as_str()));
         } else {

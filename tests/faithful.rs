@@ -861,3 +861,123 @@ fn a_decorator_added_above_an_existing_test_changes_it() {
         assert_eq!(texts(&hs), ["changes test_a"], "{stack} decorators");
     }
 }
+
+/// openfoam b4976af6 boundBox.H: a specialisation whose only change is a
+/// typo in its name has an empty body, so there is no body to match on; it is
+/// a rename, not an added type.
+#[test]
+fn a_typo_fix_in_an_empty_bodied_type_is_a_rename() {
+    let hs = hunks(
+        "b.H",
+        "template<class T>\nstruct scaleable : public std::false_type {};\n\n\
+         template<>\nstruct scaleable<boundBox> : public std::true_type {};\n",
+        "template<class T>\nstruct scaleable : public std::false_type {};\n\n\
+         template<>\nstruct scalable<boundBox> : public std::true_type {};\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(r, ["renames scaleable<boundBox> → scalable<boundBox>"]);
+}
+
+/// Two empty-bodied specialisations whose names differ by a counter are two
+/// types, not one respelled.
+#[test]
+fn a_counter_in_an_empty_bodied_type_is_not_a_typo() {
+    let hs = hunks(
+        "c.H",
+        "struct Widget_Impl1 : public Base {};\n",
+        "struct Widget_Impl2 : public Base {};\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.starts_with("renames")), "{r:?}");
+}
+
+/// A short name is not replaced inside other identifiers when the body is
+/// compared: `get` → `fetch` leaves `get_value` alone, so a pure rename stays
+/// a pure rename.
+#[test]
+fn a_short_renamed_name_is_not_swapped_inside_other_names() {
+    let hs = hunks(
+        "g.py",
+        "def get(x):\n    y = get_value(x)\n    return y + get_other(x)\n",
+        "def fetch(x):\n    y = get_value(x)\n    return y + get_other(x)\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(r, ["renames get → fetch"]);
+}
+
+/// A short heading is renamed even when its letters appear inside another
+/// line of the new section.
+#[test]
+fn a_heading_word_inside_a_line_does_not_block_a_rename() {
+    let hs = hunks(
+        "R.md",
+        "# Doc\n\n## Fix\n\nFirst line of the notes.\nSecond line of the notes.\nThird line of the notes.\nFourth line of the notes.\n",
+        "# Doc\n\n## Repair\n\nFirst line of the notes.\nSecond line of the notes.\nThird line of the notes.\nFourth line of the notes.\nA Fix was applied.\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(
+        r.iter().any(|x| x.starts_with("renames Fix → Repair")),
+        "{r:?}"
+    );
+}
+
+/// lazy dbffad6f fragments.lua: the rename also gave the function a body it
+/// did not have, which "renames F:add → M:add" alone hides.
+#[test]
+fn a_rename_that_also_changes_the_body_says_so() {
+    let hs = hunks(
+        "f.lua",
+        "function F:add(plugin)\n  local id = self.next\n  self.next = id + 1\n  self.fragments[id] = plugin\n  return id\nend\n",
+        "function M:add(plugin)\n  if self.plugins[plugin] then\n    return self.fragments[self.plugins[plugin]]\n  end\n  local id = self.next\n  self.next = id + 1\n  self.fragments[id] = plugin\n  return id\nend\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(
+        r.iter()
+            .any(|x| x.starts_with("renames F:add → M:add; edits")),
+        "{r:?}"
+    );
+}
+
+/// junit5 e6fa8005: `printDetail` became `appendDetail` and took new
+/// parameters; the rename is not the whole of the change.
+#[test]
+fn a_rename_that_also_changes_the_signature_says_so() {
+    let hs = hunks(
+        "L.java",
+        "class L {\n  private void printDetail(Style style, String detail) {\n    printf(style, detail);\n    printf(NONE, \"%n\");\n  }\n}\n",
+        "class L {\n  private void appendDetail(StringBuilder output, Style style, String detail) {\n    printf(style, detail);\n    printf(NONE, \"%n\");\n  }\n}\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(
+        r.iter().any(|x| x
+            .starts_with("renames printDetail → appendDetail; changes signature of appendDetail")),
+        "{r:?}"
+    );
+}
+
+/// nvm 0d533816 tests.yml: `include` became `exclude` with different entries,
+/// which inverts the matrix; two keys with some lines in common are not one
+/// key renamed.
+#[test]
+fn a_yaml_key_with_a_different_body_is_not_renamed() {
+    let hs = hunks(
+        "t.yml",
+        "matrix:\n  include:\n    - shell: bash\n    - shell: sh\n",
+        "matrix:\n  exclude:\n    - shell: sh\n      suite: install\n    - shell: dash\n      suite: install\n    - shell: zsh\n      suite: install\n    - shell: bash\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.starts_with("renames")), "{r:?}");
+}
+
+/// ripgrep bdf01f46 CHANGELOG.md: the release heading got its date and a new
+/// `TBD` section went above it; `TBD` is added, not the old heading renamed.
+#[test]
+fn a_new_changelog_section_is_not_a_renamed_heading() {
+    let hs = hunks(
+        "CHANGELOG.md",
+        "14.1.0 (TBD)\n============\nBug fixes:\n\n* [BUG #2891](https://example.com):\n  Fix a thing.\n",
+        "TBD\n===\nUnreleased changes. Release notes have not yet been written.\n\n14.1.0 (2024-09-08)\n===================\nBug fixes:\n\n* [BUG #2891](https://example.com):\n  Fix a thing.\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.contains("→ TBD")), "{r:?}");
+}
