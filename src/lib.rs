@@ -1033,7 +1033,7 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
         let mut added_d: Vec<String> = nd.difference(od).cloned().collect();
         removed_d.sort();
         added_d.sort();
-        let ren = renames(fs, &removed_d, &added_d);
+        let ren = renames(fs, &removed_d, &added_d, &paths[fi]);
         let renamed_old: HashSet<String> = ren.values().cloned().collect();
         let outs = moves_out(
             fs,
@@ -1063,6 +1063,9 @@ fn detect_changes(symbols: &[FileSymbols], paths: &[String]) -> Vec<FileChanges>
         changed[fi].relocated = relocations(fs, &added_d, &ren);
         changed[fi].body_only = body_only(fs);
         changed[fi].removals = removals(fs, &paths[fi], &renamed_old, &moved_to);
+        if !is_data_path(&paths[fi]) && !lang::for_path(&paths[fi]).is_some_and(|s| s.prose) {
+            changed[fi].rename_edit = rename_edits(fs, &ren);
+        }
         changed[fi].rename = ren;
     }
     changed
@@ -1130,7 +1133,14 @@ fn appeared_defs(symbols: &[FileSymbols], paths: &[String]) -> HashMap<(String, 
 
 /// #7 rename (same file): new name → old name, by body match, then a
 /// lone-pair fallback
-fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<String, String> {
+fn renames(
+    fs: &FileSymbols,
+    removed: &[String],
+    added: &[String],
+    path: &str,
+) -> HashMap<String, String> {
+    let spec = lang::for_path(path);
+    let (data, prose) = spec.map_or((false, false), |s| (s.data, s.prose));
     // Every pair that could be a rename at all: the body reappears verbatim,
     // or the two are recognisably the same code. `similar` is the guard —
     // deleting `foo` and adding an unrelated `bar` shares no body lines, so
@@ -1151,12 +1161,12 @@ fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<St
             }
         }
     }
-    let mut pairs: Vec<(bool, bool, usize, &String, &String)> = vec![];
+    let mut pairs: Vec<(bool, bool, bool, usize, &String, &String)> = vec![];
     for r in removed {
         let Some(&(whole, lines)) = old_body.get(r.as_str()) else {
             continue;
         };
-        let rb = Some(whole).filter(|b| b.len() >= 8);
+        let rb = Some(whole).filter(|b| b.len() >= MIN_BODY_LEN);
         let mut near: Vec<&String> = rb
             .and_then(|b| by_whole.get(b))
             .into_iter()
@@ -1168,7 +1178,16 @@ fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<St
         near.dedup();
         for a in near {
             let exact = rb.is_some() && new_body.get(a.as_str()).map(|(w, _)| *w) == rb;
-            if !exact && !alike(&old_body, r, &new_body, a) {
+            // a heading still written in the new section was not renamed
+            // away; it is a section the change started above it
+            if prose
+                && new_body
+                    .get(a.as_str())
+                    .is_some_and(|(_, ls)| ls.iter().any(|l| l.trim_start_matches('#').trim() == r))
+            {
+                continue;
+            }
+            if !exact && !alike(&old_body, r, &new_body, a, data || prose) {
                 continue;
             }
             // One name inside the other is a rename on sight — `is_hidden` →
@@ -1177,12 +1196,38 @@ fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<St
             // `set_value` are two functions, not one renamed.
             let (short, long) = if r.len() <= a.len() { (r, a) } else { (a, r) };
             pairs.push((
-                long.contains(short.as_str()),
+                false,
+                !prose && long.contains(short.as_str()),
                 exact,
                 name_overlap(r, a),
                 r,
                 a,
             ));
+        }
+    }
+    // A body too short to match on — `{}` — says nothing, so such a pair is a
+    // rename only when the header is the same under the new name and the new
+    // name is the old one with a typo fixed (`scaleable<T>` → `scalable<T>`).
+    // Such a pair ranks below any pair with a body to match.
+    let mut by_short: HashMap<&str, Vec<&String>> = HashMap::new();
+    for a in added {
+        if let Some((_, h, w, _)) = fs.new_body.iter().find(|b| b.0 == *a) {
+            if w.len() < MIN_BODY_LEN && !h.is_empty() {
+                by_short.entry(w).or_default().push(a);
+            }
+        }
+    }
+    if !by_short.is_empty() && !data && !prose {
+        for r in removed {
+            let Some((_, oh, ow, _)) = fs.old_body.iter().find(|b| b.0 == *r) else {
+                continue;
+            };
+            for a in by_short.get(ow.as_str()).into_iter().flatten() {
+                let nh = fs.new_body.iter().find(|b| b.0 == **a).map(|b| &b.1);
+                if nh == Some(&swap_ident(oh, r, a)) && is_typo_fix(r, a) {
+                    pairs.push((true, false, false, name_overlap(r, a), r, a));
+                }
+            }
         }
     }
     // Best pair first, across the whole file rather than per removed name.
@@ -1192,12 +1237,17 @@ fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<St
     // about which became which. Failing that an exact body outranks a merely
     // similar one, and the closest spelling breaks what is left. Ordering by
     // name last keeps the result stable.
-    pairs.sort_by_key(|(obvious, exact, overlap, r, a)| {
-        (std::cmp::Reverse((*obvious, *exact, *overlap)), *r, *a)
+    pairs.sort_by_key(|(short, obvious, exact, overlap, r, a)| {
+        (
+            *short,
+            std::cmp::Reverse((*obvious, *exact, *overlap)),
+            *r,
+            *a,
+        )
     });
     let mut ren = HashMap::new();
     let (mut taken, mut claimed): (HashSet<&String>, HashSet<&String>) = Default::default();
-    for (_, _, _, r, a) in pairs {
+    for (_, _, _, _, r, a) in pairs {
         if taken.contains(r) || claimed.contains(a) {
             continue;
         }
@@ -1206,6 +1256,67 @@ fn renames(fs: &FileSymbols, removed: &[String], added: &[String]) -> HashMap<St
         ren.insert(a.clone(), r.clone());
     }
     ren
+}
+
+/// Bodies shorter than this carry no evidence of which definition is which.
+const MIN_BODY_LEN: usize = 8;
+
+/// How alike (`similar`'s character ratio) a name and its typo-fixed spelling are.
+const TYPO_RATIO: f32 = 0.8;
+
+/// `new` is `old` with a typo fixed: spelled alike, and not by a counter or a
+/// suffix (`Foo1` → `Foo2`, `Foo` → `FooB` name two things).
+fn is_typo_fix(old: &str, new: &str) -> bool {
+    let diff = similar::TextDiff::from_chars(old, new);
+    if diff.ratio() < TYPO_RATIO || old.starts_with(new) || new.starts_with(old) {
+        return false;
+    }
+    let letters = diff
+        .iter_all_changes()
+        .filter(|c| c.tag() != similar::ChangeTag::Equal)
+        .any(|c| !c.value().chars().all(|ch| ch.is_ascii_digit()));
+    letters
+}
+
+/// `text` with whole-identifier occurrences of `from` spelled `to`: `get` in
+/// `get_value` is another name and stays.
+fn swap_ident(text: &str, from: &str, to: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut before: Option<char> = None;
+    while let Some(i) = rest.find(from) {
+        let (head, tail) = rest.split_at(i);
+        let after = tail[from.len()..].chars().next();
+        let prev = head.chars().next_back().or(before);
+        out.push_str(head);
+        if prev.is_some_and(word) || after.is_some_and(word) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+        }
+        before = from.chars().next_back();
+        rest = &tail[from.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What a rename changed besides the name, per new name: `(signature, body)`.
+/// The header and body are compared with the new name put back as the old, so
+/// a function calling itself is not an edit.
+fn rename_edits(fs: &FileSymbols, ren: &HashMap<String, String>) -> HashMap<String, (bool, bool)> {
+    let part = |n: &str| n.rsplit('.').next().unwrap_or(n).to_string();
+    ren.iter()
+        .filter_map(|(new, old)| {
+            let (_, oh, ow, _) = fs.old_body.iter().find(|b| &b.0 == old)?;
+            let (_, nh, nw, _) = fs.new_body.iter().find(|b| &b.0 == new)?;
+            let (o, n) = (part(old), part(new));
+            let sig = swap_ident(oh, &o, &n) != *nh;
+            let body = swap_ident(ow, &o, &n) != *nw;
+            (sig || body).then(|| (new.clone(), (sig, body)))
+        })
+        .collect()
 }
 
 /// How much of two names is shared at either end: `get_stream` and
@@ -1859,6 +1970,8 @@ pub(crate) struct PerFileHunks {
 pub(crate) struct FileChanges {
     /// new name → the name it had before (#7)
     pub(crate) rename: HashMap<String, String>,
+    /// new name of a rename → whether it also changed the (signature, body)
+    pub(crate) rename_edit: HashMap<String, (bool, bool)>,
     /// new name → the path it arrived from (P12.1)
     pub(crate) moved_in: HashMap<String, String>,
     /// new name → the def it was extracted out of (P16)
@@ -1965,7 +2078,11 @@ fn index_bodies(list: &[extract::Body]) -> BodyIndex<'_> {
 /// has, up to a third of them, has to appear in the other. A one-line body
 /// matching one line passes — that is all the evidence a one-liner can offer
 /// — while two unrelated definitions share nothing and are rejected.
-fn alike(old: &BodyIndex, from: &str, new: &BodyIndex, to: &str) -> bool {
+///
+/// `strict` asks for two thirds of the longer body instead: a yaml key or a
+/// heading is renamed with its contents, and two that merely reuse a few
+/// lines (`include` and `exclude` over the same job) are different things.
+fn alike(old: &BodyIndex, from: &str, new: &BodyIndex, to: &str, strict: bool) -> bool {
     let (Some((_, o)), Some((_, n))) = (old.get(from), new.get(to)) else {
         return false;
     };
@@ -1974,6 +2091,9 @@ fn alike(old: &BodyIndex, from: &str, new: &BodyIndex, to: &str) -> bool {
     }
     let os: HashSet<&String> = o.iter().collect();
     let shared = n.iter().filter(|l| os.contains(*l)).count();
+    if strict {
+        return shared * 3 >= o.len().max(n.len()) * 2;
+    }
     shared > 0 && shared * 3 >= o.len().min(n.len())
 }
 

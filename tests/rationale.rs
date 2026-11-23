@@ -1507,14 +1507,14 @@ fn a_lone_unrelated_pair_is_not_a_rename() {
 }
 
 #[test]
-fn a_lone_pair_that_shares_its_body_is_a_rename() {
+fn a_lone_pair_with_an_edited_line_is_a_rename_and_an_edit() {
     // same body, one line edited: still the same code under a new name
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py",
             "old": "def foo():\n    total = 0\n    for r in rows:\n        total += r\n    return total\n",
             "new": "def bar():\n    total = 1\n    for r in rows:\n        total += r\n    return total\n" } ]
     }));
-    assert_eq!(rats, vec!["renames foo → bar"]);
+    assert_eq!(rats, vec!["renames foo → bar; edits bar"]);
 }
 
 /// The last-resort rationale used to be the bare word "change", which tells a

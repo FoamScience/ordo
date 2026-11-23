@@ -3,13 +3,13 @@
  "unmatched": 0,
  "matched_by_overlap": 0,
  "surviving": {
-  "n": 8523,
-  "unfaithful": 179,
+  "n": 8498,
+  "unfaithful": 159,
   "by_verb": {
    "adds": {
-    "n": 2803,
-    "unfaithful": 60,
-    "rate": 0.0214
+    "n": 2802,
+    "unfaithful": 59,
+    "rate": 0.0211
    },
    "changes": {
     "n": 795,
@@ -22,14 +22,9 @@
     "rate": 0.0394
    },
    "uses": {
-    "n": 307,
-    "unfaithful": 21,
-    "rate": 0.0684
-   },
-   "renames": {
-    "n": 27,
-    "unfaithful": 12,
-    "rate": 0.4444
+    "n": 299,
+    "unfaithful": 13,
+    "rate": 0.0435
    },
    "removes": {
     "n": 512,
@@ -60,6 +55,11 @@
     "n": 866,
     "unfaithful": 2,
     "rate": 0.0023
+   },
+   "renames": {
+    "n": 11,
+    "unfaithful": 1,
+    "rate": 0.0909
    },
    "calls": {
     "n": 48,
@@ -114,34 +114,34 @@
   },
   "by_repo": {
    "execa": {
-    "n": 809,
-    "unfaithful": 45,
-    "rate": 0.0556
+    "n": 806,
+    "unfaithful": 43,
+    "rate": 0.0533
    },
    "lazy": {
-    "n": 919,
-    "unfaithful": 33,
-    "rate": 0.0359
+    "n": 906,
+    "unfaithful": 21,
+    "rate": 0.0232
    },
    "curl": {
     "n": 720,
     "unfaithful": 17,
     "rate": 0.0236
    },
-   "click": {
-    "n": 817,
-    "unfaithful": 14,
-    "rate": 0.0171
-   },
-   "ripgrep": {
-    "n": 485,
-    "unfaithful": 14,
-    "rate": 0.0289
-   },
    "excalidraw": {
-    "n": 851,
+    "n": 849,
     "unfaithful": 13,
     "rate": 0.0153
+   },
+   "click": {
+    "n": 816,
+    "unfaithful": 13,
+    "rate": 0.0159
+   },
+   "ripgrep": {
+    "n": 483,
+    "unfaithful": 12,
+    "rate": 0.0248
    },
    "vue": {
     "n": 962,
@@ -149,22 +149,22 @@
     "rate": 0.0114
    },
    "nvm": {
-    "n": 494,
-    "unfaithful": 10,
-    "rate": 0.0202
+    "n": 493,
+    "unfaithful": 9,
+    "rate": 0.0183
    },
    "junit5": {
-    "n": 629,
-    "unfaithful": 9,
-    "rate": 0.0143
+    "n": 628,
+    "unfaithful": 8,
+    "rate": 0.0127
    },
    "openfoam": {
-    "n": 773,
-    "unfaithful": 7,
-    "rate": 0.0091
+    "n": 772,
+    "unfaithful": 6,
+    "rate": 0.0078
    },
    "cobra": {
-    "n": 574,
+    "n": 573,
     "unfaithful": 5,
     "rate": 0.0087
    },
@@ -176,14 +176,14 @@
   }
  },
  "dropped": {
-  "n": 798,
-  "unfaithful": 175,
-  "faithful": 623,
+  "n": 823,
+  "unfaithful": 195,
+  "faithful": 628,
   "by_verb": {
    "adds": {
-    "n": 460,
-    "unfaithful": 101,
-    "rate": 0.2196
+    "n": 461,
+    "unfaithful": 102,
+    "rate": 0.2213
    },
    "changes": {
     "n": 159,
@@ -200,9 +200,14 @@
     "unfaithful": 18,
     "rate": 0.8571
    },
+   "renames": {
+    "n": 16,
+    "unfaithful": 11,
+    "rate": 0.6875
+   },
    "uses": {
-    "n": 2,
-    "unfaithful": 2,
+    "n": 10,
+    "unfaithful": 10,
     "rate": 1.0
    },
    "removes": {
@@ -233,10 +238,13 @@
    "formatting -> moves": 15,
    "edits -> adds": 7,
    "moves -> formatting": 7,
+   "uses -> tests": 7,
    "adds -> edits": 6,
    "formatting -> removes": 6,
+   "renames -> adds": 3,
    "uses -> changes": 1,
-   "uses -> edits": 1
+   "uses -> edits": 1,
+   "adds -> renames": 1
   },
   "faithful_rows": [
    {
@@ -1668,6 +1676,18 @@
     "why": "4 imports and 2 consts correct"
    },
    {
+    "key": "cobra:70e53f62:args_test.go:104",
+    "old": [
+     "renames TestNoArgsWithArgs → TestNoArgs_WithArgs",
+     []
+    ],
+    "new": [
+     "renames TestNoArgsWithArgs → TestNoArgs_WithArgs; edits TestNoArgs_WithArgs",
+     []
+    ],
+    "why": "rename correct"
+   },
+   {
     "key": "cobra:b312f0a8:completions.go:1",
     "old": [
      "adds import fmt, os, pflag, and 1 more",
@@ -2288,6 +2308,18 @@
     "why": "THEME added to import; other new imports omitted, not false"
    },
    {
+    "key": "excalidraw:21dd1cfa:packages/excalidraw/components/Toast.tsx:12",
+    "old": [
+     "renames Toast → ToastComponent; adds ProgressBar, ProgressBar used below",
+     []
+    ],
+    "new": [
+     "renames Toast → ToastComponent; adds ProgressBar; changes signature of ToastComponent, ProgressBar used below",
+     []
+    ],
+    "why": "rename and ProgressBar added"
+   },
+   {
     "key": "excalidraw:2423819e:packages/excalidraw/actions/actionCanvas.tsx:17",
     "old": [
      "adds import Bounds",
@@ -2670,6 +2702,18 @@
      []
     ],
     "why": "adds type imports"
+   },
+   {
+    "key": "excalidraw:abeeaeba:packages/excalidraw/components/ColorPicker/ColorPicker.tsx:343",
+    "old": [
+     "renames ColorPicker → ColorPickerComponent, used below",
+     []
+    ],
+    "new": [
+     "renames ColorPicker → ColorPickerComponent; changes signature of ColorPickerComponent, ColorPickerComponent used below",
+     []
+    ],
+    "why": "rename to ColorPickerComponent correct"
    },
    {
     "key": "excalidraw:abeeaeba:packages/excalidraw/components/ColorPicker/PickerColorList.tsx:4",
@@ -4082,6 +4126,18 @@
      []
     ],
     "why": "new imports added (replacing old)"
+   },
+   {
+    "key": "execa:8fe23432:lib/async.js:50",
+    "old": [
+     "renames spawnProcessAsync → spawnSubprocessAsync, used by execa above",
+     []
+    ],
+    "new": [
+     "renames spawnProcessAsync → spawnSubprocessAsync; edits spawnSubprocessAsync, spawnSubprocessAsync used by execa above",
+     []
+    ],
+    "why": "rename correct"
    },
    {
     "key": "execa:8fe23432:lib/pipe/setup.js:4",
@@ -5646,6 +5702,18 @@
      []
     ],
     "why": "9 imports added"
+   },
+   {
+    "key": "lazy:a17ad274:lua/lazy/minit.lua:107",
+    "old": [
+     "renames M.busted → M.busted.init; adds M.busted.setup, __call",
+     []
+    ],
+    "new": [
+     "renames M.busted → M.busted.init; adds M.busted.setup, __call; changes signature of M.busted.init",
+     []
+    ],
+    "why": "adds setup/init/__call, plausible rename"
    },
    {
     "key": "openfoam:0834aa67:src/thermophysicalModels/solidThermo/solidSpecie/transport/constAniso/constAnisoSolidTransport.C:27",
@@ -8286,6 +8354,18 @@
     "why": "only adds decorator, test pre-exists"
    },
    {
+    "key": "click:c69643b6:src/click/_termui_impl.py:369",
+    "old": [
+     "renames pager → _pager_contextmanager; adds type MaybeStripAnsi, write; changes type __init__, MaybeStripAnsi used by get_pager_file below",
+     []
+    ],
+    "new": [
+     "renames pager → _pager_contextmanager; adds type MaybeStripAnsi, write; changes signature of _pager_contextmanager; changes type __init__, MaybeStripAnsi used by get_pager_file below",
+     []
+    ],
+    "why": "__init__ is new, not changed; rename hides signature change"
+   },
+   {
     "key": "click:cd4674a6:src/click/exceptions.py:239",
     "old": [
      "adds import get_close_matches",
@@ -9154,6 +9234,22 @@
     "why": "change removes FIXTURES_DIR, not setFixtureDir"
    },
    {
+    "key": "execa:3ab34de5:test/return/output.js:92",
+    "old": [
+     "renames testSpawnError → validateSpawnErrorStdio, used by test 'stdout/stderr/all/stdio on subprocess spawning errors' below",
+     [
+      "removes all, reject, uid from testSpawnError"
+     ]
+    ],
+    "new": [
+     "renames testSpawnError → validateSpawnErrorStdio; changes signature of validateSpawnErrorStdio, validateSpawnErrorStdio used by test 'stdout/stderr/all/stdio on subprocess spawning errors' below",
+     [
+      "removes all, reject, uid from testSpawnError"
+     ]
+    ],
+    "why": "rename hides removed spawn and code check"
+   },
+   {
     "key": "execa:4b2e316e:test/transform/generator-input.js:1",
     "old": [
      "adds import foobarBuffer, foobarHex, foobarObject, and 4 more",
@@ -9264,6 +9360,18 @@
      ]
     ],
     "why": "6 imports, claims 4"
+   },
+   {
+    "key": "execa:8074d853:lib/arguments/node.js:5",
+    "old": [
+     "renames execaNode → mapNode",
+     []
+    ],
+    "new": [
+     "renames execaNode → mapNode; changes signature of mapNode",
+     []
+    ],
+    "why": "not a rename: signature and logic changed"
    },
    {
     "key": "execa:8074d853:test/arguments/options.js:1",
@@ -9674,6 +9782,150 @@
     "why": "imports-only framing hides new record definition"
    },
    {
+    "key": "junit5:e6fa8005:junit-platform-console/src/main/java/org/junit/platform/console/output/VerboseTreePrintingListener.java:231",
+    "old": [
+     "renames printDetail → appendDetail, used by VerboseTreePrintingListener.executionFinished above",
+     []
+    ],
+    "new": [
+     "renames printDetail → appendDetail; changes signature of appendDetail, appendDetail used by VerboseTreePrintingListener.executionFinished above",
+     []
+    ],
+    "why": "not just rename: new params, printf to StringBuilder append"
+   },
+   {
+    "key": "lazy:6c7ef7e2:lua/lazy/manage/task/init.lua:117",
+    "old": [
+     "renames Task:notify → Task:log",
+     []
+    ],
+    "new": [
+     "renames Task:notify → Task:log; changes signature of Task:log",
+     []
+    ],
+    "why": "not just rename; params and logic changed"
+   },
+   {
+    "key": "lazy:a36ebd2a:lua/lazy/async.lua:166",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "uses assert, added in vim.toml",
+     []
+    ],
+    "why": "assert builtin, nothing renamed in vim.toml; logic change"
+   },
+   {
+    "key": "lazy:a36ebd2a:lua/lazy/manage/task/init.lua:96",
+    "old": [
+     "renames Task:_start → Task:_run",
+     []
+    ],
+    "new": [
+     "renames Task:_start → Task:_run; edits Task:_run",
+     []
+    ],
+    "why": "also drops asserts, not just rename"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:26",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "change is is_running->running, not assert rename"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:34",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "is_running->running, not assert rename"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:36",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "change is is_running->running, not assert rename"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:49",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "assert not renamed; is_running->running"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:63",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "is_running->running; vim.toml rename bogus"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:67",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "assert is builtin; change is task.output to task:output()"
+   },
+   {
+    "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:74",
+    "old": [
+     "uses assert, renamed in vim.toml",
+     []
+    ],
+    "new": [
+     "tests assert (vim.toml)",
+     []
+    ],
+    "why": "is_running renamed, not assert"
+   },
+   {
+    "key": "lazy:be74a8a5:lua/lazy/community/init.lua:6",
+    "old": [
+     "renames _load → load, used by M.get_url below",
+     []
+    ],
+    "new": [
+     "renames _load → load; edits load, load used by M.get_url below",
+     []
+    ],
+    "why": "also changes return logic, not just rename"
+   },
+   {
     "key": "lazy:c02268ac:lua/lazy/core/plugin.lua:182",
     "old": [
      "replaces local self.importing with err (3 uses)",
@@ -9684,6 +9936,40 @@
      []
     ],
     "why": "logic change framed as local replacement; self.importing not local"
+   },
+   {
+    "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:85",
+    "old": [
+     "renames F:add → M:add",
+     []
+    ],
+    "new": [
+     "renames F:add → M:add; edits M:add",
+     []
+    ],
+    "why": "also adds dedup logic, not just rename"
+   },
+   {
+    "key": "nvm:0d533816:.github/workflows/tests.yml:22",
+    "old": [
+     "renames include → exclude; adds suite; edits shell",
+     [
+      "adds exclude to jobs.tests.strategy.matrix",
+      "removes include from jobs.tests.strategy.matrix",
+      "adds suite to jobs.tests.strategy.matrix.exclude",
+      "changes shell in jobs.tests.strategy.matrix.exclude"
+     ]
+    ],
+    "new": [
+     "adds exclude, suite; edits shell",
+     [
+      "adds exclude to jobs.tests.strategy.matrix",
+      "removes include from jobs.tests.strategy.matrix",
+      "adds suite to jobs.tests.strategy.matrix.exclude",
+      "changes shell in jobs.tests.strategy.matrix.exclude"
+     ]
+    ],
+    "why": "include to exclude inverts matrix semantics, not a rename"
    },
    {
     "key": "openfoam:0834aa67:src/thermophysicalModels/specie/transport/icoTabulated/icoTabulatedTransportI.H:26",
@@ -9866,6 +10152,18 @@
     "why": "replaces IOMRFZoneList.H, not pure add"
    },
    {
+    "key": "openfoam:b4976af6:src/OpenFOAM/meshes/boundBox/boundBox.H:264",
+    "old": [
+     "adds type scalable<boundBox>",
+     []
+    ],
+    "new": [
+     "renames scaleable<boundBox> → scalable<boundBox>",
+     []
+    ],
+    "why": "rename scaleable to scalable, not an addition"
+   },
+   {
     "key": "openfoam:cdff9f0c:etc/codeTemplates/dynamicCode/chemistryModelTemplate.C:68",
     "old": [
      "adds import ${method}_chemistryModel.H, ${solver}.H, makeChemistrySolver.H",
@@ -9936,6 +10234,18 @@
      []
     ],
     "why": "9 names imported, rationale implies 5"
+   },
+   {
+    "key": "ripgrep:8bd59502:CHANGELOG.md:1",
+    "old": [
+     "renames 14.1.1 (2024-09-08) → TBD",
+     []
+    ],
+    "new": [
+     "adds section TBD",
+     []
+    ],
+    "why": "adds new section, no rename"
    },
    {
     "key": "ripgrep:b610d1cb:crates/ignore/src/walk.rs:7",
@@ -10020,6 +10330,18 @@
      []
     ],
     "why": "only 4 names; 'and 2 more' implies 5"
+   },
+   {
+    "key": "ripgrep:bdf01f46:CHANGELOG.md:1",
+    "old": [
+     "renames 14.1.0 (TBD) → TBD",
+     []
+    ],
+    "new": [
+     "adds section TBD",
+     []
+    ],
+    "why": "adds new TBD section; 14.1.0 (TBD) not renamed"
    },
    {
     "key": "ripgrep:be739c79:crates/index/src/literal.rs:1",
@@ -10116,12 +10438,6 @@
    "rationale": "formatting only",
    "details": [],
    "why": "dedent changes Python example semantics"
-  },
-  {
-   "key": "click:c69643b6:src/click/_termui_impl.py:369",
-   "rationale": "renames pager → _pager_contextmanager; adds type MaybeStripAnsi, write; changes type __init__, MaybeStripAnsi used by get_pager_file below",
-   "details": [],
-   "why": "__init__ is new, not changed; rename hides signature change"
   },
   {
    "key": "click:cf938687:src/click/types.py:1131",
@@ -10408,14 +10724,6 @@
    "why": "test still asserts signal via error.signal"
   },
   {
-   "key": "execa:3ab34de5:test/return/output.js:92",
-   "rationale": "renames testSpawnError → validateSpawnErrorStdio, used by test 'stdout/stderr/all/stdio on subprocess spawning errors' below",
-   "details": [
-    "removes all, reject, uid from testSpawnError"
-   ],
-   "why": "rename hides removed spawn and code check"
-  },
-  {
    "key": "execa:55175e82:test-d/stdio/option/duplex.test-d.ts:9",
    "rationale": "adds import StdoutStderrSyncOption",
    "details": [],
@@ -10462,12 +10770,6 @@
    "rationale": "adds execaCommandSync, no uses in this file — check other files",
    "details": [],
    "why": "execaCommandSync existed; redeclared function->const, not added"
-  },
-  {
-   "key": "execa:8074d853:lib/arguments/node.js:5",
-   "rationale": "renames execaNode → mapNode",
-   "details": [],
-   "why": "not a rename: signature and logic changed"
   },
   {
    "key": "execa:839c2fe3:lib/ipc/get-each.js:5",
@@ -10721,12 +11023,6 @@
    "why": "private overload not usable from other file"
   },
   {
-   "key": "junit5:e6fa8005:junit-platform-console/src/main/java/org/junit/platform/console/output/VerboseTreePrintingListener.java:231",
-   "rationale": "renames printDetail → appendDetail, used by VerboseTreePrintingListener.executionFinished above",
-   "details": [],
-   "why": "not just rename: new params, printf to StringBuilder append"
-  },
-  {
    "key": "junit5:e6fa8005:platform-tests/src/test/java/org/junit/platform/console/output/VerboseTreePrintingListenerTests.java:215",
    "rationale": "adds indentationIsDerivedFromTheNumberOfAncestorsInTheTestPlan; replaces local testDescriptor with container (5 uses), test (3 uses), testPlan (3 uses)",
    "details": [],
@@ -10765,12 +11061,6 @@
    "rationale": "replaces local self.error with msg (7 uses)",
    "details": [],
    "why": "self.error is a field not local; field assignment replaced by local table, not a rename"
-  },
-  {
-   "key": "lazy:6c7ef7e2:lua/lazy/manage/task/init.lua:117",
-   "rationale": "renames Task:notify → Task:log",
-   "details": [],
-   "why": "not just rename; params and logic changed"
   },
   {
    "key": "lazy:72c0dc94:lua/lazy/manage/git.lua:153",
@@ -10821,60 +11111,6 @@
    "why": "hides removal of M.run, M.wrap"
   },
   {
-   "key": "lazy:a36ebd2a:lua/lazy/async.lua:166",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "assert builtin, nothing renamed in vim.toml; logic change"
-  },
-  {
-   "key": "lazy:a36ebd2a:lua/lazy/manage/task/init.lua:96",
-   "rationale": "renames Task:_start → Task:_run",
-   "details": [],
-   "why": "also drops asserts, not just rename"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:26",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "change is is_running->running, not assert rename"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:34",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "is_running->running, not assert rename"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:36",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "change is is_running->running, not assert rename"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:49",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "assert not renamed; is_running->running"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:63",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "is_running->running; vim.toml rename bogus"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:67",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "assert is builtin; change is task.output to task:output()"
-  },
-  {
-   "key": "lazy:a36ebd2a:tests/manage/task_spec.lua:74",
-   "rationale": "uses assert, renamed in vim.toml",
-   "details": [],
-   "why": "is_running renamed, not assert"
-  },
-  {
    "key": "lazy:a75d950b:lua/lazy/util.lua:180",
    "rationale": "removes cwd from M.float_cmd",
    "details": [
@@ -10921,22 +11157,10 @@
    "why": "replaces schedule test, not pure add"
   },
   {
-   "key": "lazy:be74a8a5:lua/lazy/community/init.lua:6",
-   "rationale": "renames _load → load, used by M.get_url below",
-   "details": [],
-   "why": "also changes return logic, not just rename"
-  },
-  {
    "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:14",
    "rationale": "edits next_id",
    "details": [],
    "why": "next_id wholly added, not edited"
-  },
-  {
-   "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:85",
-   "rationale": "renames F:add → M:add",
-   "details": [],
-   "why": "also adds dedup logic, not just rename"
   },
   {
    "key": "lazy:fcfd5483:lua/lazy/pkg/rockspec.lua:56",
@@ -10953,17 +11177,6 @@
     "removes dir from M.spec"
    ],
    "why": "dir still passed, call form changed"
-  },
-  {
-   "key": "nvm:0d533816:.github/workflows/tests.yml:22",
-   "rationale": "renames include → exclude; adds suite; edits shell",
-   "details": [
-    "adds exclude to jobs.tests.strategy.matrix",
-    "removes include from jobs.tests.strategy.matrix",
-    "adds suite to jobs.tests.strategy.matrix.exclude",
-    "changes shell in jobs.tests.strategy.matrix.exclude"
-   ],
-   "why": "include to exclude inverts matrix semantics, not a rename"
   },
   {
    "key": "nvm:29a652f9:nvm.sh:1585",
@@ -11034,12 +11247,6 @@
    "why": "interface semantics change, not a pure rename"
   },
   {
-   "key": "openfoam:b4976af6:src/OpenFOAM/meshes/boundBox/boundBox.H:264",
-   "rationale": "adds type scalable<boundBox>",
-   "details": [],
-   "why": "rename scaleable to scalable, not an addition"
-  },
-  {
    "key": "openfoam:b9da51ab:src/OpenFOAM/fields/FieldFields/FieldField/FieldField.H:87",
    "rationale": "adds type pCmptType, used in src/OpenFOAM/fields/Field/Field.H",
    "details": [],
@@ -11088,12 +11295,6 @@
    "why": "Glob not added, only AsRef impl"
   },
   {
-   "key": "ripgrep:8bd59502:CHANGELOG.md:1",
-   "rationale": "renames 14.1.1 (2024-09-08) → TBD",
-   "details": [],
-   "why": "adds new section, no rename"
-  },
-  {
    "key": "ripgrep:99fe8845:crates/printer/src/color.rs:255",
    "rationale": "adds highlight, used by ColorSpecs.new below",
    "details": [],
@@ -11124,12 +11325,6 @@
    "rationale": "adds max_matches, used by Config above",
    "details": [],
    "why": "method sets config field; Config does not use it"
-  },
-  {
-   "key": "ripgrep:bdf01f46:CHANGELOG.md:1",
-   "rationale": "renames 14.1.0 (TBD) → TBD",
-   "details": [],
-   "why": "adds new TBD section; 14.1.0 (TBD) not renamed"
   },
   {
    "key": "ripgrep:be739c79:crates/index/src/literal.rs:386",
