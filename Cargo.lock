@@ -498,9 +498,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "model2vec-rs"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51020c65a18a206a4158aa354db49de672da7b1feab5b8213896bd54d03acb17"
+checksum = "5bc5d349da0f38c0289eb1a0bf97732b82855d7ce2d35001c18dad52df933e1d"
 dependencies = [
  "anyhow",
  "half",
