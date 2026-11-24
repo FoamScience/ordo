@@ -2002,6 +2002,8 @@ pub(crate) struct FileSymbols {
     /// header and body text per definition, for rename and move matching
     pub(crate) old_body: Vec<extract::Body>,
     pub(crate) new_body: Vec<extract::Body>,
+    /// which new-side definitions are macros or functions
+    pub(crate) new_kinds: extract::DefKinds,
     /// file-scope bindings: a removed one is named rather than counted, and a
     /// touched one is what a hunk on a module constant did
     pub(crate) old_binds: Vec<(String, usize)>,
@@ -2019,12 +2021,10 @@ impl FileSymbols {
         let new = c.new.as_deref().zip(spec);
         // one descent per side: rows and bodies come back together, where they
         // used to be two walks of the same tree (see `extract::symbol_facts`)
-        let (old_rows, old_body) = old.map_or(((vec![], vec![]), vec![]), |(o, sp)| {
-            extract::symbol_facts(sp, o)
-        });
-        let (new_rows, new_body) = new.map_or(((vec![], vec![]), vec![]), |(n, sp)| {
-            extract::symbol_facts(sp, n)
-        });
+        let (old_rows, old_body, _) =
+            old.map_or(Default::default(), |(o, sp)| extract::symbol_facts(sp, o));
+        let (new_rows, new_body, new_kinds) =
+            new.map_or(Default::default(), |(n, sp)| extract::symbol_facts(sp, n));
         let set = |v: &[(String, usize)]| v.iter().map(|(n, _)| n.clone()).collect();
         let new_bind_rows = new.map_or(vec![], |(n, sp)| extract::top_level_bindings(sp, n));
         let (new_defs, new_imports): (HashSet<String>, HashSet<String>) =
@@ -2053,6 +2053,7 @@ impl FileSymbols {
             new_imports,
             old_body,
             new_body,
+            new_kinds,
             old_binds: old.map_or(vec![], |(o, sp)| extract::top_level_bindings(sp, o)),
             new_binds: new_bind_rows.iter().map(|(nm, _)| nm.clone()).collect(),
             new_bind_rows,

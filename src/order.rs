@@ -2375,7 +2375,13 @@ fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> 
                 .changed
                 .get(ctx.group_file[b])
                 .is_some_and(|c| c.rename.contains_key(u.as_str()));
-            if !renamed {
+            // A macro a test calls is used, not tested; so is a function
+            // called from a helper or wrapper rather than from a test.
+            let kinds = &ctx.symbols[ctx.group_file[b]].new_kinds;
+            let in_helper = s.enclosing.is_some() && s.enclosing_kind.is_none() && !s.in_test;
+            let under_test = !kinds.macros.contains(u.as_str())
+                && !(in_helper && kinds.functions.contains(u.as_str()));
+            if !renamed && under_test {
                 return Some(format!("tests {u} ({})", ctx.paths[ctx.group_file[b]]));
             }
         }

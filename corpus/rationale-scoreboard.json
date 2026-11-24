@@ -3,8 +3,8 @@
  "unmatched": 0,
  "matched_by_overlap": 0,
  "surviving": {
-  "n": 8498,
-  "unfaithful": 159,
+  "n": 8487,
+  "unfaithful": 151,
   "by_verb": {
    "adds": {
     "n": 2802,
@@ -36,11 +36,6 @@
     "unfaithful": 9,
     "rate": 0.0042
    },
-   "tests": {
-    "n": 14,
-    "unfaithful": 9,
-    "rate": 0.6429
-   },
    "replaces": {
     "n": 142,
     "unfaithful": 6,
@@ -60,6 +55,11 @@
     "n": 11,
     "unfaithful": 1,
     "rate": 0.0909
+   },
+   "tests": {
+    "n": 3,
+    "unfaithful": 1,
+    "rate": 0.3333
    },
    "calls": {
     "n": 48,
@@ -123,11 +123,6 @@
     "unfaithful": 21,
     "rate": 0.0232
    },
-   "curl": {
-    "n": 720,
-    "unfaithful": 17,
-    "rate": 0.0236
-   },
    "excalidraw": {
     "n": 849,
     "unfaithful": 13,
@@ -148,6 +143,11 @@
     "unfaithful": 11,
     "rate": 0.0114
    },
+   "curl": {
+    "n": 710,
+    "unfaithful": 10,
+    "rate": 0.0141
+   },
    "nvm": {
     "n": 493,
     "unfaithful": 9,
@@ -164,9 +164,9 @@
     "rate": 0.0078
    },
    "cobra": {
-    "n": 573,
-    "unfaithful": 5,
-    "rate": 0.0087
+    "n": 572,
+    "unfaithful": 4,
+    "rate": 0.007
    },
    "buildtheworld": {
     "n": 490,
@@ -176,9 +176,9 @@
   }
  },
  "dropped": {
-  "n": 823,
-  "unfaithful": 195,
-  "faithful": 628,
+  "n": 834,
+  "unfaithful": 203,
+  "faithful": 631,
   "by_verb": {
    "adds": {
     "n": 461,
@@ -210,6 +210,11 @@
     "unfaithful": 10,
     "rate": 1.0
    },
+   "tests": {
+    "n": 11,
+    "unfaithful": 8,
+    "rate": 0.7273
+   },
    "removes": {
     "n": 10,
     "unfaithful": 1,
@@ -236,11 +241,13 @@
    "adds -> changes": 18,
    "changes -> moves": 18,
    "formatting -> moves": 15,
+   "tests -> uses": 8,
    "edits -> adds": 7,
    "moves -> formatting": 7,
    "uses -> tests": 7,
    "adds -> edits": 6,
    "formatting -> removes": 6,
+   "tests -> calls": 3,
    "renames -> adds": 3,
    "uses -> changes": 1,
    "uses -> edits": 1,
@@ -2234,6 +2241,42 @@
      []
     ],
     "why": "#ifdef line added"
+   },
+   {
+    "key": "curl:e1450d8f:tests/libtest/lib1598.c:87",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "calls CURL_CSTRLEN instead of strlen in test_lib1598",
+     []
+    ],
+    "why": "test now uses CURL_CSTRLEN"
+   },
+   {
+    "key": "curl:e1450d8f:tests/libtest/lib1948.c:69",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "test code now uses CURL_CSTRLEN"
+   },
+   {
+    "key": "curl:e1450d8f:tests/unit/unit1650.c:240",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "test now uses CURL_CSTRLEN"
    },
    {
     "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/DropdownMenuContent.tsx:2",
@@ -8462,6 +8505,18 @@
     "why": "removes ioutil import, not formatting"
    },
    {
+    "key": "cobra:652c755d:bash_completions_test.go:54",
+    "old": [
+     "tests CheckErr (cobra.go)",
+     []
+    ],
+    "new": [
+     "uses CheckErr, added in cobra.go",
+     []
+    ],
+    "why": "helper calls CheckErr, does not test it"
+   },
+   {
     "key": "cobra:652c755d:cobra/cmd/golden_test.go:6",
     "old": [
      "formatting only",
@@ -8676,6 +8731,90 @@
      []
     ],
     "why": "only adds decorator to existing class"
+   },
+   {
+    "key": "curl:e1450d8f:tests/libtest/lib3102.c:50",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "uses macro, does not test it"
+   },
+   {
+    "key": "curl:e1450d8f:tests/libtest/lib654.c:95",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "uses macro, does not test it"
+   },
+   {
+    "key": "curl:e1450d8f:tests/server/rtspd.c:515",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "calls CURL_CSTRLEN instead of strlen in rtspd_ProcessRequest",
+     []
+    ],
+    "why": "uses macro, does not test it"
+   },
+   {
+    "key": "curl:e1450d8f:tests/server/sws.c:269",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "calls CURL_CSTRLEN instead of strlen in sws_parse_servercmd",
+     []
+    ],
+    "why": "uses CURL_CSTRLEN in server code, does not test it"
+   },
+   {
+    "key": "curl:e1450d8f:tests/server/sws.c:615",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "uses CURL_CSTRLEN, does not test it"
+   },
+   {
+    "key": "curl:e1450d8f:tests/unit/unit1625.c:44",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "uses CURL_CSTRLEN, does not test it"
+   },
+   {
+    "key": "curl:e1450d8f:tests/unit/unit1650.c:57",
+    "old": [
+     "tests CURL_CSTRLEN (lib/curl_setup.h)",
+     []
+    ],
+    "new": [
+     "uses CURL_CSTRLEN, added in lib/curl_setup.h",
+     []
+    ],
+    "why": "uses CURL_CSTRLEN, doesn't test it"
    },
    {
     "key": "excalidraw:063533ae:packages/excalidraw/components/dropdownMenu/common.ts:3",
@@ -10480,12 +10619,6 @@
    "why": "hides removal of cobra_generator"
   },
   {
-   "key": "cobra:652c755d:bash_completions_test.go:54",
-   "rationale": "tests CheckErr (cobra.go)",
-   "details": [],
-   "why": "helper calls CheckErr, does not test it"
-  },
-  {
    "key": "cobra:652c755d:doc/man_examples_test.go:33",
    "rationale": "tests CheckErr (cobra.go)",
    "details": [],
@@ -10564,48 +10697,6 @@
     "removes arch, build, cc, and 3 more from jobs.cross.strategy.matrix.include"
    ],
    "why": "arch/build/cc not removed; only desc changed"
-  },
-  {
-   "key": "curl:e1450d8f:tests/libtest/lib3102.c:50",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses macro, does not test it"
-  },
-  {
-   "key": "curl:e1450d8f:tests/libtest/lib654.c:95",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses macro, does not test it"
-  },
-  {
-   "key": "curl:e1450d8f:tests/server/rtspd.c:515",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses macro, does not test it"
-  },
-  {
-   "key": "curl:e1450d8f:tests/server/sws.c:269",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses CURL_CSTRLEN in server code, does not test it"
-  },
-  {
-   "key": "curl:e1450d8f:tests/server/sws.c:615",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses CURL_CSTRLEN, does not test it"
-  },
-  {
-   "key": "curl:e1450d8f:tests/unit/unit1625.c:44",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses CURL_CSTRLEN, does not test it"
-  },
-  {
-   "key": "curl:e1450d8f:tests/unit/unit1650.c:57",
-   "rationale": "tests CURL_CSTRLEN (lib/curl_setup.h)",
-   "details": [],
-   "why": "uses CURL_CSTRLEN, doesn't test it"
   },
   {
    "key": "excalidraw:2423819e:packages/excalidraw/actions/actionCanvas.tsx:399",

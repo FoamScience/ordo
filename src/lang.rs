@@ -38,6 +38,12 @@ pub struct LangSpec {
     /// Matched on the callee's first segment, so `test.serial` and `it.only`
     /// count too. Empty for languages with no such convention.
     pub test_blocks: &'static [&'static str],
+    /// name prefixes by which this language marks a function as a test when it
+    /// has no attribute or annotation to say so: `test_parses`, `testParses`,
+    /// go's `TestParse`, gtest's `TEST(a, b)`. A prefix must end the word — the
+    /// next character is not a lowercase letter — so `testing` and go's
+    /// `testHelper` are not tests. Empty where a marker or a block call says it.
+    pub test_naming: &'static [&'static str],
     /// node types that introduce a definition (fn / type / class / …)
     pub defs: &'static [&'static str],
     /// node types that are a *named member* of an enclosing definition — an enum
@@ -176,6 +182,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: true,
         language: py,
         test_blocks: &[],
+        test_naming: &["test"],
         imports: &[
             "import_statement",
             "import_from_statement",
@@ -199,6 +206,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: true,
         language: xonsh,
         test_blocks: &[],
+        test_naming: &["test"],
         imports: &[
             "import_statement",
             "import_from_statement",
@@ -222,6 +230,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: js,
         test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
+        test_naming: &[],
         imports: &["import_statement"],
         defs: &[
             "function_declaration",
@@ -250,6 +259,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: rs,
         test_blocks: &["test"],
+        test_naming: &[],
         imports: &["use_declaration", "extern_crate_declaration"],
         defs: &[
             "function_item",
@@ -274,6 +284,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: ts,
         test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
+        test_naming: &[],
         imports: &["import_statement"],
         defs: &[
             "function_declaration",
@@ -307,6 +318,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: tsx,
         test_blocks: &["describe", "it", "test", "context", "suite", "bench"],
+        test_naming: &[],
         imports: &["import_statement"],
         defs: &[
             "function_declaration",
@@ -338,6 +350,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: go,
         test_blocks: &[],
+        test_naming: &["Test", "Benchmark", "Example", "Fuzz"],
         imports: &["import_declaration", "import_spec"],
         defs: &[
             "function_declaration",
@@ -355,6 +368,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: c,
         test_blocks: &[],
+        test_naming: &["TEST"],
         imports: &["preproc_include"],
         defs: &[
             "function_definition",
@@ -381,6 +395,14 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: cpp,
         test_blocks: &[],
+        test_naming: &[
+            "TEST",
+            "TYPED_TEST",
+            "SCENARIO",
+            "BOOST_AUTO_TEST_CASE",
+            "BOOST_FIXTURE_TEST_CASE",
+            "BOOST_TEST_CASE",
+        ],
         imports: &["preproc_include"],
         defs: &[
             "function_definition",
@@ -410,6 +432,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: java,
         test_blocks: &[],
+        test_naming: &["test"],
         imports: &["import_declaration"],
         defs: &[
             "method_declaration",
@@ -441,6 +464,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: true,
         language: php,
         test_blocks: &[],
+        test_naming: &["test"],
         imports: &[
             "namespace_use_declaration",
             "require_expression",
@@ -473,6 +497,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: lua,
         test_blocks: &["describe", "it", "test", "context", "pending"],
+        test_naming: &[],
         imports: &[],
         defs: &["function_declaration", "function_definition"],
         members: &["field"],
@@ -495,6 +520,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: md,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["section"],
         members: &["section"],
@@ -512,6 +538,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: rst,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["section"],
         members: &["section"],
@@ -533,6 +560,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: json,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["pair"],
         members: &["pair"],
@@ -546,6 +574,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: yaml,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         // `flow_pair` is the inline form (`{a: 1}`); anchors and aliases are
         // real def/use pairs but are not read yet (see README ceilings).
@@ -561,6 +590,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: toml,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         // a `[table]` header names a container the pairs beneath it belong
         // to, so it is a def in its own right alongside the pairs.
@@ -581,6 +611,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: ini,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["section", "setting"],
         members: &["section", "setting"],
@@ -599,6 +630,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: cmake,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["function_def", "macro_def", "normal_command"],
         members: &[],
@@ -617,6 +649,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: make,
         test_blocks: &[],
+        test_naming: &[],
         imports: &["include_directive"],
         defs: &["rule", "variable_assignment"],
         members: &[],
@@ -636,6 +669,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: nix,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["binding"],
         members: &["binding"],
@@ -654,6 +688,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: jsonnet,
         test_blocks: &[],
+        test_naming: &[],
         imports: &["import_expr"],
         defs: &["bind", "field"],
         members: &["field"],
@@ -673,6 +708,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: true,
         language: bash,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["function_definition"],
         members: &[],
@@ -698,6 +734,7 @@ static SPECS: &[LangSpec] = &[
             standalone: true,
         }),
         test_blocks: &[],
+        test_naming: &[],
         // a template's dependencies are other templates
         imports: &["include_statement", "import_statement", "extends_statement"],
         // the two *named* blocks. `{% for %}` / `{% if %}` are containers too
@@ -721,6 +758,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: css,
         test_blocks: &[],
+        test_naming: &[],
         imports: &["import_statement"],
         defs: &["rule_set", "keyframes_statement"],
         members: &["declaration"],
@@ -739,6 +777,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: scss,
         test_blocks: &[],
+        test_naming: &[],
         imports: &["import_statement", "use_statement", "forward_statement"],
         defs: &[
             "rule_set",
@@ -769,6 +808,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: html,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &["element"],
         members: &[],
@@ -790,6 +830,7 @@ static SPECS: &[LangSpec] = &[
         function_scoped: false,
         language: svelte,
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         // `{#snippet row(x)}` is a real named block, and `{@render row(1)}`
         // calls it — the one def→use pair a component's markup has
@@ -816,6 +857,7 @@ static SPECS: &[LangSpec] = &[
             standalone: true,
         }),
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         // `{{ define "mychart.labels" }}` in a Helm `_helpers.tpl` is a real
         // named block, and `{{ template "x" }}` / `{{ include "x" }}` use it
@@ -840,6 +882,7 @@ static SPECS: &[LangSpec] = &[
             standalone: false,
         }),
         test_blocks: &[],
+        test_naming: &[],
         imports: &[],
         defs: &[],
         members: &[],
@@ -1343,6 +1386,15 @@ pub fn has_signature(kind: &str) -> bool {
             | "macro_def"
             // a jinja macro takes parameters; a `{% block %}` does not
             | "macro_block"
+    )
+}
+
+/// Is this def node a macro: text substituted at the call site, not a function
+/// a caller can be said to exercise?
+pub fn is_macro_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "preproc_def" | "preproc_function_def" | "macro_definition" | "macro_def" | "macro_block"
     )
 }
 
