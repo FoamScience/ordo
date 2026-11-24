@@ -1999,6 +1999,8 @@ pub(crate) struct FileSymbols {
     pub(crate) imported_from: HashMap<String, (String, Option<String>)>,
     /// old-side (name, row) for defs and imports — positions, not just names
     pub(crate) old_rows: extract::SymbolRows,
+    /// new-side defs with their first and last row, for what a hunk wrote whole
+    pub(crate) new_def_spans: Vec<extract::DefSpan>,
     /// header and body text per definition, for rename and move matching
     pub(crate) old_body: Vec<extract::Body>,
     pub(crate) new_body: Vec<extract::Body>,
@@ -2021,9 +2023,9 @@ impl FileSymbols {
         let new = c.new.as_deref().zip(spec);
         // one descent per side: rows and bodies come back together, where they
         // used to be two walks of the same tree (see `extract::symbol_facts`)
-        let (old_rows, old_body, _) =
+        let (old_rows, old_body, _, _) =
             old.map_or(Default::default(), |(o, sp)| extract::symbol_facts(sp, o));
-        let (new_rows, new_body, new_kinds) =
+        let (new_rows, new_body, new_kinds, new_def_spans) =
             new.map_or(Default::default(), |(n, sp)| extract::symbol_facts(sp, n));
         let set = |v: &[(String, usize)]| v.iter().map(|(n, _)| n.clone()).collect();
         let new_bind_rows = new.map_or(vec![], |(n, sp)| extract::top_level_bindings(sp, n));
@@ -2045,6 +2047,7 @@ impl FileSymbols {
                 }
                 out
             }),
+            new_def_spans,
             old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
             old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
             old_locals: old_local_rows.iter().map(|(n, _)| n.clone()).collect(),
