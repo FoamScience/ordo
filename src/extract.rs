@@ -69,6 +69,9 @@ pub struct HunkSem {
     pub adds_enclosing: bool,
     /// a type-def (class/struct/enum/…) starts in this hunk (#4 wording)
     pub is_type: bool,
+    /// the hunk lies in a test: a named test block, or a function marked as one
+    /// by an attribute, an annotation or the language's naming convention
+    pub in_test: bool,
     /// formatting-only / generated-file / copyright-notice hunk — skippable
     /// for review (P12.2)
     pub noise: bool,
@@ -175,6 +178,7 @@ impl HunkSem {
             own_bound: vec![],
             adds_enclosing: false,
             is_type: false,
+            in_test: false,
             noise: false,
             extent: None,
             copyright: false,
@@ -750,6 +754,8 @@ struct DefRec {
     /// `lang::has_signature` for the defining node — only a callable's header
     /// is a signature
     callable: bool,
+    /// a test: a named test block, or a function the language marks as one
+    test: bool,
 }
 
 /// How much of a hunk a container must fill before the hunk counts as adding
@@ -974,6 +980,7 @@ impl Parsed<'_> {
                 r0 <= d.s && d.e <= r1 && (d.e - d.s + 1) * den >= (r1 - r0 + 1) * num
             }),
             is_type: (r0..=r1).any(|r| self.c.type_rows.contains(&r)),
+            in_test: self.c.defs.iter().any(|d| d.test && d.s <= r0 && r1 <= d.e),
             noise: false,
             extent: None,
             copyright: false,
@@ -1630,6 +1637,83 @@ fn test_macro_label(node: Node, src: &[u8], spec: &LangSpec) -> Option<String> {
         .map(tidy_ident)
         .filter(|t| !t.is_empty())?;
     Some(format!("{name}! {label}"))
+}
+
+/// A function the language marks as a test: an attribute (`#[test]`,
+/// `#[tokio::test]`), an annotation (`@Test`), a decorator or an attribute list
+/// naming one, or the naming convention of a language that has no marker
+/// (`test_x`, `testX`, Go's `TestX`). `name` may be qualified.
+fn is_test_def(node: Node, name: &str, src: &[u8], spec: &LangSpec) -> bool {
+    if !lang::has_signature(node.kind()) {
+        return false;
+    }
+    let bare = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
+    let named = spec.test_naming.iter().any(|p| {
+        bare.strip_prefix(p)
+            .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_lowercase()))
+    });
+    named || marked_test(node, src)
+}
+
+fn marked_test(node: Node, src: &[u8]) -> bool {
+    const MARKS: &[&str] = &[
+        "test",
+        "test_case",
+        "testcase",
+        "theory",
+        "fact",
+        "parameterizedtest",
+        "repeatedtest",
+        "testfactory",
+        "rstest",
+        "bench",
+        "fuzz",
+        "proptest",
+        "quickcheck",
+    ];
+    let text = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
+    let mut attrs: Vec<String> = vec![];
+    // rust: attributes are the siblings just before the item
+    let mut prev = node.prev_named_sibling();
+    while let Some(p) = prev.filter(|p| matches!(p.kind(), "attribute_item" | "line_comment")) {
+        if p.kind() == "attribute_item" {
+            attrs.push(text(p));
+        }
+        prev = p.prev_named_sibling();
+    }
+    let mut cur = node.walk();
+    for ch in node.named_children(&mut cur) {
+        match ch.kind() {
+            // java, kotlin: the annotations among the modifiers
+            "modifiers" => {
+                let mut c = ch.walk();
+                attrs.extend(
+                    ch.named_children(&mut c)
+                        .filter(|m| matches!(m.kind(), "marker_annotation" | "annotation"))
+                        .map(text),
+                );
+            }
+            // c#: `[Test, Category("x")]`
+            "attribute_list" => attrs.extend(
+                text(ch)
+                    .trim_matches(['[', ']'])
+                    .split(',')
+                    .map(str::to_string),
+            ),
+            _ => {}
+        }
+    }
+    attrs.extend(decorators(node, src));
+    attrs.iter().any(|a| {
+        let head = a
+            .trim()
+            .trim_start_matches(['#', '!', '[', '@'])
+            .split(['(', '=', ']', ' '])
+            .next()
+            .unwrap_or("");
+        let last = head.rsplit([':', '.']).next().unwrap_or(head);
+        MARKS.contains(&last.to_lowercase().as_str())
+    })
 }
 
 fn is_test_label(s: &str) -> bool {
@@ -2622,6 +2706,7 @@ impl<'a> Walker<'a> {
             kind,
             header_e: None,
             callable: false,
+            test: kind == ContainerKind::Test,
         }
     }
 
@@ -2949,6 +3034,12 @@ impl<'a> Walker<'a> {
             },
             header_e: header_end(node),
             callable: lang::has_signature(kind),
+            test: is_test_def(
+                node,
+                self.stack.last().map_or("", String::as_str),
+                self.src,
+                spec,
+            ),
         });
         self.walk_children(node);
         if !dup {
@@ -5314,6 +5405,25 @@ struct DefOut {
     defs: Vec<(String, usize)>,
     imports: Vec<(String, usize)>,
     bodies: Vec<Body>,
+    /// per name; `None` once two definitions of the name disagree
+    classes: HashMap<String, Option<DefClass>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DefClass {
+    Macro,
+    Function,
+    Other,
+}
+
+/// Names every one of whose definitions in the file is a macro, and names every
+/// one of whose definitions is a callable function. A name two kinds of
+/// definition share (a struct and the function of the same name, a macro and
+/// the function it wraps) is in neither: it cannot be said what a use means.
+#[derive(Default)]
+pub struct DefKinds {
+    pub macros: HashSet<String>,
+    pub functions: HashSet<String>,
 }
 
 /// One descent doing the work `collect_rows` and `collect_bodies` used to do in
@@ -5345,6 +5455,17 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
             o.defs.push((name.clone(), row));
         }
         let (header, whole, lines) = body_parts(node, src, spec);
+        let class = if lang::is_macro_kind(node.kind()) {
+            DefClass::Macro
+        } else if lang::has_signature(node.kind()) {
+            DefClass::Function
+        } else {
+            DefClass::Other
+        };
+        let seen = o.classes.entry(name.clone()).or_insert(Some(class));
+        if *seen != Some(class) {
+            *seen = None;
+        }
         o.bodies.push((name, header, whole, lines));
     } else if !in_import && !import {
         // a test block is a row too, so a deleted test is named ("removes
@@ -5427,12 +5548,20 @@ pub fn def_nodes<'t>(root: Node<'t>, spec: &LangSpec, src: &[u8]) -> Vec<(String
     out
 }
 
-pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>) {
+pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>, DefKinds) {
     let mut o = DefOut::default();
     if let Some(tree) = lang::parse(spec, content) {
         collect_defs(tree.root_node(), content.as_bytes(), spec, &mut o, false);
     }
-    ((o.defs, o.imports), o.bodies)
+    let mut kinds = DefKinds::default();
+    for (name, class) in o.classes {
+        match class {
+            Some(DefClass::Macro) => kinds.macros.insert(name),
+            Some(DefClass::Function) => kinds.functions.insert(name),
+            _ => false,
+        };
+    }
+    ((o.defs, o.imports), o.bodies, kinds)
 }
 
 /// What an import binds, and where that name comes from: the name this file
@@ -6068,7 +6197,7 @@ fn ident_text_rows(node: Node, src: &[u8]) -> Vec<(usize, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{squeeze, symbol_facts};
+    use super::{def_nodes, squeeze, symbol_facts};
 
     /// `symbol_facts` is one descent doing what two used to. The halves have
     /// different stopping rules — rows stop at an import, bodies do not — so
@@ -6077,7 +6206,7 @@ mod tests {
     fn one_descent_still_returns_both_halves() {
         let spec = crate::lang::for_path("a.py").expect("python");
         let src = "import os\nfrom sys import argv\n\ndef parse(p):\n    return os.path.join(p)\n\ndef main():\n    return parse(argv[1])\n";
-        let ((defs, imports), bodies) = symbol_facts(spec, src);
+        let ((defs, imports), bodies, _) = symbol_facts(spec, src);
 
         let names: Vec<&str> = defs.iter().map(|(n, _)| n.as_str()).collect();
         assert!(
@@ -6099,13 +6228,83 @@ mod tests {
         assert!(parse.2.contains("os.path.join"), "body: {:?}", parse.2);
     }
 
+    /// A name two kinds of definition share is neither a macro nor a function:
+    /// `struct stat` and `stat()` cannot be told apart by a use of `stat`.
+    #[test]
+    fn a_name_shared_by_two_kinds_of_definition_is_neither() {
+        let spec = crate::lang::for_path("a.c").expect("c");
+        let src = "struct item { int a; };\nint item(void) { return 1; }\n#define LOG(x) x\nint run(void) { return 0; }\n";
+        let (_, _, kinds) = symbol_facts(spec, src);
+        assert!(kinds.macros.contains("LOG") && !kinds.functions.contains("LOG"));
+        assert!(kinds.functions.contains("run"));
+        assert!(!kinds.functions.contains("item") && !kinds.macros.contains("item"));
+    }
+
+    /// Which functions the language marks as tests, by what it marks them with.
+    #[test]
+    fn test_functions_are_recognised_by_marker_or_convention() {
+        let marked = |path: &str, src: &str, name: &str| {
+            let spec = crate::lang::for_path(path).expect("language");
+            let tree = crate::lang::parse(spec, src).expect("parses");
+            let (_, node) = def_nodes(tree.root_node(), spec, src.as_bytes())
+                .into_iter()
+                .find(|(n, _)| n == name)
+                .expect("def");
+            super::is_test_def(node, name, src.as_bytes(), spec)
+        };
+        let java = |anno: &str| format!("class C {{\n  {anno}\n  void shouldParse() {{}}\n}}\n");
+        assert!(marked("C.java", &java("@Test"), "shouldParse"));
+        assert!(marked(
+            "C.java",
+            &java("@ParameterizedTest(name = \"x\")"),
+            "shouldParse"
+        ));
+        assert!(!marked("C.java", &java("@BeforeEach"), "shouldParse"));
+        assert!(!marked(
+            "C.java",
+            &java("@DisplayName(\"a test\")"),
+            "shouldParse"
+        ));
+        assert!(marked(
+            "a.rs",
+            "#[tokio::test]\nasync fn parses() {}\n",
+            "parses"
+        ));
+        assert!(!marked("a.rs", "#[cfg(test)]\nfn helper() {}\n", "helper"));
+        assert!(marked(
+            "a.py",
+            "def test_parses():\n    pass\n",
+            "test_parses"
+        ));
+        assert!(!marked(
+            "a.py",
+            "def latest_version():\n    pass\n",
+            "latest_version"
+        ));
+        assert!(!marked(
+            "a.py",
+            "def contest_setup():\n    pass\n",
+            "contest_setup"
+        ));
+        assert!(marked(
+            "a.go",
+            "package p\nfunc ExampleParse() {}\n",
+            "ExampleParse"
+        ));
+        assert!(!marked(
+            "a.py",
+            "def ExampleParse():\n    pass\n",
+            "ExampleParse"
+        ));
+    }
+
     /// An import statement's insides are not definitions. `collect_rows` used
     /// to return at an import so nothing under one became a row; the merged
     /// descent has to carry on for the bodies half without losing that.
     #[test]
     fn nothing_under_an_import_becomes_a_definition_row() {
         let spec = crate::lang::for_path("a.py").expect("python");
-        let ((defs, imports), _) = symbol_facts(spec, "from a import (b, c)\n");
+        let ((defs, imports), _, _) = symbol_facts(spec, "from a import (b, c)\n");
         assert!(
             defs.is_empty(),
             "an import declares no definitions: {defs:?}"

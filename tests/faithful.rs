@@ -981,3 +981,254 @@ fn a_new_changelog_section_is_not_a_renamed_heading() {
     let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
     assert!(r.iter().all(|x| !x.contains("→ TBD")), "{r:?}");
 }
+
+/// curl e1450d8f: a test source that merely calls the new `CURL_CSTRLEN`
+/// macro uses it; nothing in it tests the macro.
+#[test]
+fn a_test_using_a_macro_does_not_test_it() {
+    let out = run(json!({"changes": [
+        {"path": "lib/curl_setup.h",
+         "old": "#define A 1\n",
+         "new": "#define A 1\n#define CURL_CSTRLEN(s) (sizeof(s) - 1)\n"},
+        {"path": "tests/libtest/lib654.c",
+         "old": "int f(void)\n{\n  return 1;\n}\n",
+         "new": "int f(void)\n{\n  return CURL_CSTRLEN(\"abc\");\n}\n"}
+    ]}));
+    let r = rationales(&out);
+    assert_eq!(
+        r,
+        [
+            "adds CURL_CSTRLEN, used in tests/libtest/lib654.c",
+            "uses CURL_CSTRLEN, added in lib/curl_setup.h"
+        ]
+    );
+}
+
+/// cobra 652c755d: a helper in a test file that wraps a call in `CheckErr`
+/// is using the error handler, not testing it.
+#[test]
+fn a_test_helper_calling_a_function_does_not_test_it() {
+    let out = run(json!({"changes": [
+        {"path": "cobra.go",
+         "old": "package cobra\n\nfunc other() {}\n",
+         "new": "package cobra\n\nfunc CheckErr(msg interface{}) {\n\tif msg != nil {\n\t\tpanic(msg)\n\t}\n}\n\nfunc other() {}\n"},
+        {"path": "bash_completions_test.go",
+         "old": "package cobra\n\nfunc runShellCheck(s string) {\n\tcmd := exec.Command(\"bash\", \"-c\", s)\n\tcmd.Run()\n}\n",
+         "new": "package cobra\n\nfunc runShellCheck(s string) {\n\tcmd := exec.Command(\"bash\", \"-c\", s)\n\tCheckErr(cmd.Run())\n}\n"}
+    ]}));
+    let r = rationales(&out);
+    assert_eq!(
+        r,
+        [
+            "adds CheckErr, used in bash_completions_test.go",
+            "uses CheckErr, added in cobra.go"
+        ]
+    );
+}
+
+/// `def` adds the callee; `test` edits a test-side file that already existed
+fn calls_in_test(def: (&str, &str, &str), test: (&str, &str, &str)) -> Vec<String> {
+    let (dp, dold, dnew) = def;
+    let (tp, told, tnew) = test;
+    rationales(&run(json!({"changes": [
+        {"path": dp, "old": dold, "new": dnew},
+        {"path": tp, "old": told, "new": tnew}
+    ]})))
+}
+
+fn assert_tests(r: &[String], name: &str) {
+    assert!(
+        r.iter().any(|x| x.starts_with(&format!("tests {name} "))),
+        "{r:?}"
+    );
+}
+
+fn assert_uses(r: &[String], name: &str, defined_in: &str, used_in: &str) {
+    assert_eq!(
+        r,
+        [
+            format!("adds {name}, used in {used_in}"),
+            format!("uses {name}, added in {defined_in}")
+        ]
+    );
+}
+
+/// a `#[test]` fn keeps the claim whatever it is called
+#[test]
+fn a_rust_test_attribute_keeps_the_claim() {
+    let r = calls_in_test(
+        (
+            "src/lib.rs",
+            "pub fn other() {}\n",
+            "pub fn other() {}\n\npub fn parse(x: &str) -> u32 {\n    x.len() as u32\n}\n",
+        ),
+        (
+            "tests/cli.rs",
+            "#[test]\nfn parses_flags() {\n    other();\n}\n",
+            "#[test]\nfn parses_flags() {\n    other();\n    assert_eq!(parse(\"ab\"), 2);\n}\n",
+        ),
+    );
+    assert_tests(&r, "parse");
+}
+
+/// an `it(...)` block is a test though its name is prose
+#[test]
+fn a_describe_it_block_keeps_the_claim() {
+    let r = calls_in_test(
+        (
+            "src/args.ts",
+            "export function other() {}\n",
+            "export function other() {}\nexport function parseArgs(x: string) {\n  return x;\n}\n",
+        ),
+        (
+            "src/args.test.ts",
+            "describe('args', () => {\n  it('parses', () => {\n    other();\n  });\n});\n",
+            "describe('args', () => {\n  it('parses', () => {\n    other();\n    parseArgs('a');\n  });\n});\n",
+        ),
+    );
+    assert_tests(&r, "parseArgs");
+}
+
+/// Go `TestX`, `BenchmarkX` and `ExampleX` are tests by convention
+#[test]
+fn go_test_benchmark_and_example_functions_keep_the_claim() {
+    for f in ["TestParse", "BenchmarkParse", "ExampleParse"] {
+        let r = calls_in_test(
+            (
+                "parse.go",
+                "package p\n\nfunc other() {}\n",
+                "package p\n\nfunc other() {}\n\nfunc Parse(s string) int {\n\treturn len(s)\n}\n",
+            ),
+            (
+                "parse_test.go",
+                &format!("package p\n\nfunc {f}() {{\n\tother()\n}}\n"),
+                &format!("package p\n\nfunc {f}() {{\n\tother()\n\tParse(\"ab\")\n}}\n"),
+            ),
+        );
+        assert_tests(&r, "Parse");
+    }
+}
+
+/// a helper is not a test because its name contains the letters: `contest_setup`
+/// and `latest_version` call the function, they do not test it
+#[test]
+fn a_helper_whose_name_contains_test_does_not_test() {
+    for helper in ["contest_setup", "latest_version"] {
+        let r = calls_in_test(
+            (
+                "a.py",
+                "def other():\n    return 0\n",
+                "def other():\n    return 0\n\n\ndef parse(s):\n    return len(s)\n",
+            ),
+            (
+                "tests/test_a.py",
+                &format!("def {helper}():\n    return other()\n"),
+                &format!("def {helper}():\n    other()\n    return parse('ab')\n"),
+            ),
+        );
+        assert_uses(&r, "parse", "a.py", "tests/test_a.py");
+    }
+}
+
+/// `macro_rules!` is a macro like a `#define`: a test calling it uses it
+#[test]
+fn a_test_using_a_rust_macro_does_not_test_it() {
+    let r = calls_in_test(
+        (
+            "src/lib.rs",
+            "pub fn other() {}\n",
+            "pub fn other() {}\n\nmacro_rules! cstrlen {\n    ($s:expr) => {\n        $s.len()\n    };\n}\n",
+        ),
+        (
+            "tests/cli.rs",
+            "#[test]\nfn lengths() {\n    other();\n}\n",
+            "#[test]\nfn lengths() {\n    other();\n    assert_eq!(cstrlen!(\"ab\"), 2);\n}\n",
+        ),
+    );
+    assert_uses(&r, "cstrlen", "src/lib.rs", "tests/cli.rs");
+}
+
+/// without a marker, `test_` is a test's name only where the language reads it
+/// so: an unmarked rust `fn test_helper` or go `testHelper` is a helper
+#[test]
+fn a_test_named_function_in_a_language_without_the_convention_is_a_helper() {
+    let r = calls_in_test(
+        (
+            "src/lib.rs",
+            "pub fn other() {}\n",
+            "pub fn other() {}\n\npub fn parse(x: &str) -> u32 {\n    x.len() as u32\n}\n",
+        ),
+        (
+            "tests/cli.rs",
+            "fn test_helper() {\n    other();\n}\n",
+            "fn test_helper() {\n    other();\n    parse(\"a\");\n}\n",
+        ),
+    );
+    assert_uses(&r, "parse", "src/lib.rs", "tests/cli.rs");
+    let r = calls_in_test(
+        (
+            "parse.go",
+            "package p\n\nfunc other() {}\n",
+            "package p\n\nfunc other() {}\n\nfunc Parse(s string) int {\n\treturn len(s)\n}\n",
+        ),
+        (
+            "parse_test.go",
+            "package p\n\nfunc testHelper() {\n\tother()\n}\n",
+            "package p\n\nfunc testHelper() {\n\tother()\n\tParse(\"a\")\n}\n",
+        ),
+    );
+    assert_uses(&r, "Parse", "parse.go", "parse_test.go");
+}
+
+/// python's unittest reads `test_x` as a test with no marker
+#[test]
+fn a_python_unittest_method_keeps_the_claim() {
+    let r = calls_in_test(
+        (
+            "a.py",
+            "def other():\n    return 0\n",
+            "def other():\n    return 0\n\n\ndef parse(s):\n    return len(s)\n",
+        ),
+        (
+            "tests/test_a.py",
+            "class T(unittest.TestCase):\n    def test_a(self):\n        other()\n",
+            "class T(unittest.TestCase):\n    def test_a(self):\n        other()\n        parse('a')\n",
+        ),
+    );
+    assert_tests(&r, "parse");
+}
+
+/// gtest's `TEST(a, b) {…}` and boost's `BOOST_AUTO_TEST_CASE(x) {…}` parse as
+/// functions named for the macro; they are tests, and a plain helper is not
+#[test]
+fn c_plus_plus_test_macros_keep_the_claim() {
+    let def = (
+        "src/parse.cc",
+        "int other() { return 0; }\n",
+        "int other() { return 0; }\n\nint parse(const char *s) { return 1; }\n",
+    );
+    for (old, new) in [
+        (
+            "TEST(Parse, Basic) {\n  other();\n}\n",
+            "TEST(Parse, Basic) {\n  other();\n  EXPECT_EQ(parse(\"ab\"), 1);\n}\n",
+        ),
+        (
+            "BOOST_AUTO_TEST_CASE(parses) {\n  other();\n}\n",
+            "BOOST_AUTO_TEST_CASE(parses) {\n  other();\n  BOOST_CHECK(parse(\"ab\") == 1);\n}\n",
+        ),
+    ] {
+        assert_tests(
+            &calls_in_test(def, ("tests/parse_test.cc", old, new)),
+            "parse",
+        );
+    }
+    let r = calls_in_test(
+        def,
+        (
+            "tests/parse_test.cc",
+            "void check_all() {\n  other();\n}\n",
+            "void check_all() {\n  other();\n  parse(\"ab\");\n}\n",
+        ),
+    );
+    assert_uses(&r, "parse", "src/parse.cc", "tests/parse_test.cc");
+}
