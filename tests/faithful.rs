@@ -1232,3 +1232,193 @@ fn c_plus_plus_test_macros_keep_the_claim() {
     );
     assert_uses(&r, "parse", "src/parse.cc", "tests/parse_test.cc");
 }
+
+/// lazy dbffad6f fragments.lua: `local F = {}` became `local M = {}` plus a
+/// `next_id` function moved down from the top of the file. The function is
+/// wholly added by the hunk, so the hunk cannot be an edit of it.
+#[test]
+fn a_definition_moved_into_the_hunk_is_added_not_edited() {
+    assert_eq!(moved_next_id(""), ["adds next_id"]);
+}
+
+/// The same change with a second `next_id` that stays where it was: the one
+/// moved into the hunk is still added by it.
+#[test]
+fn a_moved_definition_is_added_even_when_its_name_survives_elsewhere() {
+    let survivor = "function M.wrap()\n  local function next_id()\n    return 1\n  end\n  return next_id\nend\n";
+    assert_eq!(moved_next_id(survivor), ["adds next_id"]);
+}
+
+/// The rationales of the hunks defining `next_id` when the file also ends in
+/// `extra`.
+fn moved_next_id(extra: &str) -> Vec<String> {
+    let old = format!("{}{extra}", "local M = {}\nM._fid = 0\nlocal function next_id()\n  M._fid = M._fid + 1\n  return M._fid\nend\n--- A fragment can be a dependency (dependencies) or a child (specs) of another fragment.\n---@class LazyFragments\n---@field fragments table<number, LazyFragment>\n---@field frag_stack number[]\n---@field dep_stack number[]\n---@field dirty table<number, boolean>\n---@field spec LazySpecLoader\nlocal F = {}\nfunction M.new(spec)\n  local self = setmetatable({}, { __index = F })\n  self.fragments = {}\n  self.frag_stack = {}\n  self.dep_stack = {}\n  self.dirty = {}\nend\n");
+    let new = format!("{}{extra}", "--- A fragment can be a dependency (dependencies) or a child (specs) of another fragment.\n---@class LazyFragments\n---@field fragments table<number, LazyFragment>\n---@field frag_stack number[]\n---@field dep_stack number[]\n---@field dirty table<number, boolean>\nlocal M = {}\nM._fid = 0\nlocal function next_id()\n  M._fid = M._fid + 1\n  return M._fid\nend\nfunction M.new(spec)\n  local self = setmetatable({}, { __index = M })\n  self.fragments = {}\n  self.frag_stack = {}\n  self.dep_stack = {}\n  self.dirty = {}\n  self.plugins = {}\nend\n");
+    hunks("f.lua", &old, &new)
+        .iter()
+        .filter(|h| h.defines.iter().any(|d| d == "next_id"))
+        .map(|h| h.rationale.clone())
+        .collect()
+}
+
+/// junit5 b5f17668 EvaluatedArgumentSet.java: `set.getName()` reaches
+/// ArgumentSet's method, not the `getName` this class defines.
+#[test]
+fn a_java_call_on_another_object_is_not_a_use_of_a_local_method() {
+    let hs = hunks(
+        "E.java",
+        "class E {\n\tOptional<String> getName() {\n\t\treturn this.name;\n\t}\n\n\tprivate static Optional<String> determineName(Arguments arguments) {\n\t\tif (arguments instanceof ArgumentSet set) {\n\t\t\treturn Optional.of(set.getName());\n\t\t}\n\t\treturn Optional.empty();\n\t}\n}\n",
+        "class E {\n\t@Nullable\n\tString getName() {\n\t\treturn this.name;\n\t}\n\n\tprivate static @Nullable String determineName(Arguments arguments) {\n\t\tif (arguments instanceof ArgumentSet set) {\n\t\t\treturn set.getName();\n\t\t}\n\t\treturn null;\n\t}\n}\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(
+        r,
+        [
+            "changes signature of getName",
+            "changes signature of determineName",
+            "edits E.determineName",
+            "edits E.determineName",
+        ],
+        "{r:?}"
+    );
+}
+
+/// openfoam 627e2f90 lduMatrix.H: a constructor prototype naming its parameter
+/// `interfaceBouCoeffs` declares that name, so the accessor of the same name
+/// is not used by it.
+#[test]
+fn a_prototype_parameter_is_not_a_use_of_a_method_of_the_same_name() {
+    let hs = hunks(
+        "l.H",
+        "class solver\n{\n    const FieldField<Field, scalar>& interfaceBouCoeffs_;\n\n    solver\n    (\n        const word& fieldName,\n        const FieldField<Field, scalar>& interfaceBouCoeffs,\n        const dictionary& solverControls\n    );\n\n    const FieldField<Field, scalar>& interfaceBouCoeffs() const\n    {\n        return interfaceBouCoeffs_;\n    }\n};\n",
+        "class solver\n{\n    const Field<Field<scalar>>& interfaceBouCoeffs_;\n\n    solver\n    (\n        const word& fieldName,\n        const Field<Field<scalar>>& interfaceBouCoeffs,\n        const dictionary& solverControls\n    );\n\n    const Field<Field<scalar>>& interfaceBouCoeffs() const\n    {\n        return interfaceBouCoeffs_;\n    }\n};\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(
+        r.iter()
+            .filter(|x| x.contains("interfaceBouCoeffs"))
+            .collect::<Vec<_>>(),
+        [&"changes signature of interfaceBouCoeffs"],
+        "{r:?}"
+    );
+}
+
+/// The rationale of `helper` in a class whose `run` calls it as `call(args)`;
+/// `helper` gains a parameter and the call gains an argument.
+fn java_helper_rationale(call: impl Fn(&str) -> String) -> String {
+    let class = |params: &str, args: &str| {
+        format!(
+            "class Outer {{\n\tvoid helper(int a{params}) {{\n\t\twork(a);\n\t}}\n\n\tvoid run() {{\n\t\t{}\n\t}}\n}}\n",
+            call(args)
+        )
+    };
+    let hs = hunks("Outer.java", &class("", "1"), &class(", int b", "1, 2"));
+    let of_helper: Vec<&str> = hs
+        .iter()
+        .filter(|h| h.defines.iter().any(|d| d == "helper"))
+        .map(|h| h.rationale.as_str())
+        .collect();
+    assert_eq!(of_helper.len(), 1, "{hs:?}");
+    of_helper[0].to_string()
+}
+
+const LINKED: &str = "changes signature of helper, used by Outer.run below";
+const UNLINKED: &str = "changes signature of helper";
+
+/// `this`, `super`, a type name and a qualified `this` all reach this file's
+/// own `helper`.
+#[test]
+fn a_java_call_on_this_or_a_type_stays_linked_to_the_local_method() {
+    for receiver in [
+        "this.",
+        "super.",
+        "Outer.",
+        "Outer.this.",
+        "Outer.super.",
+        "Outer.Inner.",
+    ] {
+        assert_eq!(
+            java_helper_rationale(|a| format!("{receiver}helper({a});")),
+            LINKED,
+            "{receiver}"
+        );
+    }
+    assert_eq!(java_helper_rationale(|a| format!("helper({a});")), LINKED);
+}
+
+/// A lowercase receiver is some other object whose type this file does not
+/// say; its `helper` is not the one defined here.
+#[test]
+fn a_java_call_on_a_variable_is_not_linked_to_the_local_method() {
+    for receiver in ["set.", "this.items.", "items.get(0)."] {
+        assert_eq!(
+            java_helper_rationale(|a| format!("{receiver}helper({a});")),
+            UNLINKED,
+            "{receiver}"
+        );
+    }
+}
+
+/// One plain mention is enough to link the group; chaining off a linked call
+/// does not unlink it.
+#[test]
+fn a_bare_mention_or_a_linked_chain_keeps_the_link() {
+    assert_eq!(
+        java_helper_rationale(|a| format!("helper({a});\n\t\tset.helper({a});")),
+        LINKED
+    );
+    assert_eq!(
+        java_helper_rationale(|a| format!("this.helper({a}).helper({a});")),
+        LINKED
+    );
+    assert_eq!(
+        java_helper_rationale(|a| format!("set.helper({a}).helper({a});")),
+        UNLINKED
+    );
+}
+
+/// openfoam cd92dfdf BinaryExpression.H: `argB(args) ...` is a call in a pack
+/// expansion that parses as a parameter pack, and must not read as declaring
+/// `args`-style parameters: `compare` really does use `argB`.
+#[test]
+fn a_call_in_a_pack_expansion_is_a_use_not_a_parameter() {
+    let hs = hunks(
+        "b.H",
+        "template<class Type>\nconst Type& argB(const Type& t)\n{\n    return t;\n}\n\ntemplate<class... Args>\nbool compare(const Args&... args)\n{\n    return op(argB(args) ...);\n}\n",
+        "template<class Type>\nType& argB(Type& t)\n{\n    return t;\n}\n\ntemplate<class... Args>\nbool compare(const Args&... args)\n{\n    return op(argB(args) ..., 1);\n}\n",
+    );
+    let r: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+    assert_eq!(
+        r[0], "changes signature of argB, used by compare below",
+        "{r:?}"
+    );
+}
+
+/// A definition edited in place keeps "edits", whatever else the file holds
+/// under its name: overloads, a decorated or exported twin.
+#[test]
+fn an_edited_definition_is_not_added_because_its_name_repeats() {
+    let java = hunks(
+        "A.java",
+        "class A {\n\tint f(int a) {\n\t\treturn a;\n\t}\n\n\tint f(String s) {\n\t\treturn 1;\n\t}\n}\n",
+        "class A {\n\tint f(String s) {\n\t\treturn 2;\n\t}\n}\n",
+    );
+    let r: Vec<&str> = java.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.starts_with("adds")), "{r:?}");
+
+    let py = hunks(
+        "k.py",
+        "def helper():\n    return 0\n\n\nclass K:\n    @cache\n    def helper(self):\n        return 1\n",
+        "class K:\n    @cache(1)\n    def helper(self):\n        return 1\n",
+    );
+    let r: Vec<&str> = py.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.starts_with("adds")), "{r:?}");
+
+    let ts = hunks(
+        "k.ts",
+        "export function helper() {\n  return 0;\n}\n\nexport function other() {\n  return 1;\n}\n",
+        "export function other() {\n  return 2;\n}\n",
+    );
+    let r: Vec<&str> = ts.iter().map(|h| h.rationale.as_str()).collect();
+    assert!(r.iter().all(|x| !x.starts_with("adds")), "{r:?}");
+}

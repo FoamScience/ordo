@@ -311,7 +311,7 @@ pub fn order_all(
     };
     let (groups, mut group_idx) = group_hunks(&flat, &sets);
     let joined = joined_groups(groups.len(), &sets, &group_idx);
-    let (gdef, guse, glocal) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
+    let (gdef, guse, glocal, gforeign) = group_symbols(&flat, &groups, &group_idx, symbols, paths);
     // `users`/`definers` invert the per-group sets once (symbol → the groups
     // using / defining it, ascending), so a group's defs look up their users
     // directly instead of scanning every other group: the corpus reaches ~15k
@@ -358,6 +358,7 @@ pub fn order_all(
         paths,
         symbols,
         stays_local: &glocal,
+        foreign: &gforeign,
     };
     let (mut edges, gedges) =
         def_use_edges(&groups, &flat.sem, &gdef, &users, &bind, options.cross_file);
@@ -440,6 +441,7 @@ pub fn order_all(
         changed,
         renamed_to: &renamed_to,
         stays_local: &glocal,
+        foreign: &gforeign,
         comment: &flat.comment,
         switched: &flat.switched,
         replaced: &replaced,
@@ -849,11 +851,13 @@ fn group_symbols(
     group_idx: &[usize],
     symbols: &[crate::FileSymbols],
     paths: &[String],
-) -> (PerGroup, PerGroup, PerGroup) {
+) -> (PerGroup, PerGroup, PerGroup, PerGroup) {
     let mut gdef: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     let mut guse: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     // the names a group's uses must not resolve in another file — see `Binding::stays_local`
     let mut glocal: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
+    // the names a group only wrote as a member of another object — see `Binding::foreign`
+    let mut gforeign: Vec<HashSet<String>> = vec![HashSet::new(); groups.len()];
     // What this change defines, and where. An import links to it only when
     // the statement's own module names that file: a test file that happens to
     // define `render` must not become the definer of every
@@ -889,6 +893,7 @@ fn group_symbols(
             }
         }
         glocal[gi].extend(s.member_uses.iter().cloned());
+        gforeign[gi].extend(s.foreign_uses.iter().cloned());
         for u in &s.uses {
             guse[gi].insert(u.clone());
             // `from lib import helper as h` then `h()`: the definition is
@@ -926,7 +931,21 @@ fn group_symbols(
                 .flat_map(|&i| flat.sem[i].own_bound.iter().cloned()),
         );
     }
-    (gdef, guse, glocal)
+    for (gi, f) in gforeign.iter_mut().enumerate() {
+        let bare: HashSet<&str> = groups[gi]
+            .members
+            .iter()
+            .flat_map(|&i| {
+                let s = flat.sem[i];
+                s.uses
+                    .iter()
+                    .filter(|u| !s.foreign_uses.contains(u))
+                    .map(String::as_str)
+            })
+            .collect();
+        f.retain(|n| !bare.contains(n.as_str()));
+    }
+    (gdef, guse, glocal, gforeign)
 }
 
 /// Whether an import's module names this file. A module is written the way
@@ -1425,6 +1444,9 @@ struct Binding<'a> {
     /// per group, the names its uses must not resolve in another file: ones it
     /// only wrote as `obj.name`, and ones its own file binds where it sees them
     stays_local: &'a [HashSet<String>],
+    /// per group, the names it only wrote as a member of another object: its
+    /// own file's definitions of them are a coincidence of spelling
+    foreign: &'a [HashSet<String>],
 }
 
 impl Binding<'_> {
@@ -1477,7 +1499,11 @@ impl Binding<'_> {
         let same_file = self.group_file[definer] == self.group_file[user];
         definer != user
             && (cross_file || same_file)
-            && (same_file || self.reaches_out(user, s))
+            && (if same_file {
+                !self.foreign[user].contains(s)
+            } else {
+                self.reaches_out(user, s)
+            })
             && self.resolves(definer, user, s)
             && self.visible(definer, user, s)
     }
@@ -1565,6 +1591,7 @@ struct RatCtx<'a> {
     renamed_to: &'a HashMap<&'a str, &'a str>,
     /// see `group_symbols`; `bind()` needs it to rebuild the edge gate
     stays_local: &'a [HashSet<String>],
+    foreign: &'a [HashSet<String>],
     comment: &'a [bool],
     /// how the hunk moved code across the comment boundary, if it did
     switched: &'a [Option<crate::SideShift>],
@@ -1586,6 +1613,7 @@ impl<'a> RatCtx<'a> {
             paths: self.paths,
             symbols: self.symbols,
             stays_local: self.stays_local,
+            foreign: self.foreign,
         }
     }
     // groups defining / using `sym`, in group order
@@ -1602,7 +1630,10 @@ impl<'a> RatCtx<'a> {
     }
     // wording must not claim a link `edge_allowed` refused
     fn reads_name(&self, user: usize, mine: usize, sym: &str) -> bool {
-        self.group_file[user] == self.group_file[mine] || self.bind().reaches_out(user, sym)
+        if self.group_file[user] == self.group_file[mine] {
+            return !self.foreign[user].contains(sym);
+        }
+        self.bind().reaches_out(user, sym)
     }
     // ...and `other` really is where `sym` comes from, by the same rule the
     // def→use graph uses: the rationale must not name a definition the graph
@@ -1655,23 +1686,36 @@ impl<'a> RatCtx<'a> {
         // a data file repeats key names under different parents
         // (`linters.enable`, `formatters.enable`): the old key only counts as
         // this one when it sat on the rows this hunk replaced
+        let in_range = |s: &crate::FileSymbols| {
+            // rows come in source order: only the hunk's own are read
+            let rows = &s.old_rows.0;
+            let from = rows.partition_point(|(_, r)| *r < o0);
+            rows[from..]
+                .iter()
+                .take_while(|(_, r)| *r <= o1)
+                .any(|(n, _)| n == sym)
+        };
         let existed = o0 <= o1
-            && self.symbols.get(file).is_some_and(|s| {
-                s.old_defs.contains(sym)
-                    && (!self.is_data(file) || {
-                        // rows come in source order: only the hunk's own are read
-                        let rows = &s.old_rows.0;
-                        let from = rows.partition_point(|(_, r)| *r < o0);
-                        rows[from..]
-                            .iter()
-                            .take_while(|(_, r)| *r <= o1)
-                            .any(|(n, _)| n == sym)
-                    })
-            });
+            && self
+                .symbols
+                .get(file)
+                .is_some_and(|s| s.old_defs.contains(sym) && (!self.is_data(file) || in_range(s)));
         let body_only = self
             .changed
             .get(file)
             .is_some_and(|c| c.body_only.contains(sym));
+        // a definition this hunk wrote whole, its old one elsewhere in the
+        // file, is moved here and added by it: no row of it was edited
+        let moved_here = existed
+            && body_only
+            && !self.is_data(file)
+            && self.symbols.get(file).is_some_and(|s| {
+                !in_range(s)
+                    && s.new_def_spans.iter().any(|(n, start, end)| {
+                        n == sym && new_range[0] <= *start && *end <= new_range[1]
+                    })
+            });
+        let existed = existed && !moved_here;
         match (existed, is_type) {
             (false, false) => "adds",
             (false, true) => "adds type",
@@ -2268,11 +2312,22 @@ fn provenance<'a>(
     sem: &[&HunkSem],
     ctx: &RatCtx,
 ) -> Option<(&'a str, String)> {
+    // a parameter's name is declared where it is written: a group that only
+    // names `d` as a parameter does not use what `d` defines
+    let names_param_only = |b: usize, d: &str| {
+        let mut users = ctx.groups[b]
+            .members
+            .iter()
+            .map(|&m| sem[m])
+            .filter(|s| s.uses.iter().any(|u| u == d))
+            .peekable();
+        users.peek().is_some() && users.all(|s| s.declares(d))
+    };
     let (d, b) = real.iter().find_map(|d| {
         ctx.users(d)
             .iter()
             .copied()
-            .find(|&b| ctx.used_by(mine, b, d))
+            .find(|&b| ctx.used_by(mine, b, d) && !names_param_only(b, d))
             .map(|b| (*d, b))
     })?;
     let my_file = ctx.group_file[mine];
@@ -2359,7 +2414,7 @@ fn def_side_rationale(s: &HunkSem, sem: &[&HunkSem], mine: usize, ctx: &RatCtx) 
 fn use_side_rationale(s: &HunkSem, mine: usize, ctx: &RatCtx) -> Option<String> {
     // a parameter's name is declared where it is written, not used from
     // anything defined elsewhere
-    if s.uses.iter().all(|u| s.param_uses.contains(u)) {
+    if s.uses.iter().all(|u| s.declares(u)) {
         return None;
     }
     let my_file = ctx.group_file[mine];
@@ -2427,16 +2482,13 @@ fn defined_elsewhere<'a>(
     ctx: &RatCtx,
     accept: impl Fn(usize) -> bool,
 ) -> Option<(&'a String, usize)> {
-    s.uses
-        .iter()
-        .filter(|u| !s.param_uses.contains(u))
-        .find_map(|u| {
-            ctx.definers(u)
-                .iter()
-                .copied()
-                .find(|&b| ctx.ok_for(mine, b, u) && accept(b))
-                .map(|b| (u, b))
-        })
+    s.uses.iter().filter(|u| !s.declares(u)).find_map(|u| {
+        ctx.definers(u)
+            .iter()
+            .copied()
+            .find(|&b| ctx.ok_for(mine, b, u) && accept(b))
+            .map(|b| (u, b))
+    })
 }
 
 // what the hunk did within its own scope, tried in order: P17, a local

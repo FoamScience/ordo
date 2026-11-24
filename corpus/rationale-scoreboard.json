@@ -3,8 +3,8 @@
  "unmatched": 0,
  "matched_by_overlap": 0,
  "surviving": {
-  "n": 8487,
-  "unfaithful": 151,
+  "n": 8484,
+  "unfaithful": 149,
   "by_verb": {
    "adds": {
     "n": 2802,
@@ -12,7 +12,7 @@
     "rate": 0.0211
    },
    "changes": {
-    "n": 795,
+    "n": 794,
     "unfaithful": 24,
     "rate": 0.0302
    },
@@ -22,9 +22,9 @@
     "rate": 0.0394
    },
    "uses": {
-    "n": 299,
-    "unfaithful": 13,
-    "rate": 0.0435
+    "n": 298,
+    "unfaithful": 12,
+    "rate": 0.0403
    },
    "removes": {
     "n": 512,
@@ -32,9 +32,9 @@
     "rate": 0.0195
    },
    "edits": {
-    "n": 2149,
-    "unfaithful": 9,
-    "rate": 0.0042
+    "n": 2148,
+    "unfaithful": 8,
+    "rate": 0.0037
    },
    "replaces": {
     "n": 142,
@@ -119,9 +119,9 @@
     "rate": 0.0533
    },
    "lazy": {
-    "n": 906,
-    "unfaithful": 21,
-    "rate": 0.0232
+    "n": 905,
+    "unfaithful": 20,
+    "rate": 0.0221
    },
    "excalidraw": {
     "n": 849,
@@ -154,9 +154,9 @@
     "rate": 0.0183
    },
    "junit5": {
-    "n": 628,
-    "unfaithful": 8,
-    "rate": 0.0127
+    "n": 626,
+    "unfaithful": 7,
+    "rate": 0.0112
    },
    "openfoam": {
     "n": 772,
@@ -176,9 +176,9 @@
   }
  },
  "dropped": {
-  "n": 834,
-  "unfaithful": 203,
-  "faithful": 631,
+  "n": 837,
+  "unfaithful": 205,
+  "faithful": 632,
   "by_verb": {
    "adds": {
     "n": 461,
@@ -186,9 +186,9 @@
     "rate": 0.2213
    },
    "changes": {
-    "n": 159,
+    "n": 160,
     "unfaithful": 28,
-    "rate": 0.1761
+    "rate": 0.175
    },
    "moves": {
     "n": 138,
@@ -206,8 +206,8 @@
     "rate": 0.6875
    },
    "uses": {
-    "n": 10,
-    "unfaithful": 10,
+    "n": 11,
+    "unfaithful": 11,
     "rate": 1.0
    },
    "tests": {
@@ -215,15 +215,15 @@
     "unfaithful": 8,
     "rate": 0.7273
    },
+   "edits": {
+    "n": 8,
+    "unfaithful": 2,
+    "rate": 0.25
+   },
    "removes": {
     "n": 10,
     "unfaithful": 1,
     "rate": 0.1
-   },
-   "edits": {
-    "n": 7,
-    "unfaithful": 1,
-    "rate": 0.1429
    },
    "replaces": {
     "n": 1,
@@ -242,15 +242,15 @@
    "changes -> moves": 18,
    "formatting -> moves": 15,
    "tests -> uses": 8,
-   "edits -> adds": 7,
+   "edits -> adds": 8,
    "moves -> formatting": 7,
    "uses -> tests": 7,
    "adds -> edits": 6,
    "formatting -> removes": 6,
    "tests -> calls": 3,
    "renames -> adds": 3,
+   "uses -> edits": 2,
    "uses -> changes": 1,
-   "uses -> edits": 1,
    "adds -> renames": 1
   },
   "faithful_rows": [
@@ -5723,6 +5723,18 @@
     "why": "TimeoutException import added"
    },
    {
+    "key": "junit5:b5f17668:junit-jupiter-params/src/main/java/org/junit/jupiter/params/EvaluatedArgumentSet.java:91",
+    "old": [
+     "changes signature of getName, used by EvaluatedArgumentSet.determineName below",
+     []
+    ],
+    "new": [
+     "changes signature of getName",
+     []
+    ],
+    "why": "return type change; determineName uses it"
+   },
+   {
     "key": "junit5:e6fa8005:junit-platform-console/src/main/java/org/junit/platform/console/output/VerboseTreePrintingListener.java:19",
     "old": [
      "adds import Clock, ConcurrentHashMap, Duration, and 2 more",
@@ -8403,7 +8415,7 @@
      []
     ],
     "new": [
-     "renames pager → _pager_contextmanager; adds type MaybeStripAnsi, write; changes signature of _pager_contextmanager; changes type __init__, MaybeStripAnsi used by get_pager_file below",
+     "renames pager → _pager_contextmanager; adds type MaybeStripAnsi, __init__, write; changes signature of _pager_contextmanager, MaybeStripAnsi used by get_pager_file below",
      []
     ],
     "why": "__init__ is new, not changed; rename hides signature change"
@@ -9921,6 +9933,18 @@
     "why": "imports-only framing hides new record definition"
    },
    {
+    "key": "junit5:b5f17668:junit-jupiter-params/src/main/java/org/junit/jupiter/params/EvaluatedArgumentSet.java:105",
+    "old": [
+     "uses getName, defined above",
+     []
+    ],
+    "new": [
+     "edits EvaluatedArgumentSet.determineName",
+     []
+    ],
+    "why": "set.getName is ArgumentSet's, not the one defined above; hides Optional removal"
+   },
+   {
     "key": "junit5:e6fa8005:junit-platform-console/src/main/java/org/junit/platform/console/output/VerboseTreePrintingListener.java:231",
     "old": [
      "renames printDetail → appendDetail, used by VerboseTreePrintingListener.executionFinished above",
@@ -10075,6 +10099,18 @@
      []
     ],
     "why": "logic change framed as local replacement; self.importing not local"
+   },
+   {
+    "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:14",
+    "old": [
+     "edits next_id",
+     []
+    ],
+    "new": [
+     "adds next_id",
+     []
+    ],
+    "why": "next_id wholly added, not edited"
    },
    {
     "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:85",
@@ -11090,12 +11126,6 @@
    "why": "timeout and descriptionSupplier used once each, not 2"
   },
   {
-   "key": "junit5:b5f17668:junit-jupiter-params/src/main/java/org/junit/jupiter/params/EvaluatedArgumentSet.java:105",
-   "rationale": "uses getName, defined above",
-   "details": [],
-   "why": "set.getName is ArgumentSet's, not the one defined above; hides Optional removal"
-  },
-  {
    "key": "junit5:dd6d1d6b:junit-jupiter-engine/src/main/java/org/junit/jupiter/engine/descriptor/DefaultTestInstanceFactoryContext.java:24",
    "rationale": "uses Class, DefaultTestInstanceFactoryContext, Nullable, and 3 more",
    "details": [],
@@ -11246,12 +11276,6 @@
    "rationale": "adds it \"async\"",
    "details": [],
    "why": "replaces schedule test, not pure add"
-  },
-  {
-   "key": "lazy:dbffad6f:lua/lazy/core/fragments.lua:14",
-   "rationale": "edits next_id",
-   "details": [],
-   "why": "next_id wholly added, not edited"
   },
   {
    "key": "lazy:fcfd5483:lua/lazy/pkg/rockspec.lua:56",

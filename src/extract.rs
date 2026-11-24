@@ -57,6 +57,10 @@ pub struct HunkSem {
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
     pub member_uses: Vec<String>,
+    /// the subset of `uses` this hunk only ever wrote as the member of another
+    /// object (java `set.getName()`): never grounds an edge to a definition in
+    /// its own file, which is where `this` would have reached
+    pub foreign_uses: Vec<String>,
     /// the subset of `uses` this hunk only ever wrote as the name of a
     /// parameter it declares: a declaration, not a reference
     pub param_uses: Vec<String>,
@@ -163,6 +167,11 @@ pub struct BindingUse {
 }
 
 impl HunkSem {
+    /// Is every mention of `name` here the declaring of a parameter?
+    pub fn declares(&self, name: &str) -> bool {
+        self.param_uses.iter().any(|u| u == name)
+    }
+
     pub fn other(h: &RawHunk) -> Self {
         HunkSem {
             category: Category::Other,
@@ -174,6 +183,7 @@ impl HunkSem {
             imports_moved_out: vec![],
             uses: vec![],
             member_uses: vec![],
+            foreign_uses: vec![],
             param_uses: vec![],
             own_bound: vec![],
             adds_enclosing: false,
@@ -669,6 +679,7 @@ struct Collected {
     /// graph can refuse a cross-file definition for a name that only ever
     /// appeared as `obj.name`
     member_uses: Vec<(usize, String)>,
+    foreign_uses: Vec<(usize, String)>,
     param_uses: Vec<(usize, String)>,
     /// every name an import statement in this file binds
     import_names: HashSet<String>,
@@ -972,6 +983,7 @@ impl Parsed<'_> {
                 .filter(|k| *k != ContainerKind::Definition),
             in_header: container.is_some_and(|d| d.callable && d.header_e.is_some_and(|e| r1 <= e)),
             member_uses: self.member_uses(r0, r1),
+            foreign_uses: self.only_as(&self.c.foreign_uses, r0, r1),
             param_uses: self.param_uses(r0, r1),
             own_bound,
             uses,
@@ -2412,6 +2424,12 @@ impl Collected {
         self.all_idents.push((row, self.uses.len() - 1, id));
     }
 
+    /// the same, for the member half of an access on another object
+    fn push_foreign_use(&mut self, row: usize, name: String, id: usize) {
+        self.foreign_uses.push((row, name.clone()));
+        self.push_use(row, name, id);
+    }
+
     /// the same, for an identifier that was the member half of an access
     fn push_member_use(&mut self, row: usize, name: String, id: usize) {
         self.member_uses.push((row, name.clone()));
@@ -3407,7 +3425,9 @@ impl<'a> Walker<'a> {
             let (row, id) = (node.start_position().row, node.id());
             // `util.Trim` in go, `ns.helper` after `import * as ns`: qualified
             // by an import, the name is that package's own, not a field
-            if let Some(member) = php.then(|| php_member_name(node, t)).flatten() {
+            if java_foreign_member(node, src, self.spec) {
+                self.c.push_foreign_use(row, t.to_string(), id);
+            } else if let Some(member) = php.then(|| php_member_name(node, t)).flatten() {
                 self.c.push_member_use(row, member, id);
             } else if lang::is_member_ident(node.kind()) && !self.qualified_by_package(node) {
                 self.c.push_member_use(row, t.to_string(), id);
@@ -3423,6 +3443,86 @@ impl<'a> Walker<'a> {
     }
 }
 
+/// The member half of a java access on a receiver the file says nothing
+/// about — `set.getName()`, `items.size` — whose name belongs to that
+/// receiver's type. `this`, `super`, a type name (`Util.of()`,
+/// `Outer.Inner.of()`) and a qualified `this` (`Outer.this.helper()`) reach
+/// what this file declares, and stay ordinary uses.
+fn java_foreign_member(node: Node, src: &[u8], spec: &LangSpec) -> bool {
+    if spec.name != "java" {
+        return false;
+    }
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let (own, receiver) = match parent.kind() {
+        "method_invocation" => ("name", "object"),
+        "field_access" => ("field", "object"),
+        _ => return false,
+    };
+    parent.child_by_field_name(own) == Some(node)
+        && parent
+            .child_by_field_name(receiver)
+            .is_some_and(|r| !java_own_scope(r, src))
+}
+
+/// Does a java receiver expression name this file's own scope: `this`,
+/// `super`, `Outer.this`, or a (possibly qualified) type?
+fn java_own_scope(r: Node, src: &[u8]) -> bool {
+    match r.kind() {
+        "this" | "super" => true,
+        "field_access" => {
+            let (Some(object), Some(field)) = (
+                r.child_by_field_name("object"),
+                r.child_by_field_name("field"),
+            ) else {
+                return false;
+            };
+            matches!(field.kind(), "this" | "super") && java_type_name(object, src)
+                || java_type_name(r, src)
+        }
+        _ => java_type_name(r, src),
+    }
+}
+
+/// A type written as a name: `Util`, `Outer.Inner`, `pkg.Util`. A lowercase
+/// last segment is a variable or field.
+fn java_type_name(n: Node, src: &[u8]) -> bool {
+    let capitalized = |n: Node| {
+        n.kind() == "identifier"
+            && n.utf8_text(src)
+                .is_ok_and(|t| t.starts_with(char::is_uppercase))
+    };
+    match n.kind() {
+        "identifier" => capitalized(n),
+        "field_access" => {
+            let (Some(object), Some(field)) = (
+                n.child_by_field_name("object"),
+                n.child_by_field_name("field"),
+            ) else {
+                return false;
+            };
+            capitalized(field) && matches!(object.kind(), "identifier" | "field_access") && {
+                java_type_name(object, src) || lowercase_path(object)
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `pkg.sub` in front of a type: names only, all of them.
+fn lowercase_path(n: Node) -> bool {
+    match n.kind() {
+        "identifier" => true,
+        "field_access" => {
+            n.child_by_field_name("object").is_some_and(lowercase_path)
+                && n.child_by_field_name("field")
+                    .is_some_and(|f| f.kind() == "identifier")
+        }
+        _ => false,
+    }
+}
+
 /// Is this identifier the name a parameter declaration gives, rather than its
 /// type, default or annotation? `const T& F2` and `x: Foo` declare `F2` and
 /// `x`; `T`, `Foo` and `y=FOO`'s `FOO` are references.
@@ -3431,14 +3531,22 @@ fn declares_param(node: Node) -> bool {
         return false;
     }
     let mut child = node;
+    let mut through_declarators = true;
     for _ in 0..6 {
         let Some(parent) = child.parent() else {
             return false;
         };
         let kind = parent.kind();
-        if kind.contains("parameter") && !kind.ends_with('s') && !kind.contains("list") {
-            return true;
+        if kind.contains("parameter")
+            && !kind.ends_with('s')
+            && !kind.contains("list")
+            && !kind.contains("pack")
+        {
+            // a c-family parameter names its identifier through declarators
+            // alone; a call in a pack expansion that parses as one does not
+            return !kind.ends_with("parameter_declaration") || through_declarators;
         }
+        through_declarators &= kind.contains("declarator");
         let in_field = ["type", "value", "default"]
             .iter()
             .any(|f| parent.child_by_field_name(f) == Some(child));
@@ -5403,6 +5511,8 @@ pub type Body = (String, String, String, Vec<String>);
 #[derive(Default)]
 struct DefOut {
     defs: Vec<(String, usize)>,
+    /// the same definitions with their last row
+    spans: Vec<DefSpan>,
     imports: Vec<(String, usize)>,
     bodies: Vec<Body>,
     /// per name; `None` once two definitions of the name disagree
@@ -5453,6 +5563,8 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
         // import, so a definition under one was never a row
         if !in_import && !import {
             o.defs.push((name.clone(), row));
+            o.spans
+                .push((name.clone(), row, node.end_position().row + 1));
         }
         let (header, whole, lines) = body_parts(node, src, spec);
         let class = if lang::is_macro_kind(node.kind()) {
@@ -5548,7 +5660,10 @@ pub fn def_nodes<'t>(root: Node<'t>, spec: &LangSpec, src: &[u8]) -> Vec<(String
     out
 }
 
-pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>, DefKinds) {
+pub fn symbol_facts(
+    spec: &LangSpec,
+    content: &str,
+) -> (SymbolRows, Vec<Body>, DefKinds, Vec<DefSpan>) {
     let mut o = DefOut::default();
     if let Some(tree) = lang::parse(spec, content) {
         collect_defs(tree.root_node(), content.as_bytes(), spec, &mut o, false);
@@ -5561,7 +5676,7 @@ pub fn symbol_facts(spec: &LangSpec, content: &str) -> (SymbolRows, Vec<Body>, D
             _ => false,
         };
     }
-    ((o.defs, o.imports), o.bodies, kinds)
+    ((o.defs, o.imports), o.bodies, kinds, o.spans)
 }
 
 /// What an import binds, and where that name comes from: the name this file
@@ -6206,7 +6321,7 @@ mod tests {
     fn one_descent_still_returns_both_halves() {
         let spec = crate::lang::for_path("a.py").expect("python");
         let src = "import os\nfrom sys import argv\n\ndef parse(p):\n    return os.path.join(p)\n\ndef main():\n    return parse(argv[1])\n";
-        let ((defs, imports), bodies, _) = symbol_facts(spec, src);
+        let ((defs, imports), bodies, _, _) = symbol_facts(spec, src);
 
         let names: Vec<&str> = defs.iter().map(|(n, _)| n.as_str()).collect();
         assert!(
@@ -6234,7 +6349,7 @@ mod tests {
     fn a_name_shared_by_two_kinds_of_definition_is_neither() {
         let spec = crate::lang::for_path("a.c").expect("c");
         let src = "struct item { int a; };\nint item(void) { return 1; }\n#define LOG(x) x\nint run(void) { return 0; }\n";
-        let (_, _, kinds) = symbol_facts(spec, src);
+        let (_, _, kinds, _) = symbol_facts(spec, src);
         assert!(kinds.macros.contains("LOG") && !kinds.functions.contains("LOG"));
         assert!(kinds.functions.contains("run"));
         assert!(!kinds.functions.contains("item") && !kinds.macros.contains("item"));
@@ -6304,7 +6419,7 @@ mod tests {
     #[test]
     fn nothing_under_an_import_becomes_a_definition_row() {
         let spec = crate::lang::for_path("a.py").expect("python");
-        let ((defs, imports), _, _) = symbol_facts(spec, "from a import (b, c)\n");
+        let ((defs, imports), _, _, _) = symbol_facts(spec, "from a import (b, c)\n");
         assert!(
             defs.is_empty(),
             "an import declares no definitions: {defs:?}"
