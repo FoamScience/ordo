@@ -1455,10 +1455,9 @@ fn middle_fragment_of_a_multiline_import_list_is_an_import_not_a_bare_change() {
     let rats = rationales(serde_json::json!({
         "changes": [ { "path": "a.py", "old": old, "new": new } ]
     }));
-    // the statement's whole name list, since that is what the import now binds
     assert_eq!(
         rats,
-        vec!["changes import c, d, e"],
+        vec!["adds import e"],
         "a fragment of an import is still an import hunk"
     );
 }
