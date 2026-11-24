@@ -1422,3 +1422,107 @@ fn an_edited_definition_is_not_added_because_its_name_repeats() {
     let r: Vec<&str> = ts.iter().map(|h| h.rationale.as_str()).collect();
     assert!(r.iter().all(|x| !x.starts_with("adds")), "{r:?}");
 }
+
+/// tasks-3uv.171: an import hunk that only adds names to an existing statement
+/// names the arrivals, not the names the statement already had.
+#[test]
+fn an_import_that_only_gains_names_names_the_arrivals() {
+    let cases = [
+        (
+            "a.py",
+            "from a.b import c, d\n\nx = 1\n",
+            "from a.b import c, d, e\n\nx = 1\n",
+            "adds import e",
+        ),
+        (
+            "a.py",
+            "from a.b import (\n    c,\n    d,\n)\n",
+            "from a.b import (\n    c,\n    e,\n    d,\n)\n",
+            "adds import e",
+        ),
+        (
+            "a.ts",
+            "import { a, b } from \"./x\";\n\nexport const k = 1;\n",
+            "import { a, b, c } from \"./x\";\n\nexport const k = 1;\n",
+            "adds import c",
+        ),
+        (
+            "a.ts",
+            "import { a, b } from \"./x\";\n\nexport const k = 1;\n",
+            "import d, { a, b, c } from \"./x\";\n\nexport const k = 1;\n",
+            "adds import c, d",
+        ),
+        (
+            "a.go",
+            "package p\n\nimport (\n\t\"fmt\"\n)\n",
+            "package p\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n",
+            "adds import os",
+        ),
+        (
+            "a.rs",
+            "use std::{io, fmt};\n\nfn f() {}\n",
+            "use std::{io, fmt, mem};\n\nfn f() {}\n",
+            "adds import mem",
+        ),
+        (
+            "a.rs",
+            "use std::{\n    io,\n    fmt,\n};\n",
+            "use std::{\n    io,\n    mem,\n    fmt,\n};\n",
+            "adds import mem",
+        ),
+        (
+            "A.java",
+            "package p;\n\nimport java.util.List;\n\nclass A {}\n",
+            "package p;\n\nimport java.util.List;\nimport java.util.Map;\n\nclass A {}\n",
+            "adds import Map",
+        ),
+    ];
+    for (path, old, new, want) in cases {
+        let hs = hunks(path, old, new);
+        let got: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+        assert_eq!(got, vec![want], "{path}: {old:?} -> {new:?}");
+    }
+}
+
+/// An import that gains one name and loses another says both; one that only
+/// reorders its names is formatting; one that changes an alias still names it.
+#[test]
+fn a_mixed_import_edit_says_each_part() {
+    let cases = [
+        (
+            "a.py",
+            "from a.b import c, d\n",
+            "from a.b import c, e\n",
+            "adds import e; removes import d",
+        ),
+        (
+            "a.ts",
+            "import { a, b } from \"./x\";\n",
+            "import { a, c } from \"./x\";\n",
+            "adds import c; removes import b",
+        ),
+        (
+            "a.rs",
+            "use std::{io, fmt};\n",
+            "use std::{fmt, io};\n",
+            "formatting only",
+        ),
+        (
+            "a.py",
+            "from a.b import c, d\n",
+            "from a.b import d, c\n",
+            "formatting only",
+        ),
+        (
+            "a.py",
+            "from a.b import c as x\n",
+            "from a.b import c as y\n",
+            "replaces import x with y",
+        ),
+    ];
+    for (path, old, new, want) in cases {
+        let hs = hunks(path, old, new);
+        let got: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+        assert_eq!(got, vec![want], "{path}: {old:?} -> {new:?}");
+    }
+}

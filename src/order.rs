@@ -2038,10 +2038,19 @@ fn changed_import_phrase(
     names: &[&str],
 ) -> Option<String> {
     let before = old_import_names(s, ctx, my_file);
-    if before.is_empty() {
-        return None;
-    }
     let fs = ctx.symbols.get(my_file)?;
+    if before.is_empty() {
+        // a row inserted into a statement that spans lines: the names on the
+        // statement are all named, and only the new ones are the hunk's
+        let mut added: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| !fs.old_imports.contains(*n))
+            .collect();
+        added.sort_unstable();
+        added.dedup();
+        return (!added.is_empty()).then(|| format!("adds {noun} {}", name_list(&added)));
+    }
     let (mut added, mut moved, mut removed) = (vec![], vec![], vec![]);
     for &n in names.iter().filter(|n| !before.contains(n)) {
         if fs.old_imports.contains(n) {
@@ -2059,13 +2068,13 @@ fn changed_import_phrase(
     }
     moved.sort_unstable();
     moved.dedup();
-    // naming the kept names beside an arrival is the old wording; only an
-    // import that also lost something has a claim to correct here
-    if moved.is_empty() && removed.is_empty() {
-        return None;
-    }
     added.sort_unstable();
     added.dedup();
+    // nothing arrived or left: the hunk touched the statement without changing
+    // its names, so the whole list is the honest object
+    if added.is_empty() && moved.is_empty() && removed.is_empty() {
+        return None;
+    }
     let frags: Vec<String> = [("adds", added), ("moves", moved), ("removes", removed)]
         .into_iter()
         .filter(|(_, v)| !v.is_empty())
