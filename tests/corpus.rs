@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ordo_diff::model::{Category, Output};
+use ordo_diff::model::{Category, HunkOut, Output};
 
 mod common;
 use common::{commit_input, corpus_dir, git, parse_manifest, range_input, update_requested, Repo};
@@ -215,8 +215,47 @@ enum Dir {
     Any,
 }
 
+/// Whether `[a, b]` (1-based rows of `src`) is a re-export: every row that is
+/// not blank or a comment sits in one, and at least one row does. A row's
+/// statement starts at the nearest line at column 0 at or above it, which is a
+/// `pub use` or an `export`. Read from the commit's own blob, so it does not
+/// lean on the engine's wording or its re-export flag.
+fn rows_are_re_exports(src: &str, [a, b]: [usize; 2]) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if a < 1 || a > b || b > lines.len() {
+        return false;
+    }
+    let code: Vec<usize> = (a..=b)
+        .filter(|&row| {
+            let l = lines[row - 1].trim_start();
+            !l.is_empty() && !l.starts_with("//")
+        })
+        .collect();
+    !code.is_empty()
+        && code.iter().all(|&row| {
+            lines[..row]
+                .iter()
+                .rev()
+                .find(|l| !l.is_empty() && !l.starts_with([' ', '\t', '}', ')']))
+                .is_some_and(|l| {
+                    l.starts_with("pub use ")
+                        || (l.starts_with("pub(") && l.contains(") use "))
+                        || l.starts_with("export ")
+                })
+        })
+}
+
+/// A re-export is API, so it is the one import hunk that stays visible: every
+/// row it touches, on the side it adds or on the side it deletes, is one.
+fn is_re_export(dir: &Path, (parent, sha): (&str, &str), path: &str, h: &HunkOut) -> bool {
+    let side = |rev: &str, range: [usize; 2]| {
+        rows_are_re_exports(&git(dir, &["show", &format!("{rev}:{path}")]), range)
+    };
+    side(sha, h.new_range) || side(parent, h.old_range)
+}
+
 /// Hard invariants — these must hold whatever the wording is.
-fn check_invariants(label: &str, out: &Output) {
+fn check_invariants(label: &str, out: &Output, dir: &Path, revs: (&str, &str)) {
     // `order` is a permutation of every hunk (the README's claim, never before
     // checked at scale). Import hunks are part of it: they are noise — visible
     // but skippable — rather than dropped, since a dropped import made a new
@@ -238,8 +277,8 @@ fn check_invariants(label: &str, out: &Output) {
     for f in &out.files {
         for h in &f.hunks {
             assert!(
-                h.category != Category::Import || h.noise,
-                "{label}: {}:L{} is an import hunk but not noise",
+                h.category != Category::Import || h.noise || is_re_export(dir, revs, &f.path, h),
+                "{label}: {}:L{} is an import hunk but neither noise nor a re-export",
                 f.path,
                 h.new_range[0]
             );
@@ -435,7 +474,7 @@ fn sweep(dir: &Path, repo: &Repo) -> Metrics {
         };
         let out = ordo_diff::run(input);
         let label = format!("{} {}", repo.name, &sha[..8]);
-        check_invariants(&label, &out);
+        check_invariants(&label, &out, dir, (&parent, sha));
         check_coverage(&label, dir, &parent, sha, &out);
         swept += 1;
         fix_signals(&out, &mut m, is_fix_subject(subject));

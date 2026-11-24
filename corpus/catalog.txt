@@ -3,10 +3,12 @@ click 07c909f2 src/click/termui.py:573 magic-number note
 click 07c909f2 src/click/termui.py:583 magic-number note
 click 07c909f2 src/click/termui.py:699 magic-argument note
 click 14588004 tests/test_options.py:1262 eq-without-hash verdict
+click 333c28d7 src/click/utils.py:36 empty-catch verdict
 click 3da1f439 tests/test_options.py:1262 eq-without-hash verdict
 click 4a352253 src/click/core.py:738 assert-validation verdict
 click 587e3cc7 src/click/testing.py:72 assert-validation verdict
 click 6de21215 src/click/core.py:725 assert-validation verdict
+click 7a0a3447 src/click/utils.py:36 empty-catch verdict
 click 8a4ce842 src/click/termui.py:573 magic-number note
 click 8a4ce842 src/click/termui.py:583 magic-number note
 click 8a4ce842 src/click/termui.py:699 magic-argument note
@@ -20,7 +22,7 @@ cobra 68b6b24f flag_groups.go:31 panic note
 cobra 68b6b24f flag_groups.go:47 panic note
 cobra 6b0bd307 command_test.go:2607 reflect note
 cobra c81c46a0 flag_groups.go:47 panic note
-curl 26b9f3aa lib/rtsp.c:443 goto note
+curl 26b9f3aa lib/rtsp.c:462 goto note
 curl 2d30fd26 lib/vdns/doh.c:1010 goto note
 curl 2d30fd26 lib/vdns/doh.c:1152 goto note
 curl 2d30fd26 lib/vdns/doh.c:1181 goto note
@@ -100,13 +102,13 @@ excalidraw 339d3c37 packages/excalidraw/components/Toolbar.tsx:166 any note
 excalidraw 339d3c37 packages/excalidraw/components/Toolbar.tsx:48 any note
 excalidraw 339d3c37 packages/excalidraw/components/Tools.tsx:325 any note
 excalidraw 3b97f5a1 packages/element/src/visualdebug.ts:224 any note
+excalidraw 3bdaafe4 packages/excalidraw/components/App.tsx:10203 any note
 excalidraw 3bdaafe4 packages/excalidraw/components/App.tsx:10418 any note
-excalidraw 3bdaafe4 packages/excalidraw/components/App.tsx:10489 any note
 excalidraw 3bdaafe4 packages/excalidraw/components/App.tsx:3070 any note
 excalidraw 3bdaafe4 packages/excalidraw/data/blob.ts:441 any note
+excalidraw 416e8b3e packages/excalidraw/components/Actions.tsx:309 any note
 excalidraw 416e8b3e packages/excalidraw/components/Actions.tsx:411 any note
 excalidraw 416e8b3e packages/excalidraw/components/Actions.tsx:508 any note
-excalidraw 416e8b3e packages/excalidraw/components/Actions.tsx:599 any note
 excalidraw 416e8b3e packages/excalidraw/components/MobileToolBar.tsx:84 any note
 excalidraw 416e8b3e packages/excalidraw/components/ToolPopover.tsx:36 any note
 excalidraw 416e8b3e packages/excalidraw/components/dropdownMenu/DropdownMenu.tsx:28 any note
@@ -115,6 +117,7 @@ excalidraw 47cbb5b6 packages/common/src/editorInterface.ts:82 any note
 excalidraw 51ca8abd packages/excalidraw/components/App.tsx:2193 any note
 excalidraw 5bcd8280 excalidraw-app/components/AppSidebar.tsx:11 any note
 excalidraw 5fffc474 packages/excalidraw/components/dropdownMenu/DropdownMenuContent.tsx:77 any note
+excalidraw 63e11482 packages/element/src/shape.ts:630 any note
 excalidraw 65aa577e packages/excalidraw/renderer/animation.ts:8 any note
 excalidraw 6c908553 packages/common/src/utils.ts:1172 any note
 excalidraw 757dfeb6 packages/common/src/utils.ts:154 any note
@@ -125,6 +128,7 @@ excalidraw 85270fcc packages/excalidraw/components/UserList.tsx:333 any note
 excalidraw 8fb16669 packages/common/src/visualdebug.ts:134 any note
 excalidraw 92d25446 packages/excalidraw/components/App.tsx:3107 any note
 excalidraw 92d25446 packages/excalidraw/hooks/useAppStateValue.ts:113 any note
+excalidraw 92d25446 packages/excalidraw/hooks/useAppStateValue.ts:121 any note
 excalidraw 92d25446 packages/excalidraw/index.tsx:421 any note
 excalidraw a0b98a94 packages/excalidraw/components/TTDDialog/useTTDChatStorage.ts:22 any note
 excalidraw a0b98a94 packages/excalidraw/components/TTDDialog/useTTDChatStorage.ts:30 any note
@@ -178,9 +182,10 @@ execa acc2b685 lib/ipc/get-each.js:1 empty-catch verdict
 execa d6f5d9a5 lib/ipc/get-each.js:39 empty-catch verdict
 execa d6f5d9a5 lib/ipc/get-each.js:47 empty-catch verdict
 execa d8190e5a test/helpers/graceful.js:1 empty-catch verdict
-execa e085b108 lib/ipc/get-each.js:55 empty-catch verdict
+execa e085b108 lib/ipc/get-each.js:54 empty-catch verdict
 execa e2903e99 test-d/return/result-main.test-d.ts:56 any note
 execa e2903e99 test-d/return/result-main.test-d.ts:78 any note
+execa e69985dd lib/terminate/kill.js:82 empty-catch verdict
 execa e69985dd test/terminate/kill-force.js:188 empty-catch verdict
 lazy 5b15bc9f lua/lazy/community/_generated.lua:2 hardcoded-version warn
 openfoam 08477d77 src/Lagrangian/Lagrangian/LagrangianEqn/LagrangianSp.C:98 raw-new-delete note
@@ -230,7 +235,7 @@ openfoam 42fff1e5 src/finiteVolume/fields/PtrFields/PtrField.C:219 function-macr
 openfoam 42fff1e5 src/finiteVolume/fields/PtrFields/PtrField.C:62 const-cast note
 openfoam 42fff1e5 src/finiteVolume/fields/PtrFields/PtrField.C:94 raw-new-delete note
 openfoam 436c795e applications/test/Function1/Test-Function1.C:80 raw-new-delete note
-openfoam 436c795e src/OpenFOAM/primitives/functions/Function1/Function1/Function1.C:111 raw-new-delete note
+openfoam 436c795e src/OpenFOAM/primitives/functions/Function1/Function1/Function1.C:109 raw-new-delete note
 openfoam 468c42df src/OpenFOAM/db/objectRegistry/objectRegistryTemplates.C:240 const-cast note
 openfoam 51230005 src/radiationModels/radiationModels/fvDOM/radiativeIntensityRay/radiativeIntensityRay.C:195 raw-new-delete note
 openfoam 51ac9f27 src/finiteVolume/fields/fvPatchFields/derived/timeVaryingMappedFixedValue/timeVaryingMappedPoints.C:215 raw-new-delete note
@@ -261,7 +266,7 @@ openfoam 8afa9c90 src/OpenFOAM/global/fileOperations/fileOperation/fileOperation
 openfoam 8afa9c90 src/OpenFOAM/global/fileOperations/masterUncollatedFileOperation/masterUncollatedFileOperation.C:1150 c-style-cast note
 openfoam 8afa9c90 src/OpenFOAM/global/fileOperations/masterUncollatedFileOperation/masterUncollatedFileOperation.C:2125 c-style-cast note
 openfoam 95ec15f8 src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolation/surfaceInterpolate.C:280 raw-new-delete note
-openfoam 994ed6c0 src/Lagrangian/Lagrangian/fields/toSubFieldTemplates.C:131 raw-new-delete note
+openfoam 994ed6c0 src/Lagrangian/Lagrangian/fields/toSubFieldTemplates.C:130 raw-new-delete note
 openfoam 994ed6c0 src/Lagrangian/LagrangianThermo/LagrangianThermos/makeLagrangianThermo.H:30 function-macro note
 openfoam 994ed6c0 src/Lagrangian/LagrangianThermo/LagrangianThermos/makeLagrangianThermo.H:39 function-macro note
 openfoam 994ed6c0 src/Lagrangian/LagrangianThermo/LagrangianThermos/makeLagrangianThermo.H:51 function-macro note
@@ -329,6 +334,7 @@ openfoam d423f755 src/thermophysicalModels/multicomponentThermo/include/Dimensio
 openfoam d423f755 src/thermophysicalModels/multicomponentThermo/include/FieldListSlicer.H:124 lambda-ref-capture note
 openfoam d423f755 src/thermophysicalModels/multicomponentThermo/include/FieldListSlicer.H:138 lambda-ref-capture note
 openfoam d423f755 src/thermophysicalModels/multicomponentThermo/include/GeometricFieldListSlicer.H:99 lambda-ref-capture note
+openfoam e0cbc7e5 src/finiteVolume/fields/fvPatchFields/derived/timeVaryingMappedFixedValue/timeVaryingMappedFvPatchField.C:111 raw-new-delete note
 openfoam e600cf6f applications/modules/multiphaseEuler/fvModels/wallPhaseChange/alphatPhaseChangeWallFunctionFvPatchScalarField.C:143 c-style-cast note
 openfoam e600cf6f src/OpenFOAM/fields/expression/expressions.H:50 function-macro note
 openfoam e600cf6f src/OpenFOAM/fields/expression/expressions.H:61 function-macro note
@@ -338,7 +344,7 @@ openfoam e600cf6f src/OpenFOAM/fields/expression/tensorExpressions.H:118 functio
 openfoam e600cf6f src/OpenFOAM/fields/expression/tensorExpressions.H:48 function-macro note
 openfoam e600cf6f src/OpenFOAM/fields/expression/tensorExpressions.H:83 function-macro note
 openfoam e600cf6f src/OpenFOAM/fields/expression/vectorExpressions.H:1 function-macro note
-openfoam e600cf6f src/OpenFOAM/memory/tmp/tmpI.H:160 raw-new-delete note
+openfoam e600cf6f src/OpenFOAM/memory/tmp/tmpI.H:159 raw-new-delete note
 openfoam e600cf6f src/OpenFOAM/primitives/ops/ops.H:36 function-macro note
 openfoam e600cf6f src/finiteVolume/fields/fvPatchFields/basic/extrapolatedCalculated/extrapolatedCalculatedFvPatchField.C:70 lambda-ref-capture note
 openfoam e600cf6f src/finiteVolume/fields/fvPatchFields/basic/extrapolatedCalculated/extrapolatedCalculatedFvPatchField.C:95 lambda-ref-capture note
