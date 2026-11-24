@@ -493,6 +493,34 @@ fn split_masked(
     vec![h.clone()]
 }
 
+/// The `#[..]` items written above a rust item, nearest first; a line or
+/// block comment between them does not end the run.
+fn rust_attributes(node: Node) -> Vec<Node> {
+    let mut out = vec![];
+    let mut prev = node.prev_named_sibling();
+    while let Some(p) = prev.filter(|p| {
+        matches!(
+            p.kind(),
+            "attribute_item" | "line_comment" | "block_comment"
+        )
+    }) {
+        if p.kind() == "attribute_item" {
+            out.push(p);
+        }
+        prev = p.prev_named_sibling();
+    }
+    out
+}
+
+/// The row an item's own piece starts at: its first attribute's, else its own.
+fn lead_row(node: Node) -> usize {
+    rust_attributes(node)
+        .last()
+        .unwrap_or(&node)
+        .start_position()
+        .row
+}
+
 /// A pure insertion is one contiguous run of added lines, so a whole added file
 /// arrives as a single hunk however much it holds: every construct in it shares
 /// one card, one rationale line and one reviewed mark. Cut such a hunk at the
@@ -500,7 +528,7 @@ fn split_masked(
 /// an edited one does.
 ///
 /// Language-independent: a new file is one diff hunk in every language.
-fn split_insertions(defs: &[DefRec], hunks: &[RawHunk]) -> Vec<RawHunk> {
+fn split_insertions(defs: &[DefRec], new_lines: &[&str], hunks: &[RawHunk]) -> Vec<RawHunk> {
     let mut out = Vec::with_capacity(hunks.len());
     for h in hunks {
         // an edit's hunks already follow the change, and an insertion short
@@ -520,11 +548,18 @@ fn split_insertions(defs: &[DefRec], hunks: &[RawHunk]) -> Vec<RawHunk> {
         // cutting only at the outermost construct would hand back one card.
         let mut cuts: Vec<usize> = defs
             .iter()
-            .filter(|d| d.s > r0 && d.s <= h.new_r1)
-            .map(|d| d.s)
+            .filter(|d| d.s > r0 && d.s <= h.new_r1 && d.lead > r0)
+            .map(|d| d.lead)
             .collect();
         cuts.sort_unstable();
         cuts.dedup();
+        // blank rows ahead of the first attribute are not a piece of their own
+        if let Some(&c) = cuts.first().filter(|&&c| {
+            defs.iter().any(|d| d.lead == c && d.lead < d.s)
+                && (r0..c).all(|r| new_lines.get(r).is_some_and(|l| l.trim().is_empty()))
+        }) {
+            cuts.retain(|&x| x != c);
+        }
         if cuts.is_empty() {
             out.push(h.clone());
         } else {
@@ -749,6 +784,10 @@ const CONTROL_KINDS: &[&str] = &[
 
 struct DefRec {
     s: usize,
+    /// first row of the attributes written directly above it (rust
+    /// `#[test]`), else `s`: where a large insertion is cut, so the
+    /// attributes stay with their item
+    lead: usize,
     e: usize,
     name: String,
     depth: usize,  // enclosing def count (nesting)
@@ -799,7 +838,7 @@ pub fn analyze(
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
     let hunks = split_leading_insertions(&w.c.defs, &old_lines, &new_lines, hunks);
-    let hunks = split_insertions(&w.c.defs, &hunks);
+    let hunks = split_insertions(&w.c.defs, &new_lines, &hunks);
     let parsed = Parsed {
         c: &w.c,
         spec,
@@ -1113,11 +1152,13 @@ impl Parsed<'_> {
                 .filter(|d| d.kind != ContainerKind::Definition || !(r0 <= d.s && d.s <= r1))
                 .min_by_key(|d| d.e - d.s);
         }
+        // a hunk that opens on an item's attributes and reaches the item
+        // sits in it, as one that opens on its own row does
         let at = |row: usize| {
             self.c
                 .defs
                 .iter()
-                .filter(|d| d.s <= row && row <= d.e)
+                .filter(|d| (d.s <= row || (d.lead <= row && d.s <= r1)) && row <= d.e)
                 .min_by_key(|d| d.e - d.s)
         };
         // a hunk that starts on a blank line between two containers owns
@@ -1686,13 +1727,7 @@ fn marked_test(node: Node, src: &[u8]) -> bool {
     let text = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
     let mut attrs: Vec<String> = vec![];
     // rust: attributes are the siblings just before the item
-    let mut prev = node.prev_named_sibling();
-    while let Some(p) = prev.filter(|p| matches!(p.kind(), "attribute_item" | "line_comment")) {
-        if p.kind() == "attribute_item" {
-            attrs.push(text(p));
-        }
-        prev = p.prev_named_sibling();
-    }
+    attrs.extend(rust_attributes(node).into_iter().map(text));
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
         match ch.kind() {
@@ -2717,6 +2752,7 @@ impl<'a> Walker<'a> {
     fn container(&self, node: Node, name: String, depth: usize, kind: ContainerKind) -> DefRec {
         DefRec {
             s: node.start_position().row,
+            lead: lead_row(node),
             e: end_row(node, self.spec),
             name,
             depth,
@@ -3039,6 +3075,7 @@ impl<'a> Walker<'a> {
         }
         self.c.push_def(DefRec {
             s: sr,
+            lead: lead_row(node),
             e: rst
                 .as_ref()
                 .map_or_else(|| end_row(node, spec), |(e, _)| *e),

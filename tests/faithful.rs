@@ -845,6 +845,154 @@ fn decorators_of_an_added_test_are_not_the_test() {
     );
 }
 
+/// A rust attribute stays with the item it marks: a large insertion is cut
+/// above the attributes, so no piece holds attribute rows alone and none
+/// claims the next item's attribute as its own tail.
+fn rust_body(name: &str) -> String {
+    let pad: String = (0..40)
+        .map(|i| format!("    let a{i} = {name}_{i}();\n"))
+        .collect();
+    format!("fn {name}() {{\n{pad}}}\n")
+}
+
+fn rust_test(name: &str) -> String {
+    format!("#[test]\n{}", rust_body(name))
+}
+
+fn rust_hunks(changes: &[(&str, &str, &str)]) -> Vec<String> {
+    let changes: Vec<_> = changes
+        .iter()
+        .map(|(path, old, new)| json!({"path": path, "old": old, "new": new}))
+        .collect();
+    rationales(&run(json!({ "changes": changes })))
+}
+
+#[test]
+fn attributes_of_added_rust_tests_stay_with_them() {
+    let old = rust_body("base");
+    for attrs in [
+        "#[test]\n",
+        "#[test]\n#[ignore]\n",
+        "#[cfg_attr(windows, ignore)]\n",
+        "#[cfg_attr(\n    windows,\n    ignore\n)]\n",
+        "#[test] // note\n",
+    ] {
+        let case = |name: &str| format!("{attrs}{}", rust_body(name));
+        let new = format!("{old}\n{}\n{}", case("case_1"), case("case_2"));
+        assert_eq!(
+            rust_hunks(&[("a.rs", &old, &new)]),
+            ["adds case_1", "adds case_2"],
+            "{attrs:?}"
+        );
+    }
+}
+
+#[test]
+fn attributes_of_many_one_line_tests_make_no_extra_cards() {
+    let tests: String = (0..30)
+        .map(|i| format!("    #[test]\n    fn t{i}() {{}}\n"))
+        .collect();
+    let new = format!("fn z() {{}}\n\n#[cfg(test)]\nmod tests {{\n{tests}}}\n");
+    let r = rust_hunks(&[("a.rs", "fn z() {}\n", &new)]);
+    assert_eq!(r.len(), 31, "{r:?}");
+    assert_eq!(r[..3], ["adds tests", "adds t0", "adds t1"]);
+}
+
+#[test]
+fn a_moved_rust_test_is_not_given_a_decorator() {
+    let (k, q) = (rust_body("k"), rust_body("q"));
+    let r = rust_hunks(&[
+        ("a.rs", &format!("{k}\n{}", rust_test("case_5")), &k),
+        (
+            "b.rs",
+            &q,
+            &format!("{q}\n{}\n{}", rust_test("case_5"), rust_test("case_6")),
+        ),
+    ]);
+    assert_eq!(
+        r,
+        [
+            "moves case_5 to b.rs",
+            "moves case_5 from a.rs",
+            "adds case_6"
+        ]
+    );
+}
+
+#[test]
+fn a_comment_between_an_attribute_and_its_item_keeps_them_together() {
+    let old = rust_body("base");
+    for between in ["/// doc\n", "// note\n", "/* note */\n", "/** doc */\n"] {
+        let second = format!("#[test]\n{between}{}", rust_body("case_2"));
+        let new = format!("{old}\n{}\n{second}", rust_test("case_1"));
+        assert_eq!(
+            rust_hunks(&[("a.rs", &old, &new)]),
+            ["adds case_1", "adds case_2"],
+            "{between:?}"
+        );
+    }
+}
+
+#[test]
+fn derive_on_an_added_struct_stays_with_it() {
+    let old = rust_body("base");
+    let body: String = (0..40).map(|i| format!("    f{i}: u8,\n")).collect();
+    let new = format!(
+        "{old}\n#[derive(Debug)]\nstruct A {{\n{body}}}\n\n#[derive(Clone)]\nstruct B {{\n{body}}}\n"
+    );
+    assert_eq!(
+        rust_hunks(&[("a.rs", &old, &new)]),
+        ["adds type A", "adds type B"]
+    );
+}
+
+#[test]
+fn an_attribute_added_above_an_existing_rust_fn_keeps_its_wording() {
+    let hs = hunks(
+        "t.rs",
+        "fn case_a() {\n    assert!(true);\n}\n",
+        "#[test]\n#[ignore]\nfn case_a() {\n    assert!(true);\n}\n",
+    );
+    assert_eq!(texts(&hs), ["uses ignore, test"]);
+}
+
+#[test]
+fn an_inner_attribute_is_not_an_item_attribute() {
+    let old = rust_body("base");
+    let new = format!(
+        "{old}\n#![allow(dead_code)]\n{}\n{}",
+        rust_body("case_1"),
+        rust_body("case_2")
+    );
+    assert_eq!(
+        rust_hunks(&[("a.rs", &old, &new)]),
+        ["adds comment", "adds case_1", "adds case_2"]
+    );
+}
+
+/// No grammar reads c#, so its attribute rows stay plain added lines.
+const CS_OLD: &str = "class T {\n    void CaseA() {\n        Assert.True(true);\n    }\n}\n";
+
+#[test]
+fn a_csharp_attribute_is_a_plain_added_line() {
+    let hs = hunks(
+        "T.cs",
+        CS_OLD,
+        "class T {\n    [Fact]\n    void CaseA() {\n        Assert.True(true);\n    }\n}\n",
+    );
+    assert_eq!(texts(&hs), ["adds 1 line"]);
+}
+
+#[test]
+fn a_csharp_collection_expression_line_is_a_plain_added_line() {
+    let hs = hunks(
+        "T.cs",
+        CS_OLD,
+        "class T {\n    int[] xs = [1, 2, 3];\n    void CaseA() {\n        Assert.True(true);\n    }\n}\n",
+    );
+    assert_eq!(texts(&hs), ["adds 1 line"]);
+}
+
 /// A decorator added above a definition the file already had still reads
 /// "changes", not "adds decorator", however many decorators stack on it.
 #[test]
