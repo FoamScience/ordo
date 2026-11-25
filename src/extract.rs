@@ -56,8 +56,6 @@ pub struct HunkSem {
     /// per name in `imports`, the modules it is taken from on the statements
     /// the hunk touches, where the language says (python, js/ts, rust)
     pub import_modules: Vec<Vec<Option<String>>>,
-    /// rust globs (`fmt::*`) the hunk's rows write: they bind no name
-    pub import_globs: Vec<String>,
     pub uses: Vec<String>,
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
@@ -187,7 +185,6 @@ impl HunkSem {
             imports: vec![],
             imports_moved_out: vec![],
             import_modules: vec![],
-            import_globs: vec![],
             uses: vec![],
             member_uses: vec![],
             foreign_uses: vec![],
@@ -714,8 +711,6 @@ struct Collected {
     import_decls: Vec<(usize, usize, String)>,
     /// the module of each of those names, where the language says
     import_modules: Vec<(usize, usize, String, Option<String>)>,
-    /// (row, text) of each rust glob import
-    import_globs: Vec<(usize, String)>,
     /// (row, name) for the languages that write one import per row (go), so a
     /// hunk that swaps one line of a ten-line block names that import alone
     import_rows_of: Vec<(usize, String)>,
@@ -1120,13 +1115,6 @@ impl Parsed<'_> {
             deltas: vec![],
             defines,
             import_modules: self.import_modules(r0, r1, &imports),
-            import_globs: self
-                .c
-                .import_globs
-                .iter()
-                .filter(|(row, _)| (r0..=r1).contains(row))
-                .map(|(_, g)| g.clone())
-                .collect(),
             imports,
             imports_moved_out: vec![],
             enclosing,
@@ -2913,9 +2901,6 @@ impl<'a> Walker<'a> {
         self.c
             .package_names
             .extend(namespace_imports(node, self.src));
-        if self.spec.name == "rust" {
-            self.c.import_globs.extend(rust_globs(node, self.src));
-        }
         true // don't descend: import identifiers are declarations, not uses
     }
 
@@ -5981,6 +5966,36 @@ pub fn import_spans(spec: &LangSpec, content: &str) -> Vec<[usize; 2]> {
     out
 }
 
+/// The words (see `import_words`) of every import statement's code, by the
+/// 1-based row each token starts on. A comment inside or beside a statement
+/// is not part of it, so it adds no word.
+pub fn import_row_words(spec: &LangSpec, content: &str) -> HashMap<usize, Vec<String>> {
+    fn leaves(node: Node, src: &[u8], out: &mut HashMap<usize, Vec<String>>) {
+        if node.kind().contains("comment") {
+            return;
+        }
+        if node.child_count() == 0 {
+            if let Ok(t) = node.utf8_text(src) {
+                out.entry(node.start_position().row + 1)
+                    .or_default()
+                    .extend(import_words(t));
+            }
+            return;
+        }
+        let mut cur = node.walk();
+        for c in node.children(&mut cur) {
+            leaves(c, src, out);
+        }
+    }
+    let mut out = HashMap::new();
+    if let Some(tree) = lang::parse(spec, content) {
+        each_import(tree.root_node(), content.as_bytes(), spec, &mut |n| {
+            leaves(n, content.as_bytes(), &mut out)
+        });
+    }
+    out
+}
+
 /// The 1-based rows every re-export (see `is_reexport`) in a file covers.
 pub fn reexport_row_set(spec: &LangSpec, content: &str) -> HashSet<usize> {
     import_rows_where(spec, content, |n| is_reexport(n, content.as_bytes(), spec))
@@ -6131,22 +6146,50 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
         }
         ("rust", "use_declaration") => {
             let mut names = vec![];
-            rust_use_names(
-                node.child_by_field_name("argument")?,
-                src,
-                None,
-                None,
-                &mut names,
-            );
-            Some(names.into_iter().map(|(n, _)| (row, n)).collect())
+            let arg = node.child_by_field_name("argument")?;
+            rust_use_names(arg, src, None, None, &mut names);
+            let mut out: Vec<(usize, String)> = names.into_iter().map(|(n, _)| (row, n)).collect();
+            out.extend(rust_globs(arg, src));
+            Some(out)
         }
         ("go", "import_spec") => Some(go_import_name(node, src).into_iter().collect()),
         ("go", "import_declaration") => Some(go_import_names(node, src)),
         ("python" | "xonsh", "import_statement" | "import_from_statement") => {
-            Some(python_import_names(node, src))
+            let mut out = python_import_names(node, src);
+            out.extend(python_glob(node, src));
+            Some(out)
+        }
+        // a js/ts `export * from "m"`: the clause names nothing, so the
+        // statement itself is what the hunk wrote
+        ("javascript" | "typescript" | "tsx", "export_statement") => {
+            let source = node.child_by_field_name("source")?;
+            let mut cur = node.walk();
+            let star = node.children(&mut cur).any(|c| c.kind() == "*");
+            let module = unquote(source.utf8_text(src).ok()?.trim());
+            star.then(|| vec![(row, format!("* from {module}"))])
         }
         _ => None,
     }
+}
+
+/// python's `from m import *`, as the glob `m.*` (`.*` for `from . import *`):
+/// it binds no name, so the glob is what the statement imports.
+fn python_glob(node: Node, src: &[u8]) -> Option<(usize, String)> {
+    let mut cur = node.walk();
+    let star = node
+        .named_children(&mut cur)
+        .find(|c| c.kind() == "wildcard_import")?;
+    let module = squeeze(
+        node.child_by_field_name("module_name")?
+            .utf8_text(src)
+            .ok()?,
+    );
+    let glob = if module.ends_with('.') {
+        format!("{module}*")
+    } else {
+        format!("{module}.*")
+    };
+    Some((star.start_position().row, glob))
 }
 
 /// the names js's `import * as ns` binds
@@ -6275,26 +6318,79 @@ fn rust_use_names(
                 .and_then(|p| head(&join(&text(p))));
             out.extend(node.child_by_field_name("alias").map(|a| (text(a), module)));
         }
-        // a glob binds nothing by name
+        // a glob binds nothing by name: `rust_globs` names it
         "use_wildcard" => {}
         _ => out.push((text(node), scope.map(str::to_string))),
     }
 }
 
-/// The glob imports (`fmt::*`) under a rust `use`, with their rows: they bind
-/// no name, so the row is all there is to say what the hunk wrote.
+/// The glob imports under a rust `use`, with their rows and the whole path
+/// each one globs (`a::*`, `a::x::*` for a `*` or `x::*` inside `a::{..}`): they
+/// bind no name, so the glob itself is what the hunk imported.
 fn rust_globs(node: Node, src: &[u8]) -> Vec<(usize, String)> {
+    let text = |n: Node| n.utf8_text(src).map(squeeze).unwrap_or_default();
     let mut out = vec![];
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "use_wildcard" {
-            if let Ok(t) = n.utf8_text(src) {
-                out.push((n.start_position().row, squeeze(t)));
-            }
-            continue;
-        }
+    let mut stack: Vec<(Node, Option<String>)> = vec![(node, None)];
+    while let Some((n, scope)) = stack.pop() {
         let mut cur = n.walk();
-        stack.extend(n.named_children(&mut cur));
+        match n.kind() {
+            "use_wildcard" => {
+                let t = text(n);
+                let full = match scope {
+                    Some(s) if t == "*" => format!("{s}::*"),
+                    Some(s) => format!("{s}::{t}"),
+                    None => t,
+                };
+                out.push((n.start_position().row, full));
+            }
+            "scoped_use_list" => {
+                let path = n.child_by_field_name("path").map(text);
+                let inner = match (scope, path) {
+                    (Some(s), Some(p)) => Some(format!("{s}::{p}")),
+                    (s, p) => s.or(p),
+                };
+                stack.extend(n.child_by_field_name("list").map(|l| (l, inner)));
+            }
+            "use_list" => stack.extend(n.named_children(&mut cur).map(|c| (c, scope.clone()))),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The words of an import line, in the order written: names, a `*`, and the
+/// dots that make a module relative or climb out of a directory (`.`, `..` in
+/// `from .. import d` or `"../x"`). Two spellings of one import share their
+/// words once sorted; a different module or a dropped glob does not.
+pub(crate) fn import_words(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let mut out = vec![];
+    let mut i = 0;
+    while i < chars.len() {
+        let start = i;
+        let c = chars[i];
+        if word(c) {
+            while i < chars.len() && word(chars[i]) {
+                i += 1;
+            }
+        } else if c == '.' {
+            while i < chars.len() && chars[i] == '.' {
+                i += 1;
+            }
+            // `a.B` is a path, `./x` and `from ..` a relative module
+            if start > 0 && word(chars[start - 1]) {
+                continue;
+            }
+        } else {
+            i += 1;
+            // the `*` of a glob, not of a `/* comment */`
+            let comment = (start > 0 && chars[start - 1] == '/') || chars.get(i) == Some(&'/');
+            if c != '*' || comment {
+                continue;
+            }
+        }
+        out.push(chars[start..i].iter().collect());
     }
     out
 }
