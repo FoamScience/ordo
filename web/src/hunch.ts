@@ -5,9 +5,14 @@
 
 import type { Hunch } from "./types.ts";
 
+/** A 0 to 1 share as a whole percent; one rounding everywhere, `–` for a missing or non-finite value. */
+export function percent(x: number | undefined): string {
+  return x !== undefined && Number.isFinite(x) ? `${Math.round(x * 100)}%` : "–";
+}
+
 /** `Hunch: 72% skippable` */
 export function badge(g: Hunch): string {
-  return `Hunch: ${Math.round(g.noise * 100)}% skippable`;
+  return `Hunch: ${percent(g.noise)} skippable`;
 }
 
 const signed = (top: [string, number][]) =>
@@ -20,12 +25,12 @@ export function contributions(g: Hunch): string[] {
 
 /** `Rationale: 94% faithful`, most moved by features signed toward faithful */
 export function faithfulness(g: Hunch): string {
-  return `Rationale: ${Math.round(g.faithful * 100)}% faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
+  return `Rationale: ${percent(g.faithful)} faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
 }
 
 /** `Attention: 64%`, most moved by features signed toward attention */
 export function attention(g: Hunch): string {
-  return `Attention: ${Math.round(g.attention * 100)}%, most moved by ${signed(g.attention_top).join(", ")}`;
+  return `Attention: ${percent(g.attention)}, most moved by ${signed(g.attention_top).join(", ")}`;
 }
 
 /** `Hunch: shown` / `Hunch: hidden` when the guess moved the hunk's noise flag */

@@ -36,13 +36,13 @@ open a second tab from the URL the server printed, not from the address bar.
 
 ```text
 ┌ ordo  rev  subject           ● verdicts  ● notes  ▬▬▬ 34 of 608 read  Keys ┐
-│ Reading order   │ Hunk 37 of 608   path:line           │ Why it is here    │
-│ ○ file.py       │ Edits the comment in _back_rz        │ Needs             │
-│ ●  ╮            │ Grouped by …                         │ Needed by         │
-│ ◉ ─┤            │ ┌ the file, opened at the hunk ────┐ │ If you reject it  │
-│ ○  │            │ │                                  │ │ Findings          │
-│ ○ ─╯            │ └──────────────────────────────────┘ │ Test coverage     │
-│                 │ [Mark as read x]  Next …             │ History           │
+│ Reading order   │ Hunk 37 of 608   path:line           │ Why               │
+│ ○ file.py       │ Edits the comment in _back_rz        │ ↓ 3               │
+│ ●  ╮            │ Grouped by …                         │ ↑ 1               │
+│ ◉ ─┤            │ ┌ the file, opened at the hunk ────┐ │ ⟲ 4               │
+│ ○  │            │ │                                  │ │ ⚠ 2               │
+│ ○ ─╯            │ └──────────────────────────────────┘ │ ⚗ 12/14           │
+│                 │ [Mark as read x]  Next …             │ ◷ 8 commits       │
 └─────────────────┴──────────────────────────────────────┴───────────────────┘
 ```
 The page is set in Geist Mono, compiled into the binary,
@@ -64,14 +64,28 @@ a sentence with its names set as code, what it is grouped by, and the file
 opened at the hunk's first row with three rows above. Below the code, *Mark as
 read* (`x`) marks it and moves on, and *Next* names the hunk that follows.
 
-The **margin** on the right says why the hunk is here: what it needs, what
-needs it, and what rejecting it would strand beyond those — three of each,
-every one once the column is maximised (press its number, `3`, again, or the
-button in its corner) — then its findings, test coverage, and how often the
-file and these lines changed before. A section with nothing to say is left
-out.
+The **margin** on the right says why the hunk is here, in icons with the
+words behind them: a heading is an icon and a count, and its title and subtitle
+are its tooltip and its name for a screen reader. Down arrow is what the hunk
+needs, up arrow what needs it, and the undo arrow what rejecting it would
+strand beyond those — three of each, every one once the column is maximised
+(press its number, `3`, again, or the button in its corner). A link is one
+line, its name on the left and its place on the right; the sentence saying why
+shows under the link that is current (`Enter`, `j`/`k`), hovered or focused,
+and under every link on a touch screen. Then come the findings (a level icon
+and word, the rule, `L12` for the line, and an icon to dismiss) and the facts,
+each an icon with a few words: `skip 72%`, `faithful 94%`, `attention 40%` for
+the hunch; each definition's readability moves from before to after
+(`cx 4→7`); `tests 12/14 lines` under a test; `8 commits in 6 months`, and
+`changed 3 times` with who last changed these lines. Hover for the whole
+sentence; a screen reader hears it instead of the short form. A section with
+nothing to say is left out.
 
-The header carries the review's state:
+The header carries the review's state, each signal an icon and a number (the
+eye and `watch hint` or `watch auto` for `--watch`, the circular arrow and
+`stale 3` for a stale review, the diff icon and `changed 3` for what changed
+since your last look, a level icon and count for verdicts, warnings and notes,
+and the ticks and `done/total` for progress); the words are the tooltip:
 
 | Mark | Meaning |
 | --- | --- |
@@ -341,7 +355,7 @@ rather than reporting a save that did not happen.
 
 Whether a construct is worth flagging depends on the codebase (see
 [rules.md](rules.md#usefulness-depends-on-the-codebase)). When a catalog
-finding is not worth a look on this hunk, `dismiss` beside it in the why pane,
+finding is not worth a look on this hunk, the dismiss icon (✕) beside it in the why pane,
 or `:dismiss [rule]` (the rule's name is needed only when the hunk has several),
 records that, and the same again undoes it. A dismissal is kept per repository
 under the cache directory, by file and symbol, and changes nothing about the
@@ -388,15 +402,15 @@ What the model is, what it may change and how well it works:
 
 `--hunch` asks the engine for hunch's guess on every hunk: how likely a
 reviewer can skip it, from a small model trained offline on labelled reviews
-(`scripts/hunch-train.py`). The code pane shows it as a muted `Hunch: 72%
-skippable` badge, and the why pane names the three features that moved it
-most, each signed toward skipping in log-odds, then how likely the rationale
-is faithful and what moved that, and how much attention the hunk needs and
-what moved that. Where the model is confident
+(`scripts/hunch-train.py`). The code pane shows it as a muted gauge pill with
+its word and share (`skip 72%`; its tooltip says `Hunch: 72% skippable`), and the why pane
+shows it as three shares, each with its tooltip naming the three features that
+moved it most, signed toward skipping in log-odds: skippable, then how likely
+the rationale is faithful, and how much attention the hunk needs. Where the model is confident
 it also moves the engine's noise flag: a hunk the engine hid as noise but
 the model says a reviewer should read comes back into the view, marked
-`Hunch: shown`; one the engine showed but the model is sure can be skipped
-is hidden like noise (`:all` shows it), marked `Hunch: hidden`. Only a model
+`Hunch: shown` (a sparkle pill reading `shown`); one the engine showed but the model is sure can be skipped
+is hidden like noise (`:all` shows it), marked `Hunch: hidden` the same way. Only a model
 that passed its promotion gate does this (see `options.hunch` in
 [cli.md](cli.md)). Once the attention head passed its own gate, the reading
 order puts the hunks needing the most attention first wherever the engine's

@@ -11,9 +11,12 @@ import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordA
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
 import { dismissToggle } from "./dismiss.ts";
-import { attention, badge, contributions, effect, faithfulness, flagBadge } from "./hunch.ts";
+import { changedText, commitsText, coverageText, staleWords } from "./facts.ts";
+import { fact, heading, pill, said } from "./chips.ts";
+import { icon, type IconName } from "./icons.ts";
+import { attention, badge, contributions, effect, faithfulness, flagBadge, percent } from "./hunch.ts";
 import { CLIENT_COMMANDS, complete, hitRow, parseCommand } from "./palette.ts";
-import { moved, regressed } from "./readability.ts";
+import { deltas, regressed } from "./readability.ts";
 import { byRule, files as fileLines, flagged, written } from "./summary.ts";
 import { applyTheme, loadThemes, themeNames } from "./theme.ts";
 import type { ActResult, ChangeSummary, FileData, Finding, Hits, Item, ItemFacts, Level, Review, Row } from "./types.ts";
@@ -21,6 +24,7 @@ import type { ActResult, ChangeSummary, FileData, Finding, Hits, Item, ItemFacts
 type Pane = "list" | "code" | "why";
 const PANES: Pane[] = ["list", "code", "why"];
 const LEVELS: Level[] = ["verdict", "warn", "note"];
+const LEVEL_WORD: Record<Level, string> = { verdict: "verdict", warn: "warning", note: "note" };
 const SINCE: Record<string, [string, string]> = {
   new: ["new", "new since you last looked"],
   changed: ["changed", "changed since you last looked"],
@@ -566,9 +570,21 @@ function highlightHits(text: string, s: Search, k: number): Node[] {
   return out;
 }
 
-function dismissButton(f: Finding, dismissed: string[]): HTMLElement | null {
+let dismissHints = 0;
+
+function dismissButton(f: Finding, dismissed: string[]): HTMLElement[] | null {
   const t = dismissToggle(f, dismissed);
-  return t && h("button", { class: "at", title: t.title, onclick: () => act({ op: "command", line_text: t.command }) }, t.label);
+  if (!t) return null;
+  const on = dismissed.includes(f.name);
+  const hint = `dismiss-hint-${dismissHints++}`;
+  return [
+    h(
+      "button",
+      { class: "at ico", title: t.title, "aria-label": "Dismiss this finding", "aria-pressed": on ? "true" : "false", "aria-describedby": hint, onclick: () => act({ op: "command", line_text: t.command }) },
+      icon(on ? "dismissed" : "dismiss"),
+    ),
+    h("span", { class: "sr", id: hint }, t.title),
+  ];
 }
 
 /** The reading column's words: where the hunk is, what it does, and what the reader can do next. */
@@ -606,12 +622,12 @@ function renderReading(it: Item | undefined): void {
     h(
       "div",
       { class: "pills" },
-      it.reviewed && h("span", { class: "pill done" }, "Read"),
-      it.delta && h("span", { class: "pill accent" }, sentence(SINCE[it.delta][1].split(":")[0])),
-      it.noise && !it.hunch?.changed && !/formatting/.test(it.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
-      it.wave !== null && h("span", { class: "pill" }, `Wave ${it.wave}`),
-      it.hunch && h("span", { class: "pill", title: contributions(it.hunch).join(", ") }, badge(it.hunch)),
-      it.hunch && flagBadge(it.hunch) && h("span", { class: "pill accent" }, flagBadge(it.hunch)),
+      it.reviewed && h("span", { class: "pill done" }, icon("read"), "Read"),
+      it.delta && pill("since", SINCE[it.delta][0], sentence(SINCE[it.delta][1]), "accent"),
+      it.noise && !it.hunch?.changed && !/formatting/.test(it.rationale) && pill("quiet", "quiet", "Quiet: generated or formatting"),
+      it.wave !== null && pill("wave", `wave ${it.wave}`, `Wave ${it.wave}`),
+      it.hunch && pill("hunch", `skip ${percent(it.hunch.noise)}`, `${badge(it.hunch)}; most moved by ${contributions(it.hunch).join(", ")}`),
+      it.hunch && flagBadge(it.hunch) && pill("flag", it.hunch.changed === "unhid" ? "shown" : "hidden", flagBadge(it.hunch)!, "accent"),
     ),
     (search || st.from !== null) &&
       h(
@@ -954,10 +970,11 @@ function edgeRows(targets: { target: number | null; label: string }[], limit: nu
     const t = r.items[target];
     const link = st.whyLinks.length;
     st.whyLinks.push(target);
+    const cur = st.whyCur === link;
     return h(
       "button",
       {
-        class: `link${st.whyCur === link ? " cur" : ""}`,
+        class: `link${cur ? " cur" : ""}`,
         title: "Go there (Enter); come back with C-o",
         onclick: () => jumpTo(target),
       },
@@ -972,12 +989,12 @@ function basename(p: string): string {
   return p.slice(p.lastIndexOf("/") + 1);
 }
 
-function table(title: string, hint: string, targets: { target: number | null; label: string }[]): (HTMLElement | false)[] {
+function table(name: IconName, word: string, title: string, hint: string, targets: { target: number | null; label: string }[]): (HTMLElement | false)[] {
   if (!targets.length) return [];
   const limit = tableLimit(targets.length, st.zoom && st.focus === "why");
   const more = targets.length - limit;
   return [
-    h("h3", null, title, hint && h("small", null, hint)),
+    heading(name, word, title, targets.length, hint),
     h("div", { class: "links" }, edgeRows(targets, limit)),
     more > 0 &&
       h(
@@ -999,7 +1016,7 @@ function renderWhy(): void {
   const pane = $("#why");
   const r = st.review!;
   const it = r.items[st.sel];
-  replace(pane.querySelector(".head")!, h("span", { class: "t" }, "Why it is here"), h("span", { class: "grow" }), zoomButton("why"));
+  replace(pane.querySelector(".head")!, h("span", { class: "t", title: "Why it is here" }, "Why"), h("span", { class: "grow" }), zoomButton("why"));
   const body = pane.querySelector(".body")!;
   if (!it) return replace(body);
   st.whyLinks = [];
@@ -1016,76 +1033,103 @@ function renderWhy(): void {
     h(
       "div",
       { class: "why" },
-      it.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it.note)],
+      it.note && [heading("your-note", "note", "Your note"), h("p", { class: "warnline" }, it.note)],
       !!facts?.comments.length && [
-        h("h3", null, "Your comments"),
+        heading("comments", "comments", "Your comments", facts.comments.length),
         facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `-${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`)),
       ],
       !!facts?.out_of_order.length && [
-        h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
+        heading("early", "too early", "Read too early", facts.out_of_order.length, "it depends on hunks not read yet"),
         h("div", { class: "links" }, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length)),
       ],
-      table("Needs", "what this hunk uses", needs),
-      table("Needed by", "what uses this hunk", neededBy),
+      table("needs", "needs", "Needs", "what this hunk uses", needs),
+      table("needed-by", "needed by", "Needed by", "what uses this hunk", neededBy),
       table(
+        "reject",
+        "reject",
         "If you reject it",
         "what loses its footing, in reading order",
         cascade.map((t) => ({ target: t, label: "" })),
       ),
       findings.length > 0 && [
-        h("h3", null, "Findings", h("small", null, "the most pressing first")),
+        heading("warn", "findings", "Findings", findings.length, "the most pressing first"),
         findings.map((f) =>
+          h(
+            "div",
+            { class: "finding" },
             h(
               "div",
-              { class: "finding" },
-              h(
-                "div",
-                { class: "h" },
-                h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
-                h("span", { class: "name" }, f.name),
-                f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row!), title: "Put the cursor on this line" }, `line ${f.row}`),
-                dismissButton(f, it.dismissed),
-              ),
-              h("p", null, f.message),
-              h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : "")),
+              { class: "h" },
+              h("span", { class: `lv lv-${f.level}` }, icon(f.level), LEVEL_WORD[f.level]),
+              h("span", { class: "name" }, f.name),
+              f.row != null &&
+                h("button", { class: "at", onclick: () => cursorToLine(f.row!), title: "Put the cursor on this line", "aria-label": `L${f.row}, put the cursor on line ${f.row}` }, `L${f.row}`),
+              dismissButton(f, it.dismissed),
             ),
+            h("p", null, f.message),
+            h("div", { class: "src" }, f.source + (f.original_level ? `; ${f.original_level} in its rule, changed by rules.toml` : "")),
           ),
+        ),
       ],
       it.hunch && [
-        h("h3", null, "Hunch", h("small", null, effect(it.hunch))),
-        h("p", { class: "muted" }, `${badge(it.hunch)}, most moved by ${contributions(it.hunch).join(", ")}.`),
-        h("p", { class: "muted" }, `${faithfulness(it.hunch)}.`),
-        h("p", { class: "muted" }, `${attention(it.hunch)}.`),
+        h(
+          "div",
+          { class: "facts" },
+          fact("hunch", `skip ${percent(it.hunch.noise)}`, `${badge(it.hunch)}, most moved by ${contributions(it.hunch).join(", ")}. ${effect(it.hunch)}`),
+          fact("faithful", `faithful ${percent(it.hunch.faithful)}`, faithfulness(it.hunch)),
+          fact("attention", `attention ${percent(it.hunch.attention)}`, attention(it.hunch)),
+        ),
       ],
       it.readability.length > 0 && [
-        h("h3", null, "Readability", h("small", null, "against each definition's old version")),
-        it.readability.map((d) => h("p", { class: regressed(d) ? "warnline" : "" }, `${d.name}: ${moved(d).join(", ")}`)),
+        h(
+          "div",
+          { class: "group" },
+          h("div", { class: "facts" }, fact("readability", "readability", "Readability, against each definition's old version")),
+          it.readability.map((d) =>
+            h(
+              "div",
+              { class: `facts${regressed(d) ? " warnline" : ""}` },
+              h("span", { class: "name" }, d.name),
+              deltas(d).map((x) => fact(null, x.text, `${d.name}: ${x.words}`)),
+            ),
+          ),
+        ),
       ],
       it.executed && [
-        h("h3", null, "Test coverage"),
         h(
-          "p",
-          { class: it.executed[0] === it.executed[1] ? "" : "warnline" },
-          it.executed[0] === it.executed[1]
-            ? `All ${it.executed[1]} executable lines here run under a test.`
-            : `${it.executed[1] - it.executed[0]} of ${it.executed[1]} executable lines here run under no test.`,
+          "div",
+          { class: "facts" },
+          fact(
+            "tests",
+            coverageText(it.executed),
+            it.executed[0] === it.executed[1]
+              ? `Test coverage: all ${it.executed[1]} executable lines here run under a test.`
+              : `Test coverage: ${it.executed[1] - it.executed[0]} of ${it.executed[1]} executable lines here run under no test.`,
+            it.executed[0] === it.executed[1] ? "" : "warnline",
+          ),
         ),
       ],
       (churn || lc) && [
-        h("h3", null, "History"),
-        churn !== undefined && churn > 0 && h("p", null, `${churn} commit${churn === 1 ? "" : "s"} touched this file in the last six months.`),
-        lc &&
-          h(
-            "p",
-            null,
-            `These lines changed ${lc.commits}${lc.capped ? "+" : ""} time${lc.commits === 1 ? "" : "s"} before`,
-            lc.last ? `, last by ${lc.last.author} on ${lc.last.date}.` : ".",
-          ),
+        h(
+          "div",
+          { class: "facts" },
+          churn !== undefined && churn > 0 && fact("commits", commitsText(churn), `History: ${commitsText(churn)} touched this file.`),
+          lc &&
+            fact(
+              "history",
+              `${changedText(lc.commits, lc.capped)}${lc.last ? `, ${lc.last.author} ${lc.last.date}` : ""}`,
+              `History: these lines ${changedText(lc.commits, lc.capped)} before${lc.last ? `, last by ${lc.last.author} on ${lc.last.date}` : ""}.`,
+            ),
+        ),
       ],
-      it.notes.length > 0 && [h("h3", null, "Also"), it.notes.map((n) => h("p", null, prose(sentence(n))))],
+      it.notes.length > 0 && [heading("also", "also", "Also", it.notes.length), it.notes.map((n) => h("p", null, prose(sentence(n))))],
       it.wave !== null && [
-        h("h3", null, "Wave"),
-        h("p", null, `Wave ${it.wave}${r.wave_intents[String(it.wave)] ? `, asked for: ${r.wave_intents[String(it.wave)]}` : ""}`),
+        h(
+          "div",
+          { class: "facts" },
+          fact("wave", `wave ${it.wave}`, `Wave ${it.wave}`),
+          r.wave_intents[String(it.wave)] && h("span", { class: "by" }, `asked for: ${r.wave_intents[String(it.wave)]}`),
+        ),
       ],
     ),
   );
@@ -1132,18 +1176,26 @@ function renderBand(): void {
     );
   }
   const sinceCount = r.delta.new + r.delta.changed + r.delta.moved;
-  const plural: Record<Level, [string, string]> = { verdict: ["verdict", "verdicts"], warn: ["warning", "warnings"], note: ["note", "notes"] };
+  const stale = r.stale ? staleWords(r.stale) : null;
   replace(
     band,
     h("span", { class: "mark" }, "ordo"),
     h("span", { class: "rev", title: "the revision under review" }, r.rev),
     h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "Uncommitted work" : "")),
-    r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }), title: "Read the working tree again" }, r.stale),
+    stale &&
+      h(
+        "button",
+        { class: "sig stale", onclick: () => act({ op: "reload" }), title: `${r.stale}\nRead the working tree again` },
+        said([icon("stale"), h("span", { class: "v" }, stale.short)], stale.words, false),
+      ),
     r.watch !== "off" &&
       h(
         "span",
-        { class: "sig", title: r.watch === "auto" ? "--watch=auto: read again once the working tree settles and you pause" : "--watch=hint: says when the working tree has moved on" },
-        r.watch === "auto" ? "Watching, reloads" : "Watching",
+        { class: "sig" },
+        said(
+          [icon("watching"), h("span", { class: "v" }, `watch ${r.watch}`)],
+          r.watch === "auto" ? "Watching, reloads: read again once the working tree settles and you pause (--watch=auto)" : "Watching: says when the working tree has moved on (--watch=hint)",
+        ),
       ),
     !r.delta.first_run &&
       sinceCount > 0 &&
@@ -1158,15 +1210,13 @@ function renderBand(): void {
             renderAll();
           },
         },
-        h("b", null, sinceCount),
-        "changed since your last look",
+        said([icon("since"), h("span", { class: "v" }, `changed ${sinceCount}`)], `changed ${sinceCount} since your last look`, false),
       ),
     LEVELS.filter((l) => r.levels[l]).map((l) =>
       h(
         "button",
-        { class: `sig lv-${l}`, title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
-        h("b", null, r.levels[l]),
-        plural[l][r.levels[l] === 1 ? 0 : 1],
+        { class: `sig lv-${l}`, title: `Go to the next ${LEVEL_WORD[l]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
+        said([icon(l), h("b", null, r.levels[l])], `${r.levels[l]} ${r.levels[l] === 1 ? LEVEL_WORD[l] : `${LEVEL_WORD[l]}s`}`, false),
       ),
     ),
     h(
@@ -1177,7 +1227,7 @@ function renderBand(): void {
         title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read. The review on one page (:summary).`,
         onclick: () => toggleSummary(),
       },
-      h("span", { class: "said" }, h("b", null, r.coverage.done), ` of ${r.coverage.total} read`),
+      h("span", { class: "said" }, said([icon("progress"), h("b", null, r.coverage.done), `/${r.coverage.total}`], `${r.coverage.done}/${r.coverage.total} read`, false)),
       h("span", { class: "dimstr", "aria-hidden": "true" }, h("i", { style: `--p:${r.coverage.total ? r.coverage.done / r.coverage.total : 0}` })),
     ),
     help,
@@ -1883,7 +1933,7 @@ function whyStep(by: number): void {
   }
   st.whyCur = Math.max(0, Math.min(n - 1, st.whyCur + by));
   renderWhy();
-  $("#why tr.cur")?.scrollIntoView({ block: "nearest" });
+  $("#why .link.cur")?.scrollIntoView({ block: "nearest" });
 }
 
 function onKey(e: KeyboardEvent): void {

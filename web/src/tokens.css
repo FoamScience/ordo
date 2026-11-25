@@ -122,7 +122,7 @@
   --line-2: oklch(90.5% 0.003 250);
   --fg: oklch(24% 0.006 250);
   --dim: oklch(40% 0.006 250);
-  --faint: oklch(50% 0.006 250);
+  --faint: oklch(43% 0.006 250);
   --accent: oklch(48% 0.13 258);
   --accent-2: oklch(41% 0.13 258);
   --accent-ink: oklch(98% 0.002 250);
@@ -135,7 +135,7 @@
   --verdict: oklch(47% 0.17 28);
   --verdict-bg: oklch(95% 0.025 28);
   --verdict-strong-bg: oklch(88% 0.06 28);
-  --warn: oklch(48% 0.1 70);
+  --warn: oklch(42% 0.1 70);
   --warn-bg: oklch(95.5% 0.03 80);
   --warn-strong-bg: oklch(88% 0.07 80);
   --note-bg: oklch(94% 0.02 255);
@@ -149,9 +149,9 @@
   --syn-number: oklch(40% 0.006 250);
   --syn-function: oklch(24% 0.006 250);
   --syn-type: oklch(24% 0.006 250);
-  --syn-comment: oklch(50% 0.006 250);
+  --syn-comment: oklch(43% 0.006 250);
   --syn-property: oklch(24% 0.006 250);
-  --syn-operator: oklch(50% 0.006 250);
+  --syn-operator: oklch(43% 0.006 250);
   --syn-variable: oklch(24% 0.006 250);
   --syn-builtin: oklch(24% 0.006 250);
   --syn-parameter: oklch(40% 0.006 250);
