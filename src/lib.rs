@@ -846,11 +846,15 @@ fn gone_imports(
             .old_rows
             .1
             .iter()
-            .filter(|(nm, row)| {
-                symbols.new_imports.contains(nm) == new_side
-                    && (rows.contains(row) || member_line(nm))
+            .zip(&symbols.old_import_mods)
+            .filter(|((nm, row), module)| {
+                let kept = symbols
+                    .new_import_pairs
+                    .contains(&(nm.clone(), (*module).clone()))
+                    || symbols.import_arrived(nm);
+                kept == new_side && (rows.contains(row) || member_line(nm))
             })
-            .map(|(nm, _)| nm.clone())
+            .map(|((nm, _), _)| nm.clone())
             .collect();
         names.sort();
         names.dedup();
@@ -1985,7 +1989,12 @@ pub(crate) struct FileChanges {
 pub(crate) struct FileSymbols {
     /// names the old side defined / imported / bound locally
     pub(crate) old_defs: HashSet<String>,
-    pub(crate) old_imports: HashSet<String>,
+    /// imports as (name, module): the same name from another module is another
+    /// import
+    pub(crate) old_import_pairs: HashSet<(String, Option<String>)>,
+    pub(crate) new_import_pairs: HashSet<(String, Option<String>)>,
+    /// the module of each of `old_rows.1`, same order
+    pub(crate) old_import_mods: Vec<Option<String>>,
     pub(crate) old_locals: HashSet<String>,
     /// the same with 1-based rows, for a hunk that replaced one
     pub(crate) old_local_rows: Vec<(String, usize)>,
@@ -2017,16 +2026,41 @@ pub(crate) struct FileSymbols {
 }
 
 impl FileSymbols {
+    /// the name was imported from a module the new side no longer imports it
+    /// from: it left a binding
+    pub(crate) fn import_left(&self, name: &str) -> bool {
+        self.old_import_pairs
+            .iter()
+            .any(|p| p.0 == name && !self.new_import_pairs.contains(p))
+    }
+
+    /// the name is imported from a module the old side did not import it from:
+    /// it arrived at a binding
+    pub(crate) fn import_arrived(&self, name: &str) -> bool {
+        self.new_import_pairs
+            .iter()
+            .any(|p| p.0 == name && !self.old_import_pairs.contains(p))
+    }
+
     fn of(c: &Change) -> FileSymbols {
         let spec = lang::for_path(&c.path);
         let old = c.old.as_deref().zip(spec);
         let new = c.new.as_deref().zip(spec);
         // one descent per side: rows and bodies come back together, where they
         // used to be two walks of the same tree (see `extract::symbol_facts`)
-        let (old_rows, old_body, _, _) =
+        let (old_rows, old_body, _, _, old_mods) =
             old.map_or(Default::default(), |(o, sp)| extract::symbol_facts(sp, o));
-        let (new_rows, new_body, new_kinds, new_def_spans) =
+        let (new_rows, new_body, new_kinds, new_def_spans, new_mods) =
             new.map_or(Default::default(), |(n, sp)| extract::symbol_facts(sp, n));
+        let pairs = |rows: &extract::SymbolRows, mods: &[Option<String>]| {
+            rows.1
+                .iter()
+                .zip(mods)
+                .map(|((n, _), m)| (n.clone(), m.clone()))
+                .collect::<HashSet<_>>()
+        };
+        let (old_import_pairs, new_import_pairs) =
+            (pairs(&old_rows, &old_mods), pairs(&new_rows, &new_mods));
         let set = |v: &[(String, usize)]| v.iter().map(|(n, _)| n.clone()).collect();
         let new_bind_rows = new.map_or(vec![], |(n, sp)| extract::top_level_bindings(sp, n));
         let (new_defs, new_imports): (HashSet<String>, HashSet<String>) =
@@ -2049,7 +2083,9 @@ impl FileSymbols {
             }),
             new_def_spans,
             old_defs: old_rows.0.iter().map(|(nm, _)| nm.clone()).collect(),
-            old_imports: old_rows.1.iter().map(|(nm, _)| nm.clone()).collect(),
+            old_import_pairs,
+            new_import_pairs,
+            old_import_mods: old_mods,
             old_locals: old_local_rows.iter().map(|(n, _)| n.clone()).collect(),
             old_local_rows,
             new_defs,

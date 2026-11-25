@@ -53,6 +53,11 @@ pub struct HunkSem {
     /// on a deletion-only import hunk: the names it dropped that the new
     /// side still imports, so the hunk moved them rather than removing them
     pub imports_moved_out: Vec<String>,
+    /// per name in `imports`, the modules it is taken from on the statements
+    /// the hunk touches, where the language says (python, js/ts, rust)
+    pub import_modules: Vec<Vec<Option<String>>>,
+    /// rust globs (`fmt::*`) the hunk's rows write: they bind no name
+    pub import_globs: Vec<String>,
     pub uses: Vec<String>,
     /// the subset of `uses` this hunk only ever wrote as `obj.name` — see
     /// `lang::is_member_ident`. Never grounds a cross-file def→use edge.
@@ -181,6 +186,8 @@ impl HunkSem {
             defines: vec![],
             imports: vec![],
             imports_moved_out: vec![],
+            import_modules: vec![],
+            import_globs: vec![],
             uses: vec![],
             member_uses: vec![],
             foreign_uses: vec![],
@@ -705,6 +712,10 @@ struct Collected {
     /// (start_row, end_row, name) per import name, spanning its whole
     /// statement: what a hunk anywhere in the statement can still report
     import_decls: Vec<(usize, usize, String)>,
+    /// the module of each of those names, where the language says
+    import_modules: Vec<(usize, usize, String, Option<String>)>,
+    /// (row, text) of each rust glob import
+    import_globs: Vec<(usize, String)>,
     /// (row, name) for the languages that write one import per row (go), so a
     /// hunk that swaps one line of a ten-line block names that import alone
     import_rows_of: Vec<(usize, String)>,
@@ -1108,6 +1119,14 @@ impl Parsed<'_> {
                 .collect(),
             deltas: vec![],
             defines,
+            import_modules: self.import_modules(r0, r1, &imports),
+            import_globs: self
+                .c
+                .import_globs
+                .iter()
+                .filter(|(row, _)| (r0..=r1).contains(row))
+                .map(|(_, g)| g.clone())
+                .collect(),
             imports,
             imports_moved_out: vec![],
             enclosing,
@@ -1169,6 +1188,28 @@ impl Parsed<'_> {
                 (r0..=r1).find(|r| self.lines.get(*r).is_some_and(|l| !l.trim().is_empty()))?;
             at(first_real)
         })
+    }
+
+    /// the module each of the hunk's import names is taken from, found on the
+    /// statement the hunk touches
+    fn import_modules(&self, r0: usize, r1: usize, imports: &[String]) -> Vec<Vec<Option<String>>> {
+        imports
+            .iter()
+            .map(|n| {
+                let mut modules: Vec<Option<String>> = vec![];
+                for (_, _, _, m) in self
+                    .c
+                    .import_modules
+                    .iter()
+                    .filter(|(s, e, name, _)| *s <= r1 && r0 <= *e && name == n)
+                {
+                    if !modules.contains(m) {
+                        modules.push(m.clone());
+                    }
+                }
+                modules
+            })
+            .collect()
     }
 
     /// what the hunk defines and what it imports, the first without the
@@ -2853,6 +2894,12 @@ impl<'a> Walker<'a> {
         for (row, name) in names {
             self.c.decls.push((sr, er, name.clone()));
             self.c.import_decls.push((sr, er, name.clone()));
+            self.c.import_modules.push((
+                sr,
+                er,
+                name.clone(),
+                import_module_of(node, self.src, self.spec, &name),
+            ));
             self.c.import_names.insert(name.clone());
             if self.spec.name == "go" {
                 self.c.package_names.insert(name.clone());
@@ -2866,6 +2913,9 @@ impl<'a> Walker<'a> {
         self.c
             .package_names
             .extend(namespace_imports(node, self.src));
+        if self.spec.name == "rust" {
+            self.c.import_globs.extend(rust_globs(node, self.src));
+        }
         true // don't descend: import identifiers are declarations, not uses
     }
 
@@ -5551,6 +5601,8 @@ struct DefOut {
     /// the same definitions with their last row
     spans: Vec<DefSpan>,
     imports: Vec<(String, usize)>,
+    /// the module of each of `imports`, same order
+    import_mods: Vec<Option<String>>,
     bodies: Vec<Body>,
     /// per name; `None` once two definitions of the name disagree
     classes: HashMap<String, Option<DefClass>>,
@@ -5585,11 +5637,16 @@ fn collect_defs(node: Node, src: &[u8], spec: &LangSpec, o: &mut DefOut, in_impo
     let row = node.start_position().row + 1; // 1-based
     let import = !in_import && import_like(node, src, spec);
     if import {
-        match import_bound_names(node, src, spec) {
-            Some(names) => o.imports.extend(names.into_iter().map(|(r, n)| (n, r + 1))),
-            None => o
-                .imports
-                .extend(ident_texts(node, src).into_iter().map(|n| (n, row))),
+        let names: Vec<(String, usize)> = match import_bound_names(node, src, spec) {
+            Some(names) => names.into_iter().map(|(r, n)| (n, r + 1)).collect(),
+            None => ident_texts(node, src)
+                .into_iter()
+                .map(|n| (n, row))
+                .collect(),
+        };
+        for (n, r) in names {
+            o.import_mods.push(import_module_of(node, src, spec, &n));
+            o.imports.push((n, r));
         }
     }
     let def = is_def_node(node, spec)
@@ -5700,7 +5757,13 @@ pub fn def_nodes<'t>(root: Node<'t>, spec: &LangSpec, src: &[u8]) -> Vec<(String
 pub fn symbol_facts(
     spec: &LangSpec,
     content: &str,
-) -> (SymbolRows, Vec<Body>, DefKinds, Vec<DefSpan>) {
+) -> (
+    SymbolRows,
+    Vec<Body>,
+    DefKinds,
+    Vec<DefSpan>,
+    Vec<Option<String>>,
+) {
     let mut o = DefOut::default();
     if let Some(tree) = lang::parse(spec, content) {
         collect_defs(tree.root_node(), content.as_bytes(), spec, &mut o, false);
@@ -5713,7 +5776,7 @@ pub fn symbol_facts(
             _ => false,
         };
     }
-    ((o.defs, o.imports), o.bodies, kinds, o.spans)
+    ((o.defs, o.imports), o.bodies, kinds, o.spans, o.import_mods)
 }
 
 /// What an import binds, and where that name comes from: the name this file
@@ -6068,8 +6131,14 @@ fn import_bound_names(node: Node, src: &[u8], spec: &LangSpec) -> Option<Vec<(us
         }
         ("rust", "use_declaration") => {
             let mut names = vec![];
-            rust_use_names(node.child_by_field_name("argument")?, src, None, &mut names);
-            Some(names.into_iter().map(|n| (row, n)).collect())
+            rust_use_names(
+                node.child_by_field_name("argument")?,
+                src,
+                None,
+                None,
+                &mut names,
+            );
+            Some(names.into_iter().map(|(n, _)| (row, n)).collect())
         }
         ("go", "import_spec") => Some(go_import_name(node, src).into_iter().collect()),
         ("go", "import_declaration") => Some(go_import_names(node, src)),
@@ -6162,29 +6231,99 @@ fn go_import_names(node: Node, src: &[u8]) -> Vec<(usize, String)> {
 /// rust: the names a `use` tree binds, not the path words it walks through:
 /// `use a::b::{c, d as e, self}` binds `c`, `e` and `b`. `prefix` is the last
 /// segment of the path above, which a bare `self` stands for.
-fn rust_use_names(node: Node, src: &[u8], prefix: Option<&str>, out: &mut Vec<String>) {
+fn rust_use_names(
+    node: Node,
+    src: &[u8],
+    prefix: Option<&str>,
+    scope: Option<&str>,
+    out: &mut Vec<(String, Option<String>)>,
+) {
     let text = |n: Node| n.utf8_text(src).unwrap_or_default().to_string();
     let last_segment = |n: Node| n.child_by_field_name("name").map_or_else(|| text(n), text);
+    let join = |tail: &str| match scope {
+        Some(s) => format!("{s}::{tail}"),
+        None => tail.to_string(),
+    };
+    let head = |path: &str| path.rsplit_once("::").map(|(h, _)| h.to_string());
     match node.kind() {
-        "self" => out.extend(prefix.map(str::to_string)),
+        "self" => out.extend(prefix.map(|p| (p.to_string(), scope.and_then(head)))),
         "crate" | "super" => {}
-        "scoped_identifier" => out.push(last_segment(node)),
+        "scoped_identifier" => out.push((last_segment(node), head(&join(&text(node))))),
         "scoped_use_list" => {
-            let path = node.child_by_field_name("path").map(last_segment);
+            let path = node.child_by_field_name("path");
+            let inner = path.map(|p| join(&text(p)));
             if let Some(list) = node.child_by_field_name("list") {
-                rust_use_names(list, src, path.as_deref().or(prefix), out);
+                let last = path.map(last_segment);
+                rust_use_names(
+                    list,
+                    src,
+                    last.as_deref().or(prefix),
+                    inner.as_deref().or(scope),
+                    out,
+                );
             }
         }
         "use_list" => {
             let mut cur = node.walk();
             for ch in node.named_children(&mut cur) {
-                rust_use_names(ch, src, prefix, out);
+                rust_use_names(ch, src, prefix, scope, out);
             }
         }
-        "use_as_clause" => out.extend(node.child_by_field_name("alias").map(text)),
+        "use_as_clause" => {
+            let module = node
+                .child_by_field_name("path")
+                .and_then(|p| head(&join(&text(p))));
+            out.extend(node.child_by_field_name("alias").map(|a| (text(a), module)));
+        }
         // a glob binds nothing by name
         "use_wildcard" => {}
-        _ => out.push(text(node)),
+        _ => out.push((text(node), scope.map(str::to_string))),
+    }
+}
+
+/// The glob imports (`fmt::*`) under a rust `use`, with their rows: they bind
+/// no name, so the row is all there is to say what the hunk wrote.
+fn rust_globs(node: Node, src: &[u8]) -> Vec<(usize, String)> {
+    let mut out = vec![];
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "use_wildcard" {
+            if let Ok(t) = n.utf8_text(src) {
+                out.push((n.start_position().row, squeeze(t)));
+            }
+            continue;
+        }
+        let mut cur = n.walk();
+        stack.extend(n.named_children(&mut cur));
+    }
+    out
+}
+
+/// The module an import statement takes `name` from, for the languages that
+/// say: python's `from m import n`, a js/ts `import { n } from "m"`, a rust
+/// path. Two statements importing one name from different modules import two
+/// different things.
+fn import_module_of(node: Node, src: &[u8], spec: &LangSpec, name: &str) -> Option<String> {
+    let text = |n: Node| n.utf8_text(src).ok().map(squeeze);
+    match (spec.name, node.kind()) {
+        ("python" | "xonsh", "import_from_statement") => {
+            text(node.child_by_field_name("module_name")?)
+        }
+        ("javascript" | "typescript" | "tsx", "import_statement" | "export_statement") => {
+            text(node.child_by_field_name("source")?)
+        }
+        ("rust", "use_declaration") => {
+            let mut names = vec![];
+            rust_use_names(
+                node.child_by_field_name("argument")?,
+                src,
+                None,
+                None,
+                &mut names,
+            );
+            names.into_iter().find(|(n, _)| n == name)?.1
+        }
+        _ => None,
     }
 }
 
@@ -6358,7 +6497,7 @@ mod tests {
     fn one_descent_still_returns_both_halves() {
         let spec = crate::lang::for_path("a.py").expect("python");
         let src = "import os\nfrom sys import argv\n\ndef parse(p):\n    return os.path.join(p)\n\ndef main():\n    return parse(argv[1])\n";
-        let ((defs, imports), bodies, _, _) = symbol_facts(spec, src);
+        let ((defs, imports), bodies, _, _, _) = symbol_facts(spec, src);
 
         let names: Vec<&str> = defs.iter().map(|(n, _)| n.as_str()).collect();
         assert!(
@@ -6386,7 +6525,7 @@ mod tests {
     fn a_name_shared_by_two_kinds_of_definition_is_neither() {
         let spec = crate::lang::for_path("a.c").expect("c");
         let src = "struct item { int a; };\nint item(void) { return 1; }\n#define LOG(x) x\nint run(void) { return 0; }\n";
-        let (_, _, kinds, _) = symbol_facts(spec, src);
+        let (_, _, kinds, _, _) = symbol_facts(spec, src);
         assert!(kinds.macros.contains("LOG") && !kinds.functions.contains("LOG"));
         assert!(kinds.functions.contains("run"));
         assert!(!kinds.functions.contains("item") && !kinds.macros.contains("item"));
@@ -6456,7 +6595,7 @@ mod tests {
     #[test]
     fn nothing_under_an_import_becomes_a_definition_row() {
         let spec = crate::lang::for_path("a.py").expect("python");
-        let ((defs, imports), _, _, _) = symbol_facts(spec, "from a import (b, c)\n");
+        let ((defs, imports), _, _, _, _) = symbol_facts(spec, "from a import (b, c)\n");
         assert!(
             defs.is_empty(),
             "an import declares no definitions: {defs:?}"

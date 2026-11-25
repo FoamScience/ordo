@@ -1632,6 +1632,118 @@ fn an_import_that_only_gains_names_names_the_arrivals() {
     }
 }
 
+/// tasks-3uv.179: a name is the same import only from the same module. A name
+/// another statement already imports is still an arrival when this one brings
+/// it from elsewhere, one that stays in its module and merely changes
+/// statement is still a move, and a name that leaves for another module is
+/// removed and added.
+#[test]
+fn an_imported_name_is_compared_with_its_own_module() {
+    let cases = [
+        (
+            "a.py",
+            "from a import d\nfrom b import z\n",
+            "from a import d\nfrom b import d, z\n",
+            vec!["adds import d"],
+        ),
+        (
+            "a.py",
+            "from a import c\nfrom b import (\n    d,\n)\n",
+            "from a import c\nfrom b import (\n    c,\n    d,\n)\n",
+            vec!["adds import c"],
+        ),
+        (
+            "a.py",
+            "from a import c\nfrom b import (\n    d,\n)\n",
+            "from a import c\nfrom b import (\n    c,\n    e,\n    d,\n)\n",
+            vec!["adds import c, e"],
+        ),
+        (
+            "a.py",
+            "from a import c, d\nfrom b import z\n",
+            "from a import c\nfrom b import d, z\n",
+            vec!["changes import d"],
+        ),
+        (
+            "a.py",
+            "from a import c, d\n",
+            "from b import c, d\n",
+            vec!["changes import c, d"],
+        ),
+        (
+            "a.py",
+            "from a import c, d\nimport os\nimport sys\nimport re\nfrom a import e\n",
+            "from a import c\nimport os\nimport sys\nimport re\nfrom a import d, e\n",
+            vec!["moves import d", "moves import d"],
+        ),
+        (
+            "a.py",
+            "from a import d\nimport os\nimport sys\nimport re\nimport json\n",
+            "import os\nimport sys\nimport re\nimport json\nfrom a import d\n",
+            vec!["moves import d", "moves import d"],
+        ),
+        (
+            "a.py",
+            "from a import d\nimport os\n",
+            "import os\nfrom b import d\n",
+            vec!["moves import d", "moves import d"],
+        ),
+        (
+            "a.py",
+            "from a import d\nfrom b import d\n",
+            "from b import d\n",
+            vec!["removes import d"],
+        ),
+        (
+            "a.ts",
+            "import { a } from './x';\nimport os from 'os';\n",
+            "import os from 'os';\nimport { a } from './y';\n",
+            vec!["moves import a", "moves import a"],
+        ),
+        (
+            "a.py",
+            "from a import d\nimport os\nimport sys\nimport re\nfrom b import z\n",
+            "from a import e\nimport os\nimport sys\nimport re\nfrom b import d, z\n",
+            vec!["adds import e", "moves import d"],
+        ),
+        (
+            "a.py",
+            "from a import d, e\n",
+            "from a import d\nfrom b import d, e\n",
+            vec!["adds import d; changes import e"],
+        ),
+        (
+            "a.rs",
+            "use std::{\n    io,\n};\n",
+            "use std::{\n    io,\n    fmt::*,\n};\n",
+            vec!["adds import fmt::*"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\n",
+            "import * as ns from \"./y\";\nimport { a } from \"./x\";\n",
+            vec!["adds import ns"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\n",
+            "import \"./y\";\nimport { a } from \"./x\";\n",
+            vec!["import"],
+        ),
+        (
+            "a.ts",
+            "export { a } from \"./x\";\n",
+            "export { a, b } from \"./x\";\n",
+            vec!["adds re-export b"],
+        ),
+    ];
+    for (path, old, new, want) in cases {
+        let hs = hunks(path, old, new);
+        let got: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+        assert_eq!(got, want, "{path}: {old:?} -> {new:?}");
+    }
+}
+
 /// An import that gains one name and loses another says both; one that only
 /// reorders its names is formatting; one that changes an alias still names it.
 #[test]
