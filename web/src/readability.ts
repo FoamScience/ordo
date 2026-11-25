@@ -21,3 +21,13 @@ export function moved(d: Readability): string[] {
 export function regressed(d: Readability): boolean {
   return METRICS.some(([k]) => k !== "lines" && d[k][1] > d[k][0]);
 }
+
+const SHORT: Record<string, string> = { nesting: "nest", cognitive: "cx", branches: "br", params: "par", short_names: "short", lines: "lines" };
+
+/** The measurements that moved, each short, `cx 4→7`, with `cognitive 4 to 7` for the words. */
+export function deltas(d: Readability): { text: string; words: string }[] {
+  return METRICS.filter(([k]) => d[k][0] !== d[k][1]).map(([k, name, unit]) => ({
+    text: `${SHORT[k]} ${d[k][0]}→${d[k][1]}${unit}`,
+    words: `${name} ${d[k][0]}${unit} to ${d[k][1]}${unit}`,
+  }));
+}

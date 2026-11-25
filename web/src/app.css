@@ -45,6 +45,7 @@ button:disabled { cursor: not-allowed; }
   border: 0; border-left: var(--rule-hair) solid var(--line-2);
   background: none; color: var(--dim); font-size: var(--fs-small);
 }
+#band > * { flex-shrink: 0; }
 #band > :first-child { border-left: 0; }
 #band .mark { color: var(--fg); font-size: var(--fs-title); font-weight: 700; letter-spacing: var(--tracking-display); }
 #band .rev { color: var(--dim); }
@@ -56,6 +57,8 @@ button:disabled { cursor: not-allowed; }
 #band .sig b { color: var(--fg); font-weight: 600; }
 #band .sig.lv-verdict b { color: var(--verdict); }
 #band .sig.lv-warn b { color: var(--warn); }
+#band .sig.lv-verdict .ic { color: var(--verdict); }
+#band .sig.lv-warn .ic { color: var(--warn); }
 #band .stale { color: var(--warn); }
 #band button { position: relative; }
 #band button:hover { background: var(--raise); color: var(--fg); }
@@ -71,7 +74,7 @@ button:disabled { cursor: not-allowed; }
   flex: 0 1 calc(360px * var(--ui)); min-width: calc(184px * var(--ui));
   flex-direction: column; align-items: stretch; justify-content: center; gap: var(--space-3xs);
 }
-.progress .said { color: var(--dim); }
+.progress .said { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2xs); color: var(--dim); }
 .dimstr, .meter {
   position: relative; display: block; height: var(--tick);
   background: linear-gradient(var(--line), var(--line)) center / 100% var(--rule-hair) no-repeat;
@@ -216,6 +219,8 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .r .gist.removed { text-decoration: line-through; text-decoration-color: var(--faint); }
 .r.sel .gist { color: var(--fg); }
 
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ic { flex: none; width: 1.15em; height: 1.15em; }
 .lv { font-weight: 600; }
 .lv-verdict { color: var(--verdict); }
 .lv-warn { color: var(--warn); }
@@ -344,13 +349,12 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
   display: flex; gap: var(--space-xs); align-items: baseline; flex-wrap: wrap;
 }
 .why h3:first-child { margin-top: var(--space-sm); }
-.why h3 small { font-weight: 400; font-size: var(--fs-tiny); color: var(--faint); }
 .why p { margin: var(--space-2xs) 0; }
 .why .muted { color: var(--faint); }
 .why .warnline { color: var(--warn); }
 .links { display: grid; }
 .link {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-xs);
+  display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 0 var(--space-xs);
   padding: var(--space-xs) var(--space-sm); margin: 0 calc(var(--space-sm) * -1);
   border: 0; border-left: var(--rule-heavy) solid transparent; border-bottom: var(--rule-hair) solid var(--line-2); cursor: pointer;
   background: none; text-align: left;
@@ -358,7 +362,9 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .link:focus-visible { outline-offset: -2px; }
 .link .who { font-size: var(--fs-tiny); font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link .loc { font-size: var(--fs-tiny); color: var(--faint); white-space: nowrap; }
-.link .what { grid-column: 1 / -1; color: var(--dim); font-size: var(--fs-small); line-height: 1.4; }
+.link { position: relative; }
+.link .what { grid-column: 1 / -1; color: var(--dim); font-size: var(--fs-small); line-height: 1.4; overflow-wrap: anywhere; }
+.link:not(.cur):not(:hover):not(:focus-visible) .what { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .link:hover { background: var(--raise); }
 .link.cur { background: var(--select-bg); border-left-color: var(--accent); }
 .link.out { cursor: default; }
@@ -379,6 +385,21 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 }
 .why .finding button.at:hover { background: var(--raise); color: var(--fg); }
 .why .finding button.at:active { background: var(--select-bg); }
+.why .finding button.at.ico { display: inline-flex; align-items: center; padding: var(--space-3xs) var(--space-xs); }
+.why .finding button.at[aria-pressed="true"] { color: var(--faint); }
+.why .finding .lv { display: inline-flex; align-items: center; gap: var(--space-3xs); font-size: var(--fs-tiny); }
+.why h3 .ic { color: var(--dim); }
+.why h3 .v { font-variant-numeric: tabular-nums; }
+.why h3 .w { font-size: var(--fs-note); font-weight: 400; white-space: nowrap; }
+.why > .facts, .why > .group { margin: var(--space-md) 0 0; padding-top: var(--space-xs); border-top: var(--rule-hair) solid var(--line); }
+.facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs) var(--space-md); margin: var(--space-2xs) 0; }
+.fact, .pill, #band .sig { font-variant-numeric: tabular-nums; }
+.tip { display: inline-flex; align-items: center; gap: var(--space-2xs); }
+.group > .facts { margin: 0; }
+.group > .facts + .facts { margin-top: var(--space-3xs); }
+.facts .name { font-size: var(--fs-tiny); font-weight: 600; color: var(--fg); }
+.facts .by { min-width: 0; color: var(--faint); font-size: var(--fs-tiny); overflow-wrap: anywhere; }
+.facts.warnline .fact, .fact.warnline { color: var(--warn); }
 
 /* ---- sheets, palette, toast ---------------------------------------- */
 
@@ -631,9 +652,15 @@ body.summary #panes { display: none; }
   .canvas .sides { grid-template-columns: minmax(0, 1fr); }
 }
 
+@media (max-width: 700px) {
+  #band > * { padding: var(--space-2xs) var(--space-xs); gap: var(--space-2xs); }
+}
+
 /* ---- touch: room for a finger, and no keyboard hints -------------------- */
 
 @media (pointer: coarse) {
   :root { --control: calc(44px * var(--ui)); --spine-row: calc(44px * var(--ui)); }
   #hints, #band .help { display: none; }
+  .link .what { position: static !important; width: auto !important; height: auto !important; overflow: visible !important; clip-path: none !important; white-space: normal !important; }
+  .why .finding button.at { display: inline-flex; align-items: center; justify-content: center; min-width: var(--control); min-height: var(--control); }
 }

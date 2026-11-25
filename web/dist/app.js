@@ -1783,8 +1783,8 @@ function codeRows(f) {
   const added = /* @__PURE__ */ new Map();
   for (const h2 of hunks) {
     for (let n = h2.new[0]; n <= h2.new[1]; n++) {
-      const moved2 = h2.moved_added?.[n - h2.new[0]];
-      added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null, ...moved2?.length ? { moved: moved2 } : {} });
+      const moved = h2.moved_added?.[n - h2.new[0]];
+      added.set(n, { hunk: h2.i, marks: h2.added[n - h2.new[0]] ?? null, ...moved?.length ? { moved } : {} });
     }
   }
   const { folded, edited } = editsInPlace(f, hunks);
@@ -1792,7 +1792,7 @@ function codeRows(f) {
     for (const h2 of startingAt.get(n) ?? []) {
       for (let o = h2.old[0]; o <= h2.old[1]; o++) {
         if (folded.has(o)) continue;
-        const moved2 = h2.moved_removed?.[o - h2.old[0]];
+        const moved = h2.moved_removed?.[o - h2.old[0]];
         rows.push({
           kind: "del",
           o,
@@ -1800,7 +1800,7 @@ function codeRows(f) {
           spans: f.old_spans?.[o - 1] ?? null,
           hunk: h2.i,
           marks: h2.removed[o - h2.old[0]] ?? null,
-          ...moved2?.length ? { moved: moved2 } : {}
+          ...moved?.length ? { moved } : {}
         });
       }
     }
@@ -1916,8 +1916,8 @@ function runs(text, spans, marks, gone = [], movedSpans = []) {
   }
   const changed = new Array(chars.length).fill(false);
   for (const [a, b] of marks ?? []) for (let k = a; k < b && k < chars.length; k++) changed[k] = true;
-  const moved2 = new Array(chars.length).fill(false);
-  for (const [a, b] of movedSpans) for (let k = a; k < b && k < chars.length; k++) moved2[k] = true;
+  const moved = new Array(chars.length).fill(false);
+  for (const [a, b] of movedSpans) for (let k = a; k < b && k < chars.length; k++) moved[k] = true;
   const out = [];
   const lost = (k) => {
     for (const [at2, t] of gone) if (at2 === k) out.push({ text: t, role: null, changed: false, gone: true });
@@ -1925,8 +1925,8 @@ function runs(text, spans, marks, gone = [], movedSpans = []) {
   for (let k = 0; k < chars.length; k++) {
     lost(k);
     const last = out[out.length - 1];
-    if (last && !last.gone && last.role === role[k] && last.changed === changed[k] && !!last.moved === moved2[k]) last.text += chars[k];
-    else out.push({ text: chars[k], role: role[k], changed: changed[k], ...moved2[k] ? { moved: true } : {} });
+    if (last && !last.gone && last.role === role[k] && last.changed === changed[k] && !!last.moved === moved[k]) last.text += chars[k];
+    else out.push({ text: chars[k], role: role[k], changed: changed[k], ...moved[k] ? { moved: true } : {} });
   }
   lost(chars.length);
   return out;
@@ -4071,19 +4071,108 @@ function dismissToggle(f, dismissed) {
   };
 }
 
+// src/facts.ts
+function staleShort(line) {
+  const files2 = line.match(/(\d+) files?/);
+  if (files2) return files2[1];
+  const wave = line.match(/wave (\d+)/);
+  if (wave) return `w${wave[1]}`;
+  return /HEAD/.test(line) ? "HEAD" : "";
+}
+function commitsText(n) {
+  return `${n} commit${n === 1 ? "" : "s"} in 6 months`;
+}
+function changedText(commits, capped) {
+  return `changed ${commits}${capped ? "+" : ""} time${commits === 1 && !capped ? "" : "s"}`;
+}
+function coverageText(executed) {
+  return executed.every(Number.isFinite) ? `tests ${executed[0]}/${executed[1]} lines` : "tests \u2013";
+}
+function staleWords(line) {
+  const n = staleShort(line);
+  return { short: n ? `stale ${n}` : "stale", words: `${n ? `stale ${n}` : "stale"}, ${line.replace(/^stale · /, "")}` };
+}
+
+// src/icons.ts
+var ICONS = {
+  "verdict": { body: '<path d="m15 9-6 6"/><path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z"/><path d="m9 9 6 6"/>' },
+  "warn": { body: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>' },
+  "note": { body: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>' },
+  "your-note": { body: '<path d="M21 9a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z"/><path d="M15 3v5a1 1 0 0 0 1 1h5"/>' },
+  "comments": { body: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>' },
+  "early": { body: '<path d="M12 6a2 2 0 0 0-3.414-1.414l-6 6a2 2 0 0 0 0 2.828l6 6A2 2 0 0 0 12 18z"/><path d="M22 6a2 2 0 0 0-3.414-1.414l-6 6a2 2 0 0 0 0 2.828l6 6A2 2 0 0 0 22 18z"/>' },
+  "needs": { body: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>' },
+  "needed-by": { body: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>' },
+  "reject": { body: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>' },
+  "hunch": { body: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>' },
+  "readability": { body: '<path d="M12 5v16"/><path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z"/>' },
+  "tests": { body: '<path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/>' },
+  "history": { body: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>' },
+  "commits": { body: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>' },
+  "also": { body: '<path d="M16 5H3"/><path d="M11 12H3"/><path d="M16 19H3"/><path d="M18 9v6"/><path d="M21 12h-6"/>' },
+  "wave": { body: '<path d="M2 12q2.5 2 5 0t5 0 5 0 5 0"/><path d="M2 19q2.5 2 5 0t5 0 5 0 5 0"/><path d="M2 5q2.5 2 5 0t5 0 5 0 5 0"/>' },
+  "dismiss": { body: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>' },
+  "watching": { body: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>' },
+  "stale": { body: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>' },
+  "since": { body: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/>' },
+  "read": { body: '<path d="M20 6 9 17l-5-5"/>' },
+  "progress": { body: '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>' },
+  "quiet": { body: '<path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/>' },
+  "flag": { body: '<path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/>' },
+  "faithful": { body: '<path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m16 9-5.5 5.5L8 12"/>' },
+  "attention": { body: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="1"/><path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"/>' },
+  "dismissed": { body: '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>' }
+};
+var SVG = "http://www.w3.org/2000/svg";
+function icon(name) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "ic");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = ICONS[name].body;
+  return svg;
+}
+
+// src/chips.ts
+function said(glance, words, tip = words) {
+  return [h("span", { class: "tip", "aria-hidden": "true", title: tip || null }, glance), h("span", { class: "sr" }, words)];
+}
+function pill(name, value, words, cls = "") {
+  return h("span", { class: `pill${cls && ` ${cls}`}` }, said([icon(name), h("span", { class: "v" }, value)], words));
+}
+function fact(name, value, words, cls = "") {
+  return h("span", { class: `fact${cls && ` ${cls}`}` }, said([name && icon(name), h("span", { class: "v" }, value)], words));
+}
+function heading(name, word, title, count, hint = "") {
+  const words = `${title}${count === void 0 ? "" : ` ${count}`}${hint ? `: ${hint}` : ""}`;
+  return h(
+    "h3",
+    null,
+    said([icon(name), count !== void 0 && h("span", { class: "v" }, count), h("span", { class: "w" }, word)], words, hint ? `${title}: ${hint}` : title)
+  );
+}
+
 // src/hunch.ts
+function percent(x) {
+  return x !== void 0 && Number.isFinite(x) ? `${Math.round(x * 100)}%` : "\u2013";
+}
 function badge(g) {
-  return `Hunch: ${Math.round(g.noise * 100)}% skippable`;
+  return `Hunch: ${percent(g.noise)} skippable`;
 }
 var signed = (top) => top.map(([name, c]) => `${name} ${c >= 0 ? "+" : "\u2212"}${Math.abs(c).toFixed(2)}`);
 function contributions(g) {
   return signed(g.top);
 }
 function faithfulness(g) {
-  return `Rationale: ${Math.round(g.faithful * 100)}% faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
+  return `Rationale: ${percent(g.faithful)} faithful, most moved by ${signed(g.faithful_top).join(", ")}`;
 }
 function attention(g) {
-  return `Attention: ${Math.round(g.attention * 100)}%, most moved by ${signed(g.attention_top).join(", ")}`;
+  return `Attention: ${percent(g.attention)}, most moved by ${signed(g.attention_top).join(", ")}`;
 }
 function flagBadge(g) {
   return g.changed === "unhid" ? "Hunch: shown" : g.changed === "hid" ? "Hunch: hidden" : null;
@@ -4127,11 +4216,15 @@ var METRICS = [
   ["short_names", "short names", "%"],
   ["lines", "lines", ""]
 ];
-function moved(d) {
-  return METRICS.filter(([k]) => d[k][0] !== d[k][1]).map(([k, name, unit]) => `${name} ${d[k][0]}${unit} \u2192 ${d[k][1]}${unit}`);
-}
 function regressed(d) {
   return METRICS.some(([k]) => k !== "lines" && d[k][1] > d[k][0]);
+}
+var SHORT = { nesting: "nest", cognitive: "cx", branches: "br", params: "par", short_names: "short", lines: "lines" };
+function deltas(d) {
+  return METRICS.filter(([k]) => d[k][0] !== d[k][1]).map(([k, name, unit]) => ({
+    text: `${SHORT[k]} ${d[k][0]}\u2192${d[k][1]}${unit}`,
+    words: `${name} ${d[k][0]}${unit} to ${d[k][1]}${unit}`
+  }));
 }
 
 // src/summary.ts
@@ -4245,6 +4338,7 @@ function applyTheme(name) {
 // src/main.ts
 var PANES = ["list", "code", "why"];
 var LEVELS = ["verdict", "warn", "note"];
+var LEVEL_WORD = { verdict: "verdict", warn: "warning", note: "note" };
 var SINCE = {
   new: ["new", "new since you last looked"],
   changed: ["changed", "changed since you last looked"],
@@ -4318,15 +4412,15 @@ async function refresh() {
   st2.review = slot;
   st2.version = slot.version;
   st2.keymap = new Keymap(slot.keys);
-  const moved2 = !!prev && prev.generation !== slot.generation;
+  const moved = !!prev && prev.generation !== slot.generation;
   const remap = (i) => {
-    if (!prev || !moved2) return i;
+    if (!prev || !moved) return i;
     const id = identity(prev.items[i]);
     return id ? slot.items.findIndex((it2) => identity(it2) === id) : -1;
   };
   let sel = st2.sel >= 0 ? remap(st2.sel) : -1;
   if (sel < 0) sel = prev ? clampToView(Math.min(st2.sel, slot.items.length - 1)) : slot.sel;
-  if (moved2) {
+  if (moved) {
     st2.jumps = st2.jumps.map((j) => ({ ...j, sel: remap(j.sel) })).filter((j) => j.sel >= 0);
     if (depmap) {
       depmap.root = remap(depmap.root);
@@ -4560,7 +4654,7 @@ function renderList() {
       const folded = row.kind === "folded";
       const level = LEVELS.find((l) => items.some((i) => r.items[i].level === l));
       const run2 = folded ? void 0 : runOf.get(items[0]);
-      const said = rowText2(first, run2 ? run2.map((i) => r.items[i]) : null);
+      const said2 = rowText2(first, run2 ? run2.map((i) => r.items[i]) : null);
       const removal = first.new[1] < first.new[0];
       const el = h(
         "div",
@@ -4578,7 +4672,7 @@ function renderList() {
         h(
           "span",
           { class: "txt" },
-          folded ? sentence(foldedText(items.map((i) => r.items[i]))) : said.code ? h("span", { class: `gist${removal ? " removed" : ""}` }, said.text) : sentence(said.text)
+          folded ? sentence(foldedText(items.map((i) => r.items[i]))) : said2.code ? h("span", { class: `gist${removal ? " removed" : ""}` }, said2.text) : sentence(said2.text)
         ),
         h(
           "span",
@@ -4721,9 +4815,20 @@ function highlightHits(text, s, k) {
   out.push(document.createTextNode(text.slice(at2)));
   return out;
 }
+var dismissHints = 0;
 function dismissButton(f, dismissed) {
   const t = dismissToggle(f, dismissed);
-  return t && h("button", { class: "at", title: t.title, onclick: () => act({ op: "command", line_text: t.command }) }, t.label);
+  if (!t) return null;
+  const on2 = dismissed.includes(f.name);
+  const hint = `dismiss-hint-${dismissHints++}`;
+  return [
+    h(
+      "button",
+      { class: "at ico", title: t.title, "aria-label": "Dismiss this finding", "aria-pressed": on2 ? "true" : "false", "aria-describedby": hint, onclick: () => act({ op: "command", line_text: t.command }) },
+      icon(on2 ? "dismissed" : "dismiss")
+    ),
+    h("span", { class: "sr", id: hint }, t.title)
+  ];
 }
 function renderReading(it2) {
   const r = st2.review;
@@ -4758,12 +4863,12 @@ function renderReading(it2) {
     h(
       "div",
       { class: "pills" },
-      it2.reviewed && h("span", { class: "pill done" }, "Read"),
-      it2.delta && h("span", { class: "pill accent" }, sentence(SINCE[it2.delta][1].split(":")[0])),
-      it2.noise && !it2.hunch?.changed && !/formatting/.test(it2.rationale) && h("span", { class: "pill" }, "Quiet: generated or formatting"),
-      it2.wave !== null && h("span", { class: "pill" }, `Wave ${it2.wave}`),
-      it2.hunch && h("span", { class: "pill", title: contributions(it2.hunch).join(", ") }, badge(it2.hunch)),
-      it2.hunch && flagBadge(it2.hunch) && h("span", { class: "pill accent" }, flagBadge(it2.hunch))
+      it2.reviewed && h("span", { class: "pill done" }, icon("read"), "Read"),
+      it2.delta && pill("since", SINCE[it2.delta][0], sentence(SINCE[it2.delta][1]), "accent"),
+      it2.noise && !it2.hunch?.changed && !/formatting/.test(it2.rationale) && pill("quiet", "quiet", "Quiet: generated or formatting"),
+      it2.wave !== null && pill("wave", `wave ${it2.wave}`, `Wave ${it2.wave}`),
+      it2.hunch && pill("hunch", `skip ${percent(it2.hunch.noise)}`, `${badge(it2.hunch)}; most moved by ${contributions(it2.hunch).join(", ")}`),
+      it2.hunch && flagBadge(it2.hunch) && pill("flag", it2.hunch.changed === "unhid" ? "shown" : "hidden", flagBadge(it2.hunch), "accent")
     ),
     (search || st2.from !== null) && h(
       "div",
@@ -5058,10 +5163,11 @@ function edgeRows(targets, limit) {
     const t = r.items[target];
     const link = st2.whyLinks.length;
     st2.whyLinks.push(target);
+    const cur = st2.whyCur === link;
     return h(
       "button",
       {
-        class: `link${st2.whyCur === link ? " cur" : ""}`,
+        class: `link${cur ? " cur" : ""}`,
         title: "Go there (Enter); come back with C-o",
         onclick: () => jumpTo(target)
       },
@@ -5074,12 +5180,12 @@ function edgeRows(targets, limit) {
 function basename(p) {
   return p.slice(p.lastIndexOf("/") + 1);
 }
-function table(title, hint, targets) {
+function table(name, word, title, hint, targets) {
   if (!targets.length) return [];
   const limit = tableLimit(targets.length, st2.zoom && st2.focus === "why");
   const more = targets.length - limit;
   return [
-    h("h3", null, title, hint && h("small", null, hint)),
+    heading(name, word, title, targets.length, hint),
     h("div", { class: "links" }, edgeRows(targets, limit)),
     more > 0 && h(
       "button",
@@ -5099,7 +5205,7 @@ function renderWhy() {
   const pane = $("#why");
   const r = st2.review;
   const it2 = r.items[st2.sel];
-  replace(pane.querySelector(".head"), h("span", { class: "t" }, "Why it is here"), h("span", { class: "grow" }), zoomButton("why"));
+  replace(pane.querySelector(".head"), h("span", { class: "t", title: "Why it is here" }, "Why"), h("span", { class: "grow" }), zoomButton("why"));
   const body = pane.querySelector(".body");
   if (!it2) return replace(body);
   st2.whyLinks = [];
@@ -5116,24 +5222,26 @@ function renderWhy() {
     h(
       "div",
       { class: "why" },
-      it2.note && [h("h3", null, "Your note"), h("p", { class: "warnline" }, it2.note)],
+      it2.note && [heading("your-note", "note", "Your note"), h("p", { class: "warnline" }, it2.note)],
       !!facts?.comments.length && [
-        h("h3", null, "Your comments"),
+        heading("comments", "comments", "Your comments", facts.comments.length),
         facts.comments.map((c) => h("p", { class: "warnline" }, `Line ${c.start}${c.end > c.start ? `-${c.end}` : ""}: ${c.text}${c.stale ? " (the lines changed since)" : ""}`))
       ],
       !!facts?.out_of_order.length && [
-        h("h3", null, "Read too early", h("small", null, "it depends on hunks not read yet")),
+        heading("early", "too early", "Read too early", facts.out_of_order.length, "it depends on hunks not read yet"),
         h("div", { class: "links" }, edgeRows(facts.out_of_order.map((t) => ({ target: t, label: "" })), facts.out_of_order.length))
       ],
-      table("Needs", "what this hunk uses", needs),
-      table("Needed by", "what uses this hunk", neededBy),
+      table("needs", "needs", "Needs", "what this hunk uses", needs),
+      table("needed-by", "needed by", "Needed by", "what uses this hunk", neededBy),
       table(
+        "reject",
+        "reject",
         "If you reject it",
         "what loses its footing, in reading order",
         cascade.map((t) => ({ target: t, label: "" }))
       ),
       findings.length > 0 && [
-        h("h3", null, "Findings", h("small", null, "the most pressing first")),
+        heading("warn", "findings", "Findings", findings.length, "the most pressing first"),
         findings.map(
           (f) => h(
             "div",
@@ -5141,9 +5249,9 @@ function renderWhy() {
             h(
               "div",
               { class: "h" },
-              h("span", { class: `lv lv-${f.level}` }, sentence(f.level)),
+              h("span", { class: `lv lv-${f.level}` }, icon(f.level), LEVEL_WORD[f.level]),
               h("span", { class: "name" }, f.name),
-              f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line" }, `line ${f.row}`),
+              f.row != null && h("button", { class: "at", onclick: () => cursorToLine(f.row), title: "Put the cursor on this line", "aria-label": `L${f.row}, put the cursor on line ${f.row}` }, `L${f.row}`),
               dismissButton(f, it2.dismissed)
             ),
             h("p", null, f.message),
@@ -5152,37 +5260,61 @@ function renderWhy() {
         )
       ],
       it2.hunch && [
-        h("h3", null, "Hunch", h("small", null, effect(it2.hunch))),
-        h("p", { class: "muted" }, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}.`),
-        h("p", { class: "muted" }, `${faithfulness(it2.hunch)}.`),
-        h("p", { class: "muted" }, `${attention(it2.hunch)}.`)
+        h(
+          "div",
+          { class: "facts" },
+          fact("hunch", `skip ${percent(it2.hunch.noise)}`, `${badge(it2.hunch)}, most moved by ${contributions(it2.hunch).join(", ")}. ${effect(it2.hunch)}`),
+          fact("faithful", `faithful ${percent(it2.hunch.faithful)}`, faithfulness(it2.hunch)),
+          fact("attention", `attention ${percent(it2.hunch.attention)}`, attention(it2.hunch))
+        )
       ],
       it2.readability.length > 0 && [
-        h("h3", null, "Readability", h("small", null, "against each definition's old version")),
-        it2.readability.map((d) => h("p", { class: regressed(d) ? "warnline" : "" }, `${d.name}: ${moved(d).join(", ")}`))
+        h(
+          "div",
+          { class: "group" },
+          h("div", { class: "facts" }, fact("readability", "readability", "Readability, against each definition's old version")),
+          it2.readability.map(
+            (d) => h(
+              "div",
+              { class: `facts${regressed(d) ? " warnline" : ""}` },
+              h("span", { class: "name" }, d.name),
+              deltas(d).map((x) => fact(null, x.text, `${d.name}: ${x.words}`))
+            )
+          )
+        )
       ],
       it2.executed && [
-        h("h3", null, "Test coverage"),
         h(
-          "p",
-          { class: it2.executed[0] === it2.executed[1] ? "" : "warnline" },
-          it2.executed[0] === it2.executed[1] ? `All ${it2.executed[1]} executable lines here run under a test.` : `${it2.executed[1] - it2.executed[0]} of ${it2.executed[1]} executable lines here run under no test.`
+          "div",
+          { class: "facts" },
+          fact(
+            "tests",
+            coverageText(it2.executed),
+            it2.executed[0] === it2.executed[1] ? `Test coverage: all ${it2.executed[1]} executable lines here run under a test.` : `Test coverage: ${it2.executed[1] - it2.executed[0]} of ${it2.executed[1]} executable lines here run under no test.`,
+            it2.executed[0] === it2.executed[1] ? "" : "warnline"
+          )
         )
       ],
       (churn || lc) && [
-        h("h3", null, "History"),
-        churn !== void 0 && churn > 0 && h("p", null, `${churn} commit${churn === 1 ? "" : "s"} touched this file in the last six months.`),
-        lc && h(
-          "p",
-          null,
-          `These lines changed ${lc.commits}${lc.capped ? "+" : ""} time${lc.commits === 1 ? "" : "s"} before`,
-          lc.last ? `, last by ${lc.last.author} on ${lc.last.date}.` : "."
+        h(
+          "div",
+          { class: "facts" },
+          churn !== void 0 && churn > 0 && fact("commits", commitsText(churn), `History: ${commitsText(churn)} touched this file.`),
+          lc && fact(
+            "history",
+            `${changedText(lc.commits, lc.capped)}${lc.last ? `, ${lc.last.author} ${lc.last.date}` : ""}`,
+            `History: these lines ${changedText(lc.commits, lc.capped)} before${lc.last ? `, last by ${lc.last.author} on ${lc.last.date}` : ""}.`
+          )
         )
       ],
-      it2.notes.length > 0 && [h("h3", null, "Also"), it2.notes.map((n) => h("p", null, prose(sentence(n))))],
+      it2.notes.length > 0 && [heading("also", "also", "Also", it2.notes.length), it2.notes.map((n) => h("p", null, prose(sentence(n))))],
       it2.wave !== null && [
-        h("h3", null, "Wave"),
-        h("p", null, `Wave ${it2.wave}${r.wave_intents[String(it2.wave)] ? `, asked for: ${r.wave_intents[String(it2.wave)]}` : ""}`)
+        h(
+          "div",
+          { class: "facts" },
+          fact("wave", `wave ${it2.wave}`, `Wave ${it2.wave}`),
+          r.wave_intents[String(it2.wave)] && h("span", { class: "by" }, `asked for: ${r.wave_intents[String(it2.wave)]}`)
+        )
       ]
     )
   );
@@ -5223,17 +5355,25 @@ function renderBand() {
     );
   }
   const sinceCount = r.delta.new + r.delta.changed + r.delta.moved;
-  const plural = { verdict: ["verdict", "verdicts"], warn: ["warning", "warnings"], note: ["note", "notes"] };
+  const stale = r.stale ? staleWords(r.stale) : null;
   replace(
     band,
     h("span", { class: "mark" }, "ordo"),
     h("span", { class: "rev", title: "the revision under review" }, r.rev),
     h("span", { class: "subject", title: r.subject ?? "" }, r.subject ?? (r.uncommitted ? "Uncommitted work" : "")),
-    r.stale && h("button", { class: "sig stale", onclick: () => act({ op: "reload" }), title: "Read the working tree again" }, r.stale),
+    stale && h(
+      "button",
+      { class: "sig stale", onclick: () => act({ op: "reload" }), title: `${r.stale}
+Read the working tree again` },
+      said([icon("stale"), h("span", { class: "v" }, stale.short)], stale.words, false)
+    ),
     r.watch !== "off" && h(
       "span",
-      { class: "sig", title: r.watch === "auto" ? "--watch=auto: read again once the working tree settles and you pause" : "--watch=hint: says when the working tree has moved on" },
-      r.watch === "auto" ? "Watching, reloads" : "Watching"
+      { class: "sig" },
+      said(
+        [icon("watching"), h("span", { class: "v" }, `watch ${r.watch}`)],
+        r.watch === "auto" ? "Watching, reloads: read again once the working tree settles and you pause (--watch=auto)" : "Watching: says when the working tree has moved on (--watch=hint)"
+      )
     ),
     !r.delta.first_run && sinceCount > 0 && h(
       "button",
@@ -5246,15 +5386,13 @@ function renderBand() {
           renderAll();
         }
       },
-      h("b", null, sinceCount),
-      "changed since your last look"
+      said([icon("since"), h("span", { class: "v" }, `changed ${sinceCount}`)], `changed ${sinceCount} since your last look`, false)
     ),
     LEVELS.filter((l) => r.levels[l]).map(
       (l) => h(
         "button",
-        { class: `sig lv-${l}`, title: `Go to the next ${plural[l][0]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
-        h("b", null, r.levels[l]),
-        plural[l][r.levels[l] === 1 ? 0 : 1]
+        { class: `sig lv-${l}`, title: `Go to the next ${LEVEL_WORD[l]}`, onclick: () => act({ op: "action", action: "finding-next" }) },
+        said([icon(l), h("b", null, r.levels[l])], `${r.levels[l]} ${r.levels[l] === 1 ? LEVEL_WORD[l] : `${LEVEL_WORD[l]}s`}`, false)
       )
     ),
     h(
@@ -5265,7 +5403,7 @@ function renderBand() {
         title: `${r.coverage.both} of ${r.coverage.edges} dependency links have both ends read. The review on one page (:summary).`,
         onclick: () => toggleSummary()
       },
-      h("span", { class: "said" }, h("b", null, r.coverage.done), ` of ${r.coverage.total} read`),
+      h("span", { class: "said" }, said([icon("progress"), h("b", null, r.coverage.done), `/${r.coverage.total}`], `${r.coverage.done}/${r.coverage.total} read`, false)),
       h("span", { class: "dimstr", "aria-hidden": "true" }, h("i", { style: `--p:${r.coverage.total ? r.coverage.done / r.coverage.total : 0}` }))
     ),
     help
@@ -5907,7 +6045,7 @@ function whyStep(by) {
   }
   st2.whyCur = Math.max(0, Math.min(n - 1, st2.whyCur + by));
   renderWhy();
-  $("#why tr.cur")?.scrollIntoView({ block: "nearest" });
+  $("#why .link.cur")?.scrollIntoView({ block: "nearest" });
 }
 function onKey(e) {
   if (!$("#peek").hidden) hidePeek();
@@ -6198,12 +6336,12 @@ function paintMap() {
     p.classList.toggle("strands", (from === i || strands.has(from)) && strands.has(to));
     p.classList.toggle("needed", to === i);
   }
-  const said = $("#overlay").querySelector(".mapview .said");
-  if (said && r.items[i]) {
+  const said2 = $("#overlay").querySelector(".mapview .said");
+  if (said2 && r.items[i]) {
     const name = hunkTitle(i);
     const stranded = strands.size ? `rejecting it strands ${strands.size} hunk${strands.size === 1 ? "" : "s"}, shaded red` : "nothing here needs it";
     const needed = needs.size ? `; it needs ${needs.size}, outlined` : "";
-    said.textContent = `${i === depmap.root ? "This hunk" : name}: ${stranded}${needed}. Click a hunk to read it; gD on it draws its own chain.`;
+    said2.textContent = `${i === depmap.root ? "This hunk" : name}: ${stranded}${needed}. Click a hunk to read it; gD on it draws its own chain.`;
   }
 }
 function goMap(i) {

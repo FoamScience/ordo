@@ -143,7 +143,7 @@
   --line-2: oklch(90.5% 0.003 250);
   --fg: oklch(24% 0.006 250);
   --dim: oklch(40% 0.006 250);
-  --faint: oklch(50% 0.006 250);
+  --faint: oklch(43% 0.006 250);
   --accent: oklch(48% 0.13 258);
   --accent-2: oklch(41% 0.13 258);
   --accent-ink: oklch(98% 0.002 250);
@@ -156,7 +156,7 @@
   --verdict: oklch(47% 0.17 28);
   --verdict-bg: oklch(95% 0.025 28);
   --verdict-strong-bg: oklch(88% 0.06 28);
-  --warn: oklch(48% 0.1 70);
+  --warn: oklch(42% 0.1 70);
   --warn-bg: oklch(95.5% 0.03 80);
   --warn-strong-bg: oklch(88% 0.07 80);
   --note-bg: oklch(94% 0.02 255);
@@ -170,9 +170,9 @@
   --syn-number: oklch(40% 0.006 250);
   --syn-function: oklch(24% 0.006 250);
   --syn-type: oklch(24% 0.006 250);
-  --syn-comment: oklch(50% 0.006 250);
+  --syn-comment: oklch(43% 0.006 250);
   --syn-property: oklch(24% 0.006 250);
-  --syn-operator: oklch(50% 0.006 250);
+  --syn-operator: oklch(43% 0.006 250);
   --syn-variable: oklch(24% 0.006 250);
   --syn-builtin: oklch(24% 0.006 250);
   --syn-parameter: oklch(40% 0.006 250);
@@ -311,6 +311,9 @@ button:disabled {
   color: var(--dim);
   font-size: var(--fs-small);
 }
+#band > * {
+  flex-shrink: 0;
+}
 #band > :first-child {
   border-left: 0;
 }
@@ -342,6 +345,12 @@ button:disabled {
   color: var(--verdict);
 }
 #band .sig.lv-warn b {
+  color: var(--warn);
+}
+#band .sig.lv-verdict .ic {
+  color: var(--verdict);
+}
+#band .sig.lv-warn .ic {
   color: var(--warn);
 }
 #band .stale {
@@ -382,6 +391,10 @@ button:disabled {
   gap: var(--space-3xs);
 }
 .progress .said {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2xs);
   color: var(--dim);
 }
 .dimstr,
@@ -778,6 +791,19 @@ body.zoom #panes > .pane:not(.zoomed) {
 .r.sel .gist {
   color: var(--fg);
 }
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.ic {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+}
 .lv {
   font-weight: 600;
 }
@@ -1168,11 +1194,6 @@ body.zoom #panes > .pane:not(.zoomed) {
 .why h3:first-child {
   margin-top: var(--space-sm);
 }
-.why h3 small {
-  font-weight: 400;
-  font-size: var(--fs-tiny);
-  color: var(--faint);
-}
 .why p {
   margin: var(--space-2xs) 0;
 }
@@ -1187,7 +1208,7 @@ body.zoom #panes > .pane:not(.zoomed) {
 }
 .link {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) max-content;
   gap: 0 var(--space-xs);
   padding: var(--space-xs) var(--space-sm);
   margin: 0 calc(var(--space-sm) * -1);
@@ -1214,11 +1235,23 @@ body.zoom #panes > .pane:not(.zoomed) {
   color: var(--faint);
   white-space: nowrap;
 }
+.link {
+  position: relative;
+}
 .link .what {
   grid-column: 1 / -1;
   color: var(--dim);
   font-size: var(--fs-small);
   line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.link:not(.cur):not(:hover):not(:focus-visible) .what {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .link:hover {
   background: var(--raise);
@@ -1291,6 +1324,75 @@ body.zoom #panes > .pane:not(.zoomed) {
 }
 .why .finding button.at:active {
   background: var(--select-bg);
+}
+.why .finding button.at.ico {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-3xs) var(--space-xs);
+}
+.why .finding button.at[aria-pressed=true] {
+  color: var(--faint);
+}
+.why .finding .lv {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  font-size: var(--fs-tiny);
+}
+.why h3 .ic {
+  color: var(--dim);
+}
+.why h3 .v {
+  font-variant-numeric: tabular-nums;
+}
+.why h3 .w {
+  font-size: var(--fs-note);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.why > .facts,
+.why > .group {
+  margin: var(--space-md) 0 0;
+  padding-top: var(--space-xs);
+  border-top: var(--rule-hair) solid var(--line);
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-md);
+  margin: var(--space-2xs) 0;
+}
+.fact,
+.pill,
+#band .sig {
+  font-variant-numeric: tabular-nums;
+}
+.tip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.group > .facts {
+  margin: 0;
+}
+.group > .facts + .facts {
+  margin-top: var(--space-3xs);
+}
+.facts .name {
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  color: var(--fg);
+}
+.facts .by {
+  min-width: 0;
+  color: var(--faint);
+  font-size: var(--fs-tiny);
+  overflow-wrap: anywhere;
+}
+.facts.warnline .fact,
+.fact.warnline {
+  color: var(--warn);
 }
 #overlay {
   position: fixed;
@@ -2119,6 +2221,12 @@ body.summary #panes {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+@media (max-width: 700px) {
+  #band > * {
+    padding: var(--space-2xs) var(--space-xs);
+    gap: var(--space-2xs);
+  }
+}
 @media (pointer: coarse) {
   :root {
     --control: calc(44px * var(--ui));
@@ -2127,5 +2235,20 @@ body.summary #panes {
   #hints,
   #band .help {
     display: none;
+  }
+  .link .what {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    clip-path: none !important;
+    white-space: normal !important;
+  }
+  .why .finding button.at {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--control);
+    min-height: var(--control);
   }
 }
