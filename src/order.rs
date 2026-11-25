@@ -1941,8 +1941,12 @@ fn moved_import_phrase(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<Stri
         .old_rows
         .1
         .iter()
-        .filter(|(n, row)| (o0..=o1).contains(row) && fs.new_imports.contains(n))
-        .map(|(n, _)| n.as_str())
+        .zip(&fs.old_import_mods)
+        .filter(|((n, row), m)| {
+            (o0..=o1).contains(row)
+                && (in_pairs(&fs.new_import_pairs, (n, m.as_deref())) || fs.import_arrived(n))
+        })
+        .map(|((n, _), _)| n.as_str())
         .collect();
     names.dedup();
     (!names.is_empty()).then(|| format!("moves import {}", name_list(&names)))
@@ -1982,10 +1986,12 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
             .collect();
         return Some(join_frags(&frags));
     }
-    let all_new = s.imports.iter().all(|im| {
-        !ctx.symbols
-            .get(my_file)
-            .is_some_and(|o| o.old_imports.contains(im))
+    // a name the file already imported, from any module, may be a change of
+    // module rather than an arrival: `changed_import_phrase` tells which
+    let all_new = !ctx.symbols.get(my_file).is_some_and(|o| {
+        o.old_import_pairs
+            .iter()
+            .any(|(n, _)| names.contains(&n.as_str()))
     });
     if all_new && !s.import_moved {
         if let Some(gone) = replaced_imports(s, ctx, my_file) {
@@ -2009,19 +2015,39 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
     Some(format!("{verb} {noun} {}", name_list(&names)))
 }
 
+type ImportPair<'a> = (&'a str, Option<&'a str>);
+
+fn in_pairs(set: &HashSet<(String, Option<String>)>, (n, m): ImportPair) -> bool {
+    set.contains(&(n.to_string(), m.map(str::to_string)))
+}
+
+/// The hunk's imports with the module each is taken from: a name is the same
+/// import only from the same module.
+fn hunk_import_pairs<'h>(s: &'h HunkSem, names: &[&'h str]) -> Vec<ImportPair<'h>> {
+    names
+        .iter()
+        .enumerate()
+        .flat_map(|(i, &n)| match s.import_modules.get(i) {
+            Some(ms) if !ms.is_empty() => ms.iter().map(|m| (n, m.as_deref())).collect(),
+            _ => vec![(n, None)],
+        })
+        .collect()
+}
+
 /// The imports on the hunk's old rows, which the statement-start rows of a
 /// multi-line import leave unnamed.
-fn old_import_names<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Vec<&'c str> {
+fn old_import_names<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Vec<ImportPair<'c>> {
     let Some(fs) = ctx.symbols.get(my_file) else {
         return vec![];
     };
     let [o0, o1] = s.old_range;
-    let mut names: Vec<&str> = fs
+    let mut names: Vec<ImportPair> = fs
         .old_rows
         .1
         .iter()
-        .filter(|(_, row)| (o0..=o1).contains(row))
-        .map(|(n, _)| n.as_str())
+        .zip(&fs.old_import_mods)
+        .filter(|((_, row), _)| (o0..=o1).contains(row))
+        .map(|((n, _), m)| (n.as_str(), m.as_deref()))
         .collect();
     names.sort_unstable();
     names.dedup();
@@ -2029,7 +2055,8 @@ fn old_import_names<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Vec<&'
 }
 
 /// What an import hunk that touched a statement did to the names on it: only
-/// the names that arrived or left are said, never the ones it kept.
+/// the names that arrived or left are said, never the ones it kept. A name
+/// counts with its module, so the same name from elsewhere is an arrival.
 fn changed_import_phrase(
     s: &HunkSem,
     ctx: &RatCtx,
@@ -2039,47 +2066,88 @@ fn changed_import_phrase(
 ) -> Option<String> {
     let before = old_import_names(s, ctx, my_file);
     let fs = ctx.symbols.get(my_file)?;
+    let here = hunk_import_pairs(s, names);
+    let (mut added, mut moved, mut removed, mut changed) = (vec![], vec![], vec![], vec![]);
     if before.is_empty() {
         // a row inserted into a statement that spans lines: the names on the
-        // statement are all named, and only the new ones are the hunk's
-        let mut added: Vec<&str> = names
+        // statement are all named, and only the new ones are the hunk's. When
+        // none of them was ever imported from this statement's module, it is
+        // the module that changed, and the names it already had are not new
+        let known = here.iter().any(|p| in_pairs(&fs.old_import_pairs, *p));
+        let [o0, o1] = s.old_range;
+        let rewritten = o0 >= 1 && o0 <= o1;
+        for &p in here.iter().filter(|p| !in_pairs(&fs.old_import_pairs, **p)) {
+            let named = fs.old_import_pairs.iter().any(|(n, _)| n == p.0);
+            if named && !known && rewritten {
+                changed.push(p.0);
+            } else if fs.import_left(p.0) {
+                moved.push(p.0);
+            } else {
+                added.push(p.0);
+            }
+        }
+        added.extend(s.import_globs.iter().map(String::as_str));
+    } else {
+        for &p in here.iter().filter(|p| !before.contains(p)) {
+            if in_pairs(&fs.old_import_pairs, p) {
+                moved.push(p.0);
+            } else {
+                added.push(p.0);
+            }
+        }
+        for &p in before.iter().filter(|p| !here.contains(p)) {
+            if in_pairs(&fs.new_import_pairs, p) {
+                moved.push(p.0);
+            } else {
+                removed.push(p.0);
+            }
+        }
+        // a name that left one module and arrived from another in this very
+        // hunk changed module
+        changed = added
             .iter()
             .copied()
-            .filter(|n| !fs.old_imports.contains(*n))
+            .filter(|n| removed.contains(n))
             .collect();
-        added.sort_unstable();
-        added.dedup();
-        return (!added.is_empty()).then(|| format!("adds {noun} {}", name_list(&added)));
+        added.retain(|n| !changed.contains(n));
+        removed.retain(|n| !changed.contains(n));
+        // one that left its statement for another, or came from one it has
+        // left, moved: both halves of the move say so
+        let (arrived, left): (Vec<&str>, Vec<&str>) = (
+            added
+                .iter()
+                .copied()
+                .filter(|n| fs.import_left(n))
+                .collect(),
+            removed
+                .iter()
+                .copied()
+                .filter(|n| fs.import_arrived(n))
+                .collect(),
+        );
+        added.retain(|n| !arrived.contains(n));
+        removed.retain(|n| !left.contains(n));
+        moved.extend(arrived.into_iter().chain(left));
     }
-    let (mut added, mut moved, mut removed) = (vec![], vec![], vec![]);
-    for &n in names.iter().filter(|n| !before.contains(n)) {
-        if fs.old_imports.contains(n) {
-            moved.push(n);
-        } else {
-            added.push(n);
-        }
+    for v in [&mut changed, &mut moved, &mut added] {
+        v.sort_unstable();
+        v.dedup();
     }
-    for &n in before.iter().filter(|n| !names.contains(n)) {
-        if fs.new_imports.contains(n) {
-            moved.push(n);
-        } else {
-            removed.push(n);
-        }
-    }
-    moved.sort_unstable();
-    moved.dedup();
-    added.sort_unstable();
-    added.dedup();
     // nothing arrived or left: the hunk touched the statement without changing
     // its names, so the whole list is the honest object
-    if added.is_empty() && moved.is_empty() && removed.is_empty() {
+    if added.is_empty() && changed.is_empty() && moved.is_empty() && removed.is_empty() {
         return None;
     }
-    let frags: Vec<String> = [("adds", added), ("moves", moved), ("removes", removed)]
-        .into_iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(verb, v)| format!("{verb} {noun} {}", name_list(&v)))
-        .collect();
+    let frags: Vec<String> = [
+        ("adds", added),
+        ("changes", changed),
+        ("moves", moved),
+        ("removes", removed),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .map(|(verb, v)| format!("{verb} {noun} {}", name_list(&v)))
+    .collect();
     (!frags.is_empty()).then(|| join_frags(&frags))
 }
 
@@ -2092,8 +2160,13 @@ fn replaced_imports<'c>(s: &HunkSem, ctx: &RatCtx<'c>, my_file: usize) -> Option
         .old_rows
         .1
         .iter()
-        .filter(|(n, row)| (o0..=o1).contains(row) && !fs.new_imports.contains(n))
-        .map(|(n, _)| n.as_str())
+        .zip(&fs.old_import_mods)
+        .filter(|((n, row), m)| {
+            (o0..=o1).contains(row)
+                && !in_pairs(&fs.new_import_pairs, (n, m.as_deref()))
+                && !fs.import_arrived(n)
+        })
+        .map(|((n, _), _)| n.as_str())
         .collect();
     gone.dedup();
     (!gone.is_empty()).then_some(gone)
