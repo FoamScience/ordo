@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0](https://github.com/FoamScience/ordo/compare/v0.7.0...v0.8.0) (2026-11-25)
+
+
+### Features
+
+* **web:** code-pane text copies clean, keeps its selection, and y/Y copy lines and hunk ([ccfd4ff](https://github.com/FoamScience/ordo/commit/ccfd4ff64848b15be365558672db8ca773be9694))
+* **web:** icons for the margin, band and pills, with their words in tooltips ([814803f](https://github.com/FoamScience/ordo/commit/814803f2ca788971e25719bd35caee21dfccf903))
+
+
+### Bug Fixes
+
+* **rationale:** a decorator-only hunk of an added definition says it adds a decorator ([58ce45e](https://github.com/FoamScience/ordo/commit/58ce45eb1015a8d2d5f80bdfc91110fdd32e3aa7))
+* **rationale:** a moved definition is added, java member calls and prototype parameters are not uses of a same-named local ([9d8f474](https://github.com/FoamScience/ordo/commit/9d8f4745e6d6a14a37286de1c6c6105823f9b1e1))
+* **rationale:** a test that calls a macro, or a function from a helper, uses it instead of testing it ([36bcc0c](https://github.com/FoamScience/ordo/commit/36bcc0cfeacdd0d3ec02e51d15895cd7b96cac44))
+* **rationale:** an import hunk that only adds names to a statement names the arrivals, not the names it kept ([b16c5e6](https://github.com/FoamScience/ordo/commit/b16c5e6a1e8a2898e169db953c3ee76c4f5c340b))
+* **rationale:** an import whose module changed or whose glob was added or dropped is not formatting, and the glob is named ([d5f556a](https://github.com/FoamScience/ordo/commit/d5f556a4a8df87035d7c3bbca81652d61e24f75c))
+* **rationale:** an imported name is compared with its own module, a glob insert names the glob ([3c5a42a](https://github.com/FoamScience/ordo/commit/3c5a42adf8ea3c97e807c9e5fad02260400699bb))
+* **rationale:** rename pairing needs real body overlap in data and prose, catches empty-bodied typo renames, and names a rename's other edits ([74778a7](https://github.com/FoamScience/ordo/commit/74778a7c9425aa96a62cb3518fb9f147f94d0317))
+* **rationale:** rust attributes stay in the piece of the item they mark, so a large insertion cuts no attribute-only card ([9fa6ad8](https://github.com/FoamScience/ordo/commit/9fa6ad801d8dc8f81122d5791c6e9f4853079f48))
+
 ## [0.7.0](https://github.com/FoamScience/ordo/compare/v0.6.0...v0.7.0) (2026-11-22)
 
 
