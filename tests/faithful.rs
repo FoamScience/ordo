@@ -1716,7 +1716,7 @@ fn an_imported_name_is_compared_with_its_own_module() {
             "a.rs",
             "use std::{\n    io,\n};\n",
             "use std::{\n    io,\n    fmt::*,\n};\n",
-            vec!["adds import fmt::*"],
+            vec!["adds import std::fmt::*"],
         ),
         (
             "a.ts",
@@ -1784,5 +1784,270 @@ fn a_mixed_import_edit_says_each_part() {
         let hs = hunks(path, old, new);
         let got: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
         assert_eq!(got, vec![want], "{path}: {old:?} -> {new:?}");
+    }
+}
+
+/// tasks-3uv.180: an import whose module changed, or whose glob was added or
+/// dropped, is not formatting. A glob binds no name, so the glob itself is
+/// what the rationale names.
+#[test]
+fn an_import_module_or_glob_change_is_not_formatting() {
+    let cases = [
+        (
+            "a.rs",
+            "use a::x;\nuse b::*;\nfn f() {}\n",
+            "use a::x;\nfn f() {}\n",
+            vec!["removes import b::*"],
+        ),
+        (
+            "a.rs",
+            "use a::x;\nfn f() {}\n",
+            "use a::x;\nuse b::*;\nfn f() {}\n",
+            vec!["adds import b::*"],
+        ),
+        (
+            "a.rs",
+            "use a::x;\nuse b::*;\n",
+            "use a::x;\nuse c::*;\n",
+            vec!["replaces import b::* with c::*"],
+        ),
+        (
+            "a.rs",
+            "use b::*;\n",
+            "use b::x;\n",
+            vec!["replaces import b::* with x"],
+        ),
+        (
+            "a.rs",
+            "use b::x;\n",
+            "use b::*;\n",
+            vec!["replaces import x with b::*"],
+        ),
+        (
+            "a.py",
+            "from . import d\n",
+            "from .. import d\n",
+            vec!["changes import d"],
+        ),
+        (
+            "a.py",
+            "from .x import d\n",
+            "from ..x import d\n",
+            vec!["changes import d"],
+        ),
+        (
+            "a.py",
+            "from a import d\nfrom b import *\n",
+            "from a import d\n",
+            vec!["removes import b.*"],
+        ),
+        (
+            "a.py",
+            "from a import d\n",
+            "from a import d\nfrom b import *\n",
+            vec!["adds import b.*"],
+        ),
+        (
+            "a.py",
+            "from a import d\nfrom b import *\n",
+            "from a import d\nfrom c import *\n",
+            vec!["replaces import b.* with c.*"],
+        ),
+        (
+            "a.py",
+            "from . import d\n",
+            "from . import d\nfrom . import *\n",
+            vec!["adds import .*"],
+        ),
+        (
+            "a.java",
+            "import a.B;\nimport c.*;\nclass X {}\n",
+            "import a.B;\nclass X {}\n",
+            vec!["removes import c"],
+        ),
+        (
+            "a.java",
+            "import a.B;\nclass X {}\n",
+            "import a.B;\nimport c.*;\nclass X {}\n",
+            vec!["adds import c"],
+        ),
+        (
+            "a.java",
+            "import a.B;\nclass X {}\n",
+            "import c.B;\nclass X {}\n",
+            vec!["changes import B"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\n",
+            "import { a } from \"../x\";\n",
+            vec!["changes import a"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\nexport * from \"./y\";\n",
+            "import { a } from \"./x\";\n",
+            vec!["removes re-export * from ./y"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\n",
+            "import { a } from \"./x\";\nexport * from \"./y\";\n",
+            vec!["adds re-export * from ./y"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\nimport * as n from \"./y\";\n",
+            "import { a } from \"./x\";\n",
+            vec!["removes import n"],
+        ),
+    ];
+    for (path, old, new, want) in cases {
+        let hs = hunks(path, old, new);
+        let got: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+        assert_eq!(got, want, "{path}: {old:?} -> {new:?}");
+    }
+}
+
+/// A glob inside braces names the whole path it globs, and a comment beside an
+/// import adds no word to it.
+#[test]
+fn a_braced_glob_names_its_path_and_a_comment_is_not_an_import() {
+    let cases = [
+        (
+            "a.rs",
+            "use a::{x, *};\nuse b::{y, *};\n",
+            "use a::{x, *};\nuse b::{y};\n",
+            vec!["removes import b::*"],
+        ),
+        (
+            "a.rs",
+            "use a::{x::*};\nuse c::{x::*};\n",
+            "use a::{x::*};\n",
+            vec!["removes import c::x::*"],
+        ),
+        (
+            "a.rs",
+            "use a::{x::*};\nuse c::{x::*};\n",
+            "use a::{x::*};\nuse c::{y::*};\n",
+            vec!["replaces import c::x::* with c::y::*"],
+        ),
+        (
+            "a.rs",
+            "use a::{self, b::{*, c}};\n",
+            "use a::{self, b::{c}};\n",
+            vec!["removes import a::b::*"],
+        ),
+        (
+            "a.rs",
+            "use a::*;\nuse b::*;\n",
+            "use b::*;\nuse a::*;\n",
+            vec!["moves import b::*", "moves import b::*"],
+        ),
+        (
+            "a.py",
+            "from a import x\n",
+            "from a import x  # *\n",
+            vec!["formatting only"],
+        ),
+        (
+            "a.py",
+            "from a import x\n",
+            "from a import x  # noqa\n",
+            vec!["formatting only"],
+        ),
+        (
+            "a.rs",
+            "use a::*;\n",
+            "use a::*; // hi\n",
+            vec!["formatting only"],
+        ),
+        (
+            "a.rs",
+            "use a::x;\n",
+            "use a::x; // hi\n",
+            vec!["formatting only"],
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\n",
+            "import { a } from \"./x\"; // *\n",
+            vec!["formatting only"],
+        ),
+        (
+            "a.ts",
+            "export * from \"./a\";\nexport * from \"./b\";\n",
+            "export * from \"./b\";\nexport * from \"./a\";\n",
+            vec!["moves re-export * from ./b", "moves re-export * from ./b"],
+        ),
+        (
+            "a.ts",
+            "export * from \"./a\";\n",
+            "export * from \"./a\";\nexport * as ns from \"./b\";\n",
+            vec!["adds re-export ns"],
+        ),
+        (
+            "a.ts",
+            "export * from \"./a\";\nexport * as ns from \"./b\";\n",
+            "export * from \"./a\";\n",
+            vec!["removes re-export ns"],
+        ),
+    ];
+    for (path, old, new, want) in cases {
+        let hs = hunks(path, old, new);
+        let got: Vec<&str> = hs.iter().map(|h| h.rationale.as_str()).collect();
+        assert_eq!(got, want, "{path}: {old:?} -> {new:?}");
+    }
+}
+
+/// A real reformat of an import statement keeps saying "formatting only": its
+/// names reordered, rewrapped, or given a trailing comma, a glob kept in place.
+#[test]
+fn a_reformatted_import_is_still_formatting_only() {
+    let cases = [
+        (
+            "a.ts",
+            "import { a, b } from \"./x\";\n",
+            "import { b, a } from \"./x\";\n",
+        ),
+        (
+            "a.ts",
+            "import { a, b } from \"./x\";\n",
+            "import {\n  a,\n  b,\n} from \"./x\";\n",
+        ),
+        (
+            "a.ts",
+            "import { a, b } from \"./x\";\n",
+            "import { a, b, } from \"./x\";\n",
+        ),
+        (
+            "a.ts",
+            "import { a } from \"./x\";\n",
+            "import { a } from './x';\n",
+        ),
+        ("a.py", "from a import c, b\n", "from a import b, c\n"),
+        (
+            "a.py",
+            "from .. import c, b\n",
+            "from .. import (\n    b,\n    c,\n)\n",
+        ),
+        ("a.py", "from . import b, c\n", "from . import b, c,\n"),
+        ("a.rs", "use a::{x, y};\n", "use a::{y, x};\n"),
+        ("a.rs", "use a::{x, y};\n", "use a::{\n    x,\n    y,\n};\n"),
+        ("a.rs", "use a::{x, y};\n", "use a::{x, y,};\n"),
+        (
+            "a.rs",
+            "use a::{x, b::*};\n",
+            "use a::{\n    b::*,\n    x,\n};\n",
+        ),
+    ];
+    for (path, old, new) in cases {
+        let hs = hunks(path, old, new);
+        let got: Vec<(&str, bool)> = hs.iter().map(|h| (h.rationale.as_str(), h.noise)).collect();
+        assert_eq!(
+            got,
+            vec![("formatting only", true)],
+            "{path}: {old:?} -> {new:?}"
+        );
     }
 }

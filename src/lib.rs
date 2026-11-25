@@ -713,14 +713,10 @@ fn classify_reexports(f: &mut PerFileHunks, change: &Change) {
     let old_reexports = extract::reexport_row_set(spec, old_src);
     let after = extract::import_statements(spec, new_src);
     let old_lines: Vec<&str> = old_src.lines().collect();
-    let new_lines: Vec<&str> = new_src.lines().collect();
-    let rows = |lines: &[&str], [a, b]: [usize; 2]| -> Vec<String> {
-        (a.max(1)..=b)
-            .filter_map(|r| lines.get(r - 1))
-            .map(|l| extract::squeeze(l))
-            .filter(|l| !l.is_empty())
-            .collect()
-    };
+    let (old_words, new_words) = (
+        extract::import_row_words(spec, old_src),
+        extract::import_row_words(spec, new_src),
+    );
     let PerFileHunks { raw, sem: sems, .. } = f;
     for (li, sem) in sems.iter_mut().enumerate() {
         if sem.category != Category::Import {
@@ -740,22 +736,19 @@ fn classify_reexports(f: &mut PerFileHunks, change: &Change) {
         sem.reexport = true;
         let removed = gone.iter().any(|l| !after.contains(l));
         let arrived = new_side && !sem.import_moved;
-        let (old, new) = (
-            rows(&old_lines, sem.old_range),
-            rows(&new_lines, raw[li].new_range),
-        );
-        let same_names = names(&old) == names(&new);
+        let same_names =
+            row_words(&old_words, sem.old_range) == row_words(&new_words, raw[li].new_range);
         sem.noise = same_names || !(removed || arrived);
     }
 }
 
-/// The sorted identifier-ish words of some lines: equal for two spellings of
+/// The sorted words of the import rows in a range: equal for two spellings of
 /// one list of names.
-fn names(lines: &[String]) -> Vec<&str> {
-    let mut out: Vec<&str> = lines
-        .iter()
-        .flat_map(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')))
-        .filter(|w| !w.is_empty())
+fn row_words(words: &HashMap<usize, Vec<String>>, [a, b]: [usize; 2]) -> Vec<String> {
+    let mut out: Vec<String> = (a.max(1)..=b)
+        .filter_map(|r| words.get(&r))
+        .flatten()
+        .cloned()
         .collect();
     out.sort_unstable();
     out
@@ -878,7 +871,6 @@ fn mark_moved_imports(f: &mut PerFileHunks, change: &Change) {
         return;
     }
     let new_lines: Vec<&str> = new_src.lines().collect();
-    let old_lines: Vec<&str> = old_src.lines().collect();
     // each import statement a range of rows touches, as its words in no
     // order: two sides whose statements have the same words one for one
     // spell the same imports, sorted or re-wrapped
@@ -886,35 +878,34 @@ fn mark_moved_imports(f: &mut PerFileHunks, change: &Change) {
         extract::import_spans(spec, old_src),
         extract::import_spans(spec, new_src),
     );
-    let statements =
-        |spans: &[[usize; 2]], lines: &[&str], [a, b]: [usize; 2]| -> Vec<Vec<String>> {
-            let mut units: Vec<Vec<String>> = spans
-                .iter()
-                .copied()
-                .filter(|[s, e]| *s <= b && *e >= a)
-                .map(|[s, e]| {
-                    let mut w: Vec<String> = (s..=e)
-                        .filter_map(|r| lines.get(r - 1))
-                        .flat_map(|l| l.split(|c: char| !c.is_alphanumeric() && c != '_'))
-                        .filter(|t| !t.is_empty())
-                        .map(str::to_string)
-                        .collect();
-                    w.sort_unstable();
-                    w
-                })
-                .collect();
-            units.sort_unstable();
-            units
-        };
+    let (old_words, new_words) = (
+        extract::import_row_words(spec, old_src),
+        extract::import_row_words(spec, new_src),
+    );
+    let statements = |spans: &[[usize; 2]],
+                      words: &HashMap<usize, Vec<String>>,
+                      [a, b]: [usize; 2]|
+     -> Vec<Vec<String>> {
+        let mut units: Vec<Vec<String>> = spans
+            .iter()
+            .filter(|[s, e]| *s <= b && *e >= a)
+            .map(|&[s, e]| row_words(words, [s, e]))
+            .collect();
+        units.sort_unstable();
+        units
+    };
     let PerFileHunks { raw, sem: sems, .. } = f;
     for (li, sem) in sems.iter_mut().enumerate() {
         let [r0, r1] = raw[li].new_range;
         if sem.category != Category::Import || r0 == 0 || r0 > r1 {
             continue;
         }
-        sem.import_reordered = sem.old_range[0] <= sem.old_range[1] && {
-            let before = statements(&old_spans, &old_lines, sem.old_range);
-            !before.is_empty() && before == statements(&new_spans, &new_lines, [r0, r1])
+        // a hunk of comment rows alone is a comment change, not a reformat
+        let code = !row_words(&old_words, sem.old_range).is_empty()
+            || !row_words(&new_words, [r0, r1]).is_empty();
+        sem.import_reordered = code && sem.old_range[0] <= sem.old_range[1] && {
+            let before = statements(&old_spans, &old_words, sem.old_range);
+            !before.is_empty() && before == statements(&new_spans, &new_words, [r0, r1])
         };
         // every non-blank line of the hunk has to be an import the old file
         // already had; one new line among them makes this an arrival

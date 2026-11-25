@@ -878,7 +878,7 @@ fn re_exports_are_shown_whether_added_or_removed() {
             "b.ts",
             "export * from \"./a\";\nexport * from \"./b\";\n",
             "export * from \"./a\";\n",
-            "removes 1 line",
+            "removes re-export * from ./b",
         ),
         (
             "lib.rs",

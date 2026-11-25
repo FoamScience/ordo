@@ -1918,7 +1918,7 @@ fn noise_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String> 
     }
     if !s.imports_moved_out.is_empty() {
         let names: Vec<&str> = s.imports_moved_out.iter().map(String::as_str).collect();
-        return Some(format!("moves import {}", name_list(&names)));
+        return Some(format!("moves {} {}", import_noun(s), name_list(&names)));
     }
     Some(if crate::lang::is_generated_path(&ctx.paths[my_file]) {
         "generated file".to_string()
@@ -1949,7 +1949,15 @@ fn moved_import_phrase(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<Stri
         .map(|((n, _), _)| n.as_str())
         .collect();
     names.dedup();
-    (!names.is_empty()).then(|| format!("moves import {}", name_list(&names)))
+    (!names.is_empty()).then(|| format!("moves {} {}", import_noun(s), name_list(&names)))
+}
+
+fn import_noun(s: &HunkSem) -> &'static str {
+    if s.reexport {
+        "re-export"
+    } else {
+        "import"
+    }
 }
 
 // #5 (add side): new import(s) → "adds import"; a touched existing one →
@@ -1965,7 +1973,7 @@ fn import_rationale(s: &HunkSem, ctx: &RatCtx, my_file: usize) -> Option<String>
     if s.new_empty && s.imports.is_empty() {
         return None;
     }
-    let noun = if s.reexport { "re-export" } else { "import" };
+    let noun = import_noun(s);
     if s.imports.is_empty() {
         return Some(noun.to_string());
     }
@@ -2086,7 +2094,6 @@ fn changed_import_phrase(
                 added.push(p.0);
             }
         }
-        added.extend(s.import_globs.iter().map(String::as_str));
     } else {
         for &p in here.iter().filter(|p| !before.contains(p)) {
             if in_pairs(&fs.old_import_pairs, p) {
