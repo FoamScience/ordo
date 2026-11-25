@@ -1637,6 +1637,134 @@ var Keymap = class {
   }
 };
 
+// src/copy.ts
+function cutRow(row, from = 0, to = row.text.length) {
+  return { kind: row.kind, text: row.text.slice(from, to) };
+}
+function joinPieces(pieces) {
+  const live = pieces.filter((p) => p.kind !== "del");
+  return (live.length ? live : pieces).map((p) => p.text).join("\n");
+}
+function rowsText(rows) {
+  return joinPieces(rows.map((r) => ({ kind: r.kind, text: r.text })));
+}
+function hunkRows(rows, hunk) {
+  return rows.filter((r) => r.hunk === hunk);
+}
+function pickedRows(rows, cursor, from) {
+  const a = Math.min(cursor, from ?? cursor);
+  const b = Math.max(cursor, from ?? cursor);
+  return rows.slice(a, b + 1);
+}
+async function toClipboard(write, text, copied, refused) {
+  try {
+    await write(text);
+  } catch {
+    return refused();
+  }
+  copied();
+}
+
+// src/selection.ts
+var GONE = "del.gone";
+var contentOf = (line) => line.lastElementChild;
+function colAt(content, node, offset, length) {
+  const whole = document.createRange();
+  whole.selectNodeContents(content);
+  const at2 = whole.comparePoint(node, offset);
+  if (at2 < 0) return 0;
+  if (at2 > 0) return length;
+  const head = document.createRange();
+  head.setStart(content, 0);
+  head.setEnd(node, offset);
+  const frag = head.cloneContents();
+  frag.querySelectorAll(GONE).forEach((d) => d.remove());
+  return frag.textContent.length;
+}
+function cut(content, range2, length) {
+  const whole = document.createRange();
+  whole.selectNodeContents(content);
+  if (whole.comparePoint(range2.endContainer, range2.endOffset) < 0) return null;
+  if (whole.comparePoint(range2.startContainer, range2.startOffset) > 0) return null;
+  return [colAt(content, range2.startContainer, range2.startOffset, length), colAt(content, range2.endContainer, range2.endOffset, length)];
+}
+function selectedRanges(body) {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount || !sel.anchorNode || !body.contains(sel.anchorNode)) return null;
+  const out = [];
+  for (let i = 0; i < sel.rangeCount; i++) {
+    const range2 = sel.getRangeAt(i).cloneRange();
+    const starts = body.contains(range2.startContainer);
+    const ends = body.contains(range2.endContainer);
+    if (!starts && !ends) continue;
+    if (!starts) range2.setStart(body, 0);
+    if (!ends) range2.setEnd(body, body.childNodes.length);
+    out.push(range2);
+  }
+  return out.length ? out : null;
+}
+function selectedText(ranges, body, rows) {
+  const pieces = [];
+  for (const range2 of ranges) {
+    for (const line of body.querySelectorAll(".l")) {
+      const row = rows[Number(line.dataset.k)];
+      if (!row || !range2.intersectsNode(line)) continue;
+      const at2 = cut(contentOf(line), range2, row.text.length);
+      if (at2) pieces.push(cutRow(row, at2[0], at2[1]));
+    }
+  }
+  return pieces.length ? joinPieces(pieces) : null;
+}
+function markSelection() {
+  const sel = getSelection();
+  return sel ? [sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset] : [];
+}
+var sameMark = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+function rowText(line) {
+  const copy = contentOf(line).cloneNode(true);
+  copy.querySelectorAll(GONE).forEach((d) => d.remove());
+  return copy.textContent;
+}
+function endOf(body, node, offset) {
+  const line = node && (node instanceof Element ? node : node.parentElement)?.closest(".l");
+  if (!line || !body.contains(line)) return null;
+  const content = contentOf(line);
+  if (!content.contains(node)) return null;
+  const text = rowText(line);
+  return [Number(line.dataset.k), colAt(content, node, offset, text.length), text];
+}
+function saveSelection(body, path) {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed) return null;
+  const anchor = endOf(body, sel.anchorNode, sel.anchorOffset);
+  const focus = endOf(body, sel.focusNode, sel.focusOffset);
+  return anchor && focus ? { path, anchor, focus } : null;
+}
+function pointAt(line, col) {
+  const content = contentOf(line);
+  let left = col;
+  let last = null;
+  const walk = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement?.closest(GONE) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (left <= n.length) return [n, left];
+    left -= n.length;
+    last = n;
+  }
+  return last ? [last, last.length] : [content, 0];
+}
+function restoreSelection(body, saved, path, rows) {
+  if (saved.path !== path) return false;
+  const lines = new Map([...body.querySelectorAll(".l")].map((l) => [Number(l.dataset.k), l]));
+  for (const [k, , text] of [saved.anchor, saved.focus]) {
+    if (!lines.has(k) || rows[k]?.text !== text) return false;
+  }
+  const [a, f] = [saved.anchor, saved.focus].map(([k, col]) => pointAt(lines.get(k), col));
+  getSelection().setBaseAndExtent(a[0], a[1], f[0], f[1]);
+  return true;
+}
+
 // src/layout.ts
 var import_diff_match_patch = __toESM(require_diff_match_patch(), 1);
 function centerScroll(rowTop, rowHeight2, viewHeight, contentHeight) {
@@ -1916,7 +2044,7 @@ function withSymbols(rows, items) {
   const opens = new Map(rows.flatMap((r) => r.kind === "item" ? [[r.i, r.opens]] : []));
   return { rows: out.map((r) => r.kind === "item" ? { ...r, opens: opens.get(r.i) ?? false } : r), runOf };
 }
-function rowText(it2, run2) {
+function rowText2(it2, run2) {
   if (!run2) return { text: it2.rationale, code: false };
   const alone = (pick) => {
     const v = pick(it2);
@@ -4304,7 +4432,9 @@ async function act(body) {
     if (out.notice) toast(out.notice);
     if (out.popup) showSheet(out.popup.title, out.popup.lines.join("\n"));
     if (out.clipboard !== void 0) {
-      await navigator.clipboard.writeText(out.clipboard).then(
+      await toClipboard(
+        (t) => navigator.clipboard.writeText(t),
+        out.clipboard,
         () => toast("copied the review prompt to the clipboard"),
         () => showSheet("review prompt", out.clipboard)
       );
@@ -4412,12 +4542,12 @@ function renderList() {
         )
       );
     } else if (row.kind === "file") {
-      const cut = row.path.lastIndexOf("/") + 1;
+      const cut2 = row.path.lastIndexOf("/") + 1;
       rows.append(
         h(
           "div",
           { class: "fileband", title: row.path },
-          h("span", { class: "path" }, h("span", { class: "dir" }, row.path.slice(0, cut)), h("span", { class: "base" }, row.path.slice(cut))),
+          h("span", { class: "path" }, h("span", { class: "dir" }, row.path.slice(0, cut2)), h("span", { class: "base" }, row.path.slice(cut2))),
           h("span", null, row.n)
         )
       );
@@ -4430,7 +4560,7 @@ function renderList() {
       const folded = row.kind === "folded";
       const level = LEVELS.find((l) => items.some((i) => r.items[i].level === l));
       const run2 = folded ? void 0 : runOf.get(items[0]);
-      const said = rowText(first, run2 ? run2.map((i) => r.items[i]) : null);
+      const said = rowText2(first, run2 ? run2.map((i) => r.items[i]) : null);
       const removal = first.new[1] < first.new[0];
       const el = h(
         "div",
@@ -4551,6 +4681,11 @@ function lineEl(row, k, mine, findings, uses, commented) {
         class: cls,
         dataset: { k: String(k) },
         onclick: (e) => {
+          const sel = getSelection();
+          if (sel && !sel.isCollapsed) {
+            if (!sameMark(downMark, markSelection())) return;
+            if (e.target.closest(".l > :last-child")) sel.removeAllRanges();
+          }
           st2.cursor = k;
           st2.col = caretColumn(e, row.text);
           st2.focus = "code";
@@ -4684,13 +4819,18 @@ function prose(text) {
   if (at2 < text.length) out.push(text.slice(at2));
   return out;
 }
+var codePath = "";
+var downMark = [];
 function renderCode() {
   const pane = $("#code");
   const r = st2.review;
   const it2 = r.items[st2.sel];
   renderReading(it2);
   const body = pane.querySelector(".body");
-  if (!st2.file || !it2) return replace(body);
+  if (!st2.file || !it2) {
+    codePath = "";
+    return replace(body);
+  }
   const findings = /* @__PURE__ */ new Map();
   for (const f of it2.findings) {
     if (f.row == null) continue;
@@ -4708,8 +4848,11 @@ function renderCode() {
     }
   });
   const top = body.scrollTop;
+  const kept = saveSelection(body, codePath);
   replace(body, code);
+  codePath = st2.file.path;
   body.scrollTop = top;
+  if (kept) restoreSelection(body, kept, codePath, st2.rows);
   renderStrip();
 }
 function renderStrip() {
@@ -5713,6 +5856,16 @@ function run(action) {
       st2.from = st2.from === null ? st2.cursor : null;
       st2.focus = "code";
       return renderAll();
+    case "copy-lines": {
+      const text = rowsText(pickedRows(st2.rows, st2.cursor, st2.from));
+      st2.from = null;
+      getSelection()?.removeAllRanges();
+      renderAll();
+      return void copyOut(text, "the picked lines");
+    }
+    case "copy-hunk":
+      getSelection()?.removeAllRanges();
+      return void copyOut(rowsText(hunkRows(st2.rows, st2.sel)), "the hunk");
     case "comment":
       return openPalette("command", "comment ");
     case "reload":
@@ -5728,6 +5881,23 @@ function run(action) {
     case "focus-deps":
       return void openCanvas();
   }
+}
+function copyOut(text, what) {
+  if (!text) return Promise.resolve(toast(`nothing to copy: no text in ${what}`));
+  return toClipboard(
+    (t) => navigator.clipboard.writeText(t),
+    text,
+    () => toast(`copied ${what}`),
+    () => showSheet("copy", text)
+  );
+}
+function onCopy(e) {
+  const body = document.querySelector("#code .body");
+  const ranges = body && selectedRanges(body);
+  const text = ranges && selectedText(ranges, body, st2.rows);
+  if (text === null || text === void 0) return;
+  e.clipboardData?.setData("text/plain", text);
+  e.preventDefault();
 }
 function whyStep(by) {
   const n = st2.whyLinks.length;
@@ -6136,6 +6306,8 @@ function wireSplits() {
 }
 function wire() {
   document.addEventListener("keydown", onKey);
+  document.addEventListener("copy", onCopy);
+  document.addEventListener("mousedown", () => downMark = markSelection(), true);
   for (const p of PANES) {
     $(`#${p}`).addEventListener("mousedown", () => {
       if (st2.focus !== p) {

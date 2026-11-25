@@ -160,6 +160,19 @@ on one reads it. The `Ctrl-w` chords in the table do nothing here: a browser
 keeps `Ctrl-w` for closing the tab. `1` `2` `3` focus a pane and, pressed
 again, maximise it.
 
+Text in the code pane can be dragged over and copied like any page text: a
+drag or double-click inside a line keeps its selection, and the copy holds the
+file's new-side text only, with its indentation and line breaks and the cut
+ends of the first and last lines, but no line numbers, gutter marks, findings,
+comments or struck-through old text. A selection of deleted rows alone copies
+the old text. `y` copies the `v` lines, or the cursor's line, the same way, and
+`Y` the selected hunk's new side, and both clear any text selection; they copy
+nothing, and say so, when there is no text to copy. Where the browser refuses
+the clipboard the text opens in a sheet instead. A selection that began in
+another pane, or lies only in a finding or a comment, is left to the browser's
+own copy. The vscode preset binds neither (`Ctrl-c` is the
+browser's own copy); bind `copy-lines` and `copy-hunk` under `[binds]`.
+
 <!-- ordo:begin keys -->
 | | `vim` (default) | `vscode` |
 | --- | --- | --- |
@@ -212,6 +225,8 @@ again, maximise it.
 | jump to the next hunk with a finding, the most severe first | `]f` | `F8` |
 | jump to the previous hunk with a finding, the most severe first | `[f` | `S-F8` |
 | select lines from the code cursor, for :comment | `v` |  |
+| copy the selected lines, or the cursor's, as the file has them | `y` |  |
+| copy the selected hunk's new side | `Y` |  |
 | comment on the code-pane line or selection | `c` |  |
 | jump to the next line comment | `gc` |  |
 | jump to the previous line comment | `gC` |  |

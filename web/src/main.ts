@@ -5,6 +5,8 @@
 import { Api } from "./api.ts";
 import { $, h, replace } from "./dom.ts";
 import { Keymap, keyLabel } from "./keys.ts";
+import { hunkRows, pickedRows, rowsText, toClipboard } from "./copy.ts";
+import { markSelection, restoreSelection, sameMark, saveSelection, selectedRanges, selectedText } from "./selection.ts";
 import { centerScroll, codeRows, firstRowOf, runs, stripMarks, tableLimit, wordAt, wordMove, type CodeRow } from "./layout.ts";
 import { foldedText, rowText, withSymbols } from "./list.ts";
 import { cascadeBeyond, cascadeOf, depMap, groundOf, needPairs, smoothPath } from "./depmap.ts";
@@ -236,7 +238,9 @@ async function act(body: Record<string, unknown>): Promise<ActResult | null> {
     if (out.notice) toast(out.notice);
     if (out.popup) showSheet(out.popup.title, out.popup.lines.join("\n"));
     if (out.clipboard !== undefined) {
-      await navigator.clipboard.writeText(out.clipboard).then(
+      await toClipboard(
+        (t) => navigator.clipboard.writeText(t),
+        out.clipboard,
         () => toast("copied the review prompt to the clipboard"),
         () => showSheet("review prompt", out.clipboard!),
       );
@@ -518,6 +522,13 @@ function lineEl(row: CodeRow, k: number, mine: boolean, findings: Map<number, It
         class: cls,
         dataset: { k: String(k) },
         onclick: (e: MouseEvent) => {
+          // a drag or double-click ends in a click that left a new selection; rebuilding the pane would drop it
+          const sel = getSelection();
+          if (sel && !sel.isCollapsed) {
+            if (!sameMark(downMark, markSelection())) return;
+            // a click on the text itself ends its selection, as it does anywhere else; one in the gutter leaves it
+            if ((e.target as Element).closest(".l > :last-child")) sel.removeAllRanges();
+          }
           st.cursor = k;
           st.col = caretColumn(e, row.text);
           st.focus = "code";
@@ -667,13 +678,20 @@ function prose(text: string): (string | HTMLElement)[] {
   return out;
 }
 
+/** The file the code pane's rows were drawn for, and where the selection stood when the last mouse button went down. */
+let codePath = "";
+let downMark: unknown[] = [];
+
 function renderCode(): void {
   const pane = $("#code");
   const r = st.review!;
   const it = r.items[st.sel];
   renderReading(it);
   const body = pane.querySelector(".body")!;
-  if (!st.file || !it) return replace(body);
+  if (!st.file || !it) {
+    codePath = "";
+    return replace(body);
+  }
   const findings = new Map<number, Item["findings"]>();
   for (const f of it.findings) {
     if (f.row == null) continue;
@@ -691,8 +709,11 @@ function renderCode(): void {
     }
   });
   const top = body.scrollTop;
+  const kept = saveSelection(body, codePath);
   replace(body, code);
+  codePath = st.file.path;
   body.scrollTop = top;
+  if (kept) restoreSelection(body, kept, codePath, st.rows);
   renderStrip();
 }
 
@@ -1807,6 +1828,16 @@ function run(action: string): void {
       st.from = st.from === null ? st.cursor : null;
       st.focus = "code";
       return renderAll();
+    case "copy-lines": {
+      const text = rowsText(pickedRows(st.rows, st.cursor, st.from));
+      st.from = null;
+      getSelection()?.removeAllRanges();
+      renderAll();
+      return void copyOut(text, "the picked lines");
+    }
+    case "copy-hunk":
+      getSelection()?.removeAllRanges();
+      return void copyOut(rowsText(hunkRows(st.rows, st.sel)), "the hunk");
     case "comment":
       return openPalette("command", "comment ");
     case "reload":
@@ -1822,6 +1853,26 @@ function run(action: string): void {
     case "focus-deps":
       return void openCanvas();
   }
+}
+
+function copyOut(text: string, what: string): Promise<void> {
+  if (!text) return Promise.resolve(toast(`nothing to copy: no text in ${what}`));
+  return toClipboard(
+    (t) => navigator.clipboard.writeText(t),
+    text,
+    () => toast(`copied ${what}`),
+    () => showSheet("copy", text),
+  );
+}
+
+/** What a copy inside the code pane puts on the clipboard: the file's text, not the pane's. */
+function onCopy(e: ClipboardEvent): void {
+  const body = document.querySelector("#code .body");
+  const ranges = body && selectedRanges(body);
+  const text = ranges && selectedText(ranges, body, st.rows);
+  if (text === null || text === undefined) return;
+  e.clipboardData?.setData("text/plain", text);
+  e.preventDefault();
 }
 
 function whyStep(by: number): void {
@@ -2274,6 +2325,8 @@ function wireSplits(): void {
 
 function wire(): void {
   document.addEventListener("keydown", onKey);
+  document.addEventListener("copy", onCopy);
+  document.addEventListener("mousedown", () => (downMark = markSelection()), true);
   for (const p of PANES) {
     $(`#${p}`).addEventListener("mousedown", () => {
       if (st.focus !== p) {

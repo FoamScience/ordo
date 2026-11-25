@@ -254,7 +254,7 @@ body.zoom #panes > .split, body.zoom #panes > .pane:not(.zoomed) { display: none
 .code { min-width: max-content; padding: var(--space-xs) 0 30vh; }
 #code > .body .code { padding-right: var(--space-md); }
 .l { display: grid; grid-template-columns: 2ch 6ch 2.5ch auto; height: var(--row); line-height: var(--row); white-space: pre; padding-right: var(--space-lg); }
-.l .g { color: var(--accent); text-align: center; }
+.l .g { color: var(--accent); text-align: center; user-select: none; }
 .l .ln { color: var(--faint); text-align: right; padding-right: 1.2ch; user-select: none; }
 .l .op { color: var(--faint); user-select: none; }
 .l.add { background: var(--add-bg); }

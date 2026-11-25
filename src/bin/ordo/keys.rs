@@ -49,6 +49,10 @@ pub(super) enum Action {
     MarkNext,
     /// `v` — start (or drop) a line selection at the code cursor
     SelectLines,
+    /// `y` — copy the picked lines, or the cursor's, as the file has them
+    CopyLines,
+    /// `Y` — copy the selected hunk's new side
+    CopyHunk,
     /// `c` — open the command bar on `:comment`, with the text already there
     /// when the selected lines have one
     Comment,
@@ -272,6 +276,8 @@ pub(super) fn keymap(name: &str) -> Option<Keymap> {
                 (Some(ch(']')), ch('f'), Action::FindingNext),
                 (Some(ch('[')), ch('f'), Action::FindingPrev),
                 (None, ch('v'), Action::SelectLines),
+                (None, ch('y'), Action::CopyLines),
+                (None, ch('Y'), Action::CopyHunk),
                 (None, ch('c'), Action::Comment),
                 (Some(ch('g')), ch('c'), Action::CommentNext),
                 (Some(ch('g')), ch('C'), Action::CommentPrev),
@@ -480,6 +486,8 @@ pub(super) fn action_help(a: Action) -> (Category, &'static str) {
         Action::MarkPrev => (Category::Navigation, "jump to the previous use of a name added here"),
         Action::MarkNext => (Category::Navigation, "jump to the next use of a name added here"),
         Action::SelectLines => (Category::Review, "select lines from the code cursor, for :comment"),
+        Action::CopyLines => (Category::Review, "copy the selected lines, or the cursor's, as the file has them"),
+        Action::CopyHunk => (Category::Review, "copy the selected hunk's new side"),
         Action::Comment => (Category::Review, "comment on the code-pane line or selection"),
         Action::CommentNext => (Category::Review, "jump to the next line comment"),
         Action::CommentPrev => (Category::Review, "jump to the previous line comment"),
@@ -562,6 +570,8 @@ pub(super) const ACTION_NAMES: &[(&str, Action)] = &[
     ("mark-prev", Action::MarkPrev),
     ("mark-next", Action::MarkNext),
     ("select-lines", Action::SelectLines),
+    ("copy-lines", Action::CopyLines),
+    ("copy-hunk", Action::CopyHunk),
     ("comment", Action::Comment),
     ("comment-next", Action::CommentNext),
     ("comment-prev", Action::CommentPrev),

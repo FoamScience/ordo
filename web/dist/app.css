@@ -901,6 +901,7 @@ body.zoom #panes > .pane:not(.zoomed) {
 .l .g {
   color: var(--accent);
   text-align: center;
+  user-select: none;
 }
 .l .ln {
   color: var(--faint);
